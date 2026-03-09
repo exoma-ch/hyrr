@@ -217,3 +217,7 @@ __marimo__/
 
 # Pre-commit cache
 .pre-commit-cache/
+
+# HYRR data (too large for git, downloaded separately)
+data/hyrr.sqlite
+data/*.sqlite
