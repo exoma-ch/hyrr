@@ -2,11 +2,12 @@
   import { onMount } from "svelte";
   import { registerServiceWorker } from "./lib/sw-register";
   import { decodeConfigFromHash, setConfigInHash } from "./lib/config-url";
-  import { PRESETS } from "./lib/presets";
   import {
     getConfig,
     setConfig,
     isConfigValid,
+    getLayers,
+    updateLayer,
   } from "./lib/stores/config.svelte";
   import {
     getResult,
@@ -15,52 +16,61 @@
   } from "./lib/stores/results.svelte";
   import {
     getHistoryOpen,
-    toggleHistory,
+    setHistoryOpen,
   } from "./lib/stores/ui.svelte";
   import {
     initScheduler,
     initDataStore,
-    forceRun,
-    getSchedulerState,
   } from "./lib/scheduler/sim-scheduler.svelte";
-  import { saveRun, getAllRuns } from "./lib/history-db";
-  import type { HistoryEntry } from "./lib/types";
-  import BeamConfig from "./lib/components/BeamConfig.svelte";
-  // TimingConfig merged into BeamConfig
-  import LayerStack from "./lib/components/LayerStack.svelte";
-  import ResultsPanel from "./lib/components/ResultsPanel.svelte";
+  import { initDepthPreview } from "./lib/stores/depth-preview.svelte";
+  import { saveRun } from "./lib/history-db";
+
+  // New components
+  import HeaderBar from "./lib/components/HeaderBar.svelte";
+  import BeamConfigBar from "./lib/components/BeamConfigBar.svelte";
+  import LayerStackHorizontal from "./lib/components/LayerStackHorizontal.svelte";
+  import PlotDepthProfileLive from "./lib/components/PlotDepthProfileLive.svelte";
+  import LayerTable from "./lib/components/LayerTable.svelte";
+  import PlotActivityCurve from "./lib/components/PlotActivityCurve.svelte";
+  import ActivityTableEnhanced from "./lib/components/ActivityTableEnhanced.svelte";
   import HistoryPanel from "./lib/components/HistoryPanel.svelte";
   import HistoryImportExport from "./lib/components/HistoryImportExport.svelte";
-
-  import type { MaterialInfo } from "./lib/types";
+  import MaterialPopup from "./lib/components/MaterialPopup.svelte";
+  import ElementPopup from "./lib/components/ElementPopup.svelte";
+  import IsotopePopup from "./lib/components/IsotopePopup.svelte";
 
   let loadingState = $state("Initializing...");
   let loadingProgress = $state(0);
   let loadingError = $state("");
   let ready = $state(false);
-  let materials = $state<MaterialInfo[]>([]);
-  let recentRuns = $state<HistoryEntry[]>([]);
 
   let config = $derived(getConfig());
-  let valid = $derived(isConfigValid());
   let status = $derived(getStatus());
-  let schedulerState = $derived(getSchedulerState());
   let result = $derived(getResult());
   let historyOpen = $derived(getHistoryOpen());
 
+  // Popup state
+  let materialPopupOpen = $state(false);
+  let materialPopupLayerIndex = $state(0);
+  let elementPopupOpen = $state(false);
+  let elementPopupSymbol = $state("");
+  let elementPopupEnrichment = $state<Record<number, number> | undefined>(undefined);
+  let isotopePopupOpen = $state(false);
+  let isotopePopupData = $state({ name: "", Z: 0, A: 0, nuclearState: "" });
+
   // Must call initScheduler synchronously in component context for $effect
   initScheduler();
+  initDepthPreview();
 
   onMount(async () => {
     await registerServiceWorker();
 
-    // Initialize DataStore with timeout and error handling
     loadingState = "Loading nuclear data...";
     loadingProgress = 0;
 
     const TIMEOUT_MS = 30_000;
     try {
-      const loadPromise = initDataStore("./data/parquet", (msg, fraction) => {
+      const loadPromise = initDataStore("./data/parquet", (msg: string, fraction?: number) => {
         loadingState = msg;
         if (fraction !== undefined) loadingProgress = fraction;
       });
@@ -81,28 +91,21 @@
       setConfig(urlConfig);
     }
 
-    // Load recent history
-    try {
-      const all = await getAllRuns();
-      recentRuns = all.slice(0, 3);
-    } catch { /* IndexedDB may not be available */ }
-
     loadingState = "Ready";
     loadingProgress = 1;
     ready = true;
   });
 
   // Update URL hash when config changes (debounced)
-  let urlTimer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     const c = config;
     if (!ready) return;
-    if (urlTimer) clearTimeout(urlTimer);
-    urlTimer = setTimeout(() => {
+    const timer = setTimeout(() => {
       if (isConfigValid()) {
         setConfigInHash(c);
       }
     }, 500);
+    return () => clearTimeout(timer);
   });
 
   // Auto-save to history when results arrive
@@ -111,51 +114,35 @@
     const r = result;
     if (r && r.timestamp !== lastSavedTimestamp) {
       lastSavedTimestamp = r.timestamp;
-      saveRun(r.config, r).then(() => {
-        getAllRuns().then((all) => { recentRuns = all.slice(0, 3); });
-      });
+      saveRun(r.config, r).catch(() => {});
     }
   });
 
-  function loadHistoryEntry(entry: HistoryEntry) {
-    setConfig({ ...entry.config });
+  // Material popup handlers
+  function openMaterialPopup(layerIndex: number) {
+    materialPopupLayerIndex = layerIndex;
+    materialPopupOpen = true;
   }
 
-  function formatTime(ts: number): string {
-    const d = new Date(ts);
-    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  }
-
-  function loadPreset(presetId: string) {
-    const preset = PRESETS.find((p) => p.id === presetId);
-    if (preset) {
-      setConfig({ ...preset.config });
+  function onMaterialSelected(material: string) {
+    const layers = getLayers();
+    if (materialPopupLayerIndex < layers.length) {
+      updateLayer(materialPopupLayerIndex, {
+        ...layers[materialPopupLayerIndex],
+        material,
+        enrichment: undefined,
+      });
     }
   }
 
-  function handleRun() {
-    forceRun();
+  function openIsotopePopup(data: { name: string; Z: number; A: number; state: string }) {
+    isotopePopupData = { name: data.name, Z: data.Z, A: data.A, nuclearState: data.state };
+    isotopePopupOpen = true;
   }
-
-  let runBtnLabel = $derived(
-    status === "loading" || status === "running"
-      ? "Running..."
-      : schedulerState === "ready"
-        ? "Results Ready"
-        : "Run Simulation",
-  );
 </script>
 
 <main>
-  <header>
-    <h1>HYRR</h1>
-    <p class="subtitle">Hierarchical Yield &amp; Radionuclide Rates</p>
-    <div class="header-actions">
-      <button class="history-btn" onclick={toggleHistory}>
-        {historyOpen ? "Close History" : "History"}
-      </button>
-    </div>
-  </header>
+  <HeaderBar />
 
   {#if !ready}
     <div class="loading">
@@ -170,76 +157,69 @@
       {/if}
     </div>
   {:else}
-    <div class="layout">
-      <aside class="sidebar">
-        {#if recentRuns.length > 0}
-          <section>
-            <h2>Recent Runs</h2>
-            <ul class="preset-list">
-              {#each recentRuns as entry}
-                <li>
-                  <button onclick={() => loadHistoryEntry(entry)}>
-                    <strong>{entry.label}</strong>
-                    <span class="preset-desc">{formatTime(entry.timestamp)}</span>
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          </section>
-        {/if}
+    <div class="app-flow">
+      <div class="config-row">
+        <BeamConfigBar />
+      </div>
 
-        <section>
-          <h2>Presets</h2>
-          <ul class="preset-list">
-            {#each PRESETS as preset}
-              <li>
-                <button onclick={() => loadPreset(preset.id)}>
-                  <strong>{preset.name}</strong>
-                  <span class="preset-desc">{preset.description}</span>
-                </button>
-              </li>
-            {/each}
-          </ul>
-        </section>
+      <LayerStackHorizontal onmaterialclick={openMaterialPopup} />
 
-        <section>
-          <h2>Beam</h2>
-          <BeamConfig />
-        </section>
+      <PlotDepthProfileLive />
 
-        <section>
-          <h2>Target Stack</h2>
-          <LayerStack {materials} />
-        </section>
+      <LayerTable />
 
+      {#if status === "loading" || status === "running"}
+        <div class="status-bar">
+          <div class="spinner"></div>
+          <span>{getProgress()}</span>
+        </div>
+      {/if}
 
-        <button
-          class="run-btn"
-          disabled={!valid || status === "loading" || status === "running"}
-          onclick={handleRun}
-        >
-          {runBtnLabel}
-        </button>
-      </aside>
+      {#if result}
+        <PlotActivityCurve {result} />
+        <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
+      {/if}
+    </div>
 
-      <div class="main-area">
-        {#if historyOpen}
-          <div class="history-drawer">
-            <section class="panel">
-              <HistoryPanel />
-              <HistoryImportExport />
-            </section>
+    {#if historyOpen}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="history-overlay" onclick={() => setHistoryOpen(false)}></div>
+      <div class="history-drawer">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">History</span>
+            <button class="close-btn" onclick={() => setHistoryOpen(false)}>&times;</button>
           </div>
-        {/if}
-
-        <div class="results">
-          <section>
-            <h2>Results</h2>
-            <ResultsPanel />
-          </section>
+          <HistoryPanel />
+          <HistoryImportExport />
         </div>
       </div>
-    </div>
+    {/if}
+
+    <!-- Popups -->
+    <MaterialPopup
+      open={materialPopupOpen}
+      onclose={() => materialPopupOpen = false}
+      onselect={onMaterialSelected}
+      materials={[]}
+    />
+
+    <ElementPopup
+      open={elementPopupOpen}
+      onclose={() => elementPopupOpen = false}
+      element={elementPopupSymbol}
+      enrichment={elementPopupEnrichment}
+      onchange={(e) => { elementPopupEnrichment = e; elementPopupOpen = false; }}
+    />
+
+    <IsotopePopup
+      open={isotopePopupOpen}
+      onclose={() => isotopePopupOpen = false}
+      name={isotopePopupData.name}
+      Z={isotopePopupData.Z}
+      A={isotopePopupData.A}
+      nuclearState={isotopePopupData.nuclearState}
+    />
   {/if}
 </main>
 
@@ -252,60 +232,9 @@
   }
 
   main {
-    max-width: 1400px;
+    max-width: 1600px;
     margin: 0 auto;
-    padding: 1rem;
-  }
-
-  header {
-    text-align: center;
-    padding: 1rem 0;
-    border-bottom: 1px solid #2d333b;
-    margin-bottom: 1rem;
-    position: relative;
-  }
-
-  h1 {
-    margin: 0;
-    font-size: 2rem;
-    letter-spacing: 0.1em;
-    color: #58a6ff;
-  }
-
-  .subtitle {
-    margin: 0.25rem 0 0;
-    color: #8b949e;
-    font-size: 0.9rem;
-  }
-
-  .header-actions {
-    position: absolute;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
-  }
-
-  .history-btn {
-    background: #0d1117;
-    border: 1px solid #2d333b;
-    border-radius: 4px;
-    color: #8b949e;
-    padding: 0.4rem 0.75rem;
-    font-size: 0.8rem;
-    cursor: pointer;
-  }
-
-  .history-btn:hover {
-    border-color: #58a6ff;
-    color: #e1e4e8;
-  }
-
-  h2 {
-    font-size: 0.9rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #8b949e;
-    margin: 0 0 0.5rem;
+    padding: 0.5rem 1rem 2rem;
   }
 
   .loading {
@@ -351,121 +280,100 @@
     background: #1c2128;
   }
 
-  .layout {
-    display: grid;
-    grid-template-columns: 320px 1fr;
-    gap: 1rem;
-    align-items: start;
-  }
-
-  .sidebar {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .sidebar section {
-    background: #161b22;
-    border: 1px solid #2d333b;
-    border-radius: 6px;
-    padding: 1rem;
-  }
-
-  .preset-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .preset-list button {
-    width: 100%;
-    text-align: left;
-    background: #0d1117;
-    border: 1px solid #2d333b;
-    border-radius: 4px;
-    padding: 0.5rem;
-    color: #e1e4e8;
-    cursor: pointer;
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-
-  .preset-list button:hover {
-    border-color: #58a6ff;
-    background: #1c2128;
-  }
-
-  .preset-desc {
-    font-size: 0.75rem;
-    color: #8b949e;
-  }
-
-  .run-btn {
-    padding: 0.75rem;
-    background: #238636;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .run-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .run-btn:not(:disabled):hover {
-    background: #2ea043;
-  }
-
-  .main-area {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-
-  .history-drawer {
-    animation: slideDown 0.2s ease-out;
-  }
-
-  @keyframes slideDown {
-    from {
-      opacity: 0;
-      transform: translateY(-10px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .panel {
-    background: #161b22;
-    border: 1px solid #2d333b;
-    border-radius: 6px;
-    padding: 1rem;
+  .app-flow {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
   }
 
-  .results {
+  .config-row {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    justify-content: center;
+    padding: 1rem;
+    color: #8b949e;
     background: #161b22;
     border: 1px solid #2d333b;
     border-radius: 6px;
-    padding: 1rem;
-    min-height: 400px;
   }
 
-  @media (max-width: 768px) {
-    .layout {
-      grid-template-columns: 1fr;
-    }
+  .spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #2d333b;
+    border-top-color: #58a6ff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .history-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 499;
+  }
+
+  .history-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 400px;
+    height: 100vh;
+    z-index: 500;
+    overflow-y: auto;
+    animation: slideIn 0.2s ease-out;
+  }
+
+  @keyframes slideIn {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+
+  .panel {
+    background: #161b22;
+    border-left: 1px solid #2d333b;
+    padding: 1rem;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .panel-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #e1e4e8;
+  }
+
+  .close-btn {
+    background: none;
+    border: none;
+    color: #8b949e;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+  }
+
+  .close-btn:hover {
+    color: #e1e4e8;
+    background: #21262d;
   }
 </style>
