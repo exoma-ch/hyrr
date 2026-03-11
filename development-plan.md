@@ -25,7 +25,7 @@ Replace the current architecture (Python wrapper → subprocess → Fortran bina
 |---|---|---|
 | Language | Python (NumPy/SciPy) | Computation is trivial (~20 ms), entire ecosystem is Python |
 | Data storage | SQLite (stdlib) | Indexed lookups by composite key, zero dependencies, single file |
-| DataFrames | Polars | Faster, better API, new project — no legacy pandas baggage |
+| DataFrames | NumPy core, polars/pandas optional | Core computation uses plain numpy arrays — one code path for pip and WASM. Polars and pandas are lazy-imported only for export (`to_polars()`, `to_pandas()`), not required at runtime. |
 | Materials | py-mat (MorePET/py-mat) | Already provides hierarchical materials with density + composition |
 | Stopping powers | PSTAR/ASTAR tables | NIST reference data, replaces inaccurate bare Bethe-Bloch |
 | Parallelism | Not needed | Single simulation < 20 ms; batch parallelism can be added later |
@@ -203,8 +203,9 @@ class IsotopeResult:
     half_life_s: float | None
     production_rate: float       # [s⁻¹]
     saturation_yield_Bq_uA: float
-    activity: pl.DataFrame       # time vs activity (irradiation + cooling)
-    yield_curve: pl.DataFrame    # time vs yield [Bq/mAh]
+    time_s: np.ndarray           # time points [s] (irradiation + cooling)
+    activity_Bq: np.ndarray      # activity at each time point [Bq]
+    yield_Bq_per_mAh: np.ndarray # yield at each time point [Bq/mAh]
 
 @dataclass
 class StackResult:
@@ -216,11 +217,20 @@ class StackResult:
     def purity_at(self, cooling_time_s: float, isotope: str) -> float:
         """Fraction of total activity from specified isotope at given cooling time."""
 
-    def to_polars(self) -> pl.DataFrame:
-        """All results as a single DataFrame."""
+    def to_polars(self) -> "pl.DataFrame":
+        """All results as Polars DataFrame. Requires: pip install hyrr[polars]"""
+
+    def to_pandas(self) -> "pd.DataFrame":
+        """All results as Pandas DataFrame. Requires: pip install hyrr[pandas]"""
 
     def to_excel(self, path: str) -> None:
-        """Formatted export for logbook/reporting."""
+        """Formatted export for logbook/regulatory use."""
+
+    def to_json(self) -> str:
+        """Structured JSON export (config + results), re-importable."""
+
+    def to_csv_bundle(self, path: str) -> None:
+        """Zip of CSVs (one per layer, one summary, one per depth profile)."""
 
     def summary(self) -> str:
         """Printable text summary (similar to ISOTOPIA output format)."""
@@ -349,6 +359,7 @@ Tasks:
   - `get_natural_abundances(Z) → dict[A, abundance]`
   - `get_decay_data(Z, A, state) → DecayInfo`
   - Connection management, caching of frequently accessed tables
+- [ ] Store data version metadata in SQLite (`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`) — track TENDL version, build date, hyrr version, source hashes. Enables reproducibility: shared configs can reference the exact data version used.
 - [ ] Validate: compare queried cross-sections against ISOTOPIA sample outputs
 
 ### Phase 2: Stopping power
@@ -456,21 +467,184 @@ Tasks:
 - [ ] **Purity at time of use**: `result.purity_at(cooling_time, isotope)` → fraction of total activity
 - [ ] **Monitor reactions**: flag layers as monitors, compare computed vs expected activity for beam current verification
 - [ ] **Beam current scan**: activity and heat vs current, with thermal warnings
+- [ ] **Full decay chains**: extend Bateman solver beyond single parent→daughter to full chains (e.g., Ac-225 → Fr-221 → At-217 → ...). Required for therapeutic isotopes where daughter activities matter clinically.
+- [ ] **Uncertainty propagation**: run simulations with ±1σ on cross-sections (TENDL provides covariance data). Simple approach: repeat integration with perturbed σ values, report uncertainty bands on activity/yield.
+- [ ] **General parameter sweep API**: `hyrr.sweep(stack, param="beam.energy_MeV", values=range(10, 30))` — sweep any parameter (energy, current, enrichment, thickness), return results as DataFrame. Subsumes energy scan and current scan as special cases.
+- [ ] **CLI `hyrr compare`**: diff two results (from JSON files or two inline runs). Side-by-side table of activities, yields, deviations. Researchers constantly compare "what if I change energy from 16 to 18 MeV?"
 
 ### Phase 8: Output & reporting
 
 **Goal**: Get results out of notebooks and into papers/reports.
 
 Tasks:
-- [ ] `result.to_polars()` — all results as Polars DataFrames
+- [ ] `result.to_polars()` — lazy-import polars, export all results as Polars DataFrame (`pip install hyrr[polars]`)
+- [ ] `result.to_pandas()` — lazy-import pandas, export all results as Pandas DataFrame (`pip install hyrr[pandas]`)
 - [ ] `result.summary()` — text output similar to ISOTOPIA format (for comparison/validation)
 - [ ] `result.to_excel()` — formatted spreadsheet for logbook/regulatory use
+- [ ] `result.to_json()` — structured JSON export (config + results), machine-readable, re-importable
+- [ ] `result.to_csv_bundle(path)` — zip of CSVs (one per layer, one summary, one per depth profile)
+- [ ] `StackResult.from_json(path_or_str)` — re-import a saved JSON result
+- [ ] `TargetStack.to_config_json()` — export just the input config (beam + layers + times), lightweight
+- [ ] `TargetStack.from_config_json()` — reconstruct a run from saved/shared config
 - [ ] Plotting module (`plotting.py`):
   - Depth profiles (heat, activity) with layer annotations
   - Activity vs time (irradiation + cooling) per isotope
   - Energy scan results
   - Purity vs cooling time
   - Support both matplotlib (publication) and plotly (interactive/notebook)
+  - EXFOR experimental data overlay on cross-section plots (measured vs TENDL curves) — low effort, high value for validation and publications
+- [ ] `hyrr compare` output: formatted diff table (terminal + HTML) for two StackResults
+
+### Phase 9: Interactive web frontend
+
+**Goal**: A serverless web application on GitHub Pages — zero backend, zero cost, zero auth. Users configure beam/target parameters, run simulations in-browser, and explore results interactively.
+
+#### 9a: Marimo prototype (quick win)
+
+[Marimo](https://marimo.io) reactive notebooks as a local/demo app while the full frontend is developed.
+
+Tasks:
+- [ ] Add `marimo` to optional dependencies (`pip install hyrr[app]`)
+- [ ] Build interactive notebook/app with beam config, target stack builder, live plots
+- [ ] Deploy as standalone app via `marimo run` (containerized or local)
+- [ ] Add preset configurations for common production scenarios (Tc-99m, F-18, etc.)
+
+#### 9b: Serverless WASM frontend (primary target)
+
+Fully client-side: Pyodide runs hyrr in the browser, nuclear data is lazy-loaded and cached, history lives in IndexedDB. Hosted as static files on GitHub Pages.
+
+**Architecture:**
+
+```
+GitHub Pages (static files, free)
+├── index.html + bundle.js (Svelte)
+├── pyodide + hyrr + numpy + scipy (WASM, ~28 MB, cached)
+├── data/
+│   ├── schema.sql                   # CREATE TABLE + CREATE INDEX statements
+│   ├── meta.sql.gz                  # INSERT statements: abundances + decay (~100 KB)
+│   ├── stopping.sql.gz              # INSERT statements: PSTAR/ASTAR (~200 KB)
+│   └── xs/
+│       ├── p_Mo.sql.gz              # INSERT statements: p + Mo cross-sections (~500 KB each)
+│       ├── p_O.sql.gz
+│       ├── a_Bi.sql.gz
+│       └── ...                      # ~370 files (5 projectiles × 74 elements)
+
+Browser
+├── Compute:   Pyodide + hyrr + sql.js (SQLite in WASM)
+├── Plots:     Plotly.js
+├── History:   IndexedDB (full run configs + results, persistent, unlimited)
+├── Settings:  localStorage
+└── Sharing:   URL hash encoding (#config=base64...)
+```
+
+**Single-database chunked loading:**
+
+The pip-installed hyrr and the browser hyrr use identical SQL queries against the same schema. The only difference is how data enters the database:
+
+- **pip version**: opens `hyrr.sqlite` directly (single file, all data)
+- **WASM version**: creates an empty in-memory SQLite via sql.js, then loads SQL INSERT chunks on demand
+
+This means `db.py` needs zero changes — one code path for both environments.
+
+**Data chunk format and loading flow:**
+
+The build pipeline (`data/build_chunks.py`) exports the master `hyrr.sqlite` into gzipped SQL INSERT files:
+
+```sql
+-- xs/p_Mo.sql.gz (after decompression)
+INSERT INTO cross_sections VALUES ('p',42,92,43,92,'',8.0,5.21,'iaea.2024');
+INSERT INTO cross_sections VALUES ('p',42,92,43,92,'',8.5,6.73,'iaea.2024');
+...
+```
+
+Browser-side loading sequence:
+
+```js
+// 1. Create empty database with schema (instant)
+const db = new SQL.Database();
+db.run(SCHEMA_SQL);  // CREATE TABLEs, no data yet
+
+// 2. Always load meta + stopping on init (tiny, <500 KB total)
+await loadChunk(db, "/data/meta.sql.gz");      // abundances + decay
+await loadChunk(db, "/data/stopping.sql.gz");   // PSTAR/ASTAR
+
+// 3. On demand — user configures Mo target with protons
+await loadChunk(db, "/data/xs/p_Mo.sql.gz");
+
+// 4. User adds Havar window → parallel fetch
+await Promise.all([
+    loadChunk(db, "/data/xs/p_Co.sql.gz"),
+    loadChunk(db, "/data/xs/p_Cr.sql.gz"),
+    loadChunk(db, "/data/xs/p_Ni.sql.gz"),
+    loadChunk(db, "/data/xs/p_Fe.sql.gz"),
+    loadChunk(db, "/data/xs/p_W.sql.gz"),
+]);
+
+// 5. Build indexes after loading (once, or deferred)
+db.run("CREATE INDEX IF NOT EXISTS idx_reaction ON cross_sections(...)");
+
+// Now hyrr (via Pyodide) queries this db — identical SQL to pip version
+```
+
+All fetched chunks are cached in IndexedDB — never re-downloaded on subsequent visits.
+First simulation: ~1-2 MB total. Subsequent: instant from cache.
+
+**Shareable URL configs:**
+
+```
+https://morepet.github.io/hyrr/#config=eyJiZWFtIjp7InByb2plY3...
+
+decodes to:
+{
+  "beam": {"projectile": "p", "energy_MeV": 16, "current_mA": 0.15},
+  "layers": [
+    {"material": "havar", "thickness_cm": 0.0025},
+    {"material": "Mo-100", "enrichment": 0.995, "energy_out_MeV": 12}
+  ],
+  "irradiation_s": 86400,
+  "cooling_s": 86400
+}
+```
+
+Colleague clicks link → app loads with exact config → hits run. No account needed.
+
+**Browser-side history (IndexedDB):**
+
+```
+runs: {
+  id, timestamp, label,
+  config: { beam, layers, irradiation, cooling },
+  results: { activities, summary, ... }
+}
+```
+
+Users get a history table: re-run, compare side-by-side, export, delete. All local, no auth.
+
+Tasks:
+- [ ] Write `data/build_chunks.py` — export `hyrr.sqlite` into per-element `.sql.gz` INSERT chunks + `schema.sql` + `meta.sql.gz` + `stopping.sql.gz`
+- [ ] Svelte frontend: beam config, dynamic layer builder, material selector
+- [ ] Pyodide integration: load hyrr in Web Worker, run simulations off main thread
+- [ ] sql.js integration: load per-element SQLite chunks on demand
+- [ ] Service Worker: cache WASM bundles + nuclear data in Cache API / IndexedDB
+- [ ] Plotly.js result visualization (depth profiles, cooling curves, activity tables)
+- [ ] IndexedDB history store with compare/export/delete
+- [ ] URL hash config encoding/decoding for shareable links
+- [ ] JSON/CSV export from browser (download generated files)
+- [ ] Loading UX: progress bar for first-time WASM download, instant on revisit
+- [ ] GitHub Actions workflow: build Svelte → deploy to gh-pages branch
+- [ ] Preset configs shipped as static JSON (Tc-99m, F-18, Ge-68, At-211, Ac-225)
+
+**No DataFrame dependency in WASM**: since the core uses plain numpy arrays (polars/pandas are optional export-only), the WASM build has no DataFrame compatibility issues. NumPy and SciPy both have stable Pyodide builds.
+
+#### 9c: Optional server-side extension (if needed later)
+
+If HYRR grows into a shared platform requiring persistent cross-user features (team presets, shared history, institutional deployment), a thin server layer can be added:
+
+- **Backend**: FastAPI + MariaDB/SQLite for user history, shared configs, team management
+- **Frontend**: same Svelte app, extended with auth (ETH OIDC/Shibboleth) and sync
+- **Deployment**: ETH VM or container, reverse-proxied
+
+This is only warranted if cross-user collaboration features are needed — the serverless WASM app covers individual and link-shared use cases fully.
 
 ---
 
@@ -480,12 +654,18 @@ Tasks:
 ```
 numpy >= 1.24
 scipy >= 1.11
-polars >= 1.0
 matplotlib >= 3.7
 pymat @ git+https://github.com/MorePET/py-mat.git
 ```
 
-Note: `sqlite3` is Python stdlib — no dependency. No h5py, no pandas, no Fortran.
+Note: `sqlite3` is Python stdlib — no dependency. No h5py, no Fortran.
+
+### Optional (export formats)
+```
+polars >= 1.0       # pip install hyrr[polars]
+pandas >= 2.0       # pip install hyrr[pandas]
+openpyxl >= 3.1     # pip install hyrr[excel] (for to_excel)
+```
 
 ### Development
 ```
@@ -552,8 +732,25 @@ Every phase must validate against known results before proceeding.
 
 1. **TENDL version pinning**: Ship hyrr.sqlite built from TENDL-2023 (current in isotopia.libs). How to handle future TENDL releases? Rebuild script + versioned database files?
 2. **EXFOR experimental data**: The isotopia.libs also contain EXFOR measured cross-sections. Include in SQLite as separate source? Useful for validation/comparison plots but not needed for production calculations.
-3. **Database distribution**: ~200-300 MB SQLite is too large for PyPI (100 MB limit). Options: separate data package, GitHub release asset, or zenodo DOI with download-on-first-use.
-4. **Decay chain depth**: ISOTOPIA tracks one generation of parent→daughter decay. Extend to full chains? Relevant for long-lived daughters (e.g., Ac-225 → Fr-221 → At-217 → ...).
+3. **Database distribution**: ~200-300 MB SQLite is too large for PyPI (100 MB limit). Partially solved by the WASM lazy-loading architecture (Phase 9b) — the same chunked approach works for pip users: `hyrr download-data` can fetch per-element chunks from GitHub Pages/release assets and assemble locally, or fetch a single file from a GitHub release. No need for a separate distribution mechanism.
 5. **Non-TENDL cross-sections**: Some users may want to use their own measured cross-sections or alternative libraries (ENDF, JENDL). Plugin architecture for data sources?
 6. **Natural element targets**: ISOTOPIA's `mass 0` mode runs all stable isotopes of an element separately. With compounds + natural abundances, hyrr handles this automatically. Verify equivalence.
 7. **Temperature/pressure dependent density**: py-mat has factory functions for this (water, air). Relevant for gas targets? Niche but possible.
+
+---
+
+## 10. Future features (parked)
+
+### MSTAR alpha stopping power coefficients
+
+The libdEdx repository contains `MSTAR.dat` / `mstarEng.dat` — alpha stopping power data covering 4 elements beyond ASTAR (B Z=5, Ni Z=28, Zr Z=40, Ta Z=73). However, **MSTAR files contain raw coefficients, not direct stopping powers**. They require M. Paul effective charge scaling implemented in libdEdx's C code (`_dedx_calculate_mspaul_coef()`). Without porting that formula to Python, the raw values are unusable (~99% deviation from ASTAR). Currently these elements are handled by the pycatima/SRIM fallback, so MSTAR adds no coverage benefit. If the M. Paul scaling is ever needed, the implementation lives in `libdedx/dedx_mstar.c`.
+
+### ICRU73 heavy-ion stopping power
+
+Downloaded from libdEdx: `ICRU73.dat` / `icru73Eng.dat` (896 blocks, 53 energy points each). Covers heavy ions with projectile A=3→18 (Li through Ar) on ~25 target elements. Format: `#target_Z:projectile_A:NPTS`. Integration would require:
+
+1. Extending the `stopping_power` DB table with a `projectile_A` column
+2. Extending `stopping.py` to handle arbitrary projectile masses beyond p/d/t/h/a
+3. Extending `models.py` `ProjectileType` to support heavy ions
+
+This is relevant for heavy-ion therapy research and exotic isotope production but outside the current scope (proton/deuteron/triton/He-3/alpha beams).

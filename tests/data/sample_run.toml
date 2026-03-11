@@ -1,0 +1,16 @@
+irradiation_s = 86400
+cooling_s = 86400
+
+[beam]
+projectile = "p"
+energy_MeV = 16.0
+current_mA = 0.150
+
+[[layers]]
+material = "Mo"
+thickness_cm = 0.02
+is_monitor = false
+
+[layers.enrichment.Mo]
+100 = 0.999
+98 = 0.001

@@ -24,22 +24,37 @@ dependencies = [
     "polars>=1.0",
     "matplotlib>=3.9",
     "pymat @ git+https://github.com/MorePET/py-mat.git@latest",
+    "xlsxwriter>=3.2.9",
+    "pycatima>=1.9",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
+    "nbmake>=1.5",
     "ruff>=0.3",
-    "mypy>=1.10",
+    "pyright>=1.1",
     "pre-commit>=3.6",
     "ipykernel>=6.0",
     "jupyter>=1.0",
 ]
+server = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+]
+pandas = [
+    "pandas>=2.0",
+]
 plotting = [
     "plotly>=5.17",
 ]
-all = ["hyrr[dev,plotting]"]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+    "mkdocs-jupyter>=0.24",
+]
+all = ["hyrr[dev,pandas,plotting,docs,server]"]
 
 [project.scripts]
 hyrr = "hyrr.cli:main"
@@ -60,7 +75,11 @@ packages = ["src/hyrr"]
 [dependency-groups]
 dev = [
     "hatchling>=1.25",
+    "ipykernel>=6.31.0",
+    "nbmake>=1.5",
+    "pandas>=2.0",
     "pytest>=9.0.2",
+    "pytest-benchmark>=4.0",
     "pytest-cov>=7.0.0",
     "rich>=13.0.0",
 ]
@@ -77,26 +96,26 @@ ignore = ["E501"]
 [tool.ruff.lint.isort]
 known-first-party = ["hyrr"]
 
-# MyPy
-[tool.mypy]
-python_version = "3.12"
-check_untyped_defs = true
-disallow_incomplete_defs = true
-disallow_untyped_defs = true
-no_implicit_optional = true
-warn_redundant_casts = true
-warn_unused_ignores = true
-strict_equality = true
-
-[[tool.mypy.overrides]]
-module = ["matplotlib.*", "plotly.*", "pymat.*"]
-ignore_missing_imports = true
+# Pyright
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportMissingImports = "warning"
+venvPath = "."
+venv = ".venv"
 
 # Pytest
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q --strict-markers --strict-config"
-testpaths = ["tests"]
+testpaths = ["tests", "notebooks"]
+markers = [
+    "integration: end-to-end integration tests requiring parquet data",
+    "benchmark: performance benchmark tests",
+    "nbmake: notebook execution smoke tests",
+]
 
 # Coverage
 [tool.coverage.run]
