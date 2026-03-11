@@ -7,6 +7,7 @@
 
 import { AVOGADRO, LN2 } from "./constants";
 import {
+  PROJECTILE_A,
   PROJECTILE_Z,
   type Beam,
   type CurrentProfile,
@@ -15,10 +16,12 @@ import {
   type IsotopeResult,
   type Layer,
   type LayerResult,
+  type ProjectileType,
   type StackResult,
   type TargetStack,
   layerAverageAtomicMass,
 } from "./types";
+import { buildReactionNotation } from "../utils/format";
 import { trapezoid } from "./interpolation";
 import {
   computeEnergyOut,
@@ -189,6 +192,13 @@ function computeLayer(
         const stateSuffix = xs.state || "";
         const name = `${symbol}-${xs.residualA}${stateSuffix}`;
 
+        // Build reaction notation for this channel
+        const projA = PROJECTILE_A[projectile as ProjectileType] ?? 1;
+        const reaction = buildReactionNotation(
+          projectileZ, projA, elem.Z, A,
+          xs.residualZ, xs.residualA,
+        );
+
         const { timeGrid, activity } = batemanActivity(
           scaledRate, halfLife, irrTime, coolTime,
         );
@@ -203,6 +213,12 @@ function computeLayer(
           const { timeGrid: combinedTg, activity: combinedAct } =
             batemanActivity(combinedRate, halfLife, irrTime, coolTime);
 
+          // Merge reaction strings (deduplicate)
+          const mergedReactions = existing.reactions ? [...existing.reactions] : [];
+          if (!mergedReactions.includes(reaction)) {
+            mergedReactions.push(reaction);
+          }
+
           isotopeResults.set(name, {
             ...existing,
             productionRate: combinedRate,
@@ -210,6 +226,7 @@ function computeLayer(
             activityBq: combinedAct.length > 0 ? combinedAct[combinedAct.length - 1] : 0,
             timeGridS: combinedTg,
             activityVsTimeBq: combinedAct,
+            reactions: mergedReactions,
           });
         } else {
           isotopeResults.set(name, {
@@ -225,6 +242,7 @@ function computeLayer(
             activityIngrowthBq: 0,
             activityDirectVsTimeBq: new Float64Array(0),
             activityIngrowthVsTimeBq: new Float64Array(0),
+            reactions: [reaction],
           });
         }
       }
@@ -499,6 +517,7 @@ function applyChainSolverByComponent(
         activityIngrowthBq: ingrowthFinal,
         activityDirectVsTimeBq: directActivity,
         activityIngrowthVsTimeBq: ingrowthActivity,
+        reactions: existing?.reactions,
       });
     }
   }

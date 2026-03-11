@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { SimulationResult } from "../types";
   import { formatHalfLife } from "../plotting/plotly-helpers";
-  import { fmtActivity, fmtYield } from "../utils/format";
+  import { fmtActivity, fmtYield, fmtDoseRate } from "../utils/format";
+  import { getDoseConstant } from "../utils/dose-constants";
   import { toggleIsotope, isSelected, clearSelection, getSelectedIsotopes } from "../stores/selection.svelte";
 
   interface Props {
@@ -11,7 +12,7 @@
 
   let { result, onisotopeclick }: Props = $props();
 
-  type SortKey = "name" | "activity" | "half_life" | "layer" | "direct" | "daughter" | "rnp";
+  type SortKey = "name" | "activity" | "half_life" | "layer" | "direct" | "daughter" | "rnp" | "dose";
   let sortKey = $state<SortKey>("activity");
   let sortAsc = $state(false);
   let filterText = $state("");
@@ -32,6 +33,8 @@
     activity_direct_Bq: number;
     activity_ingrowth_Bq: number;
     rnp_pct: number;
+    dose_uSv_h: number | null;
+    reactions: string[];
   }
 
   let rows = $derived.by(() => {
@@ -64,6 +67,7 @@
           activity_direct_Bq: direct,
           activity_ingrowth_Bq: ingrowth,
           rnp_pct: layerTotal > 0 ? (iso.activity_Bq / layerTotal) * 100 : 0,
+          reactions: iso.reactions ?? [],
         });
       }
     }
@@ -101,16 +105,13 @@
     }
   }
 
-  function sourceColor(source: string): string {
-    if (source === "direct") return "#58a6ff";
-    if (source === "daughter") return "#bc8cff";
-    return "#7ee787";
-  }
-
   function exportCSV() {
-    const headers = ["Layer", "Isotope", "Z", "A", "Half-life", "Activity (Bq)", "Direct (Bq)", "Daughter (Bq)", "Sat. Yield (Bq/µA)", "RNP%", "Source"];
+    const headers = ["Layer", "Isotope", "Z", "A", "Half-life", "Activity (Bq)", "Direct (Bq)", "Daughter (Bq)", "Sat. Yield (Bq/µA)", "RNP%", "Reaction"];
     const lines = [headers.join(",")];
     for (const row of rows) {
+      const reactionStr = row.reactions.length > 0
+        ? row.reactions.join("; ")
+        : (row.source === "daughter" ? "decay" : "");
       lines.push([
         row.layerIndex + 1,
         `"${row.name}${row.state ? ` (${row.state})` : ""}"`,
@@ -122,7 +123,7 @@
         row.activity_ingrowth_Bq.toExponential(4),
         row.saturation_yield_Bq_uA.toExponential(4),
         row.rnp_pct.toFixed(2),
-        row.source,
+        `"${reactionStr}"`,
       ].join(","));
     }
     const blob = new Blob([lines.join("\n")], { type: "text/csv" });
@@ -172,7 +173,7 @@
           <th class="col-z">Z</th>
           <th class="col-a">A</th>
           <th class="col-hl sortable" onclick={() => toggleSort("half_life")}>t½</th>
-          <th class="col-src">Source</th>
+          <th class="col-reaction">Reaction</th>
           <th class="col-act sortable" onclick={() => toggleSort("direct")}>Direct</th>
           <th class="col-act sortable" onclick={() => toggleSort("daughter")}>Daughter</th>
           <th class="col-act sortable" onclick={() => toggleSort("activity")}>Total</th>
@@ -202,8 +203,14 @@
             <td class="col-z">{row.Z}</td>
             <td class="col-a">{row.A}</td>
             <td class="col-hl">{formatHalfLife(row.half_life_s)}</td>
-            <td class="col-src">
-              <span class="source-badge" style="color: {sourceColor(row.source)}">{row.source}</span>
+            <td class="col-reaction">
+              {#if row.reactions.length > 0}
+                {#each row.reactions as rxn}
+                  <span class="reaction-tag" style="color: #58a6ff">{rxn}</span>
+                {/each}
+              {:else if row.source === "daughter"}
+                <span class="reaction-tag" style="color: #bc8cff">decay</span>
+              {/if}
             </td>
             <td class="col-act">{fmtActivity(row.activity_direct_Bq)}</td>
             <td class="col-act">{fmtActivity(row.activity_ingrowth_Bq)}</td>
@@ -331,7 +338,7 @@
   .col-z { width: 28px; }
   .col-a { width: 28px; }
   .col-hl { width: 70px; }
-  .col-src { width: 55px; text-align: center; }
+  .col-reaction { text-align: left; white-space: normal; min-width: 80px; }
   .col-act { width: auto; }
   .col-yield { width: auto; }
   .col-rnp { width: 55px; }
@@ -371,8 +378,10 @@
     text-decoration: underline;
   }
 
-  .source-badge {
-    font-size: 0.6rem;
-    font-weight: 500;
+  .reaction-tag {
+    font-size: 0.65rem;
+    font-weight: 400;
+    display: inline-block;
+    margin-right: 0.3rem;
   }
 </style>

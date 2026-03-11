@@ -55,6 +55,8 @@ export interface IsotopeResultData {
   time_grid_s?: number[];
   /** Activity at each time point [Bq] */
   activity_vs_time_Bq?: number[];
+  /** Nuclear reaction notation strings (e.g., "¹⁰⁰Mo(p,2n)⁹⁹Tc") */
+  reactions?: string[];
 }
 
 export interface DepthPointData {

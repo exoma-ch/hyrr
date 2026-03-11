@@ -50,3 +50,86 @@ export function nudatUrl(Z: number, A: number, _state?: string): string {
   const sym = Z_TO_SYMBOL[Z] ?? "";
   return `https://www.nndc.bnl.gov/nudat3/getdataset.jsp?nucleus=${A}${sym.toUpperCase()}`;
 }
+
+/** Unicode superscript digits for mass number formatting. */
+const SUPERSCRIPT_DIGITS = "\u2070\u00B9\u00B2\u00B3\u2074\u2075\u2076\u2077\u2078\u2079";
+
+/** Convert a number to unicode superscript. */
+function toSuperscript(n: number): string {
+  return String(n).split("").map((d) => SUPERSCRIPT_DIGITS[parseInt(d, 10)]).join("");
+}
+
+/** Known light particles by (Z, A). */
+const PARTICLE_MAP: Array<[number, number, string]> = [
+  [0, 0, "\u03B3"],
+  [0, 1, "n"],
+  [1, 1, "p"],
+  [1, 2, "d"],
+  [1, 3, "t"],
+  [2, 3, "\u00B3He"],
+  [2, 4, "\u03B1"],
+];
+
+/**
+ * Decompose total ejectile (Z, A) into known light particles.
+ * Greedy: tries heaviest particles first.
+ */
+function decomposeEjectiles(ejectileZ: number, ejectileA: number): string {
+  if (ejectileZ === 0 && ejectileA === 0) return "\u03B3";
+
+  let remZ = ejectileZ;
+  let remA = ejectileA;
+  const counts: Array<[string, number]> = [];
+
+  // Try particles from heaviest to lightest (skip γ)
+  for (let i = PARTICLE_MAP.length - 1; i >= 1; i--) {
+    const [pZ, pA, sym] = PARTICLE_MAP[i];
+    if (pZ === 0 && pA === 0) continue;
+    let count = 0;
+    while (remZ >= pZ && remA >= pA && (remZ > 0 || remA > 0)) {
+      remZ -= pZ;
+      remA -= pA;
+      count++;
+    }
+    if (count > 0) counts.push([sym, count]);
+  }
+
+  if (remZ !== 0 || remA !== 0) {
+    // Couldn't fully decompose — fall back to raw notation
+    return `Z=${ejectileZ},A=${ejectileA}`;
+  }
+
+  return counts.map(([sym, n]) => (n > 1 ? `${n}${sym}` : sym)).join("");
+}
+
+/**
+ * Build nuclear reaction notation string.
+ *
+ * Example: ¹⁰⁰Mo(p,2n)⁹⁹Tc
+ *
+ * Uses conservation laws to determine ejectile:
+ *   ejectileZ = targetZ + projZ - residualZ
+ *   ejectileA = targetA + projA - residualA
+ */
+export function buildReactionNotation(
+  projZ: number,
+  projA: number,
+  targetZ: number,
+  targetA: number,
+  residualZ: number,
+  residualA: number,
+): string {
+  const ejectileZ = targetZ + projZ - residualZ;
+  const ejectileA = targetA + projA - residualA;
+
+  const targetSym = Z_TO_SYMBOL[targetZ] ?? `Z${targetZ}`;
+  const residualSym = Z_TO_SYMBOL[residualZ] ?? `Z${residualZ}`;
+
+  // Projectile symbol
+  const projMatch = PARTICLE_MAP.find(([z, a]) => z === projZ && a === projA);
+  const projSym = projMatch ? projMatch[2] : `Z${projZ}`;
+
+  const ejectileSym = decomposeEjectiles(ejectileZ, ejectileA);
+
+  return `${toSuperscript(targetA)}${targetSym}(${projSym},${ejectileSym})${toSuperscript(residualA)}${residualSym}`;
+}

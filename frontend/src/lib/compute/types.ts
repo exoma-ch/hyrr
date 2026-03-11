@@ -167,6 +167,7 @@ export interface IsotopeResult {
   activityIngrowthBq: number;
   activityDirectVsTimeBq: Float64Array;
   activityIngrowthVsTimeBq: Float64Array;
+  reactions?: string[];
 }
 
 export interface LayerResult {
