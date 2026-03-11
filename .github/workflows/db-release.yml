@@ -1,0 +1,50 @@
+name: Build Database
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Database version (e.g., 2024.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-db:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --dev
+
+      # TODO: Download or checkout raw data sources
+      # For now, this workflow is a placeholder.
+      # In production, it would:
+      # 1. Download TENDL data from the appropriate source
+      # 2. Run build_db.py with all parsers
+      # 3. Compress and upload the resulting SQLite file
+
+      - name: Build database
+        run: |
+          echo "Database build would run here with:"
+          echo "  uv run python data/build_db.py --tendl-path ... --abundance-path ... --decay-path ... -o hyrr.sqlite"
+          echo "Placeholder for now — requires access to isotopia.libs data."
+
+      # When the actual build works:
+      # - name: Compress database
+      #   run: zstd -19 hyrr.sqlite -o hyrr-db-${{ inputs.version }}.sqlite.zst
+      #
+      # - name: Create release
+      #   uses: softprops/action-gh-release@v2
+      #   with:
+      #     tag_name: db-${{ inputs.version }}
+      #     name: "Database ${{ inputs.version }}"
+      #     body: "Pre-built HYRR database (TENDL-2023 + IAEA-2024)"
+      #     files: hyrr-db-${{ inputs.version }}.sqlite.zst

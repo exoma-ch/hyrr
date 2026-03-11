@@ -19,7 +19,7 @@ Pure Python package for predicting radio-isotope production in stacked target as
 
 - **Python only** — no Fortran, no subprocess calls. NumPy/SciPy for numerics.
 - **SQLite for all nuclear data** — stdlib, single file, indexed queries. No HDF5.
-- **Polars** — not pandas. All DataFrames use polars.
+- **NumPy core, polars/pandas optional** — core computation uses plain numpy arrays. Polars and pandas are lazy-imported for export only (`to_polars()`, `to_pandas()`). Enables single code path for pip and WASM.
 - **py-mat** (MorePET/py-mat) for materials — provides density + elemental composition.
 - **PSTAR/ASTAR tables** for stopping power — replaces bare Bethe-Bloch. Velocity scaling for d/t/³He.
 - **No parallelism needed** — single simulation < 20 ms.
@@ -33,7 +33,15 @@ Pure Python package for predicting radio-isotope production in stacked target as
 
 ## Development Plan
 
-See `development-plan.md` for the full 8-phase implementation plan.
+See `development-plan.md` for the full 9-phase implementation plan (Phases 1-8: Python library, Phase 9: serverless WASM frontend on GitHub Pages).
+
+## Frontend (`frontend/`)
+
+- Svelte + TypeScript + Vite
+- Runs hyrr in-browser via Pyodide (WASM)
+- Nuclear data: lazy-loaded SQL INSERT chunks merged into single in-memory SQLite via sql.js
+- History: IndexedDB (no backend, no auth)
+- Sharing: URL hash config encoding (#config=base64...)
 
 ## Conventions
 
