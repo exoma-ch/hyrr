@@ -103,14 +103,14 @@ export async function addSessionTab(): Promise<void> {
 
   // Deactivate previous active tab in IDB
   if (activeTabId !== null) {
-    updateSessionActive(activeTabId, false).catch(console.warn);
+    await updateSessionActive(activeTabId, false);
   }
 
   tabs = [...tabs, tab];
   activeTabId = tab.id;
 
   // Persist new tab as active
-  saveSession(toRecord(tab, true)).catch(console.warn);
+  await saveSession(toRecord(tab, true));
 }
 
 /** Switch to a tab — restores its config. */
@@ -125,7 +125,7 @@ export async function switchToTab(id: string): Promise<void> {
       currentTab.config = structuredClone(getConfig());
       currentTab.label = configLabel(currentTab.config);
       // Persist updated config and deactivate
-      saveSession(toRecord(currentTab, false)).catch(console.warn);
+      await saveSession(toRecord(currentTab, false));
     }
   }
 
@@ -133,7 +133,7 @@ export async function switchToTab(id: string): Promise<void> {
   setConfig(structuredClone(tab.config));
 
   // Mark new tab active in IDB
-  updateSessionActive(id, true).catch(console.warn);
+  await updateSessionActive(id, true);
 }
 
 /** Close a tab. If it's active, switch to the nearest neighbor. */
@@ -145,7 +145,7 @@ export async function closeTab(id: string): Promise<void> {
   tabs = tabs.filter((t) => t.id !== id);
 
   // Remove from IDB
-  deleteSession(id).catch(console.warn);
+  await deleteSession(id);
 
   if (wasActive && tabs.length > 0) {
     const newIdx = Math.min(idx, tabs.length - 1);
@@ -156,13 +156,12 @@ export async function closeTab(id: string): Promise<void> {
 }
 
 /** Update the stored config for the active tab (call when config changes). */
-export function syncActiveTab(): void {
+export async function syncActiveTab(): Promise<void> {
   if (activeTabId === null) return;
   const tab = tabs.find((t) => t.id === activeTabId);
   if (tab) {
     tab.config = structuredClone(getConfig());
     tab.label = configLabel(tab.config);
-    // Persist to IDB (fire-and-forget)
-    saveSession(toRecord(tab, true)).catch(console.warn);
+    await saveSession(toRecord(tab, true));
   }
 }

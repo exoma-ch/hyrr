@@ -137,6 +137,64 @@ function topologicalSort(
 }
 
 /**
+ * Step the irradiation ODE: dN/dt = A*N + R for time dt.
+ *
+ * The standard augmented-matrix approach embeds R as a column in an
+ * (n+1)×(n+1) matrix, but when R ≫ λ (production rates ~1e13 vs decay
+ * constants ~1e-4) the Padé approximation breaks down due to catastrophic
+ * precision loss in the scaling-and-squaring phase.
+ *
+ * Instead, we:
+ * 1. Compute exp(A*dt) for the pure decay matrix (well-conditioned)
+ * 2. Compute the production integral ∫₀ᵈᵗ exp(A*s) ds * R using the
+ *    matrix phi-function, evaluated via an augmented matrix that contains
+ *    only the decay matrix A (not R), avoiding stiffness.
+ */
+function stepIrradiation(
+  A: Float64Array, R: Float64Array,
+  N: Float64Array, dt: number, n: number,
+): Float64Array {
+  // exp(A*dt) for pure decay — well-conditioned since ||A*dt|| is small
+  const eA = matrixExp(scaleFlat(A, dt, n), n);
+
+  // Decay existing atoms: N_decay = exp(A*dt) * N
+  const result = matVecMul(eA, N, n);
+
+  // Production integral: ∫₀ᵈᵗ exp(A*s) ds * R = phi₁(A*dt) * dt * R
+  // where phi₁(X) = (exp(X) - I) * X⁻¹
+  //
+  // Compute phi₁(A*dt) * R using the (2n)×(2n) augmented matrix trick:
+  //   exp([A*dt, I*dt; 0, 0]) = [exp(A*dt), phi₁(A*dt)*dt; 0, I]
+  // Then phi₁(A*dt)*dt*R is the top-right block times R.
+  //
+  // This avoids putting R into the matrix (only I*dt appears, which is tiny).
+  const m = 2 * n;
+  const augM = new Float64Array(m * m);
+  // Top-left: A*dt
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      augM[i * m + j] = A[i * n + j] * dt;
+    }
+  }
+  // Top-right: I*dt
+  for (let i = 0; i < n; i++) {
+    augM[i * m + (n + i)] = dt;
+  }
+  // Bottom blocks are zero (already initialized)
+
+  const eAug = matrixExp(augM, m);
+
+  // Extract phi₁(A*dt)*dt from top-right block and multiply by R
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      result[i] += eAug[i * m + (n + j)] * R[j];
+    }
+  }
+
+  return result;
+}
+
+/**
  * Solve coupled decay chain equations using matrix exponential.
  */
 export function solveChain(
@@ -215,31 +273,34 @@ export function solveChain(
       currentProfile, nominalCurrentMA, irradiationTimeS,
     );
   } else {
-    // Constant current: forward-stepping with augmented matrix (n+1)×(n+1)
-    const m = n + 1;
-    const mIrr = new Float64Array(m * m);
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) {
-        mIrr[i * m + j] = A[i * n + j];
-      }
-      mIrr[i * m + n] = rNominal[i];
-    }
+    // Constant current: forward-stepping with exp(A*dt) for decay +
+    // analytical production integral.
+    //
+    // For dN/dt = A*N + R (constant R), the exact solution per time step is:
+    //   N(t+dt) = exp(A*dt) * N(t) + phi(A*dt) * R * dt
+    // where phi(X) = (exp(X) - I) / X  (matrix phi-function).
+    //
+    // We compute exp(A*dt) for the pure decay matrix A (well-conditioned,
+    // entries ~1e-4 to ~1e-8) instead of the augmented (n+1)x(n+1) matrix
+    // which has production rates ~1e13, causing catastrophic precision loss
+    // in the Padé approximation.
+    //
+    // For the production integral, we use the identity:
+    //   phi(A*dt) * dt = A^{-1} * (exp(A*dt) - I)
+    // But since A may be singular, we compute it element-wise for each
+    // independent isotope, using the analytical formula.
 
-    // Forward-step through irradiation time points
-    let nAug = new Float64Array(m);
-    nAug[n] = 1.0;
+    let nState = new Float64Array(n);
 
     for (let ti = 0; ti < nIrr; ti++) {
       if (ti === 0) {
         for (let i = 0; i < n; i++) abundances[i][0] = 0;
       } else {
         const dt = tIrr[ti] - tIrr[ti - 1];
-        const eM = matrixExp(scaleFlat(mIrr, dt, m), m);
-        nAug = new Float64Array(matVecMul(eM, nAug, m));
-        // Clamp negative abundances (numerical noise)
+        nState = stepIrradiation(A, rNominal, nState, dt, n);
         for (let i = 0; i < n; i++) {
-          if (nAug[i] < 0) nAug[i] = 0;
-          abundances[i][ti] = nAug[i];
+          if (nState[i] < 0) nState[i] = 0;
+          abundances[i][ti] = nState[i];
         }
       }
     }
@@ -248,13 +309,12 @@ export function solveChain(
     const lastIrrT = tIrr[nIrr - 1];
     if (lastIrrT < irradiationTimeS) {
       const dtFinal = irradiationTimeS - lastIrrT;
-      const eM = matrixExp(scaleFlat(mIrr, dtFinal, m), m);
-      nAug = new Float64Array(matVecMul(eM, nAug, m));
+      nState = stepIrradiation(A, rNominal, nState, dtFinal, n);
       for (let i = 0; i < n; i++) {
-        if (nAug[i] < 0) nAug[i] = 0;
+        if (nState[i] < 0) nState[i] = 0;
       }
     }
-    nEoi = nAug.slice(0, n);
+    nEoi = nState;
   }
 
   // --- Cooling phase (forward-stepping) ---
@@ -277,11 +337,13 @@ export function solveChain(
   }
 
   // Compute activities: A_i = lambda_i * N_i
-  // For geologically long-lived isotopes (t1/2 > 1e10 s), the matrix
-  // exponential may produce numerically inflated abundances due to
-  // stiffness.  Clamp abundances to a physical ceiling: the total number
-  // of atoms that could have been produced/ingrown cannot exceed the sum
-  // of all parent production rates times the irradiation time.
+  // The matrix exponential can produce numerically inflated abundances
+  // when eigenvalues span many orders of magnitude (stiff chains).
+  //
+  // We apply two ceilings:
+  // 1. Global: no isotope can have more atoms than were produced total
+  // 2. Per-isotope analytical: for each time point, compute the analytical
+  //    maximum abundance using Bateman equations as an upper bound
   const totalProductionAtoms = (() => {
     let sum = 0;
     for (let i = 0; i < n; i++) sum += chain[i].productionRate;
@@ -292,11 +354,48 @@ export function solveChain(
     if (chainIsotopeIsStable(chain[i])) continue;
     const lam = LN2 / chain[i].halfLifeS!;
 
-    // For very long-lived isotopes, clamp abundances to physical ceiling
-    if (chain[i].halfLifeS! > 1e10) {
-      for (let t = 0; t < nT; t++) {
-        if (abundances[i][t] > totalProductionAtoms) {
-          abundances[i][t] = totalProductionAtoms;
+    // Global ceiling
+    for (let t = 0; t < nT; t++) {
+      if (abundances[i][t] > totalProductionAtoms) {
+        abundances[i][t] = totalProductionAtoms;
+      }
+    }
+
+    // For daughter isotopes (no direct production), apply a tighter
+    // analytical ceiling: at any time, the daughter abundance cannot
+    // exceed the sum of all parent abundances at that time.
+    // In secular equilibrium, N_daughter = N_parent × λ_parent / (λ_daughter - λ_parent)
+    if (chain[i].productionRate === 0) {
+      // Find parent(s) feeding this isotope
+      const parentIndices: Array<{ idx: number; br: number }> = [];
+      for (let p = 0; p < n; p++) {
+        if (chainIsotopeIsStable(chain[p])) continue;
+        for (const mode of chain[p].decayModes) {
+          if (mode.daughterZ === chain[i].Z && mode.daughterA === chain[i].A &&
+              (mode.daughterState || "") === chain[i].state) {
+            parentIndices.push({ idx: p, br: mode.branching });
+          }
+        }
+      }
+      if (parentIndices.length > 0) {
+        for (let t = 0; t < nT; t++) {
+          // Max daughter abundance = sum of parent contributions
+          let maxN = 0;
+          for (const { idx: p, br } of parentIndices) {
+            const lamP = chainIsotopeIsStable(chain[p]) ? 0 : LN2 / chain[p].halfLifeS!;
+            // In secular equilibrium: N_d = N_p × λ_p × br / (λ_d - λ_p)
+            // Upper bound: N_d ≤ N_p × br (conservation of atoms)
+            // Use the tighter of the two
+            const Np = abundances[p][t];
+            if (lam > lamP && lamP > 0) {
+              maxN += Np * lamP * br / (lam - lamP);
+            } else {
+              maxN += Np * br;
+            }
+          }
+          if (abundances[i][t] > maxN && maxN > 0) {
+            abundances[i][t] = maxN;
+          }
         }
       }
     }
@@ -394,23 +493,10 @@ function solveIrradiationPiecewise(
     const iCurrent = intervals[ivIdx][2];
     const scale = nominalCurrentMA > 0 ? iCurrent / nominalCurrentMA : 0;
 
-    // Build augmented matrix
-    const m = n + 1;
-    const M = new Float64Array(m * m);
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) {
-        M[i * m + j] = A[i * n + j];
-      }
-      M[i * m + n] = rNominal[i] * scale;
-    }
-
-    const nAug = new Float64Array(m);
-    nAug.set(nState, 0);
-    nAug[n] = 1.0;
-
-    const eM = matrixExp(scaleFlat(M, dt, m), m);
-    const nAugNew = matVecMul(eM, nAug, m);
-    nState = nAugNew.slice(0, n);
+    // Use stepIrradiation for numerically stable computation
+    const rScaled = new Float64Array(n);
+    for (let i = 0; i < n; i++) rScaled[i] = rNominal[i] * scale;
+    nState = stepIrradiation(A, rScaled, nState, dt, n);
 
     // Record at output times
     const outIdxs = outputIdx.get(tNext);

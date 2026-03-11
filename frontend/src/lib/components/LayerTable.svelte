@@ -1,7 +1,42 @@
 <script lang="ts">
   import { getDepthPreview } from "../stores/depth-preview.svelte";
+  import { getResult } from "../stores/results.svelte";
+  import { getDoseConstant } from "../utils/dose-constants";
+  import { fmtDoseRate } from "../utils/format";
+  import { SYMBOL_TO_Z } from "../utils/formula";
 
   let preview = $derived(getDepthPreview());
+  let result = $derived(getResult());
+
+  /** Sum dose@1m (µSv/h) for all isotopes in a layer */
+  function layerDose(layerIndex: number): number | null {
+    if (!result) return null;
+    const layerResult = result.layers[layerIndex];
+    if (!layerResult) return null;
+    let total = 0;
+    let hasAny = false;
+    for (const iso of layerResult.isotopes) {
+      const dc = getDoseConstant(iso.name.replace(/m$/, "").replace(/-\d+.*/, ""), iso.A);
+      // Try using the element symbol from the name (e.g. "Tc-99m" -> "Tc", A=99)
+      const parts = iso.name.match(/^([A-Z][a-z]?)-(\d+)/);
+      if (parts) {
+        const c = getDoseConstant(parts[1], Number(parts[2]));
+        if (c !== null) {
+          total += (iso.activity_Bq / 1e6) * c;
+          hasAny = true;
+        }
+      }
+    }
+    return hasAny ? total : null;
+  }
+
+  function totalDose(): number {
+    let sum = 0;
+    for (let i = 0; i < preview.length; i++) {
+      sum += layerDose(i) ?? 0;
+    }
+    return sum;
+  }
 </script>
 
 <div class="layer-table">
@@ -18,6 +53,7 @@
             <th class="col-num">E_out (MeV)</th>
             <th class="col-num">ΔE (MeV)</th>
             <th class="col-num">Heat (kW)</th>
+            <th class="col-num" title="Total dose rate at 1m from all isotopes">Dose@1m</th>
           </tr>
         </thead>
         <tbody>
@@ -42,6 +78,7 @@
               </td>
               <td class="col-num computed">{layer.delta_E_MeV.toFixed(2)}</td>
               <td class="col-num computed">{layer.heat_kW.toFixed(4)}</td>
+              <td class="col-num computed">{layerDose(i) !== null ? fmtDoseRate(layerDose(i)!) : "—"}</td>
             </tr>
           {/each}
         </tbody>
@@ -55,6 +92,7 @@
             <td class="col-num">{preview.length > 0 ? preview[preview.length - 1].energy_out_MeV.toFixed(2) : "—"}</td>
             <td class="col-num">{preview.reduce((s, l) => s + l.delta_E_MeV, 0).toFixed(2)}</td>
             <td class="col-num">{preview.reduce((s, l) => s + l.heat_kW, 0).toFixed(4)}</td>
+            <td class="col-num">{totalDose() > 0 ? fmtDoseRate(totalDose()) : "—"}</td>
           </tr>
         </tfoot>
       </table>

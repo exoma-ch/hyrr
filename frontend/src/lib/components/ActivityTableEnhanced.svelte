@@ -181,7 +181,7 @@
           <th class="col-act sortable" onclick={() => toggleSort("daughter")}>Daughter</th>
           <th class="col-act sortable" onclick={() => toggleSort("activity")}>Total</th>
           <th class="col-yield">Sat. Yield</th>
-          <th class="col-rnp sortable" onclick={() => toggleSort("rnp")}>RNP%</th>
+          <th class="col-rnp sortable" onclick={() => toggleSort("rnp")} title="Radionuclide purity at end of cooling">RNP% (EOC)</th>
           <th class="col-dose sortable" onclick={() => toggleSort("dose")}>Dose@1m</th>
         </tr>
       </thead>

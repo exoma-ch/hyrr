@@ -304,6 +304,8 @@
 
   let activityResult: ActivityResult | null = $state(null);
 
+  let activityComputing = $state(false);
+
   $effect(() => {
     if (!open || !xsData || !decayInfo) {
       activityResult = null;
@@ -319,72 +321,77 @@
     const halfLife = decayInfo.halfLifeS;
     if (!halfLife || halfLife <= 0) return;
 
-    const lambda = Math.LN2 / halfLife;
-    let productionRate = 0;
+    // Capture reactive deps, then defer heavy work off the main thread tick
+    const preview = getDepthPreview();
+    activityComputing = true;
 
-    for (const layer of config.layers) {
-      if (!layer.material) continue;
-      try {
-        const mat = resolveMaterial(db, layer.material);
-        const composition: Array<[number, number]> = mat.elements.map(([el, frac]) => [el.Z, frac]);
-        const density = mat.density;
+    setTimeout(() => {
+      const lambda = Math.LN2 / halfLife;
+      let productionRate = 0;
 
-        for (const [el, frac] of mat.elements) {
-          for (const [targetA, isoFrac] of el.isotopes) {
-            const xsList = db.getCrossSections(proj, el.Z, targetA);
-            const match = xsList.find(
-              (xs) => xs.residualZ === Z && xs.residualA === A && (xs.state || "") === (nuclearState || ""),
-            );
-            if (!match) continue;
+      for (const layer of config.layers) {
+        if (!layer.material) continue;
+        try {
+          const mat = resolveMaterial(db, layer.material);
+          const composition: Array<[number, number]> = mat.elements.map(([el, frac]) => [el.Z, frac]);
+          const density = mat.density;
+          const layerPreview = preview.find((l) => l.material === layer.material);
+          if (!layerPreview || layerPreview.energy_in_MeV <= 0) continue;
 
-            const preview = getDepthPreview();
-            const layerPreview = preview.find((l) => l.material === layer.material);
-            if (!layerPreview || layerPreview.energy_in_MeV <= 0) continue;
+          const eIn = layerPreview.energy_in_MeV;
+          const eOut = layerPreview.energy_out_MeV;
+          const thickCm = layerPreview.thickness_mm / 10;
 
-            const eIn = layerPreview.energy_in_MeV;
-            const eOut = layerPreview.energy_out_MeV;
-            const thickCm = layerPreview.thickness_mm / 10;
+          const dedxFn = (energies: Float64Array) =>
+            dedxMeVPerCm(db, proj, composition, density, energies) as Float64Array;
 
-            const dedxFn = (energies: Float64Array) =>
-              dedxMeVPerCm(db, proj, composition, density, energies) as Float64Array;
+          for (const [el, frac] of mat.elements) {
+            for (const [targetA, isoFrac] of el.isotopes) {
+              const xsList = db.getCrossSections(proj, el.Z, targetA);
+              const match = xsList.find(
+                (xs) => xs.residualZ === Z && xs.residualA === A && (xs.state || "") === (nuclearState || ""),
+              );
+              if (!match) continue;
 
-            const AVOGADRO = 6.022e23;
-            const nAtoms = density * thickCm * AVOGADRO / targetA * frac * isoFrac;
-            const beamParticlesPerS = config.beam.current_mA * 1e-3 / 1.602e-19;
+              const AVOGADRO = 6.022e23;
+              const nAtoms = density * thickCm * AVOGADRO / targetA * frac * isoFrac;
+              const beamParticlesPerS = config.beam.current_mA * 1e-3 / 1.602e-19;
 
-            const { productionRate: rate } = computeProductionRate(
-              match.energiesMeV, match.xsMb,
-              dedxFn, eIn, eOut,
-              nAtoms, beamParticlesPerS, thickCm,
-            );
-            productionRate += rate;
+              const { productionRate: rate } = computeProductionRate(
+                match.energiesMeV, match.xsMb,
+                dedxFn, eIn, eOut,
+                nAtoms, beamParticlesPerS, thickCm,
+              );
+              productionRate += rate;
+            }
           }
-        }
-      } catch { /* skip */ }
-    }
+        } catch { /* skip */ }
+      }
 
-    if (productionRate <= 0) return;
+      activityComputing = false;
+      if (productionRate <= 0) return;
 
-    const nPts = 100;
-    const times: number[] = [];
-    const activities: number[] = [];
+      const nPts = 100;
+      const times: number[] = [];
+      const activities: number[] = [];
 
-    const irrTimes = linspace(0, irrS, nPts / 2);
-    for (let i = 0; i < irrTimes.length; i++) {
-      times.push(irrTimes[i]);
-      activities.push((productionRate / lambda) * (1 - Math.exp(-lambda * irrTimes[i])));
-    }
+      const irrTimes = linspace(0, irrS, nPts / 2);
+      for (let i = 0; i < irrTimes.length; i++) {
+        times.push(irrTimes[i]);
+        activities.push((productionRate / lambda) * (1 - Math.exp(-lambda * irrTimes[i])));
+      }
 
-    const eobActivity = activities[activities.length - 1];
+      const eobActivity = activities[activities.length - 1];
 
-    const coolTimes = linspace(0, coolS, nPts / 2);
-    for (let i = 1; i < coolTimes.length; i++) {
-      times.push(irrS + coolTimes[i]);
-      activities.push(eobActivity * Math.exp(-lambda * coolTimes[i]));
-    }
+      const coolTimes = linspace(0, coolS, nPts / 2);
+      for (let i = 1; i < coolTimes.length; i++) {
+        times.push(irrS + coolTimes[i]);
+        activities.push(eobActivity * Math.exp(-lambda * coolTimes[i]));
+      }
 
-    const satYield = productionRate / lambda / (config.beam.current_mA * 1000);
-    activityResult = { times, activities, productionRate, satYield, eobActivity };
+      const satYield = productionRate / lambda / (config.beam.current_mA * 1000);
+      activityResult = { times, activities, productionRate, satYield, eobActivity };
+    }, 0);
   });
 
   $effect(() => {

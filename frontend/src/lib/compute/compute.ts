@@ -284,17 +284,17 @@ function computeLayer(
     );
   }
 
-  // Sanity-check: clamp activity for geologically long-lived isotopes.
+  // Sanity-check: clamp activity for all non-stable isotopes.
   // The matrix-exponential chain solver can produce numerically inflated
-  // abundances when eigenvalues span many orders of magnitude (e.g.
-  // lambda_parent ~ 1e-5 vs lambda_daughter ~ 1e-13).  For such daughters
-  // the physically correct EOB activity is bounded by R * lambda * t_irr
-  // (the linear regime of 1 - exp(-lambda*t) ~ lambda*t).  We enforce
-  // this ceiling on every time point.
+  // abundances when eigenvalues span many orders of magnitude.  The
+  // physically correct ceiling is R * lambda * t_irr.  We enforce this
+  // on every time point for ALL isotopes (not just long-lived ones),
+  // because short-lived daughters of long-lived parents are especially
+  // prone to numerical inflation.
   for (const [, iso] of isotopeResults) {
     if (
       iso.halfLifeS !== null &&
-      iso.halfLifeS > LONG_HALFLIFE_THRESHOLD_S
+      iso.halfLifeS > 0
     ) {
       const lambda = LN2 / iso.halfLifeS;
       // Upper bound: all parent production feeds this isotope, plus its own direct production.
