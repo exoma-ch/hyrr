@@ -46,7 +46,7 @@ let lastHash = $state("");
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let cancelled = false;
 
-let dataStore: DataStore | null = null;
+let dataStore = $state<DataStore | null>(null);
 
 export function getSchedulerState(): SchedulerState {
   return state;
@@ -86,7 +86,7 @@ export function initScheduler(): void {
 /** Initialize the data store. Call from App.svelte onMount. */
 export async function initDataStore(
   baseUrl: string,
-  onProgress?: (msg: string) => void,
+  onProgress?: (msg: string, fraction?: number) => void,
 ): Promise<void> {
   dataStore = new DataStore(baseUrl);
   await dataStore.init(onProgress);

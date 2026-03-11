@@ -9,20 +9,27 @@
 
   let tabs = $derived(getSessionTabs());
   let activeId = $derived(getActiveTabId());
+
+  function initial(label: string): string {
+    return label.charAt(0).toUpperCase();
+  }
 </script>
 
 <div class="session-tabs" role="tablist">
-  {#each tabs as tab (tab.id)}
+  {#each tabs as tab, i (tab.id)}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="tab"
       class:active={tab.id === activeId}
+      class:inactive={tab.id !== activeId}
+      style:z-index={tab.id === activeId ? tabs.length + 1 : tabs.length - i}
       onclick={() => switchToTab(tab.id)}
       onkeydown={(e) => { if (e.key === 'Enter') switchToTab(tab.id); }}
       title={tab.label}
       role="tab"
       tabindex="0"
     >
+      <span class="tab-favicon">{initial(tab.label)}</span>
       <span class="tab-label">{tab.label}</span>
       <button
         class="tab-close"
@@ -42,42 +49,95 @@
     display: flex;
     align-items: flex-end;
     gap: 0;
+    position: relative;
   }
 
   .tab {
     position: relative;
-    background: #0d1117;
+    background: #1c2128;
     border: 1px solid #2d333b;
-    border-bottom-color: #2d333b;
-    border-radius: 8px 8px 0 0;
+    border-bottom: none;
+    border-radius: 10px 10px 0 0;
     padding: 0.3rem 0.5rem;
-    padding-right: 1.4rem;
+    padding-right: 1.6rem;
+    padding-left: 0.35rem;
     font-size: 0.7rem;
     color: #6e7681;
     max-width: 180px;
+    min-width: 60px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     cursor: pointer;
-    margin-bottom: -1px;
-    margin-left: -1px;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    transition: background 0.15s, color 0.15s;
   }
 
-  .tab:first-child {
-    margin-left: 0;
+  /* Tab overlap: negative margin on non-first tabs */
+  .tab:not(:first-child) {
+    margin-left: -8px;
+  }
+
+  /* Inactive tabs are slightly shorter */
+  .tab.inactive {
+    height: 28px;
+    margin-bottom: 0;
   }
 
   .tab:hover {
-    background: #161b22;
+    background: #21262d;
     color: #c9d1d9;
   }
 
+  /* Active tab */
   .tab.active {
-    background: #0f1117;
-    border-color: #2d333b;
-    border-bottom-color: transparent;
+    background: #0d1117;
     color: #e1e4e8;
-    z-index: 1;
+    height: 32px;
+  }
+
+  /* Chrome-style curved connectors on active tab */
+  .tab.active::before,
+  .tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    width: 8px;
+    height: 8px;
+    pointer-events: none;
+  }
+
+  .tab.active::before {
+    left: -8px;
+    background: radial-gradient(circle at 0 0, transparent 8px, #0d1117 8px);
+  }
+
+  .tab.active::after {
+    right: -8px;
+    background: radial-gradient(circle at 100% 0, transparent 8px, #0d1117 8px);
+  }
+
+  /* Favicon circle */
+  .tab-favicon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #2d333b;
+    color: #8b949e;
+    font-size: 0.55rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+
+  .tab.active .tab-favicon {
+    background: #58a6ff;
+    color: #0d1117;
   }
 
   .tab-label {
@@ -100,6 +160,7 @@
     opacity: 0;
     line-height: 1;
     border-radius: 3px;
+    transition: opacity 0.1s;
   }
 
   .tab:hover .tab-close {
@@ -120,10 +181,12 @@
     font-weight: 500;
     cursor: pointer;
     padding: 0.15rem 0.4rem;
-    margin-bottom: 0.1rem;
+    margin-bottom: 0.25rem;
+    margin-left: 0.15rem;
     border-radius: 4px;
     line-height: 1;
     flex-shrink: 0;
+    transition: color 0.15s, background 0.15s;
   }
 
   .add-btn:hover {

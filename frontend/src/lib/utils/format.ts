@@ -45,6 +45,17 @@ export function bestTimeUnit(maxS: number): { label: string; divisor: number } {
   return { label: "s", divisor: 1 };
 }
 
+/** Auto-scale dose rate (µSv/h input) to the best human-readable unit. */
+export function fmtDoseRate(uSvPerH: number): string {
+  const abs = Math.abs(uSvPerH);
+  if (abs === 0) return "0";
+  if (abs >= 1e6) return (uSvPerH / 1e6).toPrecision(3) + " Sv/h";
+  if (abs >= 1e3) return (uSvPerH / 1e3).toPrecision(3) + " mSv/h";
+  if (abs >= 1) return uSvPerH.toPrecision(3) + " µSv/h";
+  if (abs >= 1e-3) return (uSvPerH * 1e3).toPrecision(3) + " nSv/h";
+  return uSvPerH.toExponential(2) + " µSv/h";
+}
+
 /** Build NuDat 3.0 URL for an isotope. */
 export function nudatUrl(Z: number, A: number, _state?: string): string {
   const sym = Z_TO_SYMBOL[Z] ?? "";

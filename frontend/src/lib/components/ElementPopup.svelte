@@ -21,6 +21,68 @@
   }
 
   let rows = $state<IsotopeRow[]>([]);
+  let quickRatioInput = $state("");
+  let quickRatioError = $state(false);
+
+  function applyQuickRatio() {
+    const text = quickRatioInput.trim();
+    if (!text) {
+      quickRatioError = false;
+      return;
+    }
+
+    // Parse format: "Symbol-A: percentage" e.g. "Mo-100: 99.5"
+    const match = text.match(/^([A-Z][a-z]?)-(\d+)\s*:\s*([\d.]+)$/);
+    if (!match) {
+      quickRatioError = true;
+      return;
+    }
+
+    const [, sym, aStr, pctStr] = match;
+    if (sym !== element) {
+      quickRatioError = true;
+      return;
+    }
+
+    const targetA = parseInt(aStr);
+    const targetPct = parseFloat(pctStr);
+
+    if (isNaN(targetPct) || targetPct < 0 || targetPct > 100) {
+      quickRatioError = true;
+      return;
+    }
+
+    const targetRow = rows.find((r) => r.A === targetA);
+    if (!targetRow) {
+      quickRatioError = true;
+      return;
+    }
+
+    // Distribute remainder proportionally among other isotopes by natural abundance
+    const otherRows = rows.filter((r) => r.A !== targetA);
+    const otherNaturalSum = otherRows.reduce((s, r) => s + r.naturalAbundance, 0);
+    const remainder = 100 - targetPct;
+
+    rows = rows.map((r) => {
+      if (r.A === targetA) {
+        return { ...r, enrichment: targetPct };
+      }
+      if (otherNaturalSum > 0) {
+        return { ...r, enrichment: (r.naturalAbundance / otherNaturalSum) * remainder };
+      }
+      // If all other natural abundances are zero, distribute evenly
+      return { ...r, enrichment: remainder / otherRows.length };
+    });
+
+    quickRatioError = false;
+    quickRatioInput = "";
+  }
+
+  function onQuickRatioKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      applyQuickRatio();
+    }
+  }
 
   $effect(() => {
     if (!open) return;
@@ -79,6 +141,18 @@
     <div class="info-row">
       <span class="el-symbol">{element}</span>
       <span class="el-z">Z = {SYMBOL_TO_Z[element] ?? "?"}</span>
+    </div>
+
+    <div class="quick-ratio">
+      <input
+        type="text"
+        class="quick-ratio-input"
+        class:error={quickRatioError}
+        placeholder="e.g. {element}-100: 99.5"
+        bind:value={quickRatioInput}
+        onkeydown={onQuickRatioKeydown}
+        onblur={applyQuickRatio}
+      />
     </div>
 
     <table>
@@ -150,6 +224,34 @@
   .el-z {
     font-size: 0.85rem;
     color: #8b949e;
+  }
+
+  .quick-ratio {
+    display: flex;
+  }
+
+  .quick-ratio-input {
+    width: 100%;
+    background: #0d1117;
+    border: 1px solid #2d333b;
+    border-radius: 4px;
+    color: #e1e4e8;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.8rem;
+    font-family: inherit;
+  }
+
+  .quick-ratio-input::placeholder {
+    color: #484f58;
+  }
+
+  .quick-ratio-input:focus {
+    outline: none;
+    border-color: #58a6ff;
+  }
+
+  .quick-ratio-input.error {
+    border-color: #f85149;
   }
 
   table {

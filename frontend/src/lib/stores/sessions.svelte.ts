@@ -1,20 +1,27 @@
 /**
- * Session tabs store — ephemeral simulation snapshots within a browser session.
- * Each tab captures a config snapshot that can be restored.
+ * Session tabs store — simulation snapshots persisted to IndexedDB.
+ * Each tab captures a config snapshot that survives page refresh.
  */
 
 import type { SimulationConfig } from "../types";
+import {
+  saveSession,
+  deleteSession,
+  loadAllSessions,
+  updateSessionActive,
+  type SessionRecord,
+} from "../session-db";
 import { getConfig, setConfig } from "./config.svelte";
 
 export interface SessionTab {
-  id: number;
+  id: string;
   label: string;
   config: SimulationConfig;
 }
 
-let nextId = 1;
 let tabs = $state<SessionTab[]>([]);
-let activeTabId = $state<number | null>(null);
+let activeTabId = $state<string | null>(null);
+let initialized = $state(false);
 
 /** Generate a short label from a config. */
 function configLabel(config: SimulationConfig): string {
@@ -24,55 +31,125 @@ function configLabel(config: SimulationConfig): string {
   return `${p} ${config.beam.energy_MeV} MeV \u2192 ${mats || "empty"}`;
 }
 
+/** Convert a SessionTab + active flag to a SessionRecord for IDB. */
+function toRecord(tab: SessionTab, isActive: boolean): SessionRecord {
+  return {
+    id: tab.id,
+    label: tab.label,
+    config: tab.config,
+    timestamp: Date.now(),
+    isActive,
+  };
+}
+
+// ─── Getters ────────────────────────────────────────────────────────
+
 export function getSessionTabs(): SessionTab[] {
   return tabs;
 }
 
-export function getActiveTabId(): number | null {
+export function getActiveTabId(): string | null {
   return activeTabId;
 }
 
+export function isInitialized(): boolean {
+  return initialized;
+}
+
+// ─── Actions ────────────────────────────────────────────────────────
+
+/** Load persisted sessions from IndexedDB on app startup. */
+export async function restoreSessions(): Promise<void> {
+  try {
+    const records = await loadAllSessions();
+    if (records.length === 0) {
+      initialized = true;
+      return;
+    }
+
+    // Sort by timestamp so tab order is stable
+    records.sort((a, b) => a.timestamp - b.timestamp);
+
+    tabs = records.map((r) => ({
+      id: r.id,
+      label: r.label,
+      config: r.config,
+    }));
+
+    // Find the previously active tab (or fall back to last)
+    const active = records.find((r) => r.isActive);
+    const activeId = active ? active.id : records[records.length - 1].id;
+    activeTabId = activeId;
+
+    // Restore the active tab's config
+    const activeTab = tabs.find((t) => t.id === activeId);
+    if (activeTab) {
+      setConfig(structuredClone(activeTab.config));
+    }
+  } catch (err) {
+    console.warn("Failed to restore sessions from IndexedDB:", err);
+  }
+  initialized = true;
+}
+
 /** Save current config as a new tab and make it active. */
-export function addSessionTab(): void {
+export async function addSessionTab(): Promise<void> {
   const config = structuredClone(getConfig());
   const tab: SessionTab = {
-    id: nextId++,
+    id: crypto.randomUUID(),
     label: configLabel(config),
     config,
   };
+
+  // Deactivate previous active tab in IDB
+  if (activeTabId !== null) {
+    updateSessionActive(activeTabId, false).catch(console.warn);
+  }
+
   tabs = [...tabs, tab];
   activeTabId = tab.id;
+
+  // Persist new tab as active
+  saveSession(toRecord(tab, true)).catch(console.warn);
 }
 
 /** Switch to a tab — restores its config. */
-export function switchToTab(id: number): void {
+export async function switchToTab(id: string): Promise<void> {
   const tab = tabs.find((t) => t.id === id);
   if (!tab) return;
 
-  // Save current config into the currently active tab before switching
+  // Save current config into the previously active tab before switching
   if (activeTabId !== null && activeTabId !== id) {
     const currentTab = tabs.find((t) => t.id === activeTabId);
     if (currentTab) {
       currentTab.config = structuredClone(getConfig());
       currentTab.label = configLabel(currentTab.config);
+      // Persist updated config and deactivate
+      saveSession(toRecord(currentTab, false)).catch(console.warn);
     }
   }
 
   activeTabId = id;
   setConfig(structuredClone(tab.config));
+
+  // Mark new tab active in IDB
+  updateSessionActive(id, true).catch(console.warn);
 }
 
 /** Close a tab. If it's active, switch to the nearest neighbor. */
-export function closeTab(id: number): void {
+export async function closeTab(id: string): Promise<void> {
   const idx = tabs.findIndex((t) => t.id === id);
   if (idx === -1) return;
 
   const wasActive = activeTabId === id;
   tabs = tabs.filter((t) => t.id !== id);
 
+  // Remove from IDB
+  deleteSession(id).catch(console.warn);
+
   if (wasActive && tabs.length > 0) {
     const newIdx = Math.min(idx, tabs.length - 1);
-    switchToTab(tabs[newIdx].id);
+    await switchToTab(tabs[newIdx].id);
   } else if (tabs.length === 0) {
     activeTabId = null;
   }
@@ -85,5 +162,7 @@ export function syncActiveTab(): void {
   if (tab) {
     tab.config = structuredClone(getConfig());
     tab.label = configLabel(tab.config);
+    // Persist to IDB (fire-and-forget)
+    saveSession(toRecord(tab, true)).catch(console.warn);
   }
 }

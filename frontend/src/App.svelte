@@ -24,6 +24,7 @@
   } from "./lib/scheduler/sim-scheduler.svelte";
   import { initDepthPreview } from "./lib/stores/depth-preview.svelte";
   import { saveRun } from "./lib/history-db";
+  import { restoreSessions, syncActiveTab, getActiveTabId } from "./lib/stores/sessions.svelte";
 
   // New components
   import HeaderBar from "./lib/components/HeaderBar.svelte";
@@ -91,6 +92,9 @@
       setConfig(urlConfig);
     }
 
+    // Restore persisted session tabs from IndexedDB
+    await restoreSessions();
+
     loadingState = "Ready";
     loadingProgress = 1;
     ready = true;
@@ -105,6 +109,15 @@
         setConfigInHash(c);
       }
     }, 500);
+    return () => clearTimeout(timer);
+  });
+
+  // Debounce-sync config changes to the active session tab in IDB
+  $effect(() => {
+    const c = config;
+    const tabId = getActiveTabId();
+    if (!ready || !tabId) return;
+    const timer = setTimeout(() => syncActiveTab(), 500);
     return () => clearTimeout(timer);
   });
 

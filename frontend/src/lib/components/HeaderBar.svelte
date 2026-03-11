@@ -50,6 +50,7 @@
     padding: 0.5rem 0.75rem 0;
     border-bottom: 1px solid #2d333b;
     margin-bottom: 0.75rem;
+    position: relative;
   }
 
   .tab-strip {
@@ -73,23 +74,24 @@
   }
 
   .lucky-btn {
-    background: #161b22;
+    background: #1c2128;
     border: 1px solid #2d333b;
-    border-bottom-color: #2d333b;
-    border-radius: 8px 8px 0 0;
+    border-bottom: none;
+    border-radius: 10px 10px 0 0;
     color: #d29922;
-    padding: 0.35rem 0.7rem;
+    padding: 0.3rem 0.7rem;
+    height: 28px;
     font-size: 0.72rem;
     cursor: pointer;
     font-weight: 500;
     white-space: nowrap;
-    margin-bottom: -1px;
     flex-shrink: 0;
+    transition: background 0.15s;
   }
 
   .lucky-btn:hover {
-    background: #1c2128;
-    border-bottom-color: transparent;
+    background: #21262d;
+    color: #e3b341;
   }
 
   .actions {

@@ -13,6 +13,10 @@
   let plotDiv: HTMLDivElement;
   let Plotly: any = null;
 
+  // Track legend visibility state so it persists across Plotly.react() re-renders.
+  // Key = trace name, value = Plotly visibility ("true" | "legendonly").
+  let legendVisibility = new Map<string, boolean | "legendonly">();
+
   let logY = $state(false);
   let useEOBTime = $state(false);
   let rnpMode = $state(false);
@@ -51,7 +55,49 @@
   onMount(async () => {
     Plotly = await import("plotly.js-dist-min");
     render();
+    attachLegendListeners();
   });
+
+  function attachLegendListeners() {
+    if (!plotDiv) return;
+    const el = plotDiv as any;
+    el.on("plotly_legendclick", (evt: any) => {
+      const trace = evt.data[evt.curveNumber];
+      if (!trace?.name) return false; // let Plotly handle it
+      const name = trace.name as string;
+      // Toggle: if currently visible, hide it; if legendonly, show it
+      const currentlyHidden = legendVisibility.get(name) === "legendonly";
+      legendVisibility.set(name, currentlyHidden ? true : "legendonly");
+      // Return false to prevent Plotly default — we re-render with our state
+      render();
+      return false;
+    });
+    el.on("plotly_legenddoubleclick", (evt: any) => {
+      const clickedTrace = evt.data[evt.curveNumber];
+      if (!clickedTrace?.name) return false;
+      const clickedName = clickedTrace.name as string;
+      // Double-click: isolate this trace (hide all others) or restore all
+      const allHiddenExceptThis = [...evt.data].every(
+        (t: any) =>
+          t.name === clickedName ||
+          legendVisibility.get(t.name) === "legendonly",
+      );
+      if (allHiddenExceptThis) {
+        // Restore all
+        legendVisibility.clear();
+      } else {
+        // Isolate: hide all except clicked
+        for (const t of evt.data) {
+          if (t.name && t.name !== clickedName) {
+            legendVisibility.set(t.name, "legendonly");
+          }
+        }
+        legendVisibility.set(clickedName, true);
+      }
+      render();
+      return false;
+    });
+  }
 
   onDestroy(() => {
     if (Plotly && plotDiv) Plotly.purge(plotDiv);
@@ -125,13 +171,15 @@
       const times = iso.time_grid_s!.map((t) => (t - timeOffset) / timeDiv);
       const activities = iso.activity_vs_time_Bq!.map((a) => a / actDiv);
 
+      const traceName = `${iso.name}${iso.state ? ` (${iso.state})` : ""}`;
       traces.push({
         x: times,
         y: activities,
-        name: `${iso.name}${iso.state ? ` (${iso.state})` : ""}`,
+        name: traceName,
         type: "scatter",
         mode: "lines",
         line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
+        visible: legendVisibility.get(traceName) ?? true,
       });
       colorIdx++;
     }
@@ -230,23 +278,27 @@
       totalActivity!.reduce((m, v) => Math.max(m, v), 0),
     );
 
+    const rnpTraceName = `RNP% (${rnpIsotope})`;
+    const totalTraceName = `Total activity`;
     const traces: any[] = [
       {
         x: times,
         y: rnpPercent,
-        name: `RNP% (${rnpIsotope})`,
+        name: rnpTraceName,
         type: "scatter",
         mode: "lines",
         line: { color: TRACE_COLORS[0], width: 2 },
+        visible: legendVisibility.get(rnpTraceName) ?? true,
       },
       {
         x: times,
         y: totalActivity!.map((a) => a / actDiv),
-        name: `Total activity`,
+        name: totalTraceName,
         type: "scatter",
         mode: "lines",
         line: { color: TRACE_COLORS[2], width: 1, dash: "dot" },
         yaxis: "y2",
+        visible: legendVisibility.get(totalTraceName) ?? true,
       },
     ];
 

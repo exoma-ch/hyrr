@@ -1,14 +1,8 @@
 <script lang="ts">
   import type { LayerConfig } from "../types";
+  import { parseThickness } from "../utils/thickness-parse";
 
   type ThicknessMode = "thickness_cm" | "areal_density_g_cm2" | "energy_out_MeV";
-  type LengthUnit = "µm" | "mm" | "cm";
-
-  const LENGTH_UNITS: { value: LengthUnit; label: string; toCm: number }[] = [
-    { value: "µm", label: "µm", toCm: 1e-4 },
-    { value: "mm", label: "mm", toCm: 0.1 },
-    { value: "cm", label: "cm", toCm: 1 },
-  ];
 
   interface Props {
     layer: LayerConfig;
@@ -25,42 +19,75 @@
         : "energy_out_MeV",
   );
 
-  /** Pick best length unit for current thickness value. */
-  function bestLengthUnit(cm: number): LengthUnit {
-    if (cm < 0.01) return "µm";
-    if (cm < 1) return "mm";
-    return "cm";
-  }
-
-  let lengthUnit = $state<LengthUnit>("mm");
-  let unitInitialized = false;
-  $effect(() => {
-    if (!unitInitialized && mode === "thickness_cm") {
-      unitInitialized = true;
-      lengthUnit = bestLengthUnit(layer.thickness_cm ?? 0.1);
-    }
-  });
-
-  let convFactor = $derived(LENGTH_UNITS.find((u) => u.value === lengthUnit)!.toCm);
-
-  let value = $derived(
-    mode === "thickness_cm"
-      ? (layer.thickness_cm ?? 0) / convFactor
-      : mode === "areal_density_g_cm2"
-        ? (layer.areal_density_g_cm2 ?? 0)
-        : (layer.energy_out_MeV ?? 0),
-  );
-
   const MODES: { id: ThicknessMode; label: string }[] = [
     { id: "thickness_cm", label: "Thickness" },
     { id: "areal_density_g_cm2", label: "Areal dens." },
     { id: "energy_out_MeV", label: "E out" },
   ];
 
+  // --- Smart thickness text input (thickness_cm mode) ---
+  let thicknessText = $state("");
+  let thicknessFeedback = $state("");
+  let textInitialized = false;
+
+  /** Format a cm value into a human-readable string with best unit. */
+  function formatCm(cm: number): string {
+    if (cm === 0) return "0";
+    if (cm < 0.01) return `${cm * 1e4}µm`;
+    if (cm < 1) return `${cm * 10}mm`;
+    return `${cm}cm`;
+  }
+
+  $effect(() => {
+    if (!textInitialized && mode === "thickness_cm") {
+      textInitialized = true;
+      thicknessText = formatCm(layer.thickness_cm ?? 0.1);
+      const parsed = parseThickness(thicknessText);
+      thicknessFeedback = parsed ? parsed.display : "";
+    }
+  });
+
+  function onThicknessInput(e: Event) {
+    const val = (e.target as HTMLInputElement).value;
+    thicknessText = val;
+    const parsed = parseThickness(val);
+    if (parsed) {
+      thicknessFeedback = parsed.display;
+    } else {
+      thicknessFeedback = val ? "invalid" : "";
+    }
+  }
+
+  function commitThickness() {
+    const parsed = parseThickness(thicknessText);
+    if (parsed && parsed.cm >= 0) {
+      const updated = { ...layer };
+      delete updated.thickness_cm;
+      delete updated.areal_density_g_cm2;
+      delete updated.energy_out_MeV;
+      updated.thickness_cm = parsed.cm;
+      onchange(updated);
+    }
+  }
+
+  function onThicknessKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      commitThickness();
+      (e.target as HTMLInputElement).blur();
+    }
+  }
+
+  // --- Numeric inputs for areal density / E out ---
+  let otherValue = $derived(
+    mode === "areal_density_g_cm2"
+      ? (layer.areal_density_g_cm2 ?? 0)
+      : (layer.energy_out_MeV ?? 0),
+  );
+
   function unitLabel(): string {
     if (mode === "areal_density_g_cm2") return "g/cm²";
     if (mode === "energy_out_MeV") return "MeV";
-    return ""; // thickness uses the dropdown
+    return "";
   }
 
   function setMode(newMode: ThicknessMode) {
@@ -69,7 +96,8 @@
     delete updated.areal_density_g_cm2;
     delete updated.energy_out_MeV;
     if (newMode === "thickness_cm") {
-      updated.thickness_cm = (value || 0.1) * convFactor;
+      updated.thickness_cm = 0.1; // default 1 mm
+      textInitialized = false; // re-initialize text on mode switch
     } else if (newMode === "areal_density_g_cm2") {
       updated.areal_density_g_cm2 = 0.1;
     } else {
@@ -78,23 +106,15 @@
     onchange(updated);
   }
 
-  function setValue(e: Event) {
+  function setOtherValue(e: Event) {
     const v = parseFloat((e.target as HTMLInputElement).value);
     if (isNaN(v) || v < 0) return;
     const updated = { ...layer };
     delete updated.thickness_cm;
     delete updated.areal_density_g_cm2;
     delete updated.energy_out_MeV;
-    if (mode === "thickness_cm") {
-      updated.thickness_cm = v * convFactor;
-    } else {
-      updated[mode] = v;
-    }
+    updated[mode] = v;
     onchange(updated);
-  }
-
-  function onUnitChange(e: Event) {
-    lengthUnit = (e.target as HTMLSelectElement).value as LengthUnit;
   }
 </script>
 
@@ -111,21 +131,32 @@
     {/each}
   </div>
   <div class="value-row">
-    <input
-      type="number"
-      {value}
-      min={0}
-      step={mode === "thickness_cm" ? 0.1 : 0.001}
-      onchange={setValue}
-      class="val-input"
-    />
     {#if mode === "thickness_cm"}
-      <select value={lengthUnit} onchange={onUnitChange} class="unit-select">
-        {#each LENGTH_UNITS as u}
-          <option value={u.value}>{u.label}</option>
-        {/each}
-      </select>
+      <div class="input-with-feedback">
+        <input
+          type="text"
+          value={thicknessText}
+          oninput={onThicknessInput}
+          onblur={commitThickness}
+          onkeydown={onThicknessKeydown}
+          placeholder="e.g. 25µm"
+          class="val-input"
+        />
+        {#if thicknessFeedback && thicknessFeedback !== "invalid"}
+          <span class="feedback ok">{thicknessFeedback}</span>
+        {:else if thicknessFeedback === "invalid"}
+          <span class="feedback err">?</span>
+        {/if}
+      </div>
     {:else}
+      <input
+        type="number"
+        value={otherValue}
+        min={0}
+        step={0.001}
+        onchange={setOtherValue}
+        class="val-input"
+      />
       <span class="unit">{unitLabel()}</span>
     {/if}
   </div>
@@ -170,6 +201,13 @@
     gap: 0.3rem;
   }
 
+  .input-with-feedback {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: 1;
+  }
+
   .val-input {
     flex: 1;
     background: #0d1117;
@@ -192,19 +230,16 @@
     min-width: 35px;
   }
 
-  .unit-select {
-    width: 52px;
-    background: #0d1117;
-    border: 1px solid #2d333b;
-    border-radius: 4px;
-    color: #e1e4e8;
-    padding: 0.25rem;
-    font-size: 0.75rem;
-    cursor: pointer;
+  .feedback {
+    font-size: 0.65rem;
+    white-space: nowrap;
   }
 
-  .unit-select:focus {
-    outline: none;
-    border-color: #58a6ff;
+  .feedback.ok {
+    color: #7ee787;
+  }
+
+  .feedback.err {
+    color: #f85149;
   }
 </style>

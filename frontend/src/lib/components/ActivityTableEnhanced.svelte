@@ -67,6 +67,7 @@
           activity_direct_Bq: direct,
           activity_ingrowth_Bq: ingrowth,
           rnp_pct: layerTotal > 0 ? (iso.activity_Bq / layerTotal) * 100 : 0,
+          dose_uSv_h: getDoseConstant(iso.name, iso.activity_Bq),
           reactions: iso.reactions ?? [],
         });
       }
@@ -91,6 +92,7 @@
         case "direct": cmp = a.activity_direct_Bq - b.activity_direct_Bq; break;
         case "daughter": cmp = a.activity_ingrowth_Bq - b.activity_ingrowth_Bq; break;
         case "rnp": cmp = a.rnp_pct - b.rnp_pct; break;
+        case "dose": cmp = (a.dose_uSv_h ?? -1) - (b.dose_uSv_h ?? -1); break;
       }
       return sortAsc ? cmp : -cmp;
     });
@@ -106,7 +108,7 @@
   }
 
   function exportCSV() {
-    const headers = ["Layer", "Isotope", "Z", "A", "Half-life", "Activity (Bq)", "Direct (Bq)", "Daughter (Bq)", "Sat. Yield (Bq/µA)", "RNP%", "Reaction"];
+    const headers = ["Layer", "Isotope", "Z", "A", "Half-life", "Activity (Bq)", "Direct (Bq)", "Daughter (Bq)", "Sat. Yield (Bq/µA)", "RNP%", "Dose@1m (µSv/h)", "Reaction"];
     const lines = [headers.join(",")];
     for (const row of rows) {
       const reactionStr = row.reactions.length > 0
@@ -123,6 +125,7 @@
         row.activity_ingrowth_Bq.toExponential(4),
         row.saturation_yield_Bq_uA.toExponential(4),
         row.rnp_pct.toFixed(2),
+        row.dose_uSv_h !== null ? row.dose_uSv_h.toExponential(4) : "",
         `"${reactionStr}"`,
       ].join(","));
     }
@@ -179,6 +182,7 @@
           <th class="col-act sortable" onclick={() => toggleSort("activity")}>Total</th>
           <th class="col-yield">Sat. Yield</th>
           <th class="col-rnp sortable" onclick={() => toggleSort("rnp")}>RNP%</th>
+          <th class="col-dose sortable" onclick={() => toggleSort("dose")}>Dose@1m</th>
         </tr>
       </thead>
       <tbody>
@@ -217,6 +221,7 @@
             <td class="col-act">{fmtActivity(row.activity_Bq)}</td>
             <td class="col-yield">{row.source === "daughter" ? "—" : fmtYield(row.saturation_yield_Bq_uA)}</td>
             <td class="col-rnp">{row.rnp_pct < 0.01 ? "<0.01" : row.rnp_pct.toFixed(2)}%</td>
+            <td class="col-dose">{row.dose_uSv_h !== null ? fmtDoseRate(row.dose_uSv_h) : "\u2014"}</td>
           </tr>
         {/each}
       </tbody>
@@ -342,6 +347,7 @@
   .col-act { width: auto; }
   .col-yield { width: auto; }
   .col-rnp { width: 55px; }
+  .col-dose { width: auto; }
 
   tr {
     cursor: pointer;
