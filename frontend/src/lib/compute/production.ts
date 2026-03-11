@@ -9,6 +9,14 @@ import { LN2, MILLIBARN_CM2, ELEMENTARY_CHARGE, MEV_TO_JOULE } from "./constants
 import { interp, linspace, trapezoid } from "./interpolation";
 
 /**
+ * Minimum peak cross-section (mb) on the integration grid to consider
+ * the reaction channel active.  Values below this are treated as zero
+ * to prevent interpolation artifacts from generating spurious
+ * production rates.
+ */
+const MIN_PEAK_XS_MB = 1e-6;
+
+/**
  * Compute energy-integrated production rate for one isotope.
  *
  * R = beam_particles/s * (n_atoms / V) * integral(sigma(E) / |dE/dx(E)| dE)
@@ -36,6 +44,18 @@ export function computeProductionRate(
 
   // Evaluate stopping power
   const dedxValues = dedxFn(energies);
+
+  // Skip channels where the interpolated XS is effectively zero across the
+  // entire energy range.  This prevents interpolation artifacts from
+  // producing non-zero production rates for reactions that have no
+  // appreciable cross-section at the operating energies.
+  let peakXs = 0;
+  for (let i = 0; i < nPoints; i++) {
+    if (xsInterp[i] > peakXs) peakXs = xsInterp[i];
+  }
+  if (peakXs < MIN_PEAK_XS_MB) {
+    return { productionRate: 0, energies, xsInterp, dedxValues };
+  }
 
   // Integrand: sigma(E) / |dE/dx(E)|
   const integrand = new Float64Array(nPoints);

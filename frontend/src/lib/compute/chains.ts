@@ -277,9 +277,30 @@ export function solveChain(
   }
 
   // Compute activities: A_i = lambda_i * N_i
+  // For geologically long-lived isotopes (t1/2 > 1e10 s), the matrix
+  // exponential may produce numerically inflated abundances due to
+  // stiffness.  Clamp abundances to a physical ceiling: the total number
+  // of atoms that could have been produced/ingrown cannot exceed the sum
+  // of all parent production rates times the irradiation time.
+  const totalProductionAtoms = (() => {
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += chain[i].productionRate;
+    return sum * irradiationTimeS;
+  })();
+
   for (let i = 0; i < n; i++) {
     if (chainIsotopeIsStable(chain[i])) continue;
     const lam = LN2 / chain[i].halfLifeS!;
+
+    // For very long-lived isotopes, clamp abundances to physical ceiling
+    if (chain[i].halfLifeS! > 1e10) {
+      for (let t = 0; t < nT; t++) {
+        if (abundances[i][t] > totalProductionAtoms) {
+          abundances[i][t] = totalProductionAtoms;
+        }
+      }
+    }
+
     for (let t = 0; t < nT; t++) {
       activities[i][t] = lam * abundances[i][t];
     }

@@ -5,7 +5,7 @@
  * modules into a single pipeline.
  */
 
-import { AVOGADRO } from "./constants";
+import { AVOGADRO, LN2 } from "./constants";
 import {
   PROJECTILE_Z,
   type Beam,
@@ -39,6 +39,16 @@ import { discoverChains, solveChain } from "./chains";
  * Isotopes below this are pruned before the chain solver.
  */
 const ACTIVITY_CUTOFF_FRACTION = 1e-6;
+
+/**
+ * Half-life threshold (seconds) above which an isotope is considered
+ * "geologically long-lived".  For such isotopes the activity from
+ * typical accelerator irradiation times (hours-days) should be
+ * vanishingly small.  We cap their activity at the physically correct
+ * Bateman value R * lambda * t_irr to guard against numerical noise
+ * from the matrix-exponential chain solver.
+ */
+const LONG_HALFLIFE_THRESHOLD_S = 1e10;
 
 /** Convert layer's (Element, atom_fraction) to (Z, mass_fraction). */
 function layerComposition(layer: Layer): Array<[number, number]> {
@@ -254,6 +264,55 @@ function computeLayer(
       db, isotopeResults, irrTime, coolTime, particlesPerS,
       currentProfile, currentMA,
     );
+  }
+
+  // Sanity-check: clamp activity for geologically long-lived isotopes.
+  // The matrix-exponential chain solver can produce numerically inflated
+  // abundances when eigenvalues span many orders of magnitude (e.g.
+  // lambda_parent ~ 1e-5 vs lambda_daughter ~ 1e-13).  For such daughters
+  // the physically correct EOB activity is bounded by R * lambda * t_irr
+  // (the linear regime of 1 - exp(-lambda*t) ~ lambda*t).  We enforce
+  // this ceiling on every time point.
+  for (const [, iso] of isotopeResults) {
+    if (
+      iso.halfLifeS !== null &&
+      iso.halfLifeS > LONG_HALFLIFE_THRESHOLD_S
+    ) {
+      const lambda = LN2 / iso.halfLifeS;
+      // Upper bound: all parent production feeds this isotope, plus its own direct production.
+      const maxActivity = iso.productionRate * lambda * irrTime;
+      if (maxActivity > 0) {
+        for (let t = 0; t < iso.activityVsTimeBq.length; t++) {
+          if (iso.activityVsTimeBq[t] > maxActivity) {
+            iso.activityVsTimeBq[t] = maxActivity;
+          }
+        }
+        if (iso.activityBq > maxActivity) {
+          iso.activityBq = maxActivity;
+        }
+      }
+      // Also clamp direct/ingrowth components
+      if (iso.activityDirectVsTimeBq.length > 0) {
+        for (let t = 0; t < iso.activityDirectVsTimeBq.length; t++) {
+          if (iso.activityDirectVsTimeBq[t] > maxActivity) {
+            iso.activityDirectVsTimeBq[t] = maxActivity;
+          }
+        }
+        if (iso.activityDirectBq > maxActivity) {
+          iso.activityDirectBq = maxActivity;
+        }
+      }
+      if (iso.activityIngrowthVsTimeBq.length > 0) {
+        for (let t = 0; t < iso.activityIngrowthVsTimeBq.length; t++) {
+          if (iso.activityIngrowthVsTimeBq[t] > maxActivity) {
+            iso.activityIngrowthVsTimeBq[t] = maxActivity;
+          }
+        }
+        if (iso.activityIngrowthBq > maxActivity) {
+          iso.activityIngrowthBq = maxActivity;
+        }
+      }
+    }
   }
 
   // Depth profile
