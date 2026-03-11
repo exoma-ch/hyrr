@@ -1,0 +1,220 @@
+<script lang="ts">
+  import {
+    getBeam,
+    getConfig,
+    setProjectile,
+    setEnergy,
+    setCurrent,
+    setIrradiation,
+    setCooling,
+  } from "../stores/config.svelte";
+  import { parseTime } from "../utils/time-parse";
+  import type { ProjectileType } from "../types";
+
+  const PROJECTILES: { id: ProjectileType; label: string }[] = [
+    { id: "p", label: "p" },
+    { id: "d", label: "d" },
+    { id: "t", label: "t" },
+    { id: "h", label: "\u00b3He" },
+    { id: "a", label: "\u03b1" },
+  ];
+
+  let beam = $derived(getBeam());
+  let config = $derived(getConfig());
+
+  // Smart time inputs
+  let irradText = $state("");
+  let coolText = $state("");
+  let irradFeedback = $state("");
+  let coolFeedback = $state("");
+
+  // Initialize text from config
+  let initialized = false;
+  $effect(() => {
+    if (!initialized) {
+      initialized = true;
+      irradText = formatSeconds(config.irradiation_s);
+      coolText = formatSeconds(config.cooling_s);
+    }
+  });
+
+  function formatSeconds(s: number): string {
+    if (s >= 86400 * 365) return `${(s / (86400 * 365.25)).toPrecision(3)}y`;
+    if (s >= 86400) return `${s / 86400}d`;
+    if (s >= 3600) return `${s / 3600}h`;
+    if (s >= 60) return `${s / 60}min`;
+    return `${s}s`;
+  }
+
+  function onIrradInput(e: Event) {
+    const val = (e.target as HTMLInputElement).value;
+    irradText = val;
+    const parsed = parseTime(val);
+    if (parsed) {
+      irradFeedback = parsed.display;
+      setIrradiation(parsed.seconds);
+    } else {
+      irradFeedback = val ? "invalid" : "";
+    }
+  }
+
+  function onCoolInput(e: Event) {
+    const val = (e.target as HTMLInputElement).value;
+    coolText = val;
+    const parsed = parseTime(val);
+    if (parsed) {
+      coolFeedback = parsed.display;
+      setCooling(parsed.seconds);
+    } else {
+      coolFeedback = val ? "invalid" : "";
+    }
+  }
+
+  function onEnergyChange(e: Event) {
+    const v = parseFloat((e.target as HTMLInputElement).value);
+    if (!isNaN(v) && v > 0) setEnergy(v);
+  }
+
+  function onCurrentChange(e: Event) {
+    const v = parseFloat((e.target as HTMLInputElement).value);
+    if (!isNaN(v) && v > 0) setCurrent(v / 1000); // µA to mA
+  }
+</script>
+
+<div class="beam-bar">
+  <div class="field">
+    <label>Projectile</label>
+    <select value={beam.projectile} onchange={(e) => setProjectile((e.target as HTMLSelectElement).value as ProjectileType)}>
+      {#each PROJECTILES as p}
+        <option value={p.id}>{p.label}</option>
+      {/each}
+    </select>
+  </div>
+
+  <div class="field">
+    <label>Energy</label>
+    <div class="input-group">
+      <input type="text" inputmode="decimal" value={beam.energy_MeV} onchange={onEnergyChange} />
+      <span class="unit">MeV</span>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Current</label>
+    <div class="input-group">
+      <input type="text" inputmode="decimal" value={beam.current_mA * 1000} onchange={onCurrentChange} />
+      <span class="unit">µA</span>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Irradiation</label>
+    <div class="input-with-feedback">
+      <input type="text" value={irradText} oninput={onIrradInput} placeholder="e.g. 24h" />
+      {#if irradFeedback && irradFeedback !== "invalid"}
+        <span class="feedback ok">{irradFeedback}</span>
+      {:else if irradFeedback === "invalid"}
+        <span class="feedback err">?</span>
+      {/if}
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Cooling</label>
+    <div class="input-with-feedback">
+      <input type="text" value={coolText} oninput={onCoolInput} placeholder="e.g. 1d" />
+      {#if coolFeedback && coolFeedback !== "invalid"}
+        <span class="feedback ok">{coolFeedback}</span>
+      {:else if coolFeedback === "invalid"}
+        <span class="feedback err">?</span>
+      {/if}
+    </div>
+  </div>
+</div>
+
+<style>
+  .beam-bar {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    background: #161b22;
+    border: 1px solid #2d333b;
+    border-radius: 6px;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+  }
+
+  .field label {
+    font-size: 0.65rem;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .field select,
+  .field input {
+    background: #0d1117;
+    border: 1px solid #2d333b;
+    border-radius: 4px;
+    color: #e1e4e8;
+    padding: 0.3rem 0.4rem;
+    font-size: 0.8rem;
+  }
+
+  .field select {
+    width: 70px;
+    cursor: pointer;
+  }
+
+  .input-group input {
+    width: 70px;
+    text-align: right;
+  }
+
+  .field input[type="text"] {
+    width: 80px;
+  }
+
+  .field select:focus,
+  .field input:focus {
+    outline: none;
+    border-color: #58a6ff;
+  }
+
+  .input-group {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .unit {
+    font-size: 0.7rem;
+    color: #8b949e;
+  }
+
+  .input-with-feedback {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .feedback {
+    font-size: 0.65rem;
+    white-space: nowrap;
+  }
+
+  .feedback.ok {
+    color: #7ee787;
+  }
+
+  .feedback.err {
+    color: #f85149;
+  }
+</style>
