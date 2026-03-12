@@ -9,7 +9,7 @@
 
   import { Z_TO_SYMBOL } from "../utils/formula";
   import { resolveMaterial } from "../compute/materials";
-  import { bestActivityUnit, bestTimeUnit, fmtActivity } from "../utils/format";
+  import { bestActivityUnit, bestTimeUnit, fmtActivity, fmtYield } from "../utils/format";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import type { DecayMode, CrossSectionData } from "../compute/types";
 
@@ -317,6 +317,7 @@
     productionRate: number;
     satYield: number;
     eobActivity: number;
+    halfLifeS: number | null;
   }
 
   interface ActivityData {
@@ -346,6 +347,7 @@
         productionRate: best.production_rate,
         satYield: best.saturation_yield_Bq_uA,
         eobActivity: best.activity_Bq,
+        halfLifeS: best.half_life_s,
       };
     }
 
@@ -512,7 +514,11 @@
   {#snippet headerChildren()}
     <div class="nuc-title">
       <span class="nuc-notation">
-        <sup class="nuc-a">{A}</sup><sub class="nuc-z">{Z}</sub>{symbol}{#if nuclearState}<sup class="nuc-state">{nuclearState}</sup>{/if}
+        <span class="nuc-numbers">
+          <span class="nuc-a">{A}</span>
+          <span class="nuc-z">{Z}</span>
+        </span>
+        <span class="nuc-symbol">{symbol}</span>{#if nuclearState}<span class="nuc-state">{nuclearState}</span>{/if}
       </span>
       {#if decayInfo}
         <span class="nuc-hl">{formatHalfLife(decayInfo.halfLifeS)}</span>
@@ -571,41 +577,73 @@
       </div>
     {/if}
 
-    <!-- Compare selector (shared across XS + activity) -->
-    {#if xsData || compareIsotopes.length > 0}
-      <div class="compare-bar">
-        <div class="compare-controls">
-          {#each compareIsotopes as cmp}
-            <span class="compare-chip">
-              {cmp.name}
-              <button class="chip-x" onclick={() => removeCompare(cmp.name)}>&times;</button>
-            </span>
-          {/each}
-          <div class="compare-dropdown-wrapper">
-            <input
-              type="text"
-              class="compare-filter"
-              placeholder="+ compare..."
-              bind:value={compareFilter}
-              onfocus={() => { compareDropdownOpen = true; }}
-              onblur={() => { setTimeout(() => { compareDropdownOpen = false; }, 150); }}
-            />
-            {#if compareDropdownOpen && sortedCompareList.length > 0}
-              <div class="compare-dropdown">
-                {#each sortedCompareList as iso}
-                  <button
-                    class="compare-option"
-                    class:selected={compareIsotopes.some((c) => c.name === iso.name)}
-                    onmousedown={(e) => { e.preventDefault(); toggleCompare(iso); }}
-                  >
-                    {#if compareIsotopes.some((c) => c.name === iso.name)}<span class="check-mark">&#10003;</span>{/if}
-                    {iso.name}
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        </div>
+    <!-- Compare table -->
+    {#if activityData?.main}
+      <div class="compare-table-wrap">
+        <table class="compare-table">
+          <thead>
+            <tr>
+              <th class="ct-iso">Isotope</th>
+              <th class="ct-hl">t&frac12;</th>
+              <th class="ct-act">EOB</th>
+              <th class="ct-yield">Sat. yield</th>
+              <th class="ct-rate">Prod. rate</th>
+              <th class="ct-x"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="ct-main">
+              <td class="ct-iso">{name}{nuclearState ? ` (${nuclearState})` : ""}</td>
+              <td class="ct-hl">{formatHalfLife(activityData.main.halfLifeS)}</td>
+              <td class="ct-act">{fmtActivity(activityData.main.eobActivity)}</td>
+              <td class="ct-yield">{fmtYield(activityData.main.satYield)}</td>
+              <td class="ct-rate">{activityData.main.productionRate.toExponential(2)} /s</td>
+              <td class="ct-x"></td>
+            </tr>
+            {#each activityData.compare as cmp}
+              <tr>
+                <td class="ct-iso">{cmp.name}</td>
+                <td class="ct-hl">{formatHalfLife(cmp.halfLifeS)}</td>
+                <td class="ct-act">{fmtActivity(cmp.eobActivity)}</td>
+                <td class="ct-yield">{fmtYield(cmp.satYield)}</td>
+                <td class="ct-rate">{cmp.productionRate.toExponential(2)} /s</td>
+                <td class="ct-x">
+                  <button class="ct-remove" onclick={() => removeCompare(cmp.name)}>&times;</button>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="6" class="ct-add-cell">
+                <div class="compare-dropdown-wrapper">
+                  <input
+                    type="text"
+                    class="compare-filter"
+                    placeholder="+ compare..."
+                    bind:value={compareFilter}
+                    onfocus={() => { compareDropdownOpen = true; }}
+                    onblur={() => { setTimeout(() => { compareDropdownOpen = false; }, 150); }}
+                  />
+                  {#if compareDropdownOpen && sortedCompareList.length > 0}
+                    <div class="compare-dropdown">
+                      {#each sortedCompareList as iso}
+                        <button
+                          class="compare-option"
+                          class:selected={compareIsotopes.some((c) => c.name === iso.name)}
+                          onmousedown={(e) => { e.preventDefault(); toggleCompare(iso); }}
+                        >
+                          {#if compareIsotopes.some((c) => c.name === iso.name)}<span class="check-mark">&#10003;</span>{/if}
+                          {iso.name}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              </td>
+            </tr>
+          </tfoot>
+        </table>
       </div>
     {/if}
 
@@ -624,10 +662,6 @@
       <div class="section">
         <div class="section-bar">
           <span class="section-label">Activity{showRnp ? " / RNP%" : ""}</span>
-          <div class="activity-stats">
-            <span>EOB: {fmtActivity(activityData.main.eobActivity)}</span>
-            <span title="Production rate: atoms produced per second of irradiation">Prod. rate: {activityData.main.productionRate.toExponential(2)} /s</span>
-          </div>
         </div>
         <div bind:this={actPlotDiv} class="act-plot"></div>
       </div>
@@ -648,48 +682,60 @@
 </Modal>
 
 <style>
-  /* Title in header */
+  /* Title in header — proper nuclear notation: ᴬ_Z Symbol */
   .nuc-title {
     display: flex;
-    align-items: baseline;
-    gap: 0.6rem;
+    align-items: center;
+    gap: 0.5rem;
     flex: 1;
     min-width: 0;
   }
 
   .nuc-notation {
-    font-size: 1.4rem;
-    font-weight: 700;
-    color: #58a6ff;
+    display: inline-flex;
+    align-items: center;
     line-height: 1;
-    position: relative;
+  }
+
+  .nuc-numbers {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    margin-right: 0.05em;
+    line-height: 1;
+    gap: 0;
   }
 
   .nuc-a {
-    font-size: 0.6em;
-    position: relative;
-    top: -0.4em;
-    margin-right: -0.1em;
+    font-size: 0.75rem;
     color: #8b949e;
     font-weight: 400;
+    font-variant-numeric: tabular-nums;
   }
 
   .nuc-z {
-    font-size: 0.55em;
-    position: relative;
-    top: 0.2em;
-    margin-right: -0.1em;
+    font-size: 0.7rem;
     color: #6e7681;
     font-weight: 400;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .nuc-symbol {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #58a6ff;
   }
 
   .nuc-state {
-    font-size: 0.5em;
+    font-size: 0.65rem;
     color: #d29922;
+    font-weight: 600;
+    vertical-align: super;
+    margin-left: 0.05em;
   }
 
   .nuc-hl {
-    font-size: 0.8rem;
+    font-size: 0.85rem;
     color: #6e7681;
     font-variant-numeric: tabular-nums;
   }
@@ -788,49 +834,76 @@
     flex-shrink: 0;
   }
 
-  .compare-bar {
-    display: flex;
-    align-items: center;
-    padding: 0.3rem 0.5rem;
-    background: #0d1117;
+  /* Compare table */
+  .compare-table-wrap {
     border: 1px solid #2d333b;
     border-radius: 4px;
+    overflow: visible;
   }
 
-  .compare-controls {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    flex-wrap: wrap;
+  .compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
   }
 
-  .compare-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.15rem;
-    background: #1c2128;
-    border: 1px solid #2d333b;
-    border-radius: 3px;
-    padding: 0.1rem 0.3rem;
-    font-size: 0.65rem;
+  .compare-table thead th {
+    background: #0d1117;
+    color: #6e7681;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-size: 0.6rem;
+    padding: 0.25rem 0.4rem;
+    text-align: right;
+    border-bottom: 1px solid #2d333b;
+    white-space: nowrap;
+  }
+
+  .compare-table thead th.ct-iso { text-align: left; }
+
+  .compare-table td {
+    padding: 0.2rem 0.4rem;
     color: #8b949e;
+    text-align: right;
+    border-bottom: 1px solid #1c2128;
+    white-space: nowrap;
   }
 
-  .chip-x {
+  .compare-table td.ct-iso { text-align: left; color: #e1e4e8; }
+
+  .compare-table tr.ct-main td {
+    color: #e1e4e8;
+    font-weight: 500;
+  }
+
+  .compare-table tr.ct-main td.ct-iso { color: #58a6ff; }
+
+  .compare-table tfoot td {
+    border-bottom: none;
+    padding: 0.25rem 0.4rem;
+  }
+
+  .ct-x { width: 1.2rem; text-align: center !important; }
+
+  .ct-remove {
     background: none;
     border: none;
-    color: inherit;
-    font-size: 0.7rem;
+    color: #484f58;
     cursor: pointer;
+    font-size: 0.8rem;
     padding: 0;
     line-height: 1;
-    opacity: 0.6;
   }
 
-  .chip-x:hover { opacity: 1; color: #f85149; }
+  .ct-remove:hover { color: #f85149; }
+
+  .ct-add-cell { text-align: left !important; }
 
   .compare-dropdown-wrapper {
     position: relative;
+    display: inline-block;
   }
 
   .compare-filter {
@@ -897,14 +970,6 @@
   .xs-plot, .act-plot {
     width: 100%;
     height: 220px;
-  }
-
-  .activity-stats {
-    display: flex;
-    gap: 0.75rem;
-    font-size: 0.65rem;
-    color: #6e7681;
-    font-variant-numeric: tabular-nums;
   }
 
   /* Links */
