@@ -5,6 +5,7 @@
     getCustomMaterials,
     loadCustomMaterials,
     saveCustomMaterial,
+    updateCustomMaterial,
     deleteCustomMaterial,
     validateFormula,
   } from "../stores/custom-materials.svelte";
@@ -32,6 +33,7 @@
   let newDensity = $state<number | null>(null);
   let formulaError = $state<string | null>(null);
   let saving = $state(false);
+  let editingCustomId = $state<string | null>(null);
 
   $effect(() => {
     if (open) {
@@ -43,6 +45,7 @@
       nameManuallySet = false;
       newDensity = null;
       formulaError = null;
+      editingCustomId = null;
     }
   });
 
@@ -164,7 +167,11 @@
     saving = true;
     formulaError = null;
     try {
-      await saveCustomMaterial(nameVal, preview.formula, densityVal);
+      if (editingCustomId) {
+        await updateCustomMaterial(editingCustomId, nameVal, preview.formula, densityVal);
+      } else {
+        await saveCustomMaterial(nameVal, preview.formula, densityVal);
+      }
       onselect(preview.formula);
       onclose();
     } catch {
@@ -272,8 +279,8 @@
     return scored.slice(0, 30).map((s) => s.entry);
   });
 
-  function isCustomEntry(entry: MaterialInfo): string | null {
-    return customEntries.find((c) => c.name === entry.name && c.formula === entry.formula)?.customId ?? null;
+  function findCustomEntry(entry: MaterialInfo): (MaterialInfo & { customId: string }) | null {
+    return customEntries.find((c) => c.name === entry.name && c.formula === entry.formula) ?? null;
   }
 
   function select(entry: MaterialInfo) {
@@ -291,6 +298,16 @@
   async function handleDelete(id: string, event: Event) {
     event.stopPropagation();
     await deleteCustomMaterial(id);
+  }
+
+  function editCustomMaterial(entry: MaterialInfo & { customId: string }, event: Event) {
+    event.stopPropagation();
+    defineOpen = true;
+    newFormula = entry.formula ?? "";
+    newName = entry.name;
+    nameManuallySet = true;
+    newDensity = entry.density_g_cm3 ?? null;
+    editingCustomId = entry.customId;
   }
 
   /** Elements from current query for enrichment access. */
@@ -334,12 +351,12 @@
     <!-- Results -->
     <ul class="results-list">
       {#each results as entry}
-        {@const customId = isCustomEntry(entry)}
+        {@const custom = findCustomEntry(entry)}
         <li>
           <button class="result-item" onclick={() => select(entry)}>
             <span class="mat-name">
               {entry.name}
-              {#if customId}<span class="badge-custom">custom</span>{/if}
+              {#if custom}<span class="badge-custom">custom</span>{/if}
               {#if entry.category === "element"}<span class="badge-el">Z={SYMBOL_TO_Z[entry.name] ?? "?"}</span>{/if}
             </span>
             <span class="mat-meta">
@@ -347,8 +364,9 @@
               {#if entry.density_g_cm3}<span class="density">{entry.density_g_cm3.toFixed(2)} g/cm³</span>{/if}
             </span>
           </button>
-          {#if customId}
-            <button class="delete-btn" title="Delete" onclick={(e) => handleDelete(customId, e)}>&times;</button>
+          {#if custom}
+            <button class="edit-btn" title="Edit" onclick={(e) => editCustomMaterial(custom, e)}>&#9998;</button>
+            <button class="delete-btn" title="Delete" onclick={(e) => handleDelete(custom.customId, e)}>&times;</button>
           {/if}
         </li>
       {/each}
@@ -432,7 +450,7 @@
               class="save-btn"
               disabled={saving || !formulaPreview || newDensity === null || (newDensity ?? 0) <= 0}
               onclick={handleSave}
-            >{saving ? "Saving..." : "Save & Use"}</button>
+            >{saving ? "Saving..." : editingCustomId ? "Update & Use" : "Save & Use"}</button>
           </div>
         </div>
       {/if}
@@ -588,19 +606,22 @@
   .formula { color: #58a6ff; }
   .density { color: #7ee787; }
 
-  .delete-btn {
+  .edit-btn, .delete-btn {
     position: absolute;
-    right: 0.3rem;
     background: none;
     border: none;
     color: #484f58;
-    font-size: 1rem;
+    font-size: 0.85rem;
     cursor: pointer;
     padding: 0.1rem 0.3rem;
     border-radius: 3px;
     line-height: 1;
   }
 
+  .edit-btn { right: 1.6rem; }
+  .delete-btn { right: 0.3rem; font-size: 1rem; }
+
+  .edit-btn:hover { color: #58a6ff; background: rgba(88, 166, 255, 0.1); }
   .delete-btn:hover { color: #f85149; background: rgba(248, 81, 73, 0.1); }
 
   .no-results {

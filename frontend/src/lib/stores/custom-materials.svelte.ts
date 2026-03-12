@@ -112,6 +112,25 @@ export async function saveCustomMaterial(
   return entry.id;
 }
 
+/** Update an existing custom material by ID. */
+export async function updateCustomMaterial(
+  id: string,
+  name: string,
+  formula: string,
+  density: number,
+): Promise<void> {
+  const entry: CustomMaterial = { id, name, formula, density, timestamp: Date.now() };
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.put(entry);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+  await loadCustomMaterials();
+}
+
 /** Delete a custom material by ID. */
 export async function deleteCustomMaterial(id: string): Promise<void> {
   const db = await openDb();

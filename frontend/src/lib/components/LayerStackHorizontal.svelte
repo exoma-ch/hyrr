@@ -9,6 +9,7 @@
   import ThicknessInput from "./ThicknessInput.svelte";
   import type { LayerConfig } from "../types";
   import { parseFormula } from "../utils/formula";
+  import { getCustomMaterials } from "../stores/custom-materials.svelte";
 
   interface Props {
     onmaterialclick?: (index: number) => void;
@@ -18,6 +19,12 @@
   let { onmaterialclick, onelementclick }: Props = $props();
 
   let layers = $derived(getLayers());
+  let customMaterials = $derived(getCustomMaterials());
+
+  function isCustomMaterial(formula: string): boolean {
+    return customMaterials.some((m) => m.formula === formula || m.name === formula);
+  }
+
   let dragIndex = $state<number | null>(null);
   let dragOverIndex = $state<number | null>(null);
 
@@ -121,23 +128,28 @@
         title="Click to change material"
       >
         {layer.material || "select..."}
+        {#if isCustomMaterial(layer.material)}
+          <span class="cstm-badge">cstm</span>
+        {/if}
         {#if layer.enrichment && Object.keys(layer.enrichment).length > 0}
           <span class="enr-badge">enr</span>
         {/if}
       </button>
 
-      {#if layer.material && layer.enrichment}
-        <div class="element-badges">
-          {#each Object.keys(parseFormula(layer.material)) as el}
-            {#if layer.enrichment[el]}
+      {#if layer.material}
+        {@const elements = Object.keys(parseFormula(layer.material))}
+        {#if elements.length > 0}
+          <div class="element-badges">
+            {#each elements as el}
               <button
-                class="el-badge enriched"
+                class="el-badge"
+                class:enriched={!!layer.enrichment?.[el]}
                 onclick={(e) => { e.stopPropagation(); onelementclick?.(i, el); }}
-                title="{el} (enriched)"
-              >{el}</button>
-            {/if}
-          {/each}
-        </div>
+                title="{el}{layer.enrichment?.[el] ? ' (enriched)' : ''}"
+              >{el}{#if layer.enrichment?.[el]}<span class="enr-dot"></span>{/if}</button>
+            {/each}
+          </div>
+        {/if}
       {/if}
 
       <div class="thickness-display">{thicknessDisplay(layer)}</div>
@@ -266,6 +278,18 @@
     color: #58a6ff;
   }
 
+  .cstm-badge {
+    font-size: 0.55rem;
+    background: rgba(88, 166, 255, 0.15);
+    color: #58a6ff;
+    padding: 0.05rem 0.2rem;
+    border-radius: 2px;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-left: 0.2rem;
+    vertical-align: middle;
+  }
+
   .enr-badge {
     font-size: 0.55rem;
     background: rgba(210, 153, 34, 0.15);
@@ -330,5 +354,15 @@
     border-color: #d29922;
     color: #d29922;
     background: rgba(210, 153, 34, 0.1);
+  }
+
+  .enr-dot {
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    background: #d29922;
+    border-radius: 50%;
+    margin-left: 0.15rem;
+    vertical-align: middle;
   }
 </style>
