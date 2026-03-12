@@ -16,6 +16,7 @@ from hyrr.db import (
 )
 from hyrr.models import (
     Beam,
+    BeamProfile,
     DepthPoint,
     Element,
     IsotopeResult,
@@ -46,6 +47,7 @@ from hyrr.sweep import sweep
 
 __all__ = [
     "Beam",
+    "BeamProfile",
     "CrossSectionData",
     "DatabaseProtocol",
     "DataStore",

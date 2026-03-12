@@ -22,19 +22,118 @@ PROJECTILE_Z: dict[str, int] = {"p": 1, "d": 1, "t": 1, "h": 2, "a": 2}
 
 
 @dataclass(frozen=True)
+class BeamProfile:
+    """Transverse phase-space description of the beam.
+
+    Describes the 2D Gaussian spatial and angular distribution.
+    All fields have defaults that correspond to a zero-size,
+    zero-divergence pencil beam, so omitting this entirely
+    preserves 1D behavior.
+
+    When only ``sigma_x_cm`` is set, the beam is circular (σ_y = σ_x).
+    Same convention for divergence. If ``emittance_*`` is set it
+    overrides the product σ × σ_θ for sampling.
+
+    Twiss parameter α encodes x-θ (or y-θ) correlation:
+    α = 0 → waist (uncorrelated), α > 0 → converging, α < 0 → diverging.
+    """
+
+    sigma_x_cm: float = 0.0
+    sigma_y_cm: float | None = None  # None → circular (= σ_x)
+    divergence_x_mrad: float = 0.0
+    divergence_y_mrad: float | None = None  # None → same as x
+    emittance_x_mm_mrad: float | None = None  # overrides σ×σ_θ if set
+    emittance_y_mm_mrad: float | None = None
+    alpha_x: float = 0.0  # Twiss α (x-θ correlation)
+    alpha_y: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.sigma_x_cm < 0:
+            raise ValueError(
+                f"sigma_x_cm must be >= 0, got {self.sigma_x_cm}"
+            )
+        if self.sigma_y_cm is not None and self.sigma_y_cm < 0:
+            raise ValueError(
+                f"sigma_y_cm must be >= 0, got {self.sigma_y_cm}"
+            )
+        if self.divergence_x_mrad < 0:
+            raise ValueError(
+                f"divergence_x_mrad must be >= 0, got {self.divergence_x_mrad}"
+            )
+        if self.divergence_y_mrad is not None and self.divergence_y_mrad < 0:
+            raise ValueError(
+                f"divergence_y_mrad must be >= 0, got {self.divergence_y_mrad}"
+            )
+        if self.emittance_x_mm_mrad is not None and self.emittance_x_mm_mrad < 0:
+            raise ValueError(
+                f"emittance_x_mm_mrad must be >= 0, got {self.emittance_x_mm_mrad}"
+            )
+        if self.emittance_y_mm_mrad is not None and self.emittance_y_mm_mrad < 0:
+            raise ValueError(
+                f"emittance_y_mm_mrad must be >= 0, got {self.emittance_y_mm_mrad}"
+            )
+
+    @property
+    def effective_sigma_y_cm(self) -> float:
+        """σ_y: explicit value or fall back to σ_x (circular)."""
+        return self.sigma_y_cm if self.sigma_y_cm is not None else self.sigma_x_cm
+
+    @property
+    def effective_divergence_y_mrad(self) -> float:
+        """σ_θy: explicit value or fall back to σ_θx."""
+        return (
+            self.divergence_y_mrad
+            if self.divergence_y_mrad is not None
+            else self.divergence_x_mrad
+        )
+
+    @property
+    def is_pencil(self) -> bool:
+        """True if beam has zero spatial extent (pencil beam)."""
+        return self.sigma_x_cm == 0.0 and self.effective_sigma_y_cm == 0.0
+
+    @property
+    def spot_radius_cm(self) -> float:
+        """Effective circular spot radius (mean of σ_x, σ_y).
+
+        Useful as a single characteristic size for ray sampling.
+        """
+        return (self.sigma_x_cm + self.effective_sigma_y_cm) / 2.0
+
+
+@dataclass(frozen=True)
 class Beam:
     """Incident beam specification."""
 
     projectile: str
     energy_MeV: float
     current_mA: float
+    energy_spread_MeV: float = 0.0  # initial σ_E [MeV]
+
+    # Transverse phase-space profile (None = pencil beam / 1D)
+    profile: BeamProfile | None = None
+
+    # 3D pose (ignored by 1D compute_stack)
+    position: tuple[float, float, float] | None = None  # beam origin [cm]
+    direction: tuple[float, float, float] | None = None  # unit vector
 
     def __post_init__(self) -> None:
         if self.energy_MeV <= 0:
             raise ValueError(f"energy_MeV must be positive, got {self.energy_MeV}")
         if self.current_mA <= 0:
             raise ValueError(f"current_mA must be positive, got {self.current_mA}")
+        if self.energy_spread_MeV < 0:
+            raise ValueError(
+                f"energy_spread_MeV must be >= 0, got {self.energy_spread_MeV}"
+            )
         resolve_projectile(self.projectile)  # validates; raises ValueError if invalid
+
+        # Validate direction is nonzero if provided
+        if self.direction is not None:
+            dx, dy, dz = self.direction
+            mag = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if mag < 1e-12:
+                raise ValueError("direction must be a nonzero vector")
 
     @property
     def projectile_obj(self) -> Projectile:
@@ -46,6 +145,21 @@ class Beam:
         """Number of incident particles per second."""
         charge_e = 1.602176634e-19  # elementary charge [C]
         return (self.current_mA * 1e-3) / (self.projectile_obj.charge_state * charge_e)
+
+    @property
+    def direction_array(self) -> npt.NDArray[np.float64]:
+        """Direction as a normalized numpy array. Defaults to (0, 0, 1)."""
+        if self.direction is None:
+            return np.array([0.0, 0.0, 1.0])
+        d = np.array(self.direction, dtype=np.float64)
+        return d / np.linalg.norm(d)
+
+    @property
+    def position_array(self) -> npt.NDArray[np.float64]:
+        """Position as numpy array. Defaults to origin."""
+        if self.position is None:
+            return np.zeros(3, dtype=np.float64)
+        return np.array(self.position, dtype=np.float64)
 
 
 @dataclass
@@ -196,6 +310,7 @@ class DepthPoint:
     dedx_MeV_cm: float
     heat_W_cm3: float
     production_rates: dict[str, float]  # isotope_name -> local rate [s^-1 cm^-1]
+    sigma_E_MeV: float = 0.0  # energy straggling σ_E at this depth
 
 
 @dataclass
@@ -238,6 +353,8 @@ class LayerResult:
     isotope_results: dict[str, IsotopeResult]  # keyed by isotope name
     stopping_power_sources: dict[int, str] = field(default_factory=dict)
     # Z -> source label ('PSTAR', 'ASTAR', 'pycatima/SRIM')
+    sigma_E_in_MeV: float = 0.0
+    sigma_E_out_MeV: float = 0.0
 
 
 @dataclass

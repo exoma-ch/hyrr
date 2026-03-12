@@ -6,11 +6,14 @@ pycatima (SRIM-based) fallback when no tables are available.
 
 Stopping power source is tracked per element and exposed via
 :func:`get_stopping_source` for downstream reporting.
+
+Energy straggling (Bohr formula) is also provided here.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -361,3 +364,77 @@ def compute_energy_out(
             return 0.0
 
     return energy
+
+
+# ---------------------------------------------------------------------------
+# Energy straggling (Bohr formula)
+# ---------------------------------------------------------------------------
+
+# e² = 1.4399764 MeV·fm  (Coulomb constant × e²)
+_E2_MEV_FM = 1.4399764
+_NA = 6.02214076e23
+
+
+def bohr_straggling_variance_per_cm(
+    projectile_Z: int,
+    composition: list[tuple[int, float]],
+    density_g_cm3: float,
+    atomic_masses: dict[int, float],
+) -> float:
+    """Bohr energy-straggling variance per unit path length [MeV²/cm].
+
+    dσ²_E/dz = 4π (e²)² Z_proj² × Σ_i (Z_i × n_i)
+
+    where n_i = ρ N_A w_i / A_i is the number density contribution
+    from element i.
+
+    Args:
+        projectile_Z: Charge number of the projectile.
+        composition: List of (Z, mass_fraction) pairs.
+        density_g_cm3: Material density [g/cm³].
+        atomic_masses: Mapping Z → average atomic mass [u].
+
+    Returns:
+        dσ²_E/dz in [MeV²/cm].
+    """
+    # e² in MeV·cm: 1.4399764 MeV·fm × 1e-13 cm/fm
+    e2_MeV_cm = _E2_MEV_FM * 1.0e-13
+
+    sum_Zn = 0.0
+    for Z_i, w_i in composition:
+        if w_i <= 0:
+            continue
+        A_i = atomic_masses[Z_i]
+        n_i = density_g_cm3 * _NA * w_i / A_i  # [atoms/cm³]
+        sum_Zn += Z_i * n_i
+
+    return 4.0 * math.pi * e2_MeV_cm**2 * projectile_Z**2 * sum_Zn
+
+
+def cumulative_straggling_sigma(
+    sigma_E0_MeV: float,
+    projectile_Z: int,
+    composition: list[tuple[int, float]],
+    density_g_cm3: float,
+    atomic_masses: dict[int, float],
+    thickness_cm: float,
+) -> float:
+    """Energy straggling σ_E [MeV] after traversing a thickness.
+
+    σ_E = sqrt(σ₀² + dσ²/dz × Δz)
+
+    Args:
+        sigma_E0_MeV: Initial energy spread σ_E [MeV].
+        projectile_Z: Charge number of the projectile.
+        composition: List of (Z, mass_fraction) pairs.
+        density_g_cm3: Material density [g/cm³].
+        atomic_masses: Mapping Z → average atomic mass [u].
+        thickness_cm: Path length [cm].
+
+    Returns:
+        σ_E [MeV] after traversal.
+    """
+    dsigma2_dz = bohr_straggling_variance_per_cm(
+        projectile_Z, composition, density_g_cm3, atomic_masses,
+    )
+    return math.sqrt(sigma_E0_MeV**2 + dsigma2_dz * thickness_cm)

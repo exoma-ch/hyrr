@@ -49,6 +49,11 @@ pandas = [
 plotting = [
     "plotly>=5.17",
 ]
+geometry = [
+    "build123d>=0.7",
+    "tetgen>=0.6",
+    "meshio>=5.3",
+]
 docs = [
     "mkdocs-material>=9.5",
     "mkdocstrings[python]>=0.24",

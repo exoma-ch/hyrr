@@ -29,6 +29,7 @@ from hyrr.production import (
     saturation_yield,
 )
 from hyrr.stopping import (
+    bohr_straggling_variance_per_cm,
     compute_energy_out,
     compute_thickness_from_energy,
     dedx_MeV_per_cm,
@@ -90,19 +91,24 @@ def compute_stack(
     area = stack.area_cm2
 
     energy_in = beam.energy_MeV
+    accumulated_sigma_sq = beam.energy_spread_MeV ** 2
     layer_results: list[LayerResult] = []
 
     proj = resolve_projectile(beam.projectile)
     for layer in stack.layers:
+        sigma_E_in = accumulated_sigma_sq ** 0.5
         lr = _compute_layer(
             db, beam.projectile, beam.current_mA,
             beam.particles_per_second, proj.Z,
             layer, energy_in, irr_time, cool_time, area,
             enable_chains=enable_chains,
             current_profile=stack.current_profile,
+            sigma_E_initial=sigma_E_in,
         )
         layer_results.append(lr)
         energy_in = lr.energy_out
+        # Accumulate straggling variance for next layer
+        accumulated_sigma_sq = lr.sigma_E_out_MeV ** 2
 
     return StackResult(
         stack=stack,
@@ -125,6 +131,7 @@ def _compute_layer(
     area: float,
     enable_chains: bool = True,
     current_profile: CurrentProfile | None = None,
+    sigma_E_initial: float = 0.0,
 ) -> LayerResult:
     """Compute results for a single layer."""
     composition = _layer_composition(layer)
@@ -161,6 +168,28 @@ def _compute_layer(
     def dedx_fn(E: float) -> float:
         return dedx_MeV_per_cm(db, projectile, composition, density, E)
 
+    # --- energy straggling ---
+    # Compute average atomic mass per element for Bohr formula
+    atomic_masses: dict[int, float] = {}
+    for elem, _ in layer.elements:
+        atomic_masses[elem.Z] = sum(A * ab for A, ab in elem.isotopes.items())
+
+    sigma_E_fn = None
+    dsigma2_dz = 0.0
+    if sigma_E_initial > 1.0e-9 or any(w > 0 for _, w in composition):
+        dsigma2_dz = bohr_straggling_variance_per_cm(
+            projectile_Z, composition, density, atomic_masses,
+        )
+    sigma_E_out = (sigma_E_initial**2 + dsigma2_dz * thickness) ** 0.5
+
+    # Only build closure when there's meaningful energy spread
+    if sigma_E_initial > 1.0e-9 or dsigma2_dz * thickness > 1.0e-18:
+        _sig0_sq = sigma_E_initial**2
+        _dsig2 = dsigma2_dz
+
+        def sigma_E_fn(z: float) -> float:
+            return (_sig0_sq + _dsig2 * z) ** 0.5
+
     # --- target geometry ---
     volume = thickness * area
     avg_A = layer.average_atomic_mass
@@ -190,6 +219,7 @@ def _compute_layer(
                     n_target_atoms=n_atoms,
                     beam_particles_per_s=particles_per_s,
                     target_volume_cm3=volume,
+                    sigma_E_fn=sigma_E_fn,
                 )
 
                 if first_energies is None:
@@ -279,12 +309,14 @@ def _compute_layer(
             current_mA, area, projectile_Z,
         )
         for i in range(len(depths)):
+            sig_E_i = sigma_E_fn(float(depths[i])) if sigma_E_fn is not None else 0.0
             depth_profile.append(DepthPoint(
                 depth_cm=float(depths[i]),
                 energy_MeV=float(first_energies[i]),
                 dedx_MeV_cm=float(first_dedx[i]),
                 heat_W_cm3=float(heat_W_cm3[i]),
                 production_rates={},  # per-point rates omitted for performance
+                sigma_E_MeV=sig_E_i,
             ))
 
     # --- heat ---
@@ -301,6 +333,8 @@ def _compute_layer(
         depth_profile=depth_profile,
         isotope_results=isotope_results,
         stopping_power_sources=sp_sources,
+        sigma_E_in_MeV=sigma_E_initial,
+        sigma_E_out_MeV=sigma_E_out,
     )
 
 

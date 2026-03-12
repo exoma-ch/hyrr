@@ -15,6 +15,7 @@ from collections.abc import Callable
 
 import numpy as np
 import numpy.typing as npt
+from numpy.polynomial.hermite import hermgauss
 
 # Physical constants
 BARN_CM2 = 1e-24  # 1 barn = 1e-24 cm^2
@@ -23,6 +24,55 @@ AVOGADRO = 6.02214076e23
 LN2 = math.log(2)
 ELEMENTARY_CHARGE = 1.602176634e-19  # C
 MEV_TO_JOULE = 1.602176634e-13  # J/MeV
+
+
+def _gauss_hermite_convolved_xs(
+    xs_interp_fn: Callable[[npt.NDArray[np.float64]], npt.NDArray[np.float64]],
+    E_mean: npt.NDArray[np.float64],
+    sigma_E: npt.NDArray[np.float64],
+    n_points: int = 12,
+) -> npt.NDArray[np.float64]:
+    """Gauss-Hermite quadrature convolution of cross-section with energy spread.
+
+    ⟨σ⟩ = Σ_k w_k σ(E_mean + √2 σ_E x_k)
+
+    where x_k, w_k are Gauss-Hermite nodes/weights (normalized by √π).
+
+    When σ_E < 1e-6 MeV, returns σ(E_mean) directly to avoid unnecessary work.
+
+    Args:
+        xs_interp_fn: Interpolated cross-section function σ(E) [mb].
+        E_mean: Mean energy array [MeV].
+        sigma_E: Energy spread σ_E array [MeV] (same shape as E_mean).
+        n_points: Number of Gauss-Hermite quadrature points.
+
+    Returns:
+        Convolved cross-section ⟨σ⟩ [mb], same shape as E_mean.
+    """
+    nodes, weights = hermgauss(n_points)
+    # Normalize weights: ∫ f(x) exp(-x²) dx → (1/√π) Σ w_k f(x_k)
+    weights = weights / np.sqrt(np.pi)
+
+    result = np.zeros_like(E_mean)
+    # Mask: where sigma_E is significant
+    sig_mask = sigma_E > 1.0e-6
+
+    # Points with negligible spread: direct evaluation
+    if np.any(~sig_mask):
+        result[~sig_mask] = xs_interp_fn(E_mean[~sig_mask])
+
+    # Points with significant spread: Gauss-Hermite quadrature
+    if np.any(sig_mask):
+        E_m = E_mean[sig_mask]
+        s_E = sigma_E[sig_mask]
+        acc = np.zeros_like(E_m)
+        for k in range(n_points):
+            E_k = E_m + math.sqrt(2.0) * s_E * nodes[k]
+            E_k = np.maximum(E_k, 0.0)  # no negative energies
+            acc += weights[k] * xs_interp_fn(E_k)
+        result[sig_mask] = acc
+
+    return result
 
 
 def compute_production_rate(
@@ -35,6 +85,7 @@ def compute_production_rate(
     beam_particles_per_s: float,
     target_volume_cm3: float,
     n_points: int = 100,
+    sigma_E_fn: Callable[[float], float] | None = None,
 ) -> tuple[
     float,
     npt.NDArray[np.float64],
@@ -59,6 +110,10 @@ def compute_production_rate(
         beam_particles_per_s: Number of beam particles per second.
         target_volume_cm3: Volume of the target layer [cm^3].
         n_points: Number of quadrature points (default 100).
+        sigma_E_fn: Optional function σ_E(depth_cm) → MeV giving the energy
+            spread at each depth in the layer. When provided, cross-sections
+            are convolved with a Gaussian energy distribution via Gauss-Hermite
+            quadrature.
 
     Returns:
         Tuple of (production_rate [s^-1], energies, xs_at_points, dedx_at_points).
@@ -66,14 +121,35 @@ def compute_production_rate(
     # Energy grid from E_out to E_in (ascending)
     energies = np.linspace(energy_out_MeV, energy_in_MeV, n_points)
 
-    # Interpolate cross-section onto our grid (zero outside data range)
-    xs_interp = np.interp(energies, xs_energies_MeV, xs_mb, left=0.0, right=0.0)
-
     # Evaluate stopping power — try vectorized call first, fall back to scalar loop
     result = dedx_fn(energies)
     dedx_values = np.broadcast_to(
         np.asarray(result, dtype=np.float64), energies.shape
     ).copy()
+
+    if sigma_E_fn is not None:
+        # Compute depth at each energy point (cumulative from entrance)
+        # energies go E_out → E_in (ascending), but beam enters at E_in
+        # Reverse to go from E_in downward, compute depths, then reverse back
+        dE = np.abs(energies[1] - energies[0]) if n_points > 1 else 0.0
+        depths = np.zeros(n_points)
+        for i in range(n_points - 2, -1, -1):
+            depths[i] = depths[i + 1] + dE / np.abs(dedx_values[i + 1])
+
+        # Get sigma_E at each depth
+        sigma_E_arr = np.array([sigma_E_fn(float(d)) for d in depths])
+
+        # Build interpolation function for cross-sections
+        def xs_interp_fn(E: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+            return np.interp(E, xs_energies_MeV, xs_mb, left=0.0, right=0.0)
+
+        # Convolved cross-sections
+        xs_interp = _gauss_hermite_convolved_xs(
+            xs_interp_fn, energies, sigma_E_arr,
+        )
+    else:
+        # Original path: point-energy cross-section lookup
+        xs_interp = np.interp(energies, xs_energies_MeV, xs_mb, left=0.0, right=0.0)
 
     # Trapezoidal integration: integral of sigma(E) / |dE/dx(E)| dE
     integrand = xs_interp / np.abs(dedx_values)

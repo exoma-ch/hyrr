@@ -21,7 +21,7 @@ from hyrr.materials import (
     resolve_element,
     resolve_isotopics,
 )
-from hyrr.models import Beam, Layer, StackResult, TargetStack
+from hyrr.models import Beam, BeamProfile, Layer, StackResult, TargetStack
 
 
 def _resolve_material(
@@ -157,10 +157,38 @@ def config_to_stack(
         TargetStack ready for compute_stack()
     """
     beam_cfg = config["beam"]
+
+    # Parse optional beam profile
+    profile: BeamProfile | None = None
+    profile_cfg = beam_cfg.get("profile")
+    if profile_cfg:
+        profile = BeamProfile(
+            sigma_x_cm=profile_cfg.get("sigma_x_cm", 0.0),
+            sigma_y_cm=profile_cfg.get("sigma_y_cm"),
+            divergence_x_mrad=profile_cfg.get("divergence_x_mrad", 0.0),
+            divergence_y_mrad=profile_cfg.get("divergence_y_mrad"),
+            emittance_x_mm_mrad=profile_cfg.get("emittance_x_mm_mrad"),
+            emittance_y_mm_mrad=profile_cfg.get("emittance_y_mm_mrad"),
+            alpha_x=profile_cfg.get("alpha_x", 0.0),
+            alpha_y=profile_cfg.get("alpha_y", 0.0),
+        )
+
+    # Parse optional 3D pose
+    position = beam_cfg.get("position")
+    if position is not None:
+        position = tuple(position)
+    direction = beam_cfg.get("direction")
+    if direction is not None:
+        direction = tuple(direction)
+
     beam = Beam(
         projectile=beam_cfg["projectile"],
         energy_MeV=beam_cfg["energy_MeV"],
         current_mA=beam_cfg["current_mA"],
+        energy_spread_MeV=beam_cfg.get("energy_spread_MeV", 0.0),
+        profile=profile,
+        position=position,
+        direction=direction,
     )
 
     layers: list[Layer] = []
