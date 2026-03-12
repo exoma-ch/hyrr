@@ -16,6 +16,7 @@
 
 <header class="header-bar">
   <div class="tab-strip">
+    <img src="/hyrr/logo.svg" alt="HYRR logo" class="logo" />
     <h1 class="title">HYRR</h1>
     <SessionTabs />
     <button class="lucky-btn" onclick={feelingLucky} title="Load random preset">
@@ -71,6 +72,14 @@
     min-width: 0;
   }
 
+  .logo {
+    height: 42px;
+    width: 42px;
+    object-fit: contain;
+    flex-shrink: 0;
+    margin-bottom: 0.1rem;
+  }
+
   .title {
     margin: 0;
     font-size: 1.3rem;
@@ -90,7 +99,7 @@
     border-radius: 10px 10px 0 0;
     color: #d29922;
     padding: 0.3rem 0.7rem;
-    height: 28px;
+    height: 24px;
     font-size: 0.72rem;
     cursor: pointer;
     font-weight: 500;
