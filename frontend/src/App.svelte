@@ -286,6 +286,31 @@
     color: #e1e4e8;
   }
 
+  /* Dark-themed scrollbars */
+  :global(*) {
+    scrollbar-width: thin;
+    scrollbar-color: #2d333b #0d1117;
+  }
+
+  :global(*::-webkit-scrollbar) {
+    width: 6px;
+    height: 6px;
+  }
+
+  :global(*::-webkit-scrollbar-track) {
+    background: #0d1117;
+    border-radius: 3px;
+  }
+
+  :global(*::-webkit-scrollbar-thumb) {
+    background: #2d333b;
+    border-radius: 3px;
+  }
+
+  :global(*::-webkit-scrollbar-thumb:hover) {
+    background: #484f58;
+  }
+
   main {
     max-width: 1600px;
     margin: 0 auto;

@@ -427,12 +427,12 @@
           <label class="field-label">
             Density (g/cm³)
             <input
-              type="number"
+              type="text"
+              inputmode="decimal"
               class="field-input"
               placeholder={formulaPreview?.density?.toFixed(2) ?? "e.g. 2.70"}
-              step="0.01"
-              min="0.001"
-              bind:value={newDensity}
+              value={newDensity !== null ? String(newDensity) : ""}
+              oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value); newDensity = Number.isFinite(v) ? v : null; }}
             />
           </label>
 

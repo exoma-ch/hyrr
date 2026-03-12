@@ -148,10 +148,12 @@ function computePreview(): void {
           });
         }
 
-        // Scale computed depths to match theoretical thickness (numerical
-        // integration can overshoot/undershoot, causing "folding" at borders)
+        // Scale computed depths to match theoretical thickness only when
+        // the beam exits the layer (small numerical drift). When the beam
+        // stops mid-layer (energyOut ≈ 0), keep actual depths so the
+        // zero-energy extension correctly shows the remaining material.
         const computedMaxMm = depthPoints.length > 0 ? depthPoints[depthPoints.length - 1].depth_mm : 0;
-        if (computedMaxMm > 0 && thicknessMm > 0) {
+        if (computedMaxMm > 0 && thicknessMm > 0 && energyOut > 0.01) {
           const scale = thicknessMm / computedMaxMm;
           for (const pt of depthPoints) pt.depth_mm *= scale;
         }

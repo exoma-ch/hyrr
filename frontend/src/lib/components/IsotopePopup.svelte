@@ -9,10 +9,11 @@
 
   import { Z_TO_SYMBOL } from "../utils/formula";
   import { resolveMaterial } from "../compute/materials";
+  import { PROJECTILE_Z, PROJECTILE_A } from "../compute/types";
   import { bestActivityUnit, bestTimeUnit, fmtActivity, fmtYield } from "../utils/format";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import { interp } from "../compute/interpolation";
-  import type { DecayMode, CrossSectionData } from "../compute/types";
+  import type { DecayMode, CrossSectionData, ProjectileType } from "../compute/types";
 
   interface Props {
     open: boolean;
@@ -30,13 +31,68 @@
   let depthPlotDiv = $state<HTMLDivElement | null>(null);
   let actPlotDiv = $state<HTMLDivElement | null>(null);
 
+  /** Determine reaction notation, e.g. "(p,n)", "(p,γ)", "(p,2n)" */
+  function reactionNotation(proj: string, targetZ: number, targetA: number, residualZ: number, residualA: number): string {
+    const pZ = PROJECTILE_Z[proj as ProjectileType] ?? 1;
+    const pA = PROJECTILE_A[proj as ProjectileType] ?? 1;
+    let eZ = targetZ + pZ - residualZ;
+    let eA = targetA + pA - residualA;
+    if (eZ === 0 && eA === 0) return `(${proj},γ)`;
+    const parts: string[] = [];
+    while (eZ >= 2 && eA >= 4) { parts.push("α"); eZ -= 2; eA -= 4; }
+    while (eZ >= 2 && eA >= 3) { parts.push("³He"); eZ -= 2; eA -= 3; }
+    while (eZ >= 1 && eA >= 3) { parts.push("t"); eZ -= 1; eA -= 3; }
+    while (eZ >= 1 && eA >= 2) { parts.push("d"); eZ -= 1; eA -= 2; }
+    while (eZ >= 1 && eA >= 1) { parts.push("p"); eZ -= 1; eA -= 1; }
+    while (eA >= 1) { parts.push("n"); eA -= 1; }
+    // Compact: group duplicates (e.g. ["n","n"] → "2n")
+    const counts = new Map<string, number>();
+    for (const p of parts) counts.set(p, (counts.get(p) ?? 0) + 1);
+    let out = "";
+    for (const [particle, count] of counts) out += (count > 1 ? `${count}` : "") + particle;
+    return `(${proj},${out})`;
+  }
+
+  /** Convert enrichment from config format to Map format expected by resolveMaterial */
+  function enrichmentToOverrides(
+    enrichment?: Record<string, Record<number, number>>,
+  ): Record<string, Map<number, number>> | undefined {
+    if (!enrichment) return undefined;
+    const result: Record<string, Map<number, number>> = {};
+    for (const [symbol, isoMap] of Object.entries(enrichment)) {
+      const m = new Map<number, number>();
+      for (const [a, frac] of Object.entries(isoMap)) m.set(Number(a), frac);
+      result[symbol] = m;
+    }
+    return result;
+  }
+
+  /** TENDL-2023 residual production page URL for a target isotope */
+  function tendlUrl(proj: string, targetSymbol: string, targetA: number): string {
+    const projName = ({ p: "proton", d: "deuteron", t: "triton", h: "he3", a: "alpha" } as Record<string, string>)[proj] ?? "proton";
+    const aaa = String(targetA).padStart(3, "0");
+    const sym = targetSymbol.charAt(0).toUpperCase() + targetSymbol.slice(1).toLowerCase();
+    return `https://tendl.web.psi.ch/tendl_2023/${projName}_html/${projName.charAt(0).toUpperCase() + projName.slice(1)}${aaa}${sym}/residual.html`;
+  }
+
   // XS channel: one per target isotope that produces this residual
   interface XsChannel {
     xs: CrossSectionData;
+    targetZ: number;
     targetSymbol: string;
     targetA: number;
-    abundance: number; // isotopic fraction (0-1) within its element
+    abundance: number; // isotopic fraction (0-1), reflecting enrichment
     label: string; // e.g. "⁴⁴Ca(p,n)"
+    reaction: string; // e.g. "(p,n)"
+    tendlLink: string;
+  }
+
+  /** Convert "Sc-44" → "<sup>44</sup>Sc", "Sc-44 (m)" → "<sup>44m</sup>Sc" */
+  function nucSup(isotopeName: string): string {
+    const m = isotopeName.match(/^([A-Z][a-z]?)-(\d+)(?:\s*\((\w+)\))?$/);
+    if (!m) return isotopeName;
+    const [, sym, mass, state] = m;
+    return `<sup>${mass}${state ?? ""}</sup>${sym}`;
   }
 
   // State
@@ -44,13 +100,13 @@
   let parentDecays: { name: string; Z: number; A: number; state: string; mode: string; branching: number }[] = $state([]);
   let xsChannels: XsChannel[] = $state([]);
   let xsScaled = $state(false);
-  // Compare: additional XS traces to overlay
+  // Compare: additional isotopes with their own channel arrays
   let loading = $state(false);
-  let compareIsotopes: { name: string; xs: CrossSectionData }[] = $state([]);
+  let compareIsotopes: { name: string; Z: number; A: number; state: string; channels: XsChannel[] }[] = $state([]);
   let allProducedIsotopes: { name: string; Z: number; A: number; state: string }[] = $state([]);
   let compareFilter = $state("");
   let compareDropdownOpen = $state(false);
-  let cachedXsIndex: Map<string, CrossSectionData> = new Map();
+  let cachedAllChannels: Map<string, XsChannel[]> = new Map();
 
   // Only offer isotopes that appear in the simulation result (have activity data)
   let resultIsotopeKeys = $derived.by(() => {
@@ -150,17 +206,17 @@
     }
     parentDecays = parents;
 
-    // Cross-section data + collect all produced isotopes for compare
-    const channels: XsChannel[] = [];
+    // Cross-section data: build channel arrays for ALL produced isotopes
+    const allChanMap = new Map<string, XsChannel[]>();
     const seenChannel = new Set<string>(); // "targetZ-targetA-residualZ-residualA-state"
     const produced: typeof allProducedIsotopes = [];
     const seenIso = new Set<string>();
-    const xsIndex = new Map<string, CrossSectionData>();
 
     for (const layer of config.layers) {
       if (!layer.material) continue;
       try {
-        const mat = resolveMaterial(db, layer.material);
+        const overrides = enrichmentToOverrides(layer.enrichment);
+        const mat = resolveMaterial(db, layer.material, overrides);
         for (const [el] of mat.elements) {
           for (const [targetA, isoAbundance] of el.isotopes) {
             const xsList = db.getCrossSections(proj, el.Z, targetA);
@@ -171,31 +227,25 @@
               for (let i = 0; i < xs.xsMb.length; i++) {
                 if (xs.xsMb[i] > peakXs) peakXs = xs.xsMb[i];
               }
-              // Keep the channel with the highest peak XS per isotope (for compare index)
-              const prev = xsIndex.get(isoKey);
-              if (!prev) {
-                xsIndex.set(isoKey, xs);
-              } else {
-                let prevPeak = 0;
-                for (let i = 0; i < prev.xsMb.length; i++) {
-                  if (prev.xsMb[i] > prevPeak) prevPeak = prev.xsMb[i];
-                }
-                if (peakXs > prevPeak) xsIndex.set(isoKey, xs);
-              }
-              // Collect ALL channels that produce our isotope
-              if (xs.residualZ === Z && xs.residualA === A && (xs.state || "") === (nuclearState || "")) {
-                const chanKey = `${el.Z}-${targetA}-${isoKey}`;
-                if (!seenChannel.has(chanKey) && peakXs > 1e-6) {
-                  seenChannel.add(chanKey);
-                  const tSym = Z_TO_SYMBOL[el.Z] ?? `Z${el.Z}`;
-                  channels.push({
-                    xs,
-                    targetSymbol: tSym,
-                    targetA,
-                    abundance: isoAbundance,
-                    label: `${tSym}-${targetA}`,
-                  });
-                }
+              // Build channel entry for every isotope (not just main)
+              const chanKey = `${el.Z}-${targetA}-${isoKey}`;
+              if (!seenChannel.has(chanKey) && peakXs > 1e-6) {
+                seenChannel.add(chanKey);
+                const tSym = Z_TO_SYMBOL[el.Z] ?? `Z${el.Z}`;
+                const rSym = Z_TO_SYMBOL[xs.residualZ] ?? `Z${xs.residualZ}`;
+                const rxn = reactionNotation(proj, el.Z, targetA, xs.residualZ, xs.residualA);
+                const ch: XsChannel = {
+                  xs,
+                  targetZ: el.Z,
+                  targetSymbol: tSym,
+                  targetA,
+                  abundance: isoAbundance,
+                  label: `<sup>${targetA}</sup>${tSym}${rxn}<sup>${xs.residualA}</sup>${rSym}`,
+                  reaction: rxn,
+                  tendlLink: tendlUrl(proj, tSym, targetA),
+                };
+                if (!allChanMap.has(isoKey)) allChanMap.set(isoKey, []);
+                allChanMap.get(isoKey)!.push(ch);
               }
               // Collect all produced isotopes for compare selector
               if (!seenIso.has(isoKey)) {
@@ -211,16 +261,22 @@
         }
       } catch { /* skip */ }
     }
-    // Sort channels by peak XS descending so dominant channel is first
-    channels.sort((a, b) => {
-      let peakA = 0, peakB = 0;
-      for (let i = 0; i < a.xs.xsMb.length; i++) if (a.xs.xsMb[i] > peakA) peakA = a.xs.xsMb[i];
-      for (let i = 0; i < b.xs.xsMb.length; i++) if (b.xs.xsMb[i] > peakB) peakB = b.xs.xsMb[i];
-      return peakB - peakA;
-    });
-    xsChannels = channels;
+
+    // Sort each isotope's channels by peak XS descending
+    function sortChannels(chs: XsChannel[]): XsChannel[] {
+      return chs.sort((a, b) => {
+        let peakA = 0, peakB = 0;
+        for (let i = 0; i < a.xs.xsMb.length; i++) if (a.xs.xsMb[i] > peakA) peakA = a.xs.xsMb[i];
+        for (let i = 0; i < b.xs.xsMb.length; i++) if (b.xs.xsMb[i] > peakB) peakB = b.xs.xsMb[i];
+        return peakB - peakA;
+      });
+    }
+    for (const [, chs] of allChanMap) sortChannels(chs);
+
+    const mainKey = `${Z}-${A}-${nuclearState || ""}`;
+    xsChannels = allChanMap.get(mainKey) ?? [];
+    cachedAllChannels = allChanMap;
     allProducedIsotopes = produced.sort((a, b) => a.name.localeCompare(b.name));
-    cachedXsIndex = xsIndex;
     loading = false;
     }, 0);
 
@@ -284,18 +340,23 @@
         colorIdx++;
       }
 
-      // Compare traces
+      // Compare traces — all channels per compare isotope
       for (const cmp of compareIsotopes) {
-        const { e, xs } = filterXs(cmp.xs.energiesMeV, cmp.xs.xsMb, 1);
-        traces.push({
-          x: e,
-          y: xs,
-          type: "scatter",
-          mode: "lines",
-          line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
-          name: cmp.name,
-        });
-        colorIdx++;
+        for (const ch of cmp.channels) {
+          const scale = scaled ? ch.abundance : 1;
+          const { e, xs } = filterXs(ch.xs.energiesMeV, ch.xs.xsMb, scale);
+          const pct = scaled ? ` (${(ch.abundance * 100).toFixed(1)}%)` : "";
+          traces.push({
+            x: e,
+            y: xs,
+            type: "scatter",
+            mode: "lines",
+            line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
+            name: `${ch.label}${pct}`,
+            legendgroup: cmp.name,
+          });
+          colorIdx++;
+        }
       }
 
       // Layer boundary shapes — show all layers even if beam stops (eOut = 0)
@@ -352,13 +413,13 @@
     });
   }
 
-  // Compare: add an isotope XS to the plot (O(1) lookup via cached index)
+  // Compare: add an isotope with all its XS channels
   function addCompare(iso: { name: string; Z: number; A: number; state: string }) {
     if (compareIsotopes.some((c) => c.name === iso.name)) return;
     const key = `${iso.Z}-${iso.A}-${iso.state}`;
-    const match = cachedXsIndex.get(key);
-    if (match) {
-      compareIsotopes = [...compareIsotopes, { name: iso.name, xs: match }];
+    const channels = cachedAllChannels.get(key) ?? [];
+    if (channels.length > 0) {
+      compareIsotopes = [...compareIsotopes, { name: iso.name, Z: iso.Z, A: iso.A, state: iso.state, channels }];
     }
   }
 
@@ -441,17 +502,22 @@
       colorIdx++;
     }
 
-    // Compare isotopes
+    // Compare isotopes — all channels
     for (const cmp of compareIsotopes) {
-      traces.push({
-        x: allDepths,
-        y: xsAtDepth(cmp.xs, 1),
-        name: cmp.name,
-        type: "scatter",
-        mode: "lines",
-        line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
-      });
-      colorIdx++;
+      for (const ch of cmp.channels) {
+        const scale = scaled ? ch.abundance : 1;
+        const pct = scaled ? ` (${(ch.abundance * 100).toFixed(1)}%)` : "";
+        traces.push({
+          x: allDepths,
+          y: xsAtDepth(ch.xs, scale),
+          name: `${ch.label}${pct}`,
+          type: "scatter",
+          mode: "lines",
+          line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
+          legendgroup: cmp.name,
+        });
+        colorIdx++;
+      }
     }
 
     // Layer boundary shapes
@@ -535,7 +601,7 @@
 
     const compare: ActivityCurve[] = [];
     for (const cmp of compareIsotopes) {
-      const curve = findBestIsotope(cmp.xs.residualZ, cmp.xs.residualA, cmp.xs.state || "");
+      const curve = findBestIsotope(cmp.Z, cmp.A, cmp.state);
       if (curve) compare.push(curve);
     }
 
@@ -595,7 +661,7 @@
           type: "scatter",
           mode: "lines",
           line: { color: TRACE_COLORS[idx % TRACE_COLORS.length], width: idx === 0 ? 2 : 1.5 },
-          name: `${curve.name}`,
+          name: nucSup(curve.name),
         });
       });
 
@@ -646,7 +712,7 @@
         type: "scatter",
         mode: "lines",
         line: { color: TRACE_COLORS[0], width: 2 },
-        name: name,
+        name: nucSup(name),
       });
 
       const layout = darkLayout({
@@ -736,19 +802,19 @@
           {#if parentDecays.length > 0}
             <div class="chain-group">
               {#each parentDecays as p}
-                <span class="chain-nuc parent" title="{p.mode} ({(p.branching * 100).toFixed(1)}%)">{p.name}</span>
+                <span class="chain-nuc parent" title="{p.mode} ({(p.branching * 100).toFixed(1)}%)">{@html nucSup(p.name)}</span>
               {/each}
             </div>
             <span class="chain-arrow">&rarr;</span>
           {/if}
-          <span class="chain-nuc current">{name}{nuclearState ? ` (${nuclearState})` : ""}</span>
+          <span class="chain-nuc current">{@html nucSup(`${name}${nuclearState ? ` (${nuclearState})` : ""}`)}</span>
           {#if decayInfo && decayInfo.decayModes.some(m => m.daughterZ !== null)}
             <span class="chain-arrow">&rarr;</span>
             <div class="chain-group">
               {#each decayInfo.decayModes.filter(m => m.daughterZ !== null) as mode}
                 {@const dSym = Z_TO_SYMBOL[mode.daughterZ!] ?? `Z${mode.daughterZ}`}
                 <span class="chain-nuc daughter" title="{mode.mode} ({(mode.branching * 100).toFixed(1)}%)">
-                  {dSym}-{mode.daughterA}{mode.daughterState ? ` (${mode.daughterState})` : ""}
+                  {@html nucSup(`${dSym}-${mode.daughterA}${mode.daughterState ? ` (${mode.daughterState})` : ""}`)}
                 </span>
               {/each}
             </div>
@@ -773,7 +839,7 @@
           </thead>
           <tbody>
             <tr class="ct-main">
-              <td class="ct-iso">{name}{nuclearState ? ` (${nuclearState})` : ""}</td>
+              <td class="ct-iso">{@html nucSup(`${name}${nuclearState ? ` (${nuclearState})` : ""}`)}</td>
               <td class="ct-hl">{formatHalfLife(activityData.main.halfLifeS)}</td>
               <td class="ct-act">{fmtActivity(activityData.main.eobActivity)}</td>
               <td class="ct-yield">{fmtYield(activityData.main.satYield)}</td>
@@ -782,7 +848,7 @@
             </tr>
             {#each activityData.compare as cmp}
               <tr>
-                <td class="ct-iso">{cmp.name}</td>
+                <td class="ct-iso">{@html nucSup(cmp.name)}</td>
                 <td class="ct-hl">{formatHalfLife(cmp.halfLifeS)}</td>
                 <td class="ct-act">{fmtActivity(cmp.eobActivity)}</td>
                 <td class="ct-yield">{fmtYield(cmp.satYield)}</td>
@@ -814,7 +880,7 @@
                           onmousedown={(e) => { e.preventDefault(); toggleCompare(iso); }}
                         >
                           {#if compareIsotopes.some((c) => c.name === iso.name)}<span class="check-mark">&#10003;</span>{/if}
-                          {iso.name}
+                          {@html nucSup(iso.name)}
                         </button>
                       {/each}
                     </div>
@@ -872,6 +938,12 @@
         <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854.22a.75.75 0 011.396-.04L14 5.5a.75.75 0 01-1.5 0V4.56l-3.97 3.97a.75.75 0 01-1.06-1.06L11.44 3.5H10.5a.75.75 0 010-1.5h.104z"></path></svg>
         JANIS (NEA)
       </a>
+      {#each xsChannels as ch}
+        <a href={ch.tendlLink} target="_blank" rel="noopener noreferrer" class="ext-link tendl-link">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854.22a.75.75 0 011.396-.04L14 5.5a.75.75 0 01-1.5 0V4.56l-3.97 3.97a.75.75 0 01-1.06-1.06L11.44 3.5H10.5a.75.75 0 010-1.5h.104z"></path></svg>
+          TENDL {ch.label}
+        </a>
+      {/each}
     </div>
   </div>
 </Modal>
@@ -1209,4 +1281,6 @@
   }
 
   .ext-link:hover { text-decoration: underline; }
+
+  .tendl-link { color: #8b949e; }
 </style>
