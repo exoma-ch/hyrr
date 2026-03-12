@@ -1,0 +1,3 @@
+[submodule "nucl-parquet"]
+	path = nucl-parquet
+	url = https://github.com/exoma-ch/nucl-parquet.git

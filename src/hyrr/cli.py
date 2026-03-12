@@ -139,9 +139,10 @@ def _find_data_dir(data_dir_arg: Path | None) -> Path:
     Search order:
     1. Explicit --data-dir argument
     2. HYRR_DATA environment variable
-    3. nucl-parquet/ sibling to the hyrr repo
-    4. data/parquet/ relative to package (legacy fallback)
-    5. ~/.hyrr/nucl-parquet/
+    3. nucl-parquet/ git submodule within hyrr repo
+    4. nucl-parquet/ sibling to the hyrr repo
+    5. data/parquet/ relative to package (legacy fallback)
+    6. ~/.hyrr/nucl-parquet/
     """
     import os
 
@@ -152,8 +153,14 @@ def _find_data_dir(data_dir_arg: Path | None) -> Path:
     if env_path:
         return Path(env_path)
 
-    # Sibling nucl-parquet repo (../nucl-parquet relative to hyrr root)
     repo_root = Path(__file__).parent.parent.parent
+
+    # Git submodule (nucl-parquet/ within hyrr repo root)
+    submodule = repo_root / "nucl-parquet"
+    if submodule.is_dir() and (submodule / "meta").is_dir():
+        return submodule
+
+    # Sibling nucl-parquet repo (../nucl-parquet relative to hyrr root)
     sibling = repo_root.parent / "nucl-parquet"
     if sibling.is_dir() and (sibling / "meta").is_dir():
         return sibling
@@ -168,7 +175,7 @@ def _find_data_dir(data_dir_arg: Path | None) -> Path:
     if home_dir.is_dir():
         return home_dir
 
-    return sibling  # Return default even if doesn't exist (will error later)
+    return submodule  # Return default even if doesn't exist (will error later)
 
 
 def _cmd_info(args: argparse.Namespace) -> int:

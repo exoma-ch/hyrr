@@ -34,13 +34,18 @@ def _find_data_dir() -> Path:
         if p.is_dir():
             return p
 
-    # 2. Sibling nucl-parquet repo
+    # 2. Git submodule within hyrr repo
     repo_root = Path(__file__).parent.parent.parent
+    submodule = repo_root / "nucl-parquet"
+    if submodule.is_dir() and (submodule / "meta").is_dir():
+        return submodule
+
+    # 3. Sibling nucl-parquet repo
     sibling = repo_root.parent / "nucl-parquet"
     if sibling.is_dir() and (sibling / "meta").is_dir():
         return sibling
 
-    # 3. User home
+    # 4. User home
     home_dir = Path.home() / ".hyrr" / "nucl-parquet"
     if home_dir.is_dir():
         return home_dir

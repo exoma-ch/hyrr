@@ -32,6 +32,15 @@ jobs:
         python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout nucl-parquet submodule (sparse)
+        uses: actions/checkout@v4
+        with:
+          repository: exoma-ch/nucl-parquet
+          path: nucl-parquet
+          sparse-checkout: |
+            meta
+            stopping
+            tendl-2024
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -40,9 +49,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
       - name: Run tests
-        run: uv run pytest tests/ -v --benchmark-disable --ignore=tests/integration
+        run: uv run pytest tests/ -v --benchmark-disable
       - name: Run tests with coverage
-        run: uv run pytest tests/ --cov --benchmark-disable --ignore=tests/integration
+        run: uv run pytest tests/ --cov --benchmark-disable
 
   benchmark:
     runs-on: ubuntu-latest

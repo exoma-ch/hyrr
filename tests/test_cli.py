@@ -175,24 +175,6 @@ class TestCLIRun:
         assert result == 1
 
 
-@pytest.mark.integration
-class TestCliRunIntegration:
-    """Integration tests requiring parquet data."""
-
-    def test_run_sample_toml(self) -> None:
-        """Run with sample TOML and real data."""
-        sample = Path(__file__).parent / "data" / "sample_run.toml"
-        # Try nucl-parquet sibling, then legacy data/parquet
-        repo_root = Path(__file__).parent.parent
-        data_dir = repo_root.parent / "nucl-parquet"
-        if not (data_dir.is_dir() and (data_dir / "meta").is_dir()):
-            data_dir = repo_root / "data" / "parquet"
-        if not sample.exists() or not data_dir.is_dir():
-            pytest.skip("Sample TOML or data directory not found")
-        result = main(["run", str(sample), "--data-dir", str(data_dir)])
-        assert result == 0
-
-
 class TestPctDiff:
     def test_normal(self) -> None:
         assert _pct_diff(100.0, 110.0) == pytest.approx(10.0)
