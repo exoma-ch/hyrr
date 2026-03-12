@@ -9,17 +9,19 @@ import pytest
 
 
 def _find_data_dir() -> Path | None:
-    """Try to find parquet data directory."""
+    """Try to find nucl-parquet data directory."""
     env_dir = os.environ.get("HYRR_DATA", "")
     candidates: list[Path] = []
     if env_dir:
         candidates.append(Path(env_dir))
     candidates.extend([
+        Path(__file__).parent.parent.parent / ".." / "nucl-parquet",
         Path(__file__).parent.parent.parent / "data" / "parquet",
-        Path.home() / ".hyrr" / "parquet",
+        Path.home() / ".hyrr" / "nucl-parquet",
     ])
     for p in candidates:
-        if p.is_dir():
+        p = p.resolve()
+        if p.is_dir() and (p / "meta").is_dir():
             return p
     return None
 
@@ -29,13 +31,13 @@ pytestmark = pytest.mark.integration
 
 requires_db = pytest.mark.skipif(
     _find_data_dir() is None,
-    reason="parquet data directory not found",
+    reason="nucl-parquet data directory not found",
 )
 
 
 @pytest.fixture
 def data_path() -> Path:
-    """Path to the parquet data directory."""
+    """Path to the nucl-parquet data directory."""
     path = _find_data_dir()
     if path is None:
         pytest.skip("Data directory not available")

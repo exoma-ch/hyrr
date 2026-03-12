@@ -22,14 +22,22 @@ def main(argv: list[str] | None = None) -> int:
     # hyrr info
     info_parser = subparsers.add_parser("info", help="Show data store statistics")
     info_parser.add_argument(
-        "--data-dir", type=Path, default=None, help="Path to parquet data directory"
+        "--data-dir", type=Path, default=None, help="Path to nucl-parquet data directory"
+    )
+    info_parser.add_argument(
+        "--library", type=str, default=None,
+        help="Cross-section library (default: tendl-2024)",
     )
 
     # hyrr run
     run_parser = subparsers.add_parser("run", help="Run simulation from TOML input")
     run_parser.add_argument("input_file", type=Path, help="TOML input file")
     run_parser.add_argument(
-        "--data-dir", type=Path, default=None, help="Path to parquet data directory"
+        "--data-dir", type=Path, default=None, help="Path to nucl-parquet data directory"
+    )
+    run_parser.add_argument(
+        "--library", type=str, default=None,
+        help="Cross-section library (default: tendl-2024)",
     )
     run_parser.add_argument(
         "--output-dir", type=Path, default=None, help="Output directory"
@@ -126,13 +134,14 @@ def _get_version() -> str:
 
 
 def _find_data_dir(data_dir_arg: Path | None) -> Path:
-    """Find the parquet data directory.
+    """Find the nucl-parquet data directory.
 
     Search order:
     1. Explicit --data-dir argument
     2. HYRR_DATA environment variable
-    3. data/parquet/ relative to package
-    4. ~/.hyrr/parquet/
+    3. nucl-parquet/ sibling to the hyrr repo
+    4. data/parquet/ relative to package (legacy fallback)
+    5. ~/.hyrr/nucl-parquet/
     """
     import os
 
@@ -143,35 +152,53 @@ def _find_data_dir(data_dir_arg: Path | None) -> Path:
     if env_path:
         return Path(env_path)
 
-    # Relative to package
-    pkg_dir = Path(__file__).parent.parent.parent / "data" / "parquet"
+    # Sibling nucl-parquet repo (../nucl-parquet relative to hyrr root)
+    repo_root = Path(__file__).parent.parent.parent
+    sibling = repo_root.parent / "nucl-parquet"
+    if sibling.is_dir() and (sibling / "meta").is_dir():
+        return sibling
+
+    # Legacy: data/parquet/ within the hyrr repo
+    pkg_dir = repo_root / "data" / "parquet"
     if pkg_dir.is_dir():
         return pkg_dir
 
     # User home
-    home_dir = Path.home() / ".hyrr" / "parquet"
+    home_dir = Path.home() / ".hyrr" / "nucl-parquet"
     if home_dir.is_dir():
         return home_dir
 
-    return pkg_dir  # Return default even if doesn't exist (will error later)
+    return sibling  # Return default even if doesn't exist (will error later)
 
 
 def _cmd_info(args: argparse.Namespace) -> int:
     """Show data store statistics."""
     import polars as pl
 
+    from hyrr.db import DEFAULT_LIBRARY, load_catalog
+
     data_dir = _find_data_dir(args.data_dir)
 
     if not data_dir.is_dir():
         print(f"Data directory not found: {data_dir}", file=sys.stderr)
-        print("Set HYRR_DATA or place data in data/parquet/.", file=sys.stderr)
+        print("Set HYRR_DATA or point --data-dir to nucl-parquet.", file=sys.stderr)
         return 1
 
+    library = args.library or DEFAULT_LIBRARY
     print(f"Data directory: {data_dir}")
+    print(f"Active library: {library}")
 
-    # Calculate total size
-    total_bytes = sum(f.stat().st_size for f in data_dir.rglob("*.parquet"))
-    print(f"Total size: {total_bytes / 1e6:.1f} MB")
+    # Show available libraries
+    catalog = load_catalog(data_dir)
+    if catalog.get("libraries"):
+        libs = list(catalog["libraries"].keys())
+        print(f"Available libraries: {', '.join(libs)}")
+    else:
+        # Discover from directory structure
+        libs = [p.name for p in sorted(data_dir.iterdir())
+                if p.is_dir() and (p / "xs").is_dir()]
+        if libs:
+            print(f"Available libraries: {', '.join(libs)}")
     print()
 
     tables = {
@@ -189,11 +216,11 @@ def _cmd_info(args: argparse.Namespace) -> int:
         else:
             print(f"  {label}: file not found")
 
-    # Cross-section file summary
-    xs_dir = data_dir / "xs"
+    # Cross-section file summary for active library
+    xs_dir = data_dir / library / "xs"
     if xs_dir.is_dir():
         xs_files = list(xs_dir.glob("*.parquet"))
-        print(f"\n  Cross-section files: {len(xs_files)}")
+        print(f"\n  Cross-section files ({library}): {len(xs_files)}")
 
         # Count by projectile
         projectiles: dict[str, int] = {}
@@ -202,6 +229,8 @@ def _cmd_info(args: argparse.Namespace) -> int:
             projectiles[proj] = projectiles.get(proj, 0) + 1
         for proj, count in sorted(projectiles.items()):
             print(f"    {proj}: {count} targets")
+    else:
+        print(f"\n  Library '{library}' xs/ directory not found at {xs_dir}")
 
     return 0
 
@@ -264,10 +293,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Open data store and run simulation
     from hyrr.api import config_to_stack
     from hyrr.compute import compute_stack
-    from hyrr.db import DataStore
+    from hyrr.db import DEFAULT_LIBRARY, DataStore
     from hyrr.output import result_summary, result_to_excel
 
-    db = DataStore(data_dir)
+    library = args.library or toml_config.get("library", DEFAULT_LIBRARY)
+    db = DataStore(data_dir, library=library)
     stack = config_to_stack(db, config)
     result = compute_stack(db, stack)
 
@@ -372,47 +402,44 @@ def _cmd_compare(args: argparse.Namespace) -> int:
 
 
 def _cmd_download_data(args: argparse.Namespace) -> int:
-    """Download pre-built parquet data from GitHub Releases."""
+    """Download pre-built nucl-parquet data from GitHub Releases."""
     import subprocess
     import urllib.request
 
     output_dir = args.output_dir
-    parquet_dir = output_dir / "parquet"
+    data_dir = output_dir / "nucl-parquet"
 
-    if parquet_dir.is_dir() and not args.force:
-        print(f"Data already exists: {parquet_dir}")
+    if data_dir.is_dir() and not args.force:
+        print(f"Data already exists: {data_dir}")
         print("Use --force to overwrite.")
         return 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Latest data release URL
     release_url = (
-        "https://github.com/MorePET/hyrr/releases/latest/download/parquet.tar.zst"
+        "https://github.com/eXoma-ch/nucl-parquet/releases/latest/download/nucl-parquet.tar.zst"
     )
 
     print(f"Downloading data from {release_url} ...")
-    print("(This may take a moment for the ~60 MB file)")
 
     try:
-        archive_path = output_dir / "parquet.tar.zst"
+        archive_path = output_dir / "nucl-parquet.tar.zst"
         urllib.request.urlretrieve(release_url, str(archive_path))
 
-        # Decompress and extract
         try:
             subprocess.run(
                 ["tar", "--zstd", "-xf", str(archive_path), "-C", str(output_dir)],
                 check=True,
             )
             archive_path.unlink()
-            print(f"Data extracted to: {parquet_dir}")
+            print(f"Data extracted to: {data_dir}")
         except (FileNotFoundError, subprocess.CalledProcessError):
             print(f"Downloaded archive: {archive_path}")
-            print("Extract manually with: tar --zstd -xf parquet.tar.zst")
+            print("Extract manually with: tar --zstd -xf nucl-parquet.tar.zst")
     except Exception as e:
         print(f"Download failed: {e}", file=sys.stderr)
         print(
-            "You can build the data manually with 'data/build_parquet.py'.",
+            "Clone nucl-parquet manually from https://github.com/eXoma-ch/nucl-parquet",
             file=sys.stderr,
         )
         return 1
@@ -475,7 +502,8 @@ def _cmd_generate_xs(args: argparse.Namespace) -> int:
         return 1
 
     # Check if output already exists
-    xs_dir = data_dir / "xs"
+    xs_dir = data_dir / db.library / "xs"
+    xs_dir.mkdir(parents=True, exist_ok=True)
     output_file = xs_dir / f"{args.projectile}_{target_symbol}.parquet"
     if output_file.exists() and not args.force:
         print(f"Cross-section file already exists: {output_file}")

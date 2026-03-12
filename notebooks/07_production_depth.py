@@ -37,7 +37,7 @@ from hyrr.plotting import (
 )
 import numpy as np
 
-db = DataStore("data/parquet")
+db = DataStore("../nucl-parquet")
 
 # %% [markdown]
 # ## 2. Simulation

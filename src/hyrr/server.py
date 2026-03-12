@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from hyrr.api import run_simulation
-from hyrr.db import DataStore
+from hyrr.db import DEFAULT_LIBRARY, DataStore
 
 # ─── Database singleton ─────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ _db: DataStore | None = None
 
 
 def _find_data_dir() -> Path:
-    """Locate the parquet data directory."""
+    """Locate the nucl-parquet data directory."""
     # 1. Environment variable
     env = os.environ.get("HYRR_DATA")
     if env:
@@ -34,19 +34,20 @@ def _find_data_dir() -> Path:
         if p.is_dir():
             return p
 
-    # 2. Relative to package
-    pkg_dir = Path(__file__).parent.parent.parent / "data" / "parquet"
-    if pkg_dir.is_dir():
-        return pkg_dir
+    # 2. Sibling nucl-parquet repo
+    repo_root = Path(__file__).parent.parent.parent
+    sibling = repo_root.parent / "nucl-parquet"
+    if sibling.is_dir() and (sibling / "meta").is_dir():
+        return sibling
 
     # 3. User home
-    home_dir = Path.home() / ".hyrr" / "parquet"
+    home_dir = Path.home() / ".hyrr" / "nucl-parquet"
     if home_dir.is_dir():
         return home_dir
 
     msg = (
-        "data/parquet/ directory not found. Set HYRR_DATA env var or place it in "
-        "data/parquet/ or ~/.hyrr/parquet/"
+        "nucl-parquet directory not found. Set HYRR_DATA env var or clone "
+        "nucl-parquet as a sibling directory."
     )
     raise FileNotFoundError(msg)
 
@@ -55,7 +56,8 @@ def _find_data_dir() -> Path:
 async def lifespan(app: FastAPI):
     global _db
     data_dir = _find_data_dir()
-    _db = DataStore(data_dir)
+    library = os.environ.get("HYRR_LIBRARY", DEFAULT_LIBRARY)
+    _db = DataStore(data_dir, library=library)
     yield
     _db = None
 

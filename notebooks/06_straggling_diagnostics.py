@@ -36,7 +36,7 @@ from hyrr.plotting import (
     plot_xs_convolution,
 )
 
-db = DataStore("data/parquet")
+db = DataStore("../nucl-parquet")
 
 # %% [markdown]
 # ## 2. Define a multi-layer stack with beam energy spread

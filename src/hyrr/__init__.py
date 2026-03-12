@@ -7,11 +7,13 @@ __version__ = "0.1.0"
 from hyrr.api import run_simulation, run_simulation_from_json
 from hyrr.compute import compute_stack
 from hyrr.db import (
+    DEFAULT_LIBRARY,
     CrossSectionData,
     DatabaseProtocol,
     DataStore,
     DecayData,
     DecayMode,
+    load_catalog,
 )
 from hyrr.models import (
     Beam,
@@ -48,6 +50,7 @@ __all__ = [
     "Beam",
     "BeamProfile",
     "CrossSectionData",
+    "DEFAULT_LIBRARY",
     "DatabaseProtocol",
     "DataStore",
     "DecayData",

@@ -28,11 +28,11 @@ Pure Python package for predicting radio-isotope production in stacked target as
 
 ## Data
 
-- `data/parquet/` — Parquet files for the Python backend. Built by `data/build_parquet.py`.
-- `frontend/public/data/` — SQL INSERT chunks (.sql.gz) for the in-browser WASM frontend (sql.js).
-- Cross-section source: TENDL-2023 via `isotopia.libs/` in the curie project (`../curie/isotopia.libs/`).
-- Stopping power source: PSTAR/ASTAR from libdEdx (APTG/libdedx).
-- Validation reference: ISOTOPIA sample outputs in `../curie/samples/`.
+- **nucl-parquet** (`../nucl-parquet/`) — standalone repo with 12 evaluated nuclear data libraries (TENDL, ENDF/B, JENDL, JEFF, EXFOR, etc.)
+- Default library: `tendl-2024` (configurable via `DataStore(data_dir, library="...")`, `--library` CLI flag, or `HYRR_LIBRARY` env var)
+- Data resolution order: `--data-dir` arg > `HYRR_DATA` env > `../nucl-parquet` sibling > `~/.hyrr/nucl-parquet`
+- `frontend/public/data/parquet/` — Parquet files served as static assets for the browser frontend (hyparquet)
+- Stopping power source: PSTAR/ASTAR from libdEdx (APTG/libdedx), shared across all libraries
 
 ## Development Plan
 
@@ -40,9 +40,9 @@ See `development-plan.md` for the full 9-phase implementation plan (Phases 1-8: 
 
 ## Frontend (`frontend/`)
 
-- Svelte + TypeScript + Vite
-- Runs hyrr in-browser via Pyodide (WASM)
-- Nuclear data: lazy-loaded SQL INSERT chunks merged into single in-memory SQLite via sql.js
+- Svelte 5 + TypeScript + Vite
+- Pure TypeScript compute — physics ported from Python, no Pyodide/WASM
+- Nuclear data: lazy-loaded Parquet files via hyparquet, cached in IndexedDB
 - History: IndexedDB (no backend, no auth)
 - Sharing: URL hash config encoding (#config=base64...)
 

@@ -25,8 +25,8 @@ def data_dir(tmp_path):
     meta_dir.mkdir()
     stopping_dir = tmp_path / "stopping"
     stopping_dir.mkdir()
-    xs_dir = tmp_path / "xs"
-    xs_dir.mkdir()
+    xs_dir = tmp_path / "test-lib" / "xs"
+    xs_dir.mkdir(parents=True)
 
     # -- elements
     pl.DataFrame({
@@ -92,7 +92,7 @@ def data_dir(tmp_path):
 @pytest.fixture()
 def db(data_dir) -> DataStore:
     """Create a DataStore from temp parquet directory."""
-    return DataStore(data_dir)
+    return DataStore(data_dir, library="test-lib")
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +204,7 @@ class TestContextManager:
     """Tests for context manager lifecycle."""
 
     def test_enter_exit(self, data_dir) -> None:
-        store = DataStore(data_dir)
+        store = DataStore(data_dir, library="test-lib")
         with store as d:
             assert d is store
 

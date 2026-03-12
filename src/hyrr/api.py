@@ -271,20 +271,23 @@ def result_to_json(result: StackResult, config: dict) -> dict:
 def run_simulation_from_json(
     config_json: str,
     data_dir: str,
+    library: str | None = None,
 ) -> dict:
     """Run a full simulation from JSON config and a data directory path.
 
     Args:
         config_json: JSON string of SimulationConfig
-        data_dir: Path to the parquet data directory
+        data_dir: Path to the nucl-parquet data directory
+        library: Cross-section library name (default from config or DEFAULT_LIBRARY)
 
     Returns:
         Dict matching frontend SimulationResult shape
     """
-    from hyrr.db import DataStore
+    from hyrr.db import DEFAULT_LIBRARY, DataStore
 
     config = json.loads(config_json)
-    db = DataStore(data_dir)
+    lib = library or config.get("library", DEFAULT_LIBRARY)
+    db = DataStore(data_dir, library=lib)
     stack = config_to_stack(db, config)
     result = compute_stack(db, stack)
     return result_to_json(result, config)

@@ -38,7 +38,7 @@ from hyrr.plotting import (
     plot_depth_profile, plot_purity_vs_cooling,
 )
 
-db = DataStore("data/parquet")
+db = DataStore("../nucl-parquet")
 
 # %% [markdown]
 # ## 2. Define beam and target

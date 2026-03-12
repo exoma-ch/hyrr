@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import numpy.typing as npt
 import polars as pl
+
+DEFAULT_LIBRARY = "tendl-2024"
+
+
+def load_catalog(data_dir: str | Path) -> dict[str, Any]:
+    """Load the nucl-parquet catalog.json if present."""
+    cat_path = Path(data_dir) / "catalog.json"
+    if cat_path.exists():
+        return json.loads(cat_path.read_text())  # type: ignore[no-any-return]
+    return {}
 
 
 @runtime_checkable
@@ -156,14 +167,26 @@ class DataStore:
     Parameters
     ----------
     data_dir:
-        Path to the ``data/parquet/`` directory containing ``meta/``,
-        ``stopping/``, and ``xs/`` subdirectories.
+        Path to the nucl-parquet root directory containing ``meta/``,
+        ``stopping/``, and per-library ``{library}/xs/`` subdirectories.
+    library:
+        Nuclear data library to use for cross-sections (e.g. ``"tendl-2025"``).
+        Must correspond to a subdirectory with an ``xs/`` folder.
     """
 
-    def __init__(self, data_dir: str | Path) -> None:
+    def __init__(self, data_dir: str | Path, library: str = DEFAULT_LIBRARY) -> None:
         self._data_dir = Path(data_dir)
         if not self._data_dir.is_dir():
             msg = f"Data directory not found: {self._data_dir}"
+            raise FileNotFoundError(msg)
+
+        self._library = library
+        self._xs_dir = self._data_dir / library / "xs"
+        if not self._xs_dir.is_dir():
+            msg = (
+                f"Library '{library}' not found at {self._xs_dir}. "
+                f"Available: {', '.join(self.available_libraries())}"
+            )
             raise FileNotFoundError(msg)
 
         # Eagerly load small metadata tables
@@ -216,6 +239,19 @@ class DataStore:
 
     # -- internal helpers ----------------------------------------------------
 
+    @property
+    def library(self) -> str:
+        """The active cross-section library name."""
+        return self._library
+
+    def available_libraries(self) -> list[str]:
+        """List cross-section libraries available in the data directory."""
+        libs = []
+        for p in sorted(self._data_dir.iterdir()):
+            if p.is_dir() and (p / "xs").is_dir():
+                libs.append(p.name)
+        return libs
+
     def _get_xs_df(self, projectile: str, target_Z: int) -> pl.DataFrame | None:
         """Load cross-section DataFrame for a projectile+element, with caching."""
         symbol = self.get_element_symbol(target_Z)
@@ -224,7 +260,7 @@ class DataStore:
         if cache_key in self._xs_cache:
             return self._xs_cache[cache_key]
 
-        xs_path = self._data_dir / "xs" / f"{cache_key}.parquet"
+        xs_path = self._xs_dir / f"{cache_key}.parquet"
         if not xs_path.exists():
             self._xs_cache[cache_key] = pl.DataFrame()
             return None
@@ -359,5 +395,5 @@ class DataStore:
     def has_cross_sections(self, projectile: str, target_Z: int) -> bool:
         """Check if cross-section data exists for a projectile+element combination."""
         symbol = self.get_element_symbol(target_Z)
-        xs_path = self._data_dir / "xs" / f"{projectile}_{symbol}.parquet"
+        xs_path = self._xs_dir / f"{projectile}_{symbol}.parquet"
         return xs_path.exists()

@@ -11,9 +11,23 @@ from hyrr.api import (
     run_simulation,
     run_simulation_from_json,
 )
+from pathlib import Path
+
 from hyrr.db import DataStore
 
-DATA_DIR = "data/parquet"
+
+def _find_data_dir() -> str:
+    candidates = [
+        Path(__file__).parent.parent.parent / "nucl-parquet",
+        Path(__file__).parent.parent / "data" / "parquet",
+    ]
+    for p in candidates:
+        if p.is_dir() and (p / "meta").is_dir():
+            return str(p)
+    return str(candidates[0])
+
+
+DATA_DIR = _find_data_dir()
 
 
 @pytest.fixture(scope="module")
