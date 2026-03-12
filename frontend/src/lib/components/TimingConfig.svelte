@@ -23,12 +23,17 @@
   let irradUnit = $state<TimeUnit>("d");
   let coolUnit = $state<TimeUnit>("d");
 
-  // Initialize units from config on first render
-  let initialized = false;
+  // Track previous raw seconds so we re-detect units on external config changes
+  // (e.g. preset load) but not on internal edits (user typing in the input).
+  let prevIrradS = -1;
+  let prevCoolS = -1;
   $effect(() => {
-    if (!initialized) {
-      initialized = true;
+    if (config.irradiation_s !== prevIrradS) {
+      prevIrradS = config.irradiation_s;
       irradUnit = bestUnit(config.irradiation_s);
+    }
+    if (config.cooling_s !== prevCoolS) {
+      prevCoolS = config.cooling_s;
       coolUnit = bestUnit(config.cooling_s);
     }
   });
@@ -38,12 +43,20 @@
 
   function onIrradChange(e: Event) {
     const v = parseFloat((e.target as HTMLInputElement).value);
-    if (!isNaN(v) && v >= 0) setIrradiation(toSeconds(v, irradUnit));
+    if (!isNaN(v) && v >= 0) {
+      const s = toSeconds(v, irradUnit);
+      prevIrradS = s; // prevent unit re-detection on user edit
+      setIrradiation(s);
+    }
   }
 
   function onCoolChange(e: Event) {
     const v = parseFloat((e.target as HTMLInputElement).value);
-    if (!isNaN(v) && v >= 0) setCooling(toSeconds(v, coolUnit));
+    if (!isNaN(v) && v >= 0) {
+      const s = toSeconds(v, coolUnit);
+      prevCoolS = s; // prevent unit re-detection on user edit
+      setCooling(s);
+    }
   }
 
   function onIrradUnitChange(e: Event) {

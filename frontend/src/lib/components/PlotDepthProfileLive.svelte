@@ -21,7 +21,12 @@
     const p = Plotly;
     const div = plotDiv;
     const prev = preview;
-    if (p && div && prev && prev.length > 0) render();
+    if (!p || !div) return;
+    if (prev && prev.length > 0) {
+      render();
+    } else {
+      p.purge(div);
+    }
   });
 
   function render() {
@@ -85,7 +90,7 @@
     }));
 
     const layout = darkLayout({
-      xaxis: { title: "Depth (mm)", gridcolor: "#2d333b" },
+      xaxis: { title: "Depth (mm)", gridcolor: "#2d333b", range: [0, cumulativeDepth] },
       yaxis: { title: "Energy (MeV)", gridcolor: "#2d333b" },
       yaxis2: {
         title: "Heat (W/cm³)",

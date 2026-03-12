@@ -134,7 +134,7 @@ function computePreview(): void {
         energyOut = Math.max(0, energyOut);
 
         const nPts = 50;
-        const energies = linspace(energyOut, energyIn, nPts);
+        const energies = linspace(Math.max(energyOut, 0.01), energyIn, nPts);
         const dedxVals = dedxMeVPerCm(db, projectile, composition, density, energies) as Float64Array;
         const { depths, energiesOrdered, heatWCm3 } = generateDepthProfile(
           energies, dedxVals, beamCurrentMA, beamArea, projZ,
@@ -148,12 +148,27 @@ function computePreview(): void {
           });
         }
 
+        // Scale computed depths to match theoretical thickness (numerical
+        // integration can overshoot/undershoot, causing "folding" at borders)
+        const computedMaxMm = depthPoints.length > 0 ? depthPoints[depthPoints.length - 1].depth_mm : 0;
+        if (computedMaxMm > 0 && thicknessMm > 0) {
+          const scale = thicknessMm / computedMaxMm;
+          for (const pt of depthPoints) pt.depth_mm *= scale;
+        }
+
         if (depthPoints.length > 1) {
           for (let i = 1; i < depthPoints.length; i++) {
             const dx = (depthPoints[i].depth_mm - depthPoints[i - 1].depth_mm) / 10;
             const avgHeat = (depthPoints[i].heat_W_cm3 + depthPoints[i - 1].heat_W_cm3) / 2;
             heatW += avgHeat * beamArea * dx;
           }
+        }
+
+        // Extend to full layer thickness when beam stops mid-layer
+        const lastDepthMm = depthPoints.length > 0 ? depthPoints[depthPoints.length - 1].depth_mm : 0;
+        if (lastDepthMm < thicknessMm - 0.001) {
+          depthPoints.push({ depth_mm: lastDepthMm + 0.001, energy_MeV: 0, heat_W_cm3: 0 });
+          depthPoints.push({ depth_mm: thicknessMm, energy_MeV: 0, heat_W_cm3: 0 });
         }
       } else {
         energyOut = 0;

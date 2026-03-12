@@ -37,7 +37,9 @@ export function computeProductionRate(
   xsInterp: Float64Array;
   dedxValues: Float64Array;
 } {
-  const energies = linspace(energyOutMeV, energyInMeV, nPoints);
+  // Clamp lower bound above zero: log-log stopping-power interpolation
+  // produces NaN at E = 0 (log(0) = -Infinity).
+  const energies = linspace(Math.max(energyOutMeV, 0.01), energyInMeV, nPoints);
 
   // Interpolate cross-section onto grid (zero outside data range)
   const xsInterp = interp(energies, xsEnergiesMeV, xsMb, 0, 0);

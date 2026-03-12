@@ -11,6 +11,7 @@
   import { resolveMaterial } from "../compute/materials";
   import { bestActivityUnit, bestTimeUnit, fmtActivity, fmtYield } from "../utils/format";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
+  import { interp } from "../compute/interpolation";
   import type { DecayMode, CrossSectionData } from "../compute/types";
 
   interface Props {
@@ -26,12 +27,23 @@
 
   let Plotly: any = null;
   let xsPlotDiv = $state<HTMLDivElement | null>(null);
+  let depthPlotDiv = $state<HTMLDivElement | null>(null);
   let actPlotDiv = $state<HTMLDivElement | null>(null);
+
+  // XS channel: one per target isotope that produces this residual
+  interface XsChannel {
+    xs: CrossSectionData;
+    targetSymbol: string;
+    targetA: number;
+    abundance: number; // isotopic fraction (0-1) within its element
+    label: string; // e.g. "⁴⁴Ca(p,n)"
+  }
 
   // State
   let decayInfo: { halfLifeS: number | null; decayModes: DecayMode[] } | null = $state(null);
   let parentDecays: { name: string; Z: number; A: number; state: string; mode: string; branching: number }[] = $state([]);
-  let xsData: CrossSectionData | null = $state(null);
+  let xsChannels: XsChannel[] = $state([]);
+  let xsScaled = $state(false);
   // Compare: additional XS traces to overlay
   let loading = $state(false);
   let compareIsotopes: { name: string; xs: CrossSectionData }[] = $state([]);
@@ -40,10 +52,26 @@
   let compareDropdownOpen = $state(false);
   let cachedXsIndex: Map<string, CrossSectionData> = new Map();
 
+  // Only offer isotopes that appear in the simulation result (have activity data)
+  let resultIsotopeKeys = $derived.by(() => {
+    const result = getResult();
+    if (!result) return new Set<string>();
+    const keys = new Set<string>();
+    for (const layer of result.layers) {
+      for (const iso of layer.isotopes) {
+        if (iso.time_grid_s && iso.activity_vs_time_Bq) {
+          keys.add(`${iso.Z}-${iso.A}-${iso.state || ""}`);
+        }
+      }
+    }
+    return keys;
+  });
+
   let sortedCompareList = $derived.by(() => {
     const selectedNames = new Set(compareIsotopes.map((c) => c.name));
     return allProducedIsotopes
       .filter((i) => i.name !== name)
+      .filter((i) => resultIsotopeKeys.has(`${i.Z}-${i.A}-${i.state}`))
       .filter((i) => !compareFilter || i.name.toLowerCase().includes(compareFilter.toLowerCase()))
       .sort((a, b) => {
         const aSelected = selectedNames.has(a.name) ? 0 : 1;
@@ -68,7 +96,7 @@
     if (!open) {
       decayInfo = null;
       parentDecays = [];
-      xsData = null;
+      xsChannels = [];
       compareIsotopes = [];
       compareFilter = "";
       compareDropdownOpen = false;
@@ -123,7 +151,8 @@
     parentDecays = parents;
 
     // Cross-section data + collect all produced isotopes for compare
-    xsData = null;
+    const channels: XsChannel[] = [];
+    const seenChannel = new Set<string>(); // "targetZ-targetA-residualZ-residualA-state"
     const produced: typeof allProducedIsotopes = [];
     const seenIso = new Set<string>();
     const xsIndex = new Map<string, CrossSectionData>();
@@ -133,17 +162,40 @@
       try {
         const mat = resolveMaterial(db, layer.material);
         for (const [el] of mat.elements) {
-          for (const [targetA] of el.isotopes) {
+          for (const [targetA, isoAbundance] of el.isotopes) {
             const xsList = db.getCrossSections(proj, el.Z, targetA);
             for (const xs of xsList) {
               const isoKey = `${xs.residualZ}-${xs.residualA}-${xs.state || ""}`;
-              // Store first match per isotope in index
-              if (!xsIndex.has(isoKey)) {
-                xsIndex.set(isoKey, xs);
+              // Peak XS for this channel
+              let peakXs = 0;
+              for (let i = 0; i < xs.xsMb.length; i++) {
+                if (xs.xsMb[i] > peakXs) peakXs = xs.xsMb[i];
               }
-              // Check if this is our isotope
+              // Keep the channel with the highest peak XS per isotope (for compare index)
+              const prev = xsIndex.get(isoKey);
+              if (!prev) {
+                xsIndex.set(isoKey, xs);
+              } else {
+                let prevPeak = 0;
+                for (let i = 0; i < prev.xsMb.length; i++) {
+                  if (prev.xsMb[i] > prevPeak) prevPeak = prev.xsMb[i];
+                }
+                if (peakXs > prevPeak) xsIndex.set(isoKey, xs);
+              }
+              // Collect ALL channels that produce our isotope
               if (xs.residualZ === Z && xs.residualA === A && (xs.state || "") === (nuclearState || "")) {
-                if (!xsData) xsData = xs;
+                const chanKey = `${el.Z}-${targetA}-${isoKey}`;
+                if (!seenChannel.has(chanKey) && peakXs > 1e-6) {
+                  seenChannel.add(chanKey);
+                  const tSym = Z_TO_SYMBOL[el.Z] ?? `Z${el.Z}`;
+                  channels.push({
+                    xs,
+                    targetSymbol: tSym,
+                    targetA,
+                    abundance: isoAbundance,
+                    label: `${tSym}-${targetA}`,
+                  });
+                }
               }
               // Collect all produced isotopes for compare selector
               if (!seenIso.has(isoKey)) {
@@ -159,6 +211,14 @@
         }
       } catch { /* skip */ }
     }
+    // Sort channels by peak XS descending so dominant channel is first
+    channels.sort((a, b) => {
+      let peakA = 0, peakB = 0;
+      for (let i = 0; i < a.xs.xsMb.length; i++) if (a.xs.xsMb[i] > peakA) peakA = a.xs.xsMb[i];
+      for (let i = 0; i < b.xs.xsMb.length; i++) if (b.xs.xsMb[i] > peakB) peakB = b.xs.xsMb[i];
+      return peakB - peakA;
+    });
+    xsChannels = channels;
     allProducedIsotopes = produced.sort((a, b) => a.name.localeCompare(b.name));
     cachedXsIndex = xsIndex;
     loading = false;
@@ -169,10 +229,11 @@
 
   // Render XS plot — read all deps eagerly (Svelte only tracks synchronous reads)
   $effect(() => {
-    const hasXs = !!xsData;
+    const nChannels = xsChannels.length;
     const numCompare = compareIsotopes.length;
+    const scaled = xsScaled;
     const div = xsPlotDiv; // eagerly read so Svelte tracks bind:this updates
-    if (!open || (!hasXs && numCompare === 0) || !div) return;
+    if (!open || (nChannels === 0 && numCompare === 0) || !div) return;
     requestAnimationFrame(() => renderXsPlot());
   });
 
@@ -185,69 +246,63 @@
       if (!Plotly || !xsPlotDiv) return;
 
       const traces: any[] = [];
+      const scaled = xsScaled;
 
-      // Main isotope XS
-      if (xsData) {
-        // Determine energy range: beam energy to final E_out + 10% padding
-        const minE = layerEnergies.length > 0
-          ? Math.max(0, layerEnergies[layerEnergies.length - 1].eOut * 0.9)
-          : 0;
-        const maxE = beamEnergy * 1.1;
+      // Energy range: beam energy to final E_out + 10% padding
+      const minE = layerEnergies.length > 0
+        ? Math.max(0, layerEnergies[layerEnergies.length - 1].eOut * 0.9)
+        : 0;
+      const maxE = beamEnergy * 1.1;
 
-        // Filter to relevant range
-        const energies = Array.from(xsData.energiesMeV);
-        const xs = Array.from(xsData.xsMb);
-        const filteredE: number[] = [];
-        const filteredXS: number[] = [];
-        for (let i = 0; i < energies.length; i++) {
-          if (energies[i] >= minE && energies[i] <= maxE) {
-            filteredE.push(energies[i]);
-            filteredXS.push(xs[i]);
+      // Helper: filter and optionally scale XS data
+      function filterXs(energiesMeV: Float64Array, xsMb: Float64Array, scale: number): { e: number[]; xs: number[] } {
+        const e: number[] = [];
+        const xs: number[] = [];
+        for (let i = 0; i < energiesMeV.length; i++) {
+          if (energiesMeV[i] >= minE && energiesMeV[i] <= maxE) {
+            e.push(energiesMeV[i]);
+            xs.push(xsMb[i] * scale);
           }
         }
+        return { e, xs };
+      }
 
+      // All channels for main isotope
+      let colorIdx = 0;
+      for (const ch of xsChannels) {
+        const scale = scaled ? ch.abundance : 1;
+        const { e, xs } = filterXs(ch.xs.energiesMeV, ch.xs.xsMb, scale);
+        const pct = scaled ? ` (${(ch.abundance * 100).toFixed(1)}%)` : "";
         traces.push({
-          x: filteredE,
-          y: filteredXS,
+          x: e,
+          y: xs,
           type: "scatter",
           mode: "lines",
-          line: { color: TRACE_COLORS[0], width: 2 },
-          name: `${name}`,
+          line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: colorIdx === 0 ? 2 : 1.5 },
+          name: `${ch.label}${pct}`,
         });
+        colorIdx++;
       }
 
       // Compare traces
-      compareIsotopes.forEach((cmp, idx) => {
-        const minE = layerEnergies.length > 0
-          ? Math.max(0, layerEnergies[layerEnergies.length - 1].eOut * 0.9)
-          : 0;
-        const maxE = beamEnergy * 1.1;
-
-        const energies = Array.from(cmp.xs.energiesMeV);
-        const xs = Array.from(cmp.xs.xsMb);
-        const filteredE: number[] = [];
-        const filteredXS: number[] = [];
-        for (let i = 0; i < energies.length; i++) {
-          if (energies[i] >= minE && energies[i] <= maxE) {
-            filteredE.push(energies[i]);
-            filteredXS.push(xs[i]);
-          }
-        }
-
+      for (const cmp of compareIsotopes) {
+        const { e, xs } = filterXs(cmp.xs.energiesMeV, cmp.xs.xsMb, 1);
         traces.push({
-          x: filteredE,
-          y: filteredXS,
+          x: e,
+          y: xs,
           type: "scatter",
           mode: "lines",
-          line: { color: TRACE_COLORS[(idx + 1) % TRACE_COLORS.length], width: 1.5 },
+          line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
           name: cmp.name,
         });
-      });
+        colorIdx++;
+      }
 
-      // Layer boundary shapes
+      // Layer boundary shapes — show all layers even if beam stops (eOut = 0)
       const shapes: any[] = [];
       const annotations: any[] = [];
       for (const le of layerEnergies) {
+        const eOut = Math.max(0, le.eOut);
         if (le.eIn > 0) {
           shapes.push({
             type: "line", x0: le.eIn, x1: le.eIn, y0: 0, y1: 1,
@@ -255,14 +310,16 @@
             line: { color: "#484f58", width: 1, dash: "dot" },
           });
         }
-        if (le.eOut > 0 && le.eOut !== le.eIn) {
-          shapes.push({
-            type: "line", x0: le.eOut, x1: le.eOut, y0: 0, y1: 1,
-            yref: "paper",
-            line: { color: "#484f58", width: 1, dash: "dot" },
-          });
+        if (eOut !== le.eIn) {
+          if (eOut > 0) {
+            shapes.push({
+              type: "line", x0: eOut, x1: eOut, y0: 0, y1: 1,
+              yref: "paper",
+              line: { color: "#484f58", width: 1, dash: "dot" },
+            });
+          }
           annotations.push({
-            x: (le.eIn + le.eOut) / 2, y: 1.02, yref: "paper",
+            x: (le.eIn + eOut) / 2, y: 1.02, yref: "paper",
             text: le.material, showarrow: false,
             font: { color: "#6e7681", size: 9 },
             xanchor: "center",
@@ -270,18 +327,19 @@
         }
       }
 
-      const minE = layerEnergies.length > 0
+      const rangeMinE = layerEnergies.length > 0
         ? Math.max(0, layerEnergies[layerEnergies.length - 1].eOut * 0.9)
         : undefined;
-      const maxE = beamEnergy > 0 ? beamEnergy * 1.1 : undefined;
+      const rangeMaxE = beamEnergy > 0 ? beamEnergy * 1.1 : undefined;
 
+      const yTitle = scaled ? "σ × abundance (mb)" : "Cross section (mb)";
       const layout = darkLayout({
         xaxis: {
           title: "Energy (MeV)",
           gridcolor: "#2d333b",
-          range: minE !== undefined && maxE !== undefined ? [minE, maxE] : undefined,
+          range: rangeMinE !== undefined && rangeMaxE !== undefined ? [rangeMinE, rangeMaxE] : undefined,
         },
-        yaxis: { title: "Cross section (mb)", gridcolor: "#2d333b" },
+        yaxis: { title: yTitle, gridcolor: "#2d333b" },
         margin: { t: 20, r: 20, b: 40, l: 55 },
         height: 220,
         showlegend: traces.length > 1,
@@ -306,6 +364,129 @@
 
   function removeCompare(isoName: string) {
     compareIsotopes = compareIsotopes.filter((c) => c.name !== isoName);
+  }
+
+  // Depth production density plot — σ(E(x)) overlaid on beam energy
+  $effect(() => {
+    const nChannels = xsChannels.length;
+    const numCompare = compareIsotopes.length;
+    const scaled = xsScaled;
+    const div = depthPlotDiv;
+    const prev = getDepthPreview();
+    if (!open || !div || (nChannels === 0 && numCompare === 0) || prev.length === 0) return;
+    requestAnimationFrame(() => ensurePlotly().then(renderDepthPlot));
+  });
+
+  function renderDepthPlot() {
+    if (!Plotly || !depthPlotDiv) return;
+    const preview = getDepthPreview();
+    if (preview.length === 0) return;
+
+    // Build cumulative depth + energy arrays from preview
+    const allDepths: number[] = [];
+    const allEnergies: number[] = [];
+    let cumulativeDepth = 0;
+    const boundaries: { depth: number; label: string }[] = [];
+
+    for (const layer of preview) {
+      boundaries.push({ depth: cumulativeDepth, label: layer.material });
+      for (const pt of layer.depthPoints) {
+        allDepths.push(cumulativeDepth + pt.depth_mm);
+        allEnergies.push(pt.energy_MeV);
+      }
+      cumulativeDepth += layer.thickness_mm;
+    }
+
+    if (allDepths.length < 2) return;
+
+    // Interpolate σ(E(x)) for each isotope along the depth profile
+    function xsAtDepth(xs: CrossSectionData, scale: number): number[] {
+      const energiesAtDepth = new Float64Array(allEnergies);
+      const sigma = interp(energiesAtDepth, xs.energiesMeV, xs.xsMb);
+      if (scale !== 1) {
+        for (let i = 0; i < sigma.length; i++) sigma[i] *= scale;
+      }
+      return Array.from(sigma);
+    }
+
+    const scaled = xsScaled;
+    const traces: any[] = [];
+
+    // Energy curve on secondary y-axis
+    traces.push({
+      x: allDepths,
+      y: allEnergies,
+      name: "Energy",
+      type: "scatter",
+      mode: "lines",
+      line: { color: "#484f58", width: 1.5, dash: "dot" },
+      yaxis: "y2",
+    });
+
+    // All channels for main isotope
+    let colorIdx = 0;
+    for (const ch of xsChannels) {
+      const scale = scaled ? ch.abundance : 1;
+      const pct = scaled ? ` (${(ch.abundance * 100).toFixed(1)}%)` : "";
+      traces.push({
+        x: allDepths,
+        y: xsAtDepth(ch.xs, scale),
+        name: `${ch.label}${pct}`,
+        type: "scatter",
+        mode: "lines",
+        fill: colorIdx === 0 ? "tozeroy" : undefined,
+        fillcolor: colorIdx === 0 ? TRACE_COLORS[0].replace(")", ", 0.15)").replace("rgb", "rgba") : undefined,
+        line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: colorIdx === 0 ? 2 : 1.5 },
+      });
+      colorIdx++;
+    }
+
+    // Compare isotopes
+    for (const cmp of compareIsotopes) {
+      traces.push({
+        x: allDepths,
+        y: xsAtDepth(cmp.xs, 1),
+        name: cmp.name,
+        type: "scatter",
+        mode: "lines",
+        line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
+      });
+      colorIdx++;
+    }
+
+    // Layer boundary shapes
+    const shapes = boundaries.slice(1).map((b) => ({
+      type: "line" as const,
+      x0: b.depth, x1: b.depth, y0: 0, y1: 1,
+      yref: "paper" as const,
+      line: { color: "#484f58", width: 1, dash: "dot" as const },
+    }));
+
+    const annotations = boundaries.map((b) => ({
+      x: b.depth, y: 1.02, yref: "paper" as const,
+      text: b.label, showarrow: false,
+      font: { color: "#8b949e", size: 9 },
+      xanchor: "left" as const,
+    }));
+
+    const layout = darkLayout({
+      xaxis: { title: "Depth (mm)", gridcolor: "#2d333b", range: [0, cumulativeDepth] },
+      yaxis: { title: scaled ? "σ × abundance (mb)" : "σ (mb)", gridcolor: "#2d333b" },
+      yaxis2: {
+        title: "Energy (MeV)",
+        overlaying: "y",
+        side: "right",
+        gridcolor: "#2d333b",
+      },
+      margin: { t: 20, r: 55, b: 40, l: 55 },
+      height: 220,
+      showlegend: true,
+      legend: { x: 1, xanchor: "right", y: 0.95, bgcolor: "rgba(0,0,0,0)" },
+      shapes,
+      annotations,
+    });
+
+    Plotly.react(depthPlotDiv, traces, layout, PLOTLY_CONFIG);
   }
 
   // Activity data — pulled from simulation result (no recomputation)
@@ -495,6 +676,7 @@
   onDestroy(() => {
     if (Plotly) {
       if (xsPlotDiv) Plotly.purge(xsPlotDiv);
+      if (depthPlotDiv) Plotly.purge(depthPlotDiv);
       if (actPlotDiv) Plotly.purge(actPlotDiv);
     }
   });
@@ -646,12 +828,27 @@
     {/if}
 
     <!-- Cross-section plot -->
-    {#if xsData || compareIsotopes.length > 0}
+    {#if xsChannels.length > 0 || compareIsotopes.length > 0}
       <div class="section">
         <div class="section-bar">
           <span class="section-label">Cross section</span>
+          {#if xsChannels.length > 1}
+            <button class="scale-toggle" class:active={xsScaled} onclick={() => { xsScaled = !xsScaled; }}>
+              Scaled
+            </button>
+          {/if}
         </div>
         <div bind:this={xsPlotDiv} class="xs-plot"></div>
+      </div>
+    {/if}
+
+    <!-- Depth production density -->
+    {#if (xsChannels.length > 0 || compareIsotopes.length > 0) && getDepthPreview().length > 0}
+      <div class="section">
+        <div class="section-bar">
+          <span class="section-label">Production vs depth</span>
+        </div>
+        <div bind:this={depthPlotDiv} class="depth-plot"></div>
       </div>
     {/if}
 
@@ -832,6 +1029,29 @@
     flex-shrink: 0;
   }
 
+  .scale-toggle {
+    background: #1c2128;
+    border: 1px solid #2d333b;
+    border-radius: 3px;
+    color: #8b949e;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.6rem;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+    transition: all 0.15s;
+  }
+
+  .scale-toggle:hover {
+    color: #e1e4e8;
+    border-color: #484f58;
+  }
+
+  .scale-toggle.active {
+    color: #58a6ff;
+    border-color: #58a6ff;
+    background: #1f3a5f;
+  }
+
   /* Compare table */
   .compare-table-wrap {
     border: 1px solid #2d333b;
@@ -875,6 +1095,7 @@
     color: #e1e4e8;
     font-weight: 500;
   }
+
 
   .compare-table tr.ct-main td.ct-iso { color: #58a6ff; }
 
@@ -965,7 +1186,7 @@
     font-size: 0.65rem;
   }
 
-  .xs-plot, .act-plot {
+  .xs-plot, .depth-plot, .act-plot {
     width: 100%;
     height: 220px;
   }

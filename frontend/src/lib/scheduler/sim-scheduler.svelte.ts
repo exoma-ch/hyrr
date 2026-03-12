@@ -7,13 +7,14 @@
  * Now uses direct TS compute instead of worker bridge.
  */
 
-import { getConfig, isConfigValid } from "../stores/config.svelte";
+import { getConfig, isConfigValid, getLayers } from "../stores/config.svelte";
 import {
   setResult,
   setLoading,
   setRunning,
   setError,
   setIdle,
+  clearResult,
   type SimStatus,
 } from "../stores/results.svelte";
 import { configHash } from "./config-hash";
@@ -72,7 +73,7 @@ export function initScheduler(): void {
     if (!valid) {
       cancel();
       state = "idle";
-      setIdle();
+      clearResult();
       return;
     }
 

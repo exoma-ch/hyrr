@@ -45,7 +45,9 @@ export function getLayers(): LayerConfig[] {
 // ─── Setters ────────────────────────────────────────────────────────
 
 export function setConfig(c: SimulationConfig): void {
-  config = structuredClone(c);
+  // JSON round-trip instead of structuredClone: Svelte 5 proxies and IDB
+  // result objects are not structurally cloneable, but JSON-safe.
+  config = JSON.parse(JSON.stringify(c));
 }
 
 export function setBeam(beam: BeamConfig): void {

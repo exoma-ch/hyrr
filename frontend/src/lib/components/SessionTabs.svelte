@@ -92,7 +92,7 @@
 
   /* Inactive tabs are slightly shorter */
   .tab.inactive {
-    height: 28px;
+    height: 24px;
     margin-bottom: 0;
   }
 
@@ -105,7 +105,7 @@
   .tab.active {
     background: #0d1117;
     color: #e1e4e8;
-    height: 32px;
+    height: 28px;
   }
 
   /* Chrome-style curved connectors on active tab */

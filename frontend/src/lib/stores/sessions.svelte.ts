@@ -64,7 +64,7 @@ export async function restoreSessions(): Promise<void> {
     const records = await loadAllSessions();
     if (records.length === 0) {
       // Create an initial default tab from the current config
-      const config = structuredClone(getConfig());
+      const config = JSON.parse(JSON.stringify(getConfig()));
       const tab: SessionTab = {
         id: crypto.randomUUID(),
         label: configLabel(config),
@@ -94,7 +94,7 @@ export async function restoreSessions(): Promise<void> {
     // Restore the active tab's config
     const activeTab = tabs.find((t) => t.id === activeId);
     if (activeTab) {
-      setConfig(structuredClone(activeTab.config));
+      setConfig(activeTab.config);
     }
   } catch (err) {
     console.warn("Failed to restore sessions from IndexedDB:", err);
@@ -105,7 +105,7 @@ export async function restoreSessions(): Promise<void> {
 /** Save current config as a new tab and make it active. */
 export async function addSessionTab(): Promise<string | null> {
   try {
-    const config = structuredClone(getConfig());
+    const config = JSON.parse(JSON.stringify(getConfig()));
     const tab: SessionTab = {
       id: crypto.randomUUID(),
       label: configLabel(config),
@@ -138,7 +138,7 @@ export async function switchToTab(id: string): Promise<void> {
   if (activeTabId !== null && activeTabId !== id) {
     const currentTab = tabs.find((t) => t.id === activeTabId);
     if (currentTab) {
-      currentTab.config = structuredClone(getConfig());
+      currentTab.config = JSON.parse(JSON.stringify(getConfig()));
       currentTab.label = configLabel(currentTab.config);
       // Persist updated config and deactivate
       await saveSession(toRecord(currentTab, false));
@@ -146,7 +146,7 @@ export async function switchToTab(id: string): Promise<void> {
   }
 
   activeTabId = id;
-  setConfig(structuredClone(tab.config));
+  setConfig(tab.config);
 
   // Mark new tab active in IDB
   await updateSessionActive(id, true);
@@ -176,7 +176,7 @@ export async function syncActiveTab(): Promise<void> {
   if (activeTabId === null) return;
   const tab = tabs.find((t) => t.id === activeTabId);
   if (tab) {
-    tab.config = structuredClone(getConfig());
+    tab.config = JSON.parse(JSON.stringify(getConfig()));
     tab.label = configLabel(tab.config);
     await saveSession(toRecord(tab, true));
   }
