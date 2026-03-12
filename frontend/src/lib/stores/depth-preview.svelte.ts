@@ -111,7 +111,7 @@ function computePreview(): void {
           layerError = "Beam stopped before this layer";
           thicknessCm = 0;
         } else if (layer.energy_out_MeV > energyIn) {
-          layerError = `E_out (${layer.energy_out_MeV} MeV) > E_in (${energyIn.toFixed(1)} MeV)`;
+          layerError = `Eout (${layer.energy_out_MeV} MeV) > Ein (${energyIn.toFixed(1)} MeV)`;
           thicknessCm = 0;
         } else {
           thicknessCm = computeThicknessFromEnergy(db, projectile, composition, density, energyIn, Math.max(0, layer.energy_out_MeV));

@@ -8,12 +8,14 @@
   } from "../stores/config.svelte";
   import ThicknessInput from "./ThicknessInput.svelte";
   import type { LayerConfig } from "../types";
+  import { parseFormula } from "../utils/formula";
 
   interface Props {
     onmaterialclick?: (index: number) => void;
+    onelementclick?: (layerIndex: number, element: string) => void;
   }
 
-  let { onmaterialclick }: Props = $props();
+  let { onmaterialclick, onelementclick }: Props = $props();
 
   let layers = $derived(getLayers());
   let dragIndex = $state<number | null>(null);
@@ -119,15 +121,24 @@
         title="Click to change material"
       >
         {layer.material || "select..."}
+        {#if layer.enrichment && Object.keys(layer.enrichment).length > 0}
+          <span class="enr-badge">enr</span>
+        {/if}
       </button>
 
-      <input
-        type="text"
-        class="material-input"
-        value={layer.material}
-        placeholder="Formula..."
-        onchange={(e) => setMaterial(i, (e.target as HTMLInputElement).value)}
-      />
+      {#if layer.material && layer.enrichment}
+        <div class="element-badges">
+          {#each Object.keys(parseFormula(layer.material)) as el}
+            {#if layer.enrichment[el]}
+              <button
+                class="el-badge enriched"
+                onclick={(e) => { e.stopPropagation(); onelementclick?.(i, el); }}
+                title="{el} (enriched)"
+              >{el}</button>
+            {/if}
+          {/each}
+        </div>
+      {/if}
 
       <div class="thickness-display">{thicknessDisplay(layer)}</div>
 
@@ -255,18 +266,16 @@
     color: #58a6ff;
   }
 
-  .material-input {
-    background: #0d1117;
-    border: 1px solid #2d333b;
-    border-radius: 3px;
-    color: #e1e4e8;
-    padding: 0.2rem 0.3rem;
-    font-size: 0.75rem;
-  }
-
-  .material-input:focus {
-    outline: none;
-    border-color: #58a6ff;
+  .enr-badge {
+    font-size: 0.55rem;
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
+    padding: 0.05rem 0.2rem;
+    border-radius: 2px;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-left: 0.2rem;
+    vertical-align: middle;
   }
 
   .thickness-display {
@@ -292,5 +301,34 @@
   .add-btn:hover {
     border-color: #238636;
     color: #238636;
+  }
+
+  .element-badges {
+    display: flex;
+    gap: 0.2rem;
+    flex-wrap: wrap;
+  }
+
+  .el-badge {
+    background: #21262d;
+    border: 1px solid #2d333b;
+    border-radius: 3px;
+    color: #8b949e;
+    font-size: 0.6rem;
+    font-weight: 500;
+    padding: 0.1rem 0.25rem;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  .el-badge:hover {
+    border-color: #58a6ff;
+    color: #58a6ff;
+  }
+
+  .el-badge.enriched {
+    border-color: #d29922;
+    color: #d29922;
+    background: rgba(210, 153, 34, 0.1);
   }
 </style>

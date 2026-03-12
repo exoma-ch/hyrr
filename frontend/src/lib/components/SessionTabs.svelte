@@ -9,9 +9,18 @@
 
   let tabs = $derived(getSessionTabs());
   let activeId = $derived(getActiveTabId());
+  let newTabId = $state<string | null>(null);
 
   function initial(label: string): string {
     return label.charAt(0).toUpperCase();
+  }
+
+  async function handleAddTab() {
+    const id = await addSessionTab();
+    if (id) {
+      newTabId = id;
+      setTimeout(() => { newTabId = null; }, 600);
+    }
   }
 </script>
 
@@ -22,6 +31,7 @@
       class="tab"
       class:active={tab.id === activeId}
       class:inactive={tab.id !== activeId}
+      class:just-added={tab.id === newTabId}
       style:z-index={tab.id === activeId ? tabs.length + 1 : tabs.length - i}
       onclick={() => switchToTab(tab.id)}
       onkeydown={(e) => { if (e.key === 'Enter') switchToTab(tab.id); }}
@@ -39,7 +49,7 @@
     </div>
   {/each}
 
-  <button class="add-btn" onclick={addSessionTab} title="Save current config as new tab">
+  <button class="add-btn" onclick={handleAddTab} title="Save current config as new tab">
     +
   </button>
 </div>
@@ -192,5 +202,14 @@
   .add-btn:hover {
     color: #8b949e;
     background: #21262d;
+  }
+
+  .tab.just-added {
+    animation: tab-highlight 0.6s ease-out;
+  }
+
+  @keyframes tab-highlight {
+    0% { box-shadow: 0 0 0 2px #58a6ff; }
+    100% { box-shadow: 0 0 0 0 transparent; }
   }
 </style>

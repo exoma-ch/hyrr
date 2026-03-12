@@ -504,6 +504,22 @@ function applyChainSolverByComponent(
       const prodRate = existing ? existing.productionRate : ciso.productionRate;
       const satYield = existing ? existing.saturationYieldBqUA : 0;
 
+      // Build decay notation: find parents in this chain component
+      const decayNotations: string[] = [];
+      if (hasIngrowth) {
+        for (const parentIso of component) {
+          for (const mode of parentIso.decayModes) {
+            if (mode.daughterZ === ciso.Z && mode.daughterA === ciso.A &&
+                (mode.daughterState || "") === (ciso.state || "")) {
+              const pSym = db.getElementSymbol(parentIso.Z);
+              const pState = parentIso.state || "";
+              const parentName = `${pSym}-${parentIso.A}${pState}`;
+              decayNotations.push(`${parentName} →${mode.mode}→ ${name}`);
+            }
+          }
+        }
+      }
+
       newResults.set(name, {
         name, Z: ciso.Z, A: ciso.A,
         state: ciso.state, halfLifeS: ciso.halfLifeS,
@@ -518,6 +534,7 @@ function applyChainSolverByComponent(
         activityDirectVsTimeBq: directActivity,
         activityIngrowthVsTimeBq: ingrowthActivity,
         reactions: existing?.reactions,
+        decayNotations: decayNotations.length > 0 ? decayNotations : undefined,
       });
     }
   }

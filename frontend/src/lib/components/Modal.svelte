@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+
   interface Props {
     open: boolean;
     onclose: () => void;
@@ -21,9 +23,11 @@
   }
 </script>
 
+<svelte:window onkeydown={open ? onKeydown : undefined} />
+
 {#if open}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="modal-overlay" onclick={onOverlayClick} onkeydown={onKeydown}>
+  <div class="modal-overlay" onclick={onOverlayClick}>
     <div class="modal-content" class:wide>
       <div class="modal-header">
         {#if headerChildren}

@@ -16,12 +16,12 @@ import type { DatabaseProtocol, Element } from "./types";
 export { parseFormula, formulaToMassFractions, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT };
 
 /** Known material definitions: density and mass fractions by element. */
-interface CatalogEntry {
+export interface CatalogEntry {
   density: number;
   massFractions: Record<string, number>;
 }
 
-const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
+export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
   havar: {
     density: 8.3,
     massFractions: {
@@ -114,7 +114,7 @@ export function resolveFormula(
 }
 
 /** Density estimates for single-element targets (g/cm³). */
-const ELEMENT_DENSITIES: Record<string, number> = {
+export const ELEMENT_DENSITIES: Record<string, number> = {
   H: 0.0899e-3, He: 0.164e-3, Li: 0.534, Be: 1.85, B: 2.34,
   C: 2.26, N: 1.17e-3, O: 1.33e-3, F: 1.58e-3, Na: 0.97,
   Mg: 1.74, Al: 2.70, Si: 2.33, P: 1.82, S: 2.07, Cl: 2.95e-3,
@@ -132,9 +132,17 @@ const ELEMENT_DENSITIES: Record<string, number> = {
 };
 
 /** Compound density estimates (g/cm³). */
-const COMPOUND_DENSITIES: Record<string, number> = {
+export const COMPOUND_DENSITIES: Record<string, number> = {
   H2O: 1.0, "H2O-18": 1.11, MoO3: 4.69, Al2O3: 3.95,
 };
+
+/** Optional custom density override lookup — set by the UI layer. */
+let customDensityLookup: ((formula: string) => number | null) | null = null;
+
+/** Register a function that returns custom material densities. */
+export function setCustomDensityLookup(fn: (formula: string) => number | null): void {
+  customDensityLookup = fn;
+}
 
 /**
  * Resolve a material identifier (name, formula, or element symbol with mass number)
@@ -160,21 +168,30 @@ export function resolveMaterial(
   const { elements, molecularWeight } = resolveFormula(db, formulaClean, overrides);
 
   // Determine density
-  let density: number;
-  if (COMPOUND_DENSITIES[identifier]) {
-    density = COMPOUND_DENSITIES[identifier];
-  } else if (COMPOUND_DENSITIES[formulaClean]) {
-    density = COMPOUND_DENSITIES[formulaClean];
-  } else {
-    // Single-element target: use element density
-    const parsed = parseFormula(formulaClean);
-    const symbols = Object.keys(parsed);
-    if (symbols.length === 1 && ELEMENT_DENSITIES[symbols[0]]) {
-      density = ELEMENT_DENSITIES[symbols[0]];
+  let density: number | undefined;
+
+  // Check custom materials first
+  if (customDensityLookup) {
+    const custom = customDensityLookup(identifier) ?? customDensityLookup(formulaClean);
+    if (custom !== null) density = custom;
+  }
+
+  if (density === undefined) {
+    if (COMPOUND_DENSITIES[identifier]) {
+      density = COMPOUND_DENSITIES[identifier];
+    } else if (COMPOUND_DENSITIES[formulaClean]) {
+      density = COMPOUND_DENSITIES[formulaClean];
     } else {
-      // Fallback: rough estimate from mass fractions
-      density = 5.0;
-      console.warn(`[materials] No density for "${identifier}", using default ${density} g/cm³`);
+      // Single-element target: use element density
+      const parsed = parseFormula(formulaClean);
+      const symbols = Object.keys(parsed);
+      if (symbols.length === 1 && ELEMENT_DENSITIES[symbols[0]]) {
+        density = ELEMENT_DENSITIES[symbols[0]];
+      } else {
+        // Fallback: rough estimate from mass fractions
+        density = 5.0;
+        console.warn(`[materials] No density for "${identifier}", using default ${density} g/cm³`);
+      }
     }
   }
 

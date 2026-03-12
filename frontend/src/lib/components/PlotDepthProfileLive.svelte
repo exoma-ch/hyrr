@@ -3,14 +3,13 @@
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS } from "../plotting/plotly-helpers";
 
-  let plotDiv: HTMLDivElement;
-  let Plotly: any = null;
+  let plotDiv = $state<HTMLDivElement | null>(null);
+  let Plotly = $state<any>(null);
 
   let preview = $derived(getDepthPreview());
 
   onMount(async () => {
     Plotly = await import("plotly.js-dist-min");
-    render();
   });
 
   onDestroy(() => {
@@ -18,11 +17,16 @@
   });
 
   $effect(() => {
-    if (Plotly && plotDiv && preview) render();
+    // Read all deps eagerly to avoid short-circuit tracking issues
+    const p = Plotly;
+    const div = plotDiv;
+    const prev = preview;
+    if (p && div && prev && prev.length > 0) render();
   });
 
   function render() {
-    if (!Plotly || !plotDiv || preview.length === 0) return;
+    if (!Plotly || !plotDiv) return;
+    if (preview.length === 0) return;
 
     const allDepths: number[] = [];
     const allEnergies: number[] = [];

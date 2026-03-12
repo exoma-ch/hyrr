@@ -25,6 +25,8 @@
   import { initDepthPreview } from "./lib/stores/depth-preview.svelte";
   import { saveRun } from "./lib/history-db";
   import { restoreSessions, syncActiveTab, getActiveTabId } from "./lib/stores/sessions.svelte";
+  import { setCustomDensityLookup } from "./lib/compute/materials";
+  import { getCustomMaterials, loadCustomMaterials } from "./lib/stores/custom-materials.svelte";
 
   // New components
   import HeaderBar from "./lib/components/HeaderBar.svelte";
@@ -56,6 +58,7 @@
   let elementPopupOpen = $state(false);
   let elementPopupSymbol = $state("");
   let elementPopupEnrichment = $state<Record<number, number> | undefined>(undefined);
+  let elementPopupLayerIndex = $state(0);
   let isotopePopupOpen = $state(false);
   let isotopePopupData = $state({ name: "", Z: 0, A: 0, nuclearState: "" });
 
@@ -95,9 +98,19 @@
     // Restore persisted session tabs from IndexedDB
     await restoreSessions();
 
+    // Load custom materials and register density lookup
+    await loadCustomMaterials();
+    setCustomDensityLookup((formula) => {
+      const cm = getCustomMaterials().find((m) => m.formula === formula || m.name === formula);
+      return cm ? cm.density : null;
+    });
+
     loadingState = "Ready";
     loadingProgress = 1;
     ready = true;
+
+    // Preload Plotly for faster popup opening
+    import("plotly.js-dist-min").catch(() => {});
   });
 
   // Update URL hash when config changes (debounced)
@@ -148,6 +161,31 @@
     }
   }
 
+  function openElementPopup(layerIndex: number, element: string) {
+    elementPopupLayerIndex = layerIndex;
+    elementPopupSymbol = element;
+    const layers = getLayers();
+    elementPopupEnrichment = layers[layerIndex]?.enrichment?.[element];
+    elementPopupOpen = true;
+  }
+
+  function onEnrichmentChanged(override: Record<number, number> | undefined) {
+    const layers = getLayers();
+    const layer = layers[elementPopupLayerIndex];
+    if (!layer) return;
+    const enrichment = { ...(layer.enrichment ?? {}) };
+    if (override) {
+      enrichment[elementPopupSymbol] = override;
+    } else {
+      delete enrichment[elementPopupSymbol];
+    }
+    updateLayer(elementPopupLayerIndex, {
+      ...layer,
+      enrichment: Object.keys(enrichment).length > 0 ? enrichment : undefined,
+    });
+    elementPopupOpen = false;
+  }
+
   function openIsotopePopup(data: { name: string; Z: number; A: number; state: string }) {
     isotopePopupData = { name: data.name, Z: data.Z, A: data.A, nuclearState: data.state };
     isotopePopupOpen = true;
@@ -175,7 +213,7 @@
         <BeamConfigBar />
       </div>
 
-      <LayerStackHorizontal onmaterialclick={openMaterialPopup} />
+      <LayerStackHorizontal onmaterialclick={openMaterialPopup} onelementclick={openElementPopup} />
 
       <PlotDepthProfileLive />
 
@@ -203,7 +241,7 @@
             <span class="panel-title">History</span>
             <button class="close-btn" onclick={() => setHistoryOpen(false)}>&times;</button>
           </div>
-          <HistoryPanel />
+          <HistoryPanel onrestore={() => setHistoryOpen(false)} />
           <HistoryImportExport />
         </div>
       </div>
@@ -214,6 +252,8 @@
       open={materialPopupOpen}
       onclose={() => materialPopupOpen = false}
       onselect={onMaterialSelected}
+      onenrichment={(el) => openElementPopup(materialPopupLayerIndex, el)}
+      currentEnrichment={getLayers()[materialPopupLayerIndex]?.enrichment}
       materials={[]}
     />
 
@@ -222,7 +262,7 @@
       onclose={() => elementPopupOpen = false}
       element={elementPopupSymbol}
       enrichment={elementPopupEnrichment}
-      onchange={(e) => { elementPopupEnrichment = e; elementPopupOpen = false; }}
+      onchange={onEnrichmentChanged}
     />
 
     <IsotopePopup

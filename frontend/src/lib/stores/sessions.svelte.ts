@@ -63,6 +63,16 @@ export async function restoreSessions(): Promise<void> {
   try {
     const records = await loadAllSessions();
     if (records.length === 0) {
+      // Create an initial default tab from the current config
+      const config = structuredClone(getConfig());
+      const tab: SessionTab = {
+        id: crypto.randomUUID(),
+        label: configLabel(config),
+        config,
+      };
+      tabs = [tab];
+      activeTabId = tab.id;
+      await saveSession(toRecord(tab, true));
       initialized = true;
       return;
     }
@@ -93,24 +103,30 @@ export async function restoreSessions(): Promise<void> {
 }
 
 /** Save current config as a new tab and make it active. */
-export async function addSessionTab(): Promise<void> {
-  const config = structuredClone(getConfig());
-  const tab: SessionTab = {
-    id: crypto.randomUUID(),
-    label: configLabel(config),
-    config,
-  };
+export async function addSessionTab(): Promise<string | null> {
+  try {
+    const config = structuredClone(getConfig());
+    const tab: SessionTab = {
+      id: crypto.randomUUID(),
+      label: configLabel(config),
+      config,
+    };
 
-  // Deactivate previous active tab in IDB
-  if (activeTabId !== null) {
-    await updateSessionActive(activeTabId, false);
+    // Deactivate previous active tab in IDB
+    if (activeTabId !== null) {
+      await updateSessionActive(activeTabId, false);
+    }
+
+    tabs = [...tabs, tab];
+    activeTabId = tab.id;
+
+    // Persist new tab as active
+    await saveSession(toRecord(tab, true));
+    return tab.id;
+  } catch (err) {
+    console.warn("Failed to add session tab:", err);
+    return null;
   }
-
-  tabs = [...tabs, tab];
-  activeTabId = tab.id;
-
-  // Persist new tab as active
-  await saveSession(toRecord(tab, true));
 }
 
 /** Switch to a tab — restores its config. */

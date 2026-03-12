@@ -221,6 +221,7 @@ function convertResult(
         time_grid_s: Array.from(iso.timeGridS),
         activity_vs_time_Bq: Array.from(iso.activityVsTimeBq),
         reactions: iso.reactions,
+        decay_notations: iso.decayNotations,
       });
     }
 

@@ -6,14 +6,10 @@
   import { getConfig } from "../stores/config.svelte";
   import { formatHalfLife, darkLayout, PLOTLY_CONFIG, TRACE_COLORS } from "../plotting/plotly-helpers";
   import { nudatUrl } from "../utils/format";
-  import { toggleIsotope, isSelected } from "../stores/selection.svelte";
+
   import { Z_TO_SYMBOL } from "../utils/formula";
   import { resolveMaterial } from "../compute/materials";
-  import { computeProductionRate } from "../compute/production";
-  import { dedxMeVPerCm } from "../compute/stopping";
   import { bestActivityUnit, bestTimeUnit, fmtActivity } from "../utils/format";
-  import { linspace } from "../compute/interpolation";
-  import { PROJECTILE_Z } from "../compute";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import type { DecayMode, CrossSectionData } from "../compute/types";
 
@@ -29,18 +25,40 @@
   let { open, onclose, name, Z, A, nuclearState = "" }: Props = $props();
 
   let Plotly: any = null;
-  let xsPlotDiv: HTMLDivElement;
-  let actPlotDiv: HTMLDivElement;
+  let xsPlotDiv = $state<HTMLDivElement | null>(null);
+  let actPlotDiv = $state<HTMLDivElement | null>(null);
 
   // State
   let decayInfo: { halfLifeS: number | null; decayModes: DecayMode[] } | null = $state(null);
   let parentDecays: { name: string; Z: number; A: number; state: string; mode: string; branching: number }[] = $state([]);
   let xsData: CrossSectionData | null = $state(null);
-  let selected = $derived(isSelected(name));
-
   // Compare: additional XS traces to overlay
+  let loading = $state(false);
   let compareIsotopes: { name: string; xs: CrossSectionData }[] = $state([]);
   let allProducedIsotopes: { name: string; Z: number; A: number; state: string }[] = $state([]);
+  let compareFilter = $state("");
+  let compareDropdownOpen = $state(false);
+  let cachedXsIndex: Map<string, CrossSectionData> = new Map();
+
+  let sortedCompareList = $derived.by(() => {
+    const selectedNames = new Set(compareIsotopes.map((c) => c.name));
+    return allProducedIsotopes
+      .filter((i) => i.name !== name)
+      .filter((i) => !compareFilter || i.name.toLowerCase().includes(compareFilter.toLowerCase()))
+      .sort((a, b) => {
+        const aSelected = selectedNames.has(a.name) ? 0 : 1;
+        const bSelected = selectedNames.has(b.name) ? 0 : 1;
+        return aSelected - bSelected || a.name.localeCompare(b.name);
+      });
+  });
+
+  function toggleCompare(iso: { name: string; Z: number; A: number; state: string }) {
+    if (compareIsotopes.some((c) => c.name === iso.name)) {
+      removeCompare(iso.name);
+    } else {
+      addCompare(iso);
+    }
+  }
 
   // Energy range info from depth preview
   let beamEnergy = $state(0);
@@ -52,11 +70,17 @@
       parentDecays = [];
       xsData = null;
       compareIsotopes = [];
+      compareFilter = "";
+      compareDropdownOpen = false;
       return;
     }
     const db = getDataStore();
     if (!db) return;
+    loading = true;
+    let cancelled = false;
 
+    setTimeout(() => {
+    if (cancelled) return;
     const config = getConfig();
     const proj = config.beam.projectile;
     beamEnergy = config.beam.energy_MeV;
@@ -102,6 +126,7 @@
     xsData = null;
     const produced: typeof allProducedIsotopes = [];
     const seenIso = new Set<string>();
+    const xsIndex = new Map<string, CrossSectionData>();
 
     for (const layer of config.layers) {
       if (!layer.material) continue;
@@ -111,12 +136,16 @@
           for (const [targetA] of el.isotopes) {
             const xsList = db.getCrossSections(proj, el.Z, targetA);
             for (const xs of xsList) {
+              const isoKey = `${xs.residualZ}-${xs.residualA}-${xs.state || ""}`;
+              // Store first match per isotope in index
+              if (!xsIndex.has(isoKey)) {
+                xsIndex.set(isoKey, xs);
+              }
               // Check if this is our isotope
               if (xs.residualZ === Z && xs.residualA === A && (xs.state || "") === (nuclearState || "")) {
                 if (!xsData) xsData = xs;
               }
               // Collect all produced isotopes for compare selector
-              const isoKey = `${xs.residualZ}-${xs.residualA}-${xs.state || ""}`;
               if (!seenIso.has(isoKey)) {
                 seenIso.add(isoKey);
                 const sym = Z_TO_SYMBOL[xs.residualZ] ?? `Z${xs.residualZ}`;
@@ -131,12 +160,21 @@
       } catch { /* skip */ }
     }
     allProducedIsotopes = produced.sort((a, b) => a.name.localeCompare(b.name));
+    cachedXsIndex = xsIndex;
+    loading = false;
+    }, 0);
+
+    return () => { cancelled = true; };
   });
 
-  // Render XS plot
+  // Render XS plot — read all deps eagerly to avoid short-circuit tracking loss
   $effect(() => {
-    if (!open || !xsPlotDiv) return;
-    if (xsData || compareIsotopes.length > 0) renderXsPlot();
+    const hasXs = !!xsData;
+    const numCompare = compareIsotopes.length;
+    if (!open || (!hasXs && numCompare === 0)) return;
+    requestAnimationFrame(() => {
+      if (xsPlotDiv) renderXsPlot();
+    });
   });
 
   async function ensurePlotly() {
@@ -257,35 +295,13 @@
     });
   }
 
-  // Compare: add an isotope XS to the plot
-  function addCompare(isoName: string) {
-    if (!isoName || compareIsotopes.some((c) => c.name === isoName)) return;
-    const db = getDataStore();
-    if (!db) return;
-
-    const config = getConfig();
-    const proj = config.beam.projectile;
-
-    // Find XS for this isotope
-    for (const layer of config.layers) {
-      if (!layer.material) continue;
-      try {
-        const mat = resolveMaterial(db, layer.material);
-        for (const [el] of mat.elements) {
-          for (const [targetA] of el.isotopes) {
-            const xsList = db.getCrossSections(proj, el.Z, targetA);
-            const iso = allProducedIsotopes.find((i) => i.name === isoName);
-            if (!iso) continue;
-            const match = xsList.find(
-              (xs) => xs.residualZ === iso.Z && xs.residualA === iso.A && (xs.state || "") === iso.state,
-            );
-            if (match) {
-              compareIsotopes = [...compareIsotopes, { name: isoName, xs: match }];
-              return;
-            }
-          }
-        }
-      } catch { /* skip */ }
+  // Compare: add an isotope XS to the plot (O(1) lookup via cached index)
+  function addCompare(iso: { name: string; Z: number; A: number; state: string }) {
+    if (compareIsotopes.some((c) => c.name === iso.name)) return;
+    const key = `${iso.Z}-${iso.A}-${iso.state}`;
+    const match = cachedXsIndex.get(key);
+    if (match) {
+      compareIsotopes = [...compareIsotopes, { name: iso.name, xs: match }];
     }
   }
 
@@ -293,8 +309,9 @@
     compareIsotopes = compareIsotopes.filter((c) => c.name !== isoName);
   }
 
-  // Activity computation
-  interface ActivityResult {
+  // Activity data — pulled from simulation result (no recomputation)
+  interface ActivityCurve {
+    name: string;
     times: number[];
     activities: number[];
     productionRate: number;
@@ -302,143 +319,177 @@
     eobActivity: number;
   }
 
-  let activityResult: ActivityResult | null = $state(null);
+  interface ActivityData {
+    main: ActivityCurve | null;
+    compare: ActivityCurve[];
+  }
 
-  let activityComputing = $state(false);
+  let activityData = $derived.by((): ActivityData | null => {
+    if (!open) return null;
+    const result = getResult();
+    if (!result) return null;
 
-  $effect(() => {
-    if (!open || !xsData || !decayInfo) {
-      activityResult = null;
-      return;
-    }
-    const db = getDataStore();
-    if (!db) return;
-
-    const config = getConfig();
-    const proj = config.beam.projectile;
-    const irrS = config.irradiation_s;
-    const coolS = config.cooling_s || 86400;
-    const halfLife = decayInfo.halfLifeS;
-    if (!halfLife || halfLife <= 0) return;
-
-    // Capture reactive deps, then defer heavy work off the main thread tick
-    const preview = getDepthPreview();
-    activityComputing = true;
-
-    setTimeout(() => {
-      const lambda = Math.LN2 / halfLife;
-      let productionRate = 0;
-
-      for (const layer of config.layers) {
-        if (!layer.material) continue;
-        try {
-          const mat = resolveMaterial(db, layer.material);
-          const composition: Array<[number, number]> = mat.elements.map(([el, frac]) => [el.Z, frac]);
-          const density = mat.density;
-          const layerPreview = preview.find((l) => l.material === layer.material);
-          if (!layerPreview || layerPreview.energy_in_MeV <= 0) continue;
-
-          const eIn = layerPreview.energy_in_MeV;
-          const eOut = layerPreview.energy_out_MeV;
-          const thickCm = layerPreview.thickness_mm / 10;
-
-          const dedxFn = (energies: Float64Array) =>
-            dedxMeVPerCm(db, proj, composition, density, energies) as Float64Array;
-
-          for (const [el, frac] of mat.elements) {
-            for (const [targetA, isoFrac] of el.isotopes) {
-              const xsList = db.getCrossSections(proj, el.Z, targetA);
-              const match = xsList.find(
-                (xs) => xs.residualZ === Z && xs.residualA === A && (xs.state || "") === (nuclearState || ""),
-              );
-              if (!match) continue;
-
-              const AVOGADRO = 6.022e23;
-              const nAtoms = density * thickCm * AVOGADRO / targetA * frac * isoFrac;
-              const beamParticlesPerS = config.beam.current_mA * 1e-3 / 1.602e-19;
-
-              const { productionRate: rate } = computeProductionRate(
-                match.energiesMeV, match.xsMb,
-                dedxFn, eIn, eOut,
-                nAtoms, beamParticlesPerS, thickCm,
-              );
-              productionRate += rate;
-            }
+    function findBestIsotope(z: number, a: number, st: string): ActivityCurve | null {
+      let best: import("../types").IsotopeResultData | null = null;
+      for (const layer of result!.layers) {
+        for (const iso of layer.isotopes) {
+          if (iso.Z === z && iso.A === a && (iso.state || "") === (st || "")) {
+            if (!best || iso.activity_Bq > best.activity_Bq) best = iso;
           }
-        } catch { /* skip */ }
+        }
       }
+      if (!best || !best.time_grid_s || !best.activity_vs_time_Bq) return null;
+      return {
+        name: best.name + (best.state ? ` (${best.state})` : ""),
+        times: [...best.time_grid_s],
+        activities: [...best.activity_vs_time_Bq],
+        productionRate: best.production_rate,
+        satYield: best.saturation_yield_Bq_uA,
+        eobActivity: best.activity_Bq,
+      };
+    }
 
-      activityComputing = false;
-      if (productionRate <= 0) return;
+    const main = findBestIsotope(Z, A, nuclearState || "");
 
-      const nPts = 100;
-      const times: number[] = [];
-      const activities: number[] = [];
+    const compare: ActivityCurve[] = [];
+    for (const cmp of compareIsotopes) {
+      const curve = findBestIsotope(cmp.xs.residualZ, cmp.xs.residualA, cmp.xs.state || "");
+      if (curve) compare.push(curve);
+    }
 
-      const irrTimes = linspace(0, irrS, nPts / 2);
-      for (let i = 0; i < irrTimes.length; i++) {
-        times.push(irrTimes[i]);
-        activities.push((productionRate / lambda) * (1 - Math.exp(-lambda * irrTimes[i])));
-      }
-
-      const eobActivity = activities[activities.length - 1];
-
-      const coolTimes = linspace(0, coolS, nPts / 2);
-      for (let i = 1; i < coolTimes.length; i++) {
-        times.push(irrS + coolTimes[i]);
-        activities.push(eobActivity * Math.exp(-lambda * coolTimes[i]));
-      }
-
-      const satYield = productionRate / lambda / (config.beam.current_mA * 1000);
-      activityResult = { times, activities, productionRate, satYield, eobActivity };
-    }, 0);
+    return { main, compare };
   });
 
+  let showRnp = $derived(compareIsotopes.length > 0);
+
   $effect(() => {
-    if (!open || !activityResult || !actPlotDiv) return;
-    ensurePlotly().then(renderActivityPlot);
+    const data = activityData;
+    const _cmp = compareIsotopes.length;
+    if (!open || !data || !data.main) return;
+    requestAnimationFrame(() => {
+      if (actPlotDiv) ensurePlotly().then(renderActivityPlot);
+    });
   });
 
   function renderActivityPlot() {
-    if (!Plotly || !activityResult || !actPlotDiv) return;
+    if (!Plotly || !activityData?.main || !actPlotDiv) return;
 
     const config = getConfig();
     const totalTime = config.irradiation_s + (config.cooling_s || 86400);
     const { label: timeLabel, divisor: timeDiv } = bestTimeUnit(totalTime);
-    const maxAct = activityResult.activities.reduce((m, v) => Math.max(m, v), 0);
-    const { label: actLabel, divisor: actDiv } = bestActivityUnit(maxAct);
     const eobX = config.irradiation_s / timeDiv;
 
-    const traces = [{
-      x: activityResult.times.map((t) => t / timeDiv),
-      y: activityResult.activities.map((a) => a / actDiv),
-      type: "scatter",
-      mode: "lines",
-      line: { color: TRACE_COLORS[0], width: 2 },
-      name: name,
-    }];
+    const allCurves = [activityData.main, ...activityData.compare];
 
-    const layout = darkLayout({
-      xaxis: { title: `Time (${timeLabel})`, gridcolor: "#2d333b" },
-      yaxis: { title: `Activity (${actLabel})`, gridcolor: "#2d333b" },
-      margin: { t: 10, r: 20, b: 40, l: 55 },
-      height: 200,
-      showlegend: false,
-      shapes: [{
-        type: "line" as const,
-        x0: eobX, x1: eobX, y0: 0, y1: 1,
-        yref: "paper" as const,
-        line: { color: "#f0883e", width: 1, dash: "dash" as const },
-      }],
-      annotations: [{
-        x: eobX, y: 1.02, yref: "paper" as const,
-        text: "EOB", showarrow: false,
-        font: { color: "#f0883e", size: 9 },
-        xanchor: "center" as const,
-      }],
-    });
+    // Find global max for unit scaling
+    let globalMax = 0;
+    for (const curve of allCurves) {
+      for (const a of curve.activities) {
+        if (a > globalMax) globalMax = a;
+      }
+    }
+    const { label: actLabel, divisor: actDiv } = bestActivityUnit(globalMax);
 
-    Plotly.react(actPlotDiv, traces, layout, PLOTLY_CONFIG);
+    const traces: any[] = [];
+
+    if (showRnp) {
+      // RNP% mode: show relative contribution of each isotope
+      // Compute total activity at each time point (across shown isotopes)
+      const mainTimes = activityData.main.times;
+      const totalAct = new Float64Array(mainTimes.length);
+      for (const curve of allCurves) {
+        for (let i = 0; i < Math.min(curve.activities.length, totalAct.length); i++) {
+          totalAct[i] += curve.activities[i];
+        }
+      }
+
+      // RNP% trace for each isotope
+      allCurves.forEach((curve, idx) => {
+        const rnp = curve.activities.map((a, i) =>
+          totalAct[i] > 0 ? (a / totalAct[i]) * 100 : 0,
+        );
+        traces.push({
+          x: curve.times.map((t) => t / timeDiv),
+          y: rnp,
+          type: "scatter",
+          mode: "lines",
+          line: { color: TRACE_COLORS[idx % TRACE_COLORS.length], width: idx === 0 ? 2 : 1.5 },
+          name: `${curve.name}`,
+        });
+      });
+
+      // Total activity on secondary axis
+      traces.push({
+        x: mainTimes.map((t) => t / timeDiv),
+        y: Array.from(totalAct).map((a) => a / actDiv),
+        type: "scatter",
+        mode: "lines",
+        line: { color: "#484f58", width: 1, dash: "dot" },
+        yaxis: "y2",
+        name: "Total",
+      });
+
+      const layout = darkLayout({
+        xaxis: { title: `Time (${timeLabel})`, gridcolor: "#2d333b" },
+        yaxis: { title: "RNP (%)", gridcolor: "#2d333b", range: [0, 105] },
+        yaxis2: {
+          title: `Activity (${actLabel})`,
+          overlaying: "y",
+          side: "right",
+          gridcolor: "#2d333b",
+        },
+        margin: { t: 10, r: 55, b: 40, l: 55 },
+        height: 220,
+        showlegend: true,
+        legend: { x: 1, xanchor: "right", y: 1, bgcolor: "rgba(0,0,0,0)" },
+        shapes: [{
+          type: "line" as const,
+          x0: eobX, x1: eobX, y0: 0, y1: 1,
+          yref: "paper" as const,
+          line: { color: "#f0883e", width: 1, dash: "dash" as const },
+        }],
+        annotations: [{
+          x: eobX, y: 1.02, yref: "paper" as const,
+          text: "EOB", showarrow: false,
+          font: { color: "#f0883e", size: 9 },
+          xanchor: "center" as const,
+        }],
+      });
+
+      Plotly.react(actPlotDiv, traces, layout, PLOTLY_CONFIG);
+    } else {
+      // Single isotope mode: simple activity curve
+      traces.push({
+        x: activityData.main.times.map((t) => t / timeDiv),
+        y: activityData.main.activities.map((a) => a / actDiv),
+        type: "scatter",
+        mode: "lines",
+        line: { color: TRACE_COLORS[0], width: 2 },
+        name: name,
+      });
+
+      const layout = darkLayout({
+        xaxis: { title: `Time (${timeLabel})`, gridcolor: "#2d333b" },
+        yaxis: { title: `Activity (${actLabel})`, gridcolor: "#2d333b" },
+        margin: { t: 10, r: 20, b: 40, l: 55 },
+        height: 200,
+        showlegend: false,
+        shapes: [{
+          type: "line" as const,
+          x0: eobX, x1: eobX, y0: 0, y1: 1,
+          yref: "paper" as const,
+          line: { color: "#f0883e", width: 1, dash: "dash" as const },
+        }],
+        annotations: [{
+          x: eobX, y: 1.02, yref: "paper" as const,
+          text: "EOB", showarrow: false,
+          font: { color: "#f0883e", size: 9 },
+          xanchor: "center" as const,
+        }],
+      });
+
+      Plotly.react(actPlotDiv, traces, layout, PLOTLY_CONFIG);
+    }
   }
 
   onDestroy(() => {
@@ -448,9 +499,9 @@
     }
   });
 
-  function tendlUrl(): string {
+  function janisUrl(): string {
     const sym = Z_TO_SYMBOL[Z] ?? "";
-    return `https://tendl.web.psi.ch/tendl_2023/proton_html/${sym}${String(A).padStart(3, "0")}/residual.html`;
+    return `https://www.oecd-nea.org/janisweb/search/endf?SearchTerm=${sym}${A}`;
   }
 
   // Nuclear notation helper
@@ -463,23 +514,16 @@
       <span class="nuc-notation">
         <sup class="nuc-a">{A}</sup><sub class="nuc-z">{Z}</sub>{symbol}{#if nuclearState}<sup class="nuc-state">{nuclearState}</sup>{/if}
       </span>
-      <span class="nuc-name">{symbol}-{A}{nuclearState ? ` (${nuclearState})` : ""}</span>
       {#if decayInfo}
         <span class="nuc-hl">{formatHalfLife(decayInfo.halfLifeS)}</span>
       {/if}
-      <div class="nuc-actions">
-        <button
-          class="action-btn"
-          class:active={selected}
-          onclick={() => toggleIsotope(name)}
-        >
-          {selected ? "Deselect" : "Compare"}
-        </button>
-      </div>
     </div>
   {/snippet}
 
   <div class="isotope-popup">
+    {#if loading}
+      <div class="loading-indicator">Loading isotope data...</div>
+    {/if}
     <!-- Properties -->
     {#if decayInfo}
       <div class="properties">
@@ -527,41 +571,62 @@
       </div>
     {/if}
 
+    <!-- Compare selector (shared across XS + activity) -->
+    {#if xsData || compareIsotopes.length > 0}
+      <div class="compare-bar">
+        <div class="compare-controls">
+          {#each compareIsotopes as cmp}
+            <span class="compare-chip">
+              {cmp.name}
+              <button class="chip-x" onclick={() => removeCompare(cmp.name)}>&times;</button>
+            </span>
+          {/each}
+          <div class="compare-dropdown-wrapper">
+            <input
+              type="text"
+              class="compare-filter"
+              placeholder="+ compare..."
+              bind:value={compareFilter}
+              onfocus={() => { compareDropdownOpen = true; }}
+              onblur={() => { setTimeout(() => { compareDropdownOpen = false; }, 150); }}
+            />
+            {#if compareDropdownOpen && sortedCompareList.length > 0}
+              <div class="compare-dropdown">
+                {#each sortedCompareList as iso}
+                  <button
+                    class="compare-option"
+                    class:selected={compareIsotopes.some((c) => c.name === iso.name)}
+                    onmousedown={(e) => { e.preventDefault(); toggleCompare(iso); }}
+                  >
+                    {#if compareIsotopes.some((c) => c.name === iso.name)}<span class="check-mark">&#10003;</span>{/if}
+                    {iso.name}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+      </div>
+    {/if}
+
     <!-- Cross-section plot -->
     {#if xsData || compareIsotopes.length > 0}
       <div class="section">
         <div class="section-bar">
           <span class="section-label">Cross section</span>
-          <div class="compare-controls">
-            {#each compareIsotopes as cmp}
-              <span class="compare-chip">
-                {cmp.name}
-                <button class="chip-x" onclick={() => removeCompare(cmp.name)}>&times;</button>
-              </span>
-            {/each}
-            <select
-              class="compare-select"
-              onchange={(e) => { addCompare((e.target as HTMLSelectElement).value); (e.target as HTMLSelectElement).value = ""; }}
-            >
-              <option value="">+ compare...</option>
-              {#each allProducedIsotopes.filter(i => i.name !== name && !compareIsotopes.some(c => c.name === i.name)) as iso}
-                <option value={iso.name}>{iso.name}</option>
-              {/each}
-            </select>
-          </div>
         </div>
         <div bind:this={xsPlotDiv} class="xs-plot"></div>
       </div>
     {/if}
 
     <!-- Activity curve -->
-    {#if activityResult}
+    {#if activityData?.main}
       <div class="section">
         <div class="section-bar">
-          <span class="section-label">Activity</span>
+          <span class="section-label">Activity{showRnp ? " / RNP%" : ""}</span>
           <div class="activity-stats">
-            <span>EOB: {fmtActivity(activityResult.eobActivity)}</span>
-            <span>Rate: {activityResult.productionRate.toExponential(2)} /s</span>
+            <span>EOB: {fmtActivity(activityData.main.eobActivity)}</span>
+            <span title="Production rate: atoms produced per second of irradiation">Prod. rate: {activityData.main.productionRate.toExponential(2)} /s</span>
           </div>
         </div>
         <div bind:this={actPlotDiv} class="act-plot"></div>
@@ -574,9 +639,9 @@
         <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854.22a.75.75 0 011.396-.04L14 5.5a.75.75 0 01-1.5 0V4.56l-3.97 3.97a.75.75 0 01-1.06-1.06L11.44 3.5H10.5a.75.75 0 010-1.5h.104z"></path></svg>
         NuDat 3.0
       </a>
-      <a href={tendlUrl()} target="_blank" rel="noopener noreferrer" class="ext-link">
+      <a href={janisUrl()} target="_blank" rel="noopener noreferrer" class="ext-link">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854.22a.75.75 0 011.396-.04L14 5.5a.75.75 0 01-1.5 0V4.56l-3.97 3.97a.75.75 0 01-1.06-1.06L11.44 3.5H10.5a.75.75 0 010-1.5h.104z"></path></svg>
-        TENDL 2023
+        JANIS (NEA)
       </a>
     </div>
   </div>
@@ -612,8 +677,8 @@
   .nuc-z {
     font-size: 0.55em;
     position: relative;
-    bottom: -0.2em;
-    margin-right: -0.05em;
+    top: 0.2em;
+    margin-right: -0.1em;
     color: #6e7681;
     font-weight: 400;
   }
@@ -623,20 +688,19 @@
     color: #d29922;
   }
 
-  .nuc-name {
-    font-size: 0.85rem;
-    color: #8b949e;
-  }
-
   .nuc-hl {
     font-size: 0.8rem;
     color: #6e7681;
     font-variant-numeric: tabular-nums;
   }
 
-  .nuc-actions {
-    margin-left: auto;
-    flex-shrink: 0;
+
+  .loading-indicator {
+    text-align: center;
+    padding: 1rem;
+    color: #8b949e;
+    font-size: 0.8rem;
+    font-style: italic;
   }
 
   /* Body */
@@ -724,6 +788,15 @@
     flex-shrink: 0;
   }
 
+  .compare-bar {
+    display: flex;
+    align-items: center;
+    padding: 0.3rem 0.5rem;
+    background: #0d1117;
+    border: 1px solid #2d333b;
+    border-radius: 4px;
+  }
+
   .compare-controls {
     display: flex;
     align-items: center;
@@ -756,14 +829,69 @@
 
   .chip-x:hover { opacity: 1; color: #f85149; }
 
-  .compare-select {
+  .compare-dropdown-wrapper {
+    position: relative;
+  }
+
+  .compare-filter {
     background: #0d1117;
     border: 1px solid #2d333b;
     border-radius: 3px;
-    color: #6e7681;
+    color: #e1e4e8;
     padding: 0.1rem 0.25rem;
     font-size: 0.65rem;
+    width: 7rem;
+    outline: none;
+  }
+
+  .compare-filter:focus {
+    border-color: #58a6ff;
+  }
+
+  .compare-filter::placeholder {
+    color: #6e7681;
+  }
+
+  .compare-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 100;
+    background: #161b22;
+    border: 1px solid #2d333b;
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    min-width: 10rem;
+    margin-top: 2px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+
+  .compare-option {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    width: 100%;
+    background: none;
+    border: none;
+    color: #e1e4e8;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.7rem;
     cursor: pointer;
+    text-align: left;
+  }
+
+  .compare-option:hover {
+    background: #1c2128;
+  }
+
+  .compare-option.selected {
+    color: #58a6ff;
+  }
+
+  .check-mark {
+    color: #58a6ff;
+    font-size: 0.65rem;
   }
 
   .xs-plot, .act-plot {
@@ -778,20 +906,6 @@
     color: #6e7681;
     font-variant-numeric: tabular-nums;
   }
-
-  /* Actions */
-  .action-btn {
-    background: #21262d;
-    border: 1px solid #2d333b;
-    border-radius: 4px;
-    color: #e1e4e8;
-    padding: 0.2rem 0.5rem;
-    font-size: 0.75rem;
-    cursor: pointer;
-  }
-
-  .action-btn:hover { border-color: #58a6ff; }
-  .action-btn.active { background: #1f3a5f; border-color: #58a6ff; color: #58a6ff; }
 
   /* Links */
   .links {

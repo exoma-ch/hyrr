@@ -10,8 +10,8 @@
   }
 
   let { result }: Props = $props();
-  let plotDiv: HTMLDivElement;
-  let Plotly: any = null;
+  let plotDiv = $state<HTMLDivElement | null>(null);
+  let Plotly = $state<any>(null);
 
   // Track legend visibility state so it persists across Plotly.react() re-renders.
   // Key = trace name, value = Plotly visibility ("true" | "legendonly").
@@ -52,15 +52,17 @@
     layerFilter = next;
   }
 
+  let legendListenersAttached = false;
+
   onMount(async () => {
     Plotly = await import("plotly.js-dist-min");
-    render();
-    attachLegendListeners();
   });
 
   function attachLegendListeners() {
-    if (!plotDiv) return;
+    if (!plotDiv || legendListenersAttached) return;
     const el = plotDiv as any;
+    if (!el.on) return; // Plotly hasn't rendered yet
+    legendListenersAttached = true;
     el.on("plotly_legendclick", (evt: any) => {
       const trace = evt.data[evt.curveNumber];
       if (!trace?.name) return false; // let Plotly handle it
@@ -103,8 +105,10 @@
     if (Plotly && plotDiv) Plotly.purge(plotDiv);
   });
 
-  // Single effect for all render dependencies
+  // Single effect for all render dependencies — read all deps eagerly
   $effect(() => {
+    const p = Plotly;
+    const div = plotDiv;
     const _result = result;
     const _sel = selected;
     const _log = logY;
@@ -113,7 +117,7 @@
     const _rnpIso = rnpIsotope;
     const _floor = activityFloor;
     const _filter = layerFilter;
-    if (Plotly && plotDiv) render();
+    if (p && div) render();
   });
 
   function render() {
@@ -219,6 +223,7 @@
     });
 
     Plotly.react(plotDiv, traces, layout, PLOTLY_CONFIG);
+    attachLegendListeners();
   }
 
   function renderRNP(irrTime: number, coolTime: number, totalTime: number, timeOffset: number) {
@@ -348,6 +353,7 @@
     });
 
     Plotly.react(plotDiv, traces, layout, PLOTLY_CONFIG);
+    attachLegendListeners();
   }
 </script>
 

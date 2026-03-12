@@ -22,7 +22,7 @@
   const MODES: { id: ThicknessMode; label: string }[] = [
     { id: "thickness_cm", label: "Thickness" },
     { id: "areal_density_g_cm2", label: "Areal dens." },
-    { id: "energy_out_MeV", label: "E out" },
+    { id: "energy_out_MeV", label: "E<sub>out</sub>" },
   ];
 
   // --- Smart thickness text input (thickness_cm mode) ---
@@ -126,7 +126,7 @@
         class:active={mode === m.id}
         onclick={() => setMode(m.id)}
       >
-        {m.label}
+        {@html m.label}
       </button>
     {/each}
   </div>
@@ -150,10 +150,9 @@
       </div>
     {:else}
       <input
-        type="number"
+        type="text"
+        inputmode="decimal"
         value={otherValue}
-        min={0}
-        step={0.001}
         onchange={setOtherValue}
         class="val-input"
       />

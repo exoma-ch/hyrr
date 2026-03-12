@@ -168,6 +168,8 @@ export interface IsotopeResult {
   activityDirectVsTimeBq: Float64Array;
   activityIngrowthVsTimeBq: Float64Array;
   reactions?: string[];
+  /** Decay chain notation for daughter isotopes (e.g., "Mo-99 →β⁻→ Tc-99m") */
+  decayNotations?: string[];
 }
 
 export interface LayerResult {

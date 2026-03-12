@@ -12,7 +12,7 @@
 
   let { result, onisotopeclick }: Props = $props();
 
-  type SortKey = "name" | "activity" | "half_life" | "layer" | "direct" | "daughter" | "rnp" | "dose";
+  type SortKey = "name" | "activity" | "half_life" | "layer" | "direct" | "daughter" | "rnp" | "rnp_eob" | "dose";
   let sortKey = $state<SortKey>("activity");
   let sortAsc = $state(false);
   let filterText = $state("");
@@ -33,12 +33,30 @@
     activity_direct_Bq: number;
     activity_ingrowth_Bq: number;
     rnp_pct: number;
+    rnp_eob_pct: number;
     dose_uSv_h: number | null;
     reactions: string[];
+    decayNotations: string[];
+  }
+
+  function getEobActivity(iso: { time_grid_s?: number[]; activity_vs_time_Bq?: number[]; activity_Bq: number }, irrS: number): number {
+    if (!iso.time_grid_s || !iso.activity_vs_time_Bq || iso.time_grid_s.length === 0) {
+      // Fallback: if no time grid, approximate with EOC value
+      return iso.activity_Bq;
+    }
+    let bestIdx = 0;
+    let bestDist = Math.abs(iso.time_grid_s[0] - irrS);
+    for (let i = 1; i < iso.time_grid_s.length; i++) {
+      const d = Math.abs(iso.time_grid_s[i] - irrS);
+      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+    return iso.activity_vs_time_Bq[bestIdx];
   }
 
   let rows = $derived.by(() => {
-    // Compute total activity per layer for RNP%
+    const irrS = result.config.irradiation_s;
+
+    // Compute total activity per layer for RNP% (EOC)
     const layerTotals = new Map<number, number>();
     for (const layer of result.layers) {
       let total = 0;
@@ -48,12 +66,24 @@
       layerTotals.set(layer.layer_index, total);
     }
 
+    // Compute total activity per layer at EOB for RNP% (EOB)
+    const layerEobTotals = new Map<number, number>();
+    for (const layer of result.layers) {
+      let total = 0;
+      for (const iso of layer.isotopes) {
+        total += getEobActivity(iso, irrS);
+      }
+      layerEobTotals.set(layer.layer_index, total);
+    }
+
     const r: Row[] = [];
     for (const layer of result.layers) {
       const layerTotal = layerTotals.get(layer.layer_index) ?? 0;
+      const layerEobTotal = layerEobTotals.get(layer.layer_index) ?? 0;
       for (const iso of layer.isotopes) {
         const direct = iso.activity_direct_Bq ?? (iso.source === "daughter" ? 0 : iso.activity_Bq);
         const ingrowth = iso.activity_ingrowth_Bq ?? (iso.source === "daughter" ? iso.activity_Bq : 0);
+        const eobAct = getEobActivity(iso, irrS);
         r.push({
           layerIndex: layer.layer_index,
           name: iso.name,
@@ -67,8 +97,10 @@
           activity_direct_Bq: direct,
           activity_ingrowth_Bq: ingrowth,
           rnp_pct: layerTotal > 0 ? (iso.activity_Bq / layerTotal) * 100 : 0,
+          rnp_eob_pct: layerEobTotal > 0 ? (eobAct / layerEobTotal) * 100 : 0,
           dose_uSv_h: getDoseConstant(iso.name, iso.activity_Bq),
           reactions: iso.reactions ?? [],
+          decayNotations: iso.decay_notations ?? [],
         });
       }
     }
@@ -92,6 +124,7 @@
         case "direct": cmp = a.activity_direct_Bq - b.activity_direct_Bq; break;
         case "daughter": cmp = a.activity_ingrowth_Bq - b.activity_ingrowth_Bq; break;
         case "rnp": cmp = a.rnp_pct - b.rnp_pct; break;
+        case "rnp_eob": cmp = a.rnp_eob_pct - b.rnp_eob_pct; break;
         case "dose": cmp = (a.dose_uSv_h ?? -1) - (b.dose_uSv_h ?? -1); break;
       }
       return sortAsc ? cmp : -cmp;
@@ -108,11 +141,12 @@
   }
 
   function exportCSV() {
-    const headers = ["Layer", "Isotope", "Z", "A", "Half-life", "Activity (Bq)", "Direct (Bq)", "Daughter (Bq)", "Sat. Yield (Bq/µA)", "RNP%", "Dose@1m (µSv/h)", "Reaction"];
+    const headers = ["Layer", "Isotope", "Z", "A", "Half-life", "Activity (Bq)", "Direct (Bq)", "Daughter (Bq)", "Sat. Yield (Bq/µA)", "RNP% (EOB)", "RNP% (EOC)", "Dose@1m (µSv/h)", "Reaction"];
     const lines = [headers.join(",")];
     for (const row of rows) {
-      const reactionStr = row.reactions.length > 0
-        ? row.reactions.join("; ")
+      const reactionParts = [...row.reactions, ...row.decayNotations];
+      const reactionStr = reactionParts.length > 0
+        ? reactionParts.join("; ")
         : (row.source === "daughter" ? "decay" : "");
       lines.push([
         row.layerIndex + 1,
@@ -124,6 +158,7 @@
         row.activity_direct_Bq.toExponential(4),
         row.activity_ingrowth_Bq.toExponential(4),
         row.saturation_yield_Bq_uA.toExponential(4),
+        row.rnp_eob_pct.toFixed(2),
         row.rnp_pct.toFixed(2),
         row.dose_uSv_h !== null ? row.dose_uSv_h.toExponential(4) : "",
         `"${reactionStr}"`,
@@ -181,6 +216,7 @@
           <th class="col-act sortable" onclick={() => toggleSort("daughter")}>Daughter</th>
           <th class="col-act sortable" onclick={() => toggleSort("activity")}>Total</th>
           <th class="col-yield">Sat. Yield</th>
+          <th class="col-rnp sortable" onclick={() => toggleSort("rnp_eob")} title="Radionuclide purity at end of bombardment">RNP% (EOB)</th>
           <th class="col-rnp sortable" onclick={() => toggleSort("rnp")} title="Radionuclide purity at end of cooling">RNP% (EOC)</th>
           <th class="col-dose sortable" onclick={() => toggleSort("dose")}>Dose@1m</th>
         </tr>
@@ -212,6 +248,11 @@
                 {#each row.reactions as rxn}
                   <span class="reaction-tag" style="color: #58a6ff">{rxn}</span>
                 {/each}
+              {/if}
+              {#if row.decayNotations.length > 0}
+                {#each row.decayNotations as dn}
+                  <span class="reaction-tag" style="color: #bc8cff">{dn}</span>
+                {/each}
               {:else if row.source === "daughter"}
                 <span class="reaction-tag" style="color: #bc8cff">decay</span>
               {/if}
@@ -220,6 +261,7 @@
             <td class="col-act">{fmtActivity(row.activity_ingrowth_Bq)}</td>
             <td class="col-act">{fmtActivity(row.activity_Bq)}</td>
             <td class="col-yield">{row.source === "daughter" ? "—" : fmtYield(row.saturation_yield_Bq_uA)}</td>
+            <td class="col-rnp">{row.rnp_eob_pct < 0.01 ? "<0.01" : row.rnp_eob_pct.toFixed(2)}%</td>
             <td class="col-rnp">{row.rnp_pct < 0.01 ? "<0.01" : row.rnp_pct.toFixed(2)}%</td>
             <td class="col-dose">{row.dose_uSv_h !== null ? fmtDoseRate(row.dose_uSv_h) : "\u2014"}</td>
           </tr>

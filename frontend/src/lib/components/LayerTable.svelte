@@ -3,7 +3,6 @@
   import { getResult } from "../stores/results.svelte";
   import { getDoseConstant } from "../utils/dose-constants";
   import { fmtDoseRate } from "../utils/format";
-  import { SYMBOL_TO_Z } from "../utils/formula";
 
   let preview = $derived(getDepthPreview());
   let result = $derived(getResult());
@@ -16,15 +15,10 @@
     let total = 0;
     let hasAny = false;
     for (const iso of layerResult.isotopes) {
-      const dc = getDoseConstant(iso.name.replace(/m$/, "").replace(/-\d+.*/, ""), iso.A);
-      // Try using the element symbol from the name (e.g. "Tc-99m" -> "Tc", A=99)
-      const parts = iso.name.match(/^([A-Z][a-z]?)-(\d+)/);
-      if (parts) {
-        const c = getDoseConstant(parts[1], Number(parts[2]));
-        if (c !== null) {
-          total += (iso.activity_Bq / 1e6) * c;
-          hasAny = true;
-        }
+      const d = getDoseConstant(iso.name, iso.activity_Bq);
+      if (d !== null) {
+        total += d;
+        hasAny = true;
       }
     }
     return hasAny ? total : null;
@@ -49,11 +43,11 @@
             <th class="col-mat">Material</th>
             <th class="col-num">d (mm)</th>
             <th class="col-num">ρd (g/cm²)</th>
-            <th class="col-num">E_in (MeV)</th>
-            <th class="col-num">E_out (MeV)</th>
+            <th class="col-num">E<sub>in</sub> (MeV)</th>
+            <th class="col-num">E<sub>out</sub> (MeV)</th>
             <th class="col-num">ΔE (MeV)</th>
             <th class="col-num">Heat (kW)</th>
-            <th class="col-num" title="Total dose rate at 1m from all isotopes">Dose@1m</th>
+            <th class="col-num" title="Total dose rate at 1m from all isotopes (end of cooling)">Dose@1m (EOC)</th>
           </tr>
         </thead>
         <tbody>

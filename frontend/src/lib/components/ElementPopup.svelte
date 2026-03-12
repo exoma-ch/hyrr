@@ -17,7 +17,7 @@
     A: number;
     naturalAbundance: number;
     atomicMass: number;
-    enrichment: number;
+    enrichment: number | null; // null = unset (will be filled by normalize)
   }
 
   let rows = $state<IsotopeRow[]>([]);
@@ -58,21 +58,15 @@
       return;
     }
 
-    // Distribute remainder proportionally among other isotopes by natural abundance
-    const otherRows = rows.filter((r) => r.A !== targetA);
-    const otherNaturalSum = otherRows.reduce((s, r) => s + r.naturalAbundance, 0);
-    const remainder = 100 - targetPct;
-
+    // Set the target isotope, leave others unset (null) for normalize
     rows = rows.map((r) => {
       if (r.A === targetA) {
         return { ...r, enrichment: targetPct };
       }
-      if (otherNaturalSum > 0) {
-        return { ...r, enrichment: (r.naturalAbundance / otherNaturalSum) * remainder };
-      }
-      // If all other natural abundances are zero, distribute evenly
-      return { ...r, enrichment: remainder / otherRows.length };
+      return { ...r, enrichment: null };
     });
+    // Auto-normalize
+    normalize();
 
     quickRatioError = false;
     quickRatioInput = "";
@@ -97,35 +91,84 @@
         A,
         naturalAbundance: abundance * 100,
         atomicMass,
-        enrichment: enrichment?.[A] !== undefined ? enrichment[A] * 100 : abundance * 100,
+        enrichment: enrichment?.[A] !== undefined ? enrichment[A] * 100 : null,
       });
     }
     newRows.sort((a, b) => a.A - b.A);
     rows = newRows;
   });
 
-  let total = $derived(rows.reduce((s, r) => s + r.enrichment, 0));
+  /** Effective enrichment: use set value or natural abundance for display. */
+  function effective(row: IsotopeRow): number {
+    return row.enrichment ?? row.naturalAbundance;
+  }
 
+  let total = $derived(rows.reduce((s, r) => s + effective(r), 0));
+  let setTotal = $derived(rows.reduce((s, r) => s + (r.enrichment ?? 0), 0));
+  let hasUnset = $derived(rows.some((r) => r.enrichment === null));
+
+  /**
+   * Normalize: set rows fill the remainder to 100% by scaling unset rows
+   * according to their natural abundance ratios.
+   */
   function normalize() {
-    if (total <= 0) return;
-    rows = rows.map((r) => ({ ...r, enrichment: (r.enrichment / total) * 100 }));
+    const setRows = rows.filter((r) => r.enrichment !== null);
+    const unsetRows = rows.filter((r) => r.enrichment === null);
+    const setSum = setRows.reduce((s, r) => s + (r.enrichment ?? 0), 0);
+
+    if (unsetRows.length === 0) {
+      // All rows are set — scale proportionally to 100%
+      const t = rows.reduce((s, r) => s + (r.enrichment ?? 0), 0);
+      if (t <= 0) return;
+      rows = rows.map((r) => ({ ...r, enrichment: ((r.enrichment ?? 0) / t) * 100 }));
+      return;
+    }
+
+    // Distribute remainder among unset rows by natural abundance
+    const remainder = Math.max(0, 100 - setSum);
+    const unsetNatSum = unsetRows.reduce((s, r) => s + r.naturalAbundance, 0);
+
+    rows = rows.map((r) => {
+      if (r.enrichment !== null) return r;
+      const newVal = unsetNatSum > 0
+        ? (r.naturalAbundance / unsetNatSum) * remainder
+        : remainder / unsetRows.length;
+      return { ...r, enrichment: newVal };
+    });
   }
 
   function resetToNatural() {
-    rows = rows.map((r) => ({ ...r, enrichment: r.naturalAbundance }));
+    rows = rows.map((r) => ({ ...r, enrichment: null }));
   }
 
-  function updateEnrichment(index: number, value: number) {
-    rows = rows.map((r, i) => i === index ? { ...r, enrichment: value } : r);
+  function updateEnrichment(index: number, value: string) {
+    const trimmed = value.trim();
+    if (trimmed === "") {
+      // Clear the value
+      rows = rows.map((r, i) => i === index ? { ...r, enrichment: null } : r);
+    } else {
+      const num = parseFloat(trimmed);
+      if (!isNaN(num)) {
+        rows = rows.map((r, i) => i === index ? { ...r, enrichment: num } : r);
+      }
+    }
   }
 
   function apply() {
-    const isNatural = rows.every((r) => Math.abs(r.enrichment - r.naturalAbundance) < 0.01);
+    // If all unset (natural), return undefined
+    if (rows.every((r) => r.enrichment === null)) {
+      onchange(undefined);
+      onclose();
+      return;
+    }
+    // Resolve all values
+    const resolved = rows.map((r) => ({ ...r, enrichment: effective(r) }));
+    const isNatural = resolved.every((r) => Math.abs(r.enrichment - r.naturalAbundance) < 0.01);
     if (isNatural) {
       onchange(undefined);
     } else {
       const result: Record<number, number> = {};
-      for (const row of rows) {
+      for (const row of resolved) {
         if (row.enrichment > 0) {
           result[row.A] = row.enrichment / 100;
         }
@@ -160,7 +203,8 @@
         <tr>
           <th>A</th>
           <th>Natural (%)</th>
-          <th>Enrichment (%)</th>
+          <th title="Set a value or leave empty for auto-fill">Custom (%)</th>
+          <th>Effective</th>
         </tr>
       </thead>
       <tbody>
@@ -170,13 +214,14 @@
             <td class="col-nat">{row.naturalAbundance.toFixed(2)}</td>
             <td class="col-enr">
               <input
-                type="number"
-                value={row.enrichment.toFixed(2)}
-                min={0}
-                max={100}
-                step={0.1}
-                onchange={(e) => updateEnrichment(i, parseFloat((e.target as HTMLInputElement).value) || 0)}
+                type="text"
+                value={row.enrichment !== null ? row.enrichment.toFixed(2) : ""}
+                placeholder="—"
+                onchange={(e) => updateEnrichment(i, (e.target as HTMLInputElement).value)}
               />
+            </td>
+            <td class="col-eff" class:is-natural={row.enrichment === null}>
+              {effective(row).toFixed(2)}
             </td>
           </tr>
         {/each}
@@ -186,11 +231,12 @@
     <div class="summary-row">
       <span class="total" class:warn={Math.abs(total - 100) > 0.1}>
         Total: {total.toFixed(2)}%
+        {#if hasUnset}
+          <span class="total-hint">(unset rows use natural)</span>
+        {/if}
       </span>
       <div class="actions">
-        {#if Math.abs(total - 100) > 0.1}
-          <button class="btn" onclick={normalize}>Normalize</button>
-        {/if}
+        <button class="btn" onclick={normalize} title="Fill unset rows from natural ratios to reach 100%">Normalize</button>
         <button class="btn" onclick={resetToNatural}>Natural</button>
       </div>
     </div>
@@ -301,9 +347,32 @@
     text-align: right;
   }
 
+  .col-enr input::placeholder {
+    color: #484f58;
+  }
+
   .col-enr input:focus {
     outline: none;
     border-color: #58a6ff;
+  }
+
+  .col-eff {
+    text-align: right;
+    color: #e1e4e8;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8rem;
+  }
+
+  .col-eff.is-natural {
+    color: #6e7681;
+    font-style: italic;
+  }
+
+  .total-hint {
+    font-size: 0.65rem;
+    color: #6e7681;
+    font-weight: 400;
+    margin-left: 0.3rem;
   }
 
   .summary-row {

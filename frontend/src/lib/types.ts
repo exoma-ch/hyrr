@@ -57,6 +57,8 @@ export interface IsotopeResultData {
   activity_vs_time_Bq?: number[];
   /** Nuclear reaction notation strings (e.g., "¹⁰⁰Mo(p,2n)⁹⁹Tc") */
   reactions?: string[];
+  /** Decay chain notation strings (e.g., "Mo-99 →β⁻→ Tc-99m") */
+  decay_notations?: string[];
 }
 
 export interface DepthPointData {

@@ -4,6 +4,12 @@
   import { getAllRuns, deleteRun, updateLabel } from "../history-db";
   import { setConfig } from "../stores/config.svelte";
 
+  interface Props {
+    onrestore?: () => void;
+  }
+
+  let { onrestore }: Props = $props();
+
   let entries = $state<HistoryEntry[]>([]);
   let editingId = $state<number | null>(null);
   let editLabel = $state("");
@@ -16,6 +22,7 @@
 
   function restore(entry: HistoryEntry) {
     setConfig(entry.config);
+    onrestore?.();
   }
 
   async function remove(id: number | undefined) {
@@ -53,8 +60,7 @@
 
 <div class="history-panel">
   <div class="history-header">
-    <h3>History</h3>
-    <button class="refresh-btn" onclick={refresh}>↻</button>
+    <button class="refresh-btn" onclick={refresh} title="Refresh">↻</button>
   </div>
 
   {#if entries.length === 0}
@@ -101,24 +107,10 @@
 </div>
 
 <style>
-  .history-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
   .history-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-  }
-
-  h3 {
-    margin: 0;
-    font-size: 0.85rem;
-    color: #8b949e;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
   }
 
   .refresh-btn {
@@ -140,6 +132,14 @@
     margin: 0;
   }
 
+  .history-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
   .history-list {
     list-style: none;
     margin: 0;
@@ -147,8 +147,27 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-    max-height: 300px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
+  }
+
+  .history-list::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .history-list::-webkit-scrollbar-track {
+    background: #0d1117;
+    border-radius: 3px;
+  }
+
+  .history-list::-webkit-scrollbar-thumb {
+    background: #2d333b;
+    border-radius: 3px;
+  }
+
+  .history-list::-webkit-scrollbar-thumb:hover {
+    background: #484f58;
   }
 
   .history-item {
