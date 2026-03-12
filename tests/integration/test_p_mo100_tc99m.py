@@ -1,7 +1,7 @@
 """Integration tests: p + Mo-100 -> Tc-99m reference case.
 
 Validates the full HYRR pipeline against ISOTOPIA-2.1 reference output.
-Tests are skipped if the hyrr.sqlite database is not available.
+Tests are skipped if the parquet data directory is not available.
 
 Tolerance: <=5% deviation from ISOTOPIA (due to improved stopping powers).
 """

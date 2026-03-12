@@ -14,20 +14,20 @@ cd hyrr
 pip install -e ".[dev]"
 ```
 
-## Database setup
+## Data setup
 
-HYRR requires a SQLite database with nuclear data. Build it from source data:
-
-```bash
-hyrr build-db \
-  --tendl-path path/to/isotopia.libs/ \
-  --abundance-path path/to/abundance/ \
-  --decay-path path/to/decay/ \
-  --output data/hyrr.sqlite
-```
-
-Or download a pre-built database:
+HYRR requires parquet data files with nuclear data. Download pre-built data:
 
 ```bash
 hyrr download-data
+```
+
+Or build from source data:
+
+```bash
+python data/build_parquet.py \
+  --tendl-path path/to/isotopia.libs/ \
+  --abundance-path path/to/abundance/ \
+  --decay-path path/to/decay/ \
+  --output-dir data/parquet
 ```

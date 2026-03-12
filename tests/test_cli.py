@@ -100,11 +100,6 @@ class TestCLIHelp:
             main(["--help"])
         assert exc_info.value.code == 0
 
-    def test_build_db_help(self):
-        with pytest.raises(SystemExit) as exc_info:
-            main(["build-db", "--help"])
-        assert exc_info.value.code == 0
-
     def test_info_help(self):
         with pytest.raises(SystemExit) as exc_info:
             main(["info", "--help"])
@@ -177,26 +172,6 @@ class TestCLIInfo:
 class TestCLIRun:
     def test_run_missing_input(self, tmp_path):
         result = main(["run", str(tmp_path / "nonexistent.toml")])
-        assert result == 1
-
-
-class TestCLIBuildDb:
-    def test_build_db_no_sources(self, tmp_path, capsys):
-        """build-db with no source paths creates empty db."""
-        db_path = tmp_path / "test.sqlite"
-        result = main(["build-db", "-o", str(db_path)])
-        assert result == 0
-        assert db_path.exists()
-
-    def test_build_db_missing_tendl(self, tmp_path):
-        """build-db with nonexistent TENDL path returns error."""
-        result = main([
-            "build-db",
-            "--tendl-path",
-            str(tmp_path / "nonexistent"),
-            "-o",
-            str(tmp_path / "test.sqlite"),
-        ])
         assert result == 1
 
 

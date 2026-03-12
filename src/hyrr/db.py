@@ -361,7 +361,3 @@ class DataStore:
         symbol = self.get_element_symbol(target_Z)
         xs_path = self._data_dir / "xs" / f"{projectile}_{symbol}.parquet"
         return xs_path.exists()
-
-
-# Backward-compatible alias
-HyrrDatabase = DataStore

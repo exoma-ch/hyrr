@@ -6,27 +6,30 @@ Pure Python package for predicting radio-isotope production in stacked target as
 
 ## Architecture
 
-- `src/hyrr/db.py` — SQLite access layer (cross-sections, stopping powers, abundances, decay data)
+- `src/hyrr/db.py` — Parquet/Polars data store (cross-sections, stopping powers, abundances, decay data)
 - `src/hyrr/stopping.py` — PSTAR/ASTAR table lookup + Bragg additivity + velocity scaling for d/t/³He
 - `src/hyrr/production.py` — ∫σ/dEdx integration + Bateman equations + depth profiles
-- `src/hyrr/models.py` — Beam, Element, Layer, TargetStack, result dataclasses
+- `src/hyrr/models.py` — Beam, BeamProfile, Element, Layer, TargetStack, result dataclasses
 - `src/hyrr/materials.py` — Bridge to py-mat + isotopic composition resolution
-- `src/hyrr/plotting.py` — Energy scans, depth profiles, cooling curves
+- `src/hyrr/plotting.py` — Energy scans, depth profiles, cooling curves, straggling, beam profiles, mesh cross-sections
+- `src/hyrr/geometry.py` — STEP import, tetrahedral meshing, ray casting, mesh slicing (optional: build123d, tetgen)
+- `src/hyrr/compute3d.py` — 3D compute orchestrator for mesh-based simulations
 - `src/hyrr/cli.py` — CLI entry point (data download, simulation)
-- `data/build_db.py` — One-shot script to build hyrr.sqlite from raw TENDL/PSTAR/decay data
+- `data/build_parquet.py` — Build parquet data from raw TENDL/PSTAR/decay sources
 
 ## Key Design Decisions
 
 - **Python only** — no Fortran, no subprocess calls. NumPy/SciPy for numerics.
-- **SQLite for all nuclear data** — stdlib, single file, indexed queries. No HDF5.
-- **NumPy core, polars/pandas optional** — core computation uses plain numpy arrays. Polars and pandas are lazy-imported for export only (`to_polars()`, `to_pandas()`). Enables single code path for pip and WASM.
+- **Parquet for all nuclear data** — columnar, fast indexed lookups via Polars. Single code path for pip and WASM.
+- **NumPy core, polars/pandas optional** — core computation uses plain numpy arrays. Polars and pandas are lazy-imported for export only (`to_polars()`, `to_pandas()`).
 - **py-mat** (MorePET/py-mat) for materials — provides density + elemental composition.
 - **PSTAR/ASTAR tables** for stopping power — replaces bare Bethe-Bloch. Velocity scaling for d/t/³He.
 - **No parallelism needed** — single simulation < 20 ms.
 
 ## Data
 
-- `data/hyrr.sqlite` is NOT in git (too large). Built by `data/build_db.py` from raw sources.
+- `data/parquet/` — Parquet files for the Python backend. Built by `data/build_parquet.py`.
+- `frontend/public/data/` — SQL INSERT chunks (.sql.gz) for the in-browser WASM frontend (sql.js).
 - Cross-section source: TENDL-2023 via `isotopia.libs/` in the curie project (`../curie/isotopia.libs/`).
 - Stopping power source: PSTAR/ASTAR from libdEdx (APTG/libdedx).
 - Validation reference: ISOTOPIA sample outputs in `../curie/samples/`.

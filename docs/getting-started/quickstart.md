@@ -6,10 +6,10 @@ The most common use case: predict isotope production for a single target layer.
 
 ```python
 from hyrr.models import Beam, Element, Layer, TargetStack
-from hyrr.db import HyrrDatabase
+from hyrr.db import DataStore
 
 # Open database
-db = HyrrDatabase("data/hyrr.sqlite")
+db = DataStore("data/parquet")
 
 # Define beam: 16 MeV protons at 0.15 mA
 beam = Beam(projectile="p", energy_MeV=16.0, current_mA=0.15)

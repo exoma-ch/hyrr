@@ -19,26 +19,6 @@ def main(argv: list[str] | None = None) -> int:
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # hyrr build-db
-    build_parser = subparsers.add_parser(
-        "build-db", help="Build SQLite database from raw data"
-    )
-    build_parser.add_argument(
-        "--tendl-path", type=Path, help="Path to isotopia.libs/ directory"
-    )
-    build_parser.add_argument(
-        "--abundance-path", type=Path, help="Path to abundance/ directory"
-    )
-    build_parser.add_argument(
-        "--decay-path", type=Path, help="Path to decay/ directory"
-    )
-    build_parser.add_argument("--pstar-file", type=Path, help="Path to PSTAR data file")
-    build_parser.add_argument("--astar-file", type=Path, help="Path to ASTAR data file")
-    build_parser.add_argument(
-        "--output", "-o", type=Path, default=Path("data/hyrr.sqlite")
-    )
-    build_parser.add_argument("--verbose", "-v", action="store_true")
-
     # hyrr info
     info_parser = subparsers.add_parser("info", help="Show data store statistics")
     info_parser.add_argument(
@@ -124,9 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    if args.command == "build-db":
-        return _cmd_build_db(args)
-    elif args.command == "info":
+    if args.command == "info":
         return _cmd_info(args)
     elif args.command == "run":
         return _cmd_run(args)
@@ -176,151 +154,6 @@ def _find_data_dir(data_dir_arg: Path | None) -> Path:
         return home_dir
 
     return pkg_dir  # Return default even if doesn't exist (will error later)
-
-
-_SCHEMA_SQL = """\
-CREATE TABLE IF NOT EXISTS cross_sections (
-    projectile  TEXT    NOT NULL,
-    target_Z    INTEGER NOT NULL,
-    target_A    INTEGER NOT NULL,
-    residual_Z  INTEGER NOT NULL,
-    residual_A  INTEGER NOT NULL,
-    state       TEXT    NOT NULL DEFAULT '',
-    energy_MeV  REAL    NOT NULL,
-    xs_mb       REAL    NOT NULL,
-    source      TEXT    NOT NULL DEFAULT 'iaea.2024',
-    PRIMARY KEY (projectile, target_Z, target_A, residual_Z, residual_A, state, energy_MeV, source)
-);
-CREATE INDEX IF NOT EXISTS idx_reaction ON cross_sections(projectile, target_Z, target_A);
-CREATE INDEX IF NOT EXISTS idx_product ON cross_sections(residual_Z, residual_A, state);
-
-CREATE TABLE IF NOT EXISTS stopping_power (
-    source      TEXT    NOT NULL,
-    target_Z    INTEGER NOT NULL,
-    energy_MeV  REAL    NOT NULL,
-    dedx        REAL    NOT NULL,
-    PRIMARY KEY (source, target_Z, energy_MeV)
-);
-
-CREATE TABLE IF NOT EXISTS natural_abundances (
-    Z            INTEGER NOT NULL,
-    A            INTEGER NOT NULL,
-    symbol       TEXT    NOT NULL,
-    abundance    REAL    NOT NULL,
-    atomic_mass  REAL    NOT NULL,
-    PRIMARY KEY (Z, A)
-);
-
-CREATE TABLE IF NOT EXISTS decay_data (
-    Z              INTEGER NOT NULL,
-    A              INTEGER NOT NULL,
-    state          TEXT    NOT NULL DEFAULT '',
-    half_life_s    REAL,
-    decay_mode     TEXT    NOT NULL,
-    daughter_Z     INTEGER,
-    daughter_A     INTEGER,
-    daughter_state TEXT    DEFAULT '',
-    branching      REAL    DEFAULT 1.0,
-    PRIMARY KEY (Z, A, state, decay_mode, daughter_Z, daughter_A, daughter_state)
-);
-CREATE INDEX IF NOT EXISTS idx_parent ON decay_data(Z, A, state);
-CREATE INDEX IF NOT EXISTS idx_daughter ON decay_data(daughter_Z, daughter_A, daughter_state);
-
-CREATE TABLE IF NOT EXISTS elements (
-    Z       INTEGER PRIMARY KEY,
-    symbol  TEXT    NOT NULL UNIQUE
-);
-"""
-
-
-def _cmd_build_db(args: argparse.Namespace) -> int:
-    """Build the SQLite database from raw data sources."""
-    import sqlite3
-
-    output = args.output
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    conn = sqlite3.connect(str(output))
-    conn.executescript(_SCHEMA_SQL)
-
-    total = 0
-
-    if args.tendl_path:
-        if not args.tendl_path.exists():
-            print(f"Error: TENDL path not found: {args.tendl_path}", file=sys.stderr)
-            return 1
-        # Lazy import parser
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "data"))
-        from parsers.tendl import (
-            insert_cross_sections,
-            walk_tendl_directory,
-        )
-
-        n = insert_cross_sections(conn, walk_tendl_directory(args.tendl_path))
-        if args.verbose:
-            print(f"Cross-sections: {n} rows")
-        total += n
-
-    if args.abundance_path:
-        if not args.abundance_path.exists():
-            print(
-                f"Error: Abundance path not found: {args.abundance_path}",
-                file=sys.stderr,
-            )
-            return 1
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "data"))
-        from parsers.abundance import (
-            insert_abundances,
-            walk_abundance_directory,
-        )
-
-        n = insert_abundances(conn, walk_abundance_directory(args.abundance_path))
-        if args.verbose:
-            print(f"Abundances: {n} rows")
-        total += n
-
-    if args.decay_path:
-        if not args.decay_path.exists():
-            print(f"Error: Decay path not found: {args.decay_path}", file=sys.stderr)
-            return 1
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "data"))
-        from parsers.decay import (
-            insert_decay_data,
-            walk_decay_directory,
-        )
-
-        n = insert_decay_data(conn, walk_decay_directory(args.decay_path))
-        if args.verbose:
-            print(f"Decay data: {n} rows")
-        total += n
-
-    if args.pstar_file:
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "data"))
-        from parsers.stopping import (
-            insert_stopping_power,
-            parse_stopping_file,
-        )
-
-        n = insert_stopping_power(conn, parse_stopping_file(args.pstar_file, "PSTAR"))
-        if args.verbose:
-            print(f"PSTAR: {n} rows")
-        total += n
-
-    if args.astar_file:
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "data"))
-        from parsers.stopping import (
-            insert_stopping_power,
-            parse_stopping_file,
-        )
-
-        n = insert_stopping_power(conn, parse_stopping_file(args.astar_file, "ASTAR"))
-        if args.verbose:
-            print(f"ASTAR: {n} rows")
-        total += n
-
-    conn.close()
-    print(f"Database built: {output} ({total} total rows)")
-    return 0
 
 
 def _cmd_info(args: argparse.Namespace) -> int:
@@ -579,7 +412,7 @@ def _cmd_download_data(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"Download failed: {e}", file=sys.stderr)
         print(
-            "You can build the data manually with 'hyrr build-db'.",
+            "You can build the data manually with 'data/build_parquet.py'.",
             file=sys.stderr,
         )
         return 1

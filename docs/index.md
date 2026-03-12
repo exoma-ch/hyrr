@@ -10,7 +10,7 @@ A pure Python package for predicting radio-isotope production in stacked target 
 - **Compound materials** — Bragg additivity for any material composition via py-mat
 - **Stacked layer geometries** — beam propagation through windows, targets, degraders, backings
 - **Depth profiles** — spatially resolved heat deposition and activity distributions
-- **Single SQLite database** — replaces 547,000 text files with one indexed file
+- **Parquet data store** — fast columnar lookups via Polars, replaces 547,000 text files
 - **Pure Python** — no Fortran compiler, no container, `pip install hyrr`
 
 ## Quick Example

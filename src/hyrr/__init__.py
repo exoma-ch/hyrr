@@ -12,7 +12,6 @@ from hyrr.db import (
     DataStore,
     DecayData,
     DecayMode,
-    HyrrDatabase,
 )
 from hyrr.models import (
     Beam,
@@ -54,7 +53,6 @@ __all__ = [
     "DecayData",
     "DecayMode",
     "DepthPoint",
-    "HyrrDatabase",
     "Element",
     "IsotopeResult",
     "Layer",

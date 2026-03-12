@@ -1,12 +1,12 @@
 # Database
 
-SQLite access layer and protocol for nuclear data.
+Parquet-backed data store and protocol for nuclear data.
 
 ::: hyrr.db
     options:
       members:
         - DatabaseProtocol
-        - HyrrDatabase
+        - DataStore
         - CrossSectionData
         - DecayData
         - DecayMode
