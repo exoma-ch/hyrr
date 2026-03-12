@@ -37,17 +37,19 @@ Replace the current architecture (Python wrapper → subprocess → Fortran bina
 ```
 hyrr/
 ├── data/
-│   ├── build_db.py              # one-shot script: parse TENDL/PSTAR/ASTAR/decay → SQLite
-│   └── hyrr.sqlite              # single file: cross-sections, stopping powers, abundances, decay
+│   ├── parquet/                 # Parquet files: XS, stopping, abundances, decay (59 MB)
+│   ├── build_parquet.py         # one-shot script: parse TENDL/PSTAR/ASTAR/decay → Parquet
+│   └── build_db.py              # (legacy) builds SQLite from raw sources
 ├── src/hyrr/
 │   ├── __init__.py
-│   ├── db.py                    # SQLite access layer (queries, interpolation helpers)
+│   ├── db.py                    # Parquet/Polars data store (queries, interpolation helpers)
 │   ├── stopping.py              # table lookup + Bragg additivity + d/t/³He velocity scaling
 │   ├── production.py            # ∫σ/dEdx integration + Bateman equations + depth profiles
 │   ├── models.py                # dataclasses: Beam, Layer, TargetStack, DepthPoint, Result
 │   ├── materials.py             # bridge to py-mat + isotopic composition resolution
 │   ├── plotting.py              # energy scans, depth profiles, cooling curves (matplotlib/plotly)
 │   └── cli.py                   # optional CLI entry point
+├── frontend/                    # Svelte 5 + TypeScript (pure TS compute, hyparquet data)
 ├── tests/
 ├── notebooks/
 ├── pyproject.toml
@@ -498,6 +500,16 @@ Tasks:
 ### Phase 9: Interactive web frontend
 
 **Goal**: A serverless web application on GitHub Pages — zero backend, zero cost, zero auth. Users configure beam/target parameters, run simulations in-browser, and explore results interactively.
+
+> **Implementation status (2026-03):** The frontend shipped as **Svelte 5 + pure TypeScript** —
+> the Pyodide/sql.js architecture described in 9b below was superseded. Key differences:
+>
+> - **Compute**: Physics ported to TypeScript (stopping, production, Bateman). No Python in the browser.
+> - **Data**: Parquet files (59 MB) read by hyparquet (~50 KB JS library), replacing sql.js + `.sql.gz` chunks.
+> - **Storage**: Nuclear data cached in IndexedDB after first fetch (~350 KB per session).
+> - **Backend data**: `data/parquet/` replaces `hyrr.sqlite` (deleted — was a build artifact only).
+>
+> The sections below preserve the original design rationale but do not reflect the current implementation.
 
 #### 9a: Marimo prototype (quick win)
 

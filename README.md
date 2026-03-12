@@ -46,10 +46,9 @@ result.summary()
 ## Dependencies
 
 - numpy, scipy — numerics
-- polars — DataFrames
+- polars — data access (Parquet backend)
 - matplotlib — plotting
 - pymat — material definitions
-- sqlite3 — data access (stdlib)
 
 ## License
 
