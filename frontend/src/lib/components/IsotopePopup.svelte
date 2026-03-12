@@ -217,7 +217,7 @@
       try {
         const overrides = enrichmentToOverrides(layer.enrichment);
         const mat = resolveMaterial(db, layer.material, overrides);
-        for (const [el] of mat.elements) {
+        for (const [el, atomFrac] of mat.elements) {
           for (const [targetA, isoAbundance] of el.isotopes) {
             const xsList = db.getCrossSections(proj, el.Z, targetA);
             for (const xs of xsList) {
@@ -239,7 +239,7 @@
                   targetZ: el.Z,
                   targetSymbol: tSym,
                   targetA,
-                  abundance: isoAbundance,
+                  abundance: atomFrac * isoAbundance,
                   label: `<sup>${targetA}</sup>${tSym}${rxn}<sup>${xs.residualA}</sup>${rSym}`,
                   reaction: rxn,
                   tendlLink: tendlUrl(proj, tSym, targetA),
