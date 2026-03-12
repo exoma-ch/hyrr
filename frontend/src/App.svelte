@@ -116,6 +116,7 @@
   // Update URL hash when config changes (debounced)
   $effect(() => {
     const c = config;
+    const _snapshot = JSON.stringify(c); // force deep dependency tracking
     if (!ready) return;
     const timer = setTimeout(() => {
       if (isConfigValid()) {
@@ -128,6 +129,7 @@
   // Debounce-sync config changes to the active session tab in IDB
   $effect(() => {
     const c = config;
+    const _snapshot = JSON.stringify(c); // force deep dependency tracking
     const tabId = getActiveTabId();
     if (!ready || !tabId) return;
     const timer = setTimeout(() => syncActiveTab(), 500);

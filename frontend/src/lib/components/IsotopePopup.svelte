@@ -167,14 +167,13 @@
     return () => { cancelled = true; };
   });
 
-  // Render XS plot — read all deps eagerly to avoid short-circuit tracking loss
+  // Render XS plot — read all deps eagerly (Svelte only tracks synchronous reads)
   $effect(() => {
     const hasXs = !!xsData;
     const numCompare = compareIsotopes.length;
-    if (!open || (!hasXs && numCompare === 0)) return;
-    requestAnimationFrame(() => {
-      if (xsPlotDiv) renderXsPlot();
-    });
+    const div = xsPlotDiv; // eagerly read so Svelte tracks bind:this updates
+    if (!open || (!hasXs && numCompare === 0) || !div) return;
+    requestAnimationFrame(() => renderXsPlot());
   });
 
   async function ensurePlotly() {
@@ -367,10 +366,9 @@
   $effect(() => {
     const data = activityData;
     const _cmp = compareIsotopes.length;
-    if (!open || !data || !data.main) return;
-    requestAnimationFrame(() => {
-      if (actPlotDiv) ensurePlotly().then(renderActivityPlot);
-    });
+    const div = actPlotDiv; // eagerly read so Svelte tracks bind:this updates
+    if (!open || !data || !data.main || !div) return;
+    requestAnimationFrame(() => ensurePlotly().then(renderActivityPlot));
   });
 
   function renderActivityPlot() {

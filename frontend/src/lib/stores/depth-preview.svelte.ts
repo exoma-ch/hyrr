@@ -204,8 +204,10 @@ function computePreview(): void {
 // Auto-recompute on config changes (must be called from component context)
 export function initDepthPreview(): void {
   $effect(() => {
-    // Touch config to create dependency
+    // Touch config to create dependency — JSON.stringify forces Svelte to
+    // track ALL nested properties (layers, materials, enrichment, etc.)
     const _config = getConfig();
+    const _snapshot = JSON.stringify(_config);
     const _db = getDataStore();
 
     const timer = setTimeout(() => {

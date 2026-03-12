@@ -63,6 +63,12 @@ export function initScheduler(): void {
     const config = getConfig();
     const valid = isConfigValid();
 
+    // Force Svelte to track ALL nested config properties by serializing.
+    // Without this, changes to config.layers (material, thickness, enrichment)
+    // may not trigger the effect because configHash's recursive traversal
+    // can lose Svelte proxy tracking context.
+    const snapshot = JSON.stringify(config);
+
     if (!valid) {
       cancel();
       state = "idle";
