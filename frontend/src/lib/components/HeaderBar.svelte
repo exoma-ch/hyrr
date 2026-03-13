@@ -3,9 +3,11 @@
   import { setConfig } from "../stores/config.svelte";
   import { PRESETS } from "../presets";
   import SessionTabs from "./SessionTabs.svelte";
+  import HelpModal from "./HelpModal.svelte";
   import { openBugReport } from "../stores/bugreport.svelte";
 
   let historyOpen = $derived(getHistoryOpen());
+  let helpOpen = $state(false);
 
   function feelingLucky() {
     const idx = Math.floor(Math.random() * PRESETS.length);
@@ -24,6 +26,12 @@
   </div>
 
   <div class="actions">
+    <button class="icon-btn" onclick={() => helpOpen = true} title="Help">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M0 8a8 8 0 1116 0A8 8 0 010 8zm8-6.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM6.92 6.085h.001a.749.749 0 11-1.342-.67c.169-.339.436-.701.849-.977C6.845 4.16 7.369 4 8 4a2.756 2.756 0 011.637.525c.503.377.863.965.863 1.725 0 .448-.115.83-.329 1.15-.205.307-.478.513-.708.662-.04.027-.08.049-.118.07h-.001l-.001.001v.001L9 8.5l-.343.356a.756.756 0 01-.214.468.751.751 0 01-.788.103.751.751 0 01-.453-.685v-.399c0-.199.079-.39.22-.53.14-.14.332-.22.53-.22h.001l.003-.002.005-.003.025-.016a1.514 1.514 0 00.21-.159c.163-.142.252-.296.252-.478 0-.263-.128-.467-.335-.623A1.26 1.26 0 008 5.5c-.369 0-.626.1-.806.224a1.132 1.132 0 00-.358.447l-.002.005zM9 11a1 1 0 11-2 0 1 1 0 012 0z"></path>
+      </svg>
+    </button>
+
     <a
       href="https://github.com/exoma-ch/hyrr"
       target="_blank"
@@ -49,6 +57,8 @@
     </button>
   </div>
 </header>
+
+<HelpModal open={helpOpen} onclose={() => helpOpen = false} />
 
 <style>
   .header-bar {

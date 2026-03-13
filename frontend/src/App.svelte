@@ -42,6 +42,7 @@
   import ElementPopup from "./lib/components/ElementPopup.svelte";
   import IsotopePopup from "./lib/components/IsotopePopup.svelte";
   import BugReportModal from "./lib/components/BugReportModal.svelte";
+  import WelcomeScreen from "./lib/components/WelcomeScreen.svelte";
 
   let loadingState = $state("Initializing...");
   let loadingProgress = $state(0);
@@ -49,6 +50,8 @@
   let ready = $state(false);
 
   let config = $derived(getConfig());
+  let layers = $derived(getLayers());
+  let hasLayers = $derived(layers.length > 0);
   let status = $derived(getStatus());
   let result = $derived(getResult());
   let historyOpen = $derived(getHistoryOpen());
@@ -211,29 +214,33 @@
       {/if}
     </div>
   {:else}
-    <div class="app-flow">
-      <div class="config-row">
-        <BeamConfigBar />
-      </div>
-
-      <LayerStackHorizontal onmaterialclick={openMaterialPopup} onelementclick={openElementPopup} />
-
-      <PlotDepthProfileLive />
-
-      <LayerTable />
-
-      {#if status === "loading" || status === "running"}
-        <div class="status-bar">
-          <div class="spinner"></div>
-          <span>{getProgress()}</span>
+    {#if hasLayers}
+      <div class="app-flow">
+        <div class="config-row">
+          <BeamConfigBar />
         </div>
-      {/if}
 
-      {#if result}
-        <PlotActivityCurve {result} />
-        <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
-      {/if}
-    </div>
+        <LayerStackHorizontal onmaterialclick={openMaterialPopup} onelementclick={openElementPopup} />
+
+        <PlotDepthProfileLive />
+
+        <LayerTable />
+
+        {#if status === "loading" || status === "running"}
+          <div class="status-bar">
+            <div class="spinner"></div>
+            <span>{getProgress()}</span>
+          </div>
+        {/if}
+
+        {#if result}
+          <PlotActivityCurve {result} />
+          <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
+        {/if}
+      </div>
+    {:else}
+      <WelcomeScreen />
+    {/if}
 
     {#if historyOpen}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -278,6 +285,23 @@
     />
   {/if}
 </main>
+
+<footer class="site-footer">
+  <div class="footer-content">
+    <p class="disclaimer">
+      All results are provided for informational and research purposes only.
+      They are non-binding, carry no warranty, and must not be used as the sole basis
+      for clinical, regulatory, or production decisions. Independent verification is required.
+    </p>
+    <div class="footer-links">
+      <span>&copy; {new Date().getFullYear()} eXoma GmbH</span>
+      <span class="sep">&middot;</span>
+      <a href="https://github.com/exoma-ch/hyrr" target="_blank" rel="noopener noreferrer">Source</a>
+      <span class="sep">&middot;</span>
+      <span class="privacy">No personal data is collected. All computation runs locally in your browser.</span>
+    </div>
+  </div>
+</footer>
 
 <BugReportModal />
 
@@ -458,5 +482,51 @@
   .close-btn:hover {
     color: #e1e4e8;
     background: #21262d;
+  }
+
+  .site-footer {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem 1rem;
+    border-top: 1px solid #2d333b;
+  }
+
+  .footer-content {
+    text-align: center;
+    font-size: 0.7rem;
+    color: #484f58;
+    line-height: 1.6;
+  }
+
+  .disclaimer {
+    margin: 0 0 0.5rem;
+    max-width: 700px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .footer-links {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .footer-links a {
+    color: #58a6ff;
+    text-decoration: none;
+  }
+
+  .footer-links a:hover {
+    text-decoration: underline;
+  }
+
+  .sep {
+    color: #2d333b;
+  }
+
+  .privacy {
+    font-style: italic;
   }
 </style>
