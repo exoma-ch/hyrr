@@ -1,37 +1,66 @@
 <script lang="ts">
-  import Modal from "./Modal.svelte";
   import { getConfig } from "../stores/config.svelte";
   import { getResult } from "../stores/results.svelte";
   import { getShareableUrl } from "../config-url";
+  import { getBugReportOpen, closeBugReport } from "../stores/bugreport.svelte";
 
-  interface Props {
-    open: boolean;
-    onclose: () => void;
-  }
-
-  let { open, onclose }: Props = $props();
+  let open = $derived(getBugReportOpen());
 
   let name = $state("");
   let email = $state("");
   let description = $state("");
-  let screenshot = $state<File | null>(null);
+  let screenshot = $state<Blob | null>(null);
   let screenshotPreview = $state<string | null>(null);
   let submitting = $state(false);
+  let capturing = $state(false);
   let resultMsg = $state<{ ok: boolean; text: string } | null>(null);
 
   // @ts-ignore – Vite env var, set via .env or build flag
   const WORKER_URL: string = (import.meta as any).env?.VITE_ISSUE_WORKER_URL ?? "";
   const REPO = "exoma-ch/hyrr";
-  const MAX_DIM = 1280; // downsample to max 1280px on longest side
+  const MAX_DIM = 1280;
   const JPEG_QUALITY = 0.8;
+
+  /** Capture the page behind this panel using html2canvas. */
+  async function captureScreen() {
+    capturing = true;
+    try {
+      const html2canvas = (await import("html2canvas")).default;
+      // Hide the bug report panel during capture
+      const panel = document.querySelector(".bug-panel") as HTMLElement | null;
+      if (panel) panel.style.visibility = "hidden";
+
+      const canvas = await html2canvas(document.body, {
+        backgroundColor: "#0d1117",
+        scale: 1,
+        logging: false,
+        useCORS: true,
+      });
+
+      if (panel) panel.style.visibility = "";
+
+      // Downsample if needed
+      const blob = await downsampleCanvas(canvas);
+      screenshot = blob;
+      screenshotPreview = canvas.toDataURL("image/jpeg", 0.6);
+    } catch (e) {
+      console.warn("Screenshot capture failed:", e);
+    } finally {
+      capturing = false;
+    }
+  }
 
   function handleFileSelect(e: Event) {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file || !file.type.startsWith("image/")) return;
-    screenshot = file;
 
-    // Generate preview
+    // Downsample the file
+    downsampleFile(file).then((blob) => {
+      screenshot = blob;
+    });
+
+    // Preview
     const reader = new FileReader();
     reader.onload = () => { screenshotPreview = reader.result as string; };
     reader.readAsDataURL(file);
@@ -42,30 +71,38 @@
     screenshotPreview = null;
   }
 
-  /** Downsample image using canvas, return as Blob. */
-  async function downsampleImage(file: File): Promise<Blob> {
+  async function downsampleCanvas(canvas: HTMLCanvasElement): Promise<Blob> {
+    let { width, height } = canvas;
+    if (width > MAX_DIM || height > MAX_DIM) {
+      const scale = MAX_DIM / Math.max(width, height);
+      const w = Math.round(width * scale);
+      const h = Math.round(height * scale);
+      const oc = new OffscreenCanvas(w, h);
+      const ctx = oc.getContext("2d")!;
+      ctx.drawImage(canvas, 0, 0, w, h);
+      return oc.convertToBlob({ type: "image/jpeg", quality: JPEG_QUALITY });
+    }
+    return new Promise((r) => canvas.toBlob((b) => r(b!), "image/jpeg", JPEG_QUALITY));
+  }
+
+  async function downsampleFile(file: File): Promise<Blob> {
     const bitmap = await createImageBitmap(file);
     let { width, height } = bitmap;
-
     if (width > MAX_DIM || height > MAX_DIM) {
       const scale = MAX_DIM / Math.max(width, height);
       width = Math.round(width * scale);
       height = Math.round(height * scale);
     }
-
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext("2d")!;
     ctx.drawImage(bitmap, 0, 0, width, height);
     bitmap.close();
-
     return canvas.convertToBlob({ type: "image/jpeg", quality: JPEG_QUALITY });
   }
 
-  /** Upload screenshot to worker, return image URL. */
-  async function uploadScreenshot(file: File): Promise<string | null> {
+  async function uploadScreenshot(blob: Blob): Promise<string | null> {
     if (!WORKER_URL) return null;
     try {
-      const blob = await downsampleImage(file);
       const res = await fetch(`${WORKER_URL}/upload`, {
         method: "POST",
         headers: { "Content-Type": "image/jpeg" },
@@ -94,7 +131,6 @@
       sections.push(`## Screenshot\n\n![screenshot](${screenshotUrl})`);
     }
 
-    // Debug context
     sections.push(`## Debug Context`);
     sections.push(`**[Reproduce this config](${configUrl})**`);
     sections.push(`**Beam:** ${config.beam?.particle ?? "?"} @ ${config.beam?.energy ?? "?"} MeV, ${config.beam?.current ?? "?"} µA`);
@@ -119,12 +155,10 @@
 
     const title = `[Bug] ${description.slice(0, 70)}`;
 
-    // If worker URL is configured, submit directly via API
     if (WORKER_URL) {
       submitting = true;
       resultMsg = null;
       try {
-        // Upload screenshot first if present
         let screenshotUrl: string | undefined;
         if (screenshot) {
           const url = await uploadScreenshot(screenshot);
@@ -143,7 +177,7 @@
           description = "";
           screenshot = null;
           screenshotPreview = null;
-          setTimeout(() => { resultMsg = null; onclose(); }, 2000);
+          setTimeout(() => { resultMsg = null; closeBugReport(); }, 2000);
         } else {
           resultMsg = { ok: false, text: data.error ?? "Failed to create issue" };
         }
@@ -156,7 +190,6 @@
       return;
     }
 
-    // Fallback: open on GitHub (requires account, no screenshot support)
     fallbackToGitHub(title, buildBody());
   }
 
@@ -171,94 +204,168 @@
     description = "";
     screenshot = null;
     screenshotPreview = null;
-    onclose();
+    closeBugReport();
   }
 </script>
 
-<Modal {open} {onclose} title="Report a Bug">
-  <div class="bug-form">
-    <div class="field">
-      <label for="bug-name">Name <span class="optional">(optional)</span></label>
-      <input id="bug-name" type="text" bind:value={name} placeholder="Your name" />
+{#if open}
+  <div class="bug-panel" role="dialog" aria-label="Report a Bug">
+    <div class="panel-header">
+      <h3>Report a Bug</h3>
+      <button class="close-btn" onclick={closeBugReport}>&times;</button>
     </div>
 
-    <div class="field">
-      <label for="bug-email">Email <span class="optional">(optional)</span></label>
-      <input id="bug-email" type="email" bind:value={email} placeholder="your@email.com" />
-    </div>
+    <div class="panel-body">
+      <p class="tip">
+        Tip: Keep the bug visible behind this panel before capturing.
+      </p>
 
-    <div class="field">
-      <label for="bug-desc">Description <span class="required">*</span></label>
-      <textarea
-        id="bug-desc"
-        bind:value={description}
-        placeholder="What happened? What did you expect?"
-        rows="4"
-      ></textarea>
-    </div>
-
-    {#if WORKER_URL}
       <div class="field">
-        <label for="bug-screenshot">Screenshot <span class="optional">(optional)</span></label>
+        <label for="bug-name">Name <span class="optional">(optional)</span></label>
+        <input id="bug-name" type="text" bind:value={name} placeholder="Your name" />
+      </div>
+
+      <div class="field">
+        <label for="bug-email">Email <span class="optional">(optional)</span></label>
+        <input id="bug-email" type="email" bind:value={email} placeholder="your@email.com" />
+      </div>
+
+      <div class="field">
+        <label for="bug-desc">Description <span class="required">*</span></label>
+        <textarea
+          id="bug-desc"
+          bind:value={description}
+          placeholder="What happened? What did you expect?"
+          rows="3"
+        ></textarea>
+      </div>
+
+      <div class="field">
+        <label>Screenshot <span class="optional">(optional)</span></label>
         {#if screenshotPreview}
           <div class="preview-wrap">
             <img src={screenshotPreview} alt="Screenshot preview" class="preview-img" />
             <button class="remove-btn" onclick={removeScreenshot} title="Remove">&times;</button>
           </div>
         {:else}
-          <label class="file-drop" for="bug-screenshot">
-            Click or drop an image
-            <input
-              id="bug-screenshot"
-              type="file"
-              accept="image/*"
-              onchange={handleFileSelect}
-              class="file-input"
-            />
-          </label>
+          <div class="screenshot-actions">
+            <button class="capture-btn" onclick={captureScreen} disabled={capturing}>
+              {#if capturing}Capturing...{:else}Capture tab{/if}
+            </button>
+            <label class="file-drop-inline" for="bug-screenshot">
+              or attach file
+              <input
+                id="bug-screenshot"
+                type="file"
+                accept="image/*"
+                onchange={handleFileSelect}
+                class="file-input"
+              />
+            </label>
+          </div>
         {/if}
       </div>
-    {/if}
 
-    <p class="hint">
-      The current configuration and simulation state will be attached automatically.
-      {#if !WORKER_URL}You'll review the issue on GitHub before submitting.{/if}
-    </p>
-
-    {#if resultMsg}
-      <p class="result-msg" class:success={resultMsg.ok} class:error={!resultMsg.ok}>
-        {resultMsg.text}
+      <p class="hint">
+        Config and simulation state attached automatically.
+        {#if !WORKER_URL}You'll review the issue on GitHub before submitting.{/if}
       </p>
-    {/if}
 
-    <div class="actions">
-      <button class="cancel-btn" onclick={onclose}>Cancel</button>
-      <button
-        class="submit-btn"
-        onclick={submit}
-        disabled={!description.trim() || submitting}
-      >
-        {#if submitting}Submitting...{:else if WORKER_URL}Submit Bug Report{:else}Open on GitHub{/if}
-      </button>
+      {#if resultMsg}
+        <p class="result-msg" class:success={resultMsg.ok} class:error={!resultMsg.ok}>
+          {resultMsg.text}
+        </p>
+      {/if}
+
+      <div class="actions">
+        <button class="cancel-btn" onclick={closeBugReport}>Cancel</button>
+        <button
+          class="submit-btn"
+          onclick={submit}
+          disabled={!description.trim() || submitting}
+        >
+          {#if submitting}Submitting...{:else if WORKER_URL}Submit{:else}Open on GitHub{/if}
+        </button>
+      </div>
     </div>
   </div>
-</Modal>
+{/if}
 
 <style>
-  .bug-form {
+  .bug-panel {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    width: 340px;
+    max-height: 80vh;
+    background: #161b22;
+    border: 1px solid #2d333b;
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    z-index: 2000;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid #2d333b;
+    cursor: grab;
+    flex-shrink: 0;
+  }
+
+  .panel-header h3 {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #e1e4e8;
+  }
+
+  .close-btn {
+    background: none;
+    border: none;
+    color: #8b949e;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0.1rem 0.3rem;
+    border-radius: 4px;
+    line-height: 1;
+  }
+
+  .close-btn:hover {
+    color: #e1e4e8;
+    background: #21262d;
+  }
+
+  .panel-body {
+    padding: 0.75rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .tip {
+    font-size: 0.7rem;
+    color: #d29922;
+    margin: 0;
+    padding: 0.3rem 0.5rem;
+    background: rgba(210, 153, 34, 0.08);
+    border-radius: 4px;
+    border-left: 2px solid #d29922;
   }
 
   .field {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.2rem;
   }
 
   label {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     color: #c9d1d9;
   }
 
@@ -276,8 +383,8 @@
     border: 1px solid #2d333b;
     border-radius: 4px;
     color: #e1e4e8;
-    padding: 0.4rem 0.5rem;
-    font-size: 0.85rem;
+    padding: 0.35rem 0.45rem;
+    font-size: 0.8rem;
     font-family: inherit;
     resize: vertical;
   }
@@ -287,22 +394,41 @@
     border-color: #58a6ff;
   }
 
-  .file-drop {
+  .screenshot-actions {
     display: flex;
     align-items: center;
-    justify-content: center;
-    padding: 1rem;
-    border: 1.5px dashed #2d333b;
-    border-radius: 6px;
-    color: #6e7681;
-    font-size: 0.8rem;
-    cursor: pointer;
-    transition: border-color 0.15s, color 0.15s;
+    gap: 0.5rem;
   }
 
-  .file-drop:hover {
-    border-color: #58a6ff;
-    color: #8b949e;
+  .capture-btn {
+    background: #21262d;
+    border: 1px solid #2d333b;
+    border-radius: 4px;
+    color: #c9d1d9;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .capture-btn:hover:not(:disabled) {
+    background: #30363d;
+    border-color: #484f58;
+  }
+
+  .capture-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .file-drop-inline {
+    font-size: 0.7rem;
+    color: #58a6ff;
+    cursor: pointer;
+  }
+
+  .file-drop-inline:hover {
+    text-decoration: underline;
   }
 
   .file-input {
@@ -316,7 +442,7 @@
 
   .preview-img {
     max-width: 100%;
-    max-height: 150px;
+    max-height: 120px;
     border-radius: 4px;
     border: 1px solid #2d333b;
   }
@@ -329,9 +455,9 @@
     border: 1px solid #2d333b;
     border-radius: 50%;
     color: #f85149;
-    width: 20px;
-    height: 20px;
-    font-size: 0.75rem;
+    width: 18px;
+    height: 18px;
+    font-size: 0.7rem;
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -340,15 +466,15 @@
   }
 
   .hint {
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     color: #6e7681;
     margin: 0;
   }
 
   .result-msg {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     margin: 0;
-    padding: 0.35rem 0.5rem;
+    padding: 0.3rem 0.45rem;
     border-radius: 4px;
   }
 
@@ -365,8 +491,7 @@
   .actions {
     display: flex;
     justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
+    gap: 0.4rem;
   }
 
   .cancel-btn {
@@ -374,8 +499,8 @@
     border: 1px solid #2d333b;
     border-radius: 4px;
     color: #8b949e;
-    padding: 0.4rem 0.75rem;
-    font-size: 0.8rem;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.75rem;
     cursor: pointer;
   }
 
@@ -389,8 +514,8 @@
     border: 1px solid #2ea043;
     border-radius: 4px;
     color: #fff;
-    padding: 0.4rem 0.75rem;
-    font-size: 0.8rem;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.75rem;
     cursor: pointer;
     font-weight: 500;
   }

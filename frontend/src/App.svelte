@@ -41,6 +41,7 @@
   import MaterialPopup from "./lib/components/MaterialPopup.svelte";
   import ElementPopup from "./lib/components/ElementPopup.svelte";
   import IsotopePopup from "./lib/components/IsotopePopup.svelte";
+  import BugReportModal from "./lib/components/BugReportModal.svelte";
 
   let loadingState = $state("Initializing...");
   let loadingProgress = $state(0);
@@ -277,6 +278,8 @@
     />
   {/if}
 </main>
+
+<BugReportModal />
 
 <style>
   :global(body) {
