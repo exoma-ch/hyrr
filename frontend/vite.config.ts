@@ -9,6 +9,9 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
   server: {
+    fs: {
+      allow: [".", "../../nucl-parquet"],
+    },
     watch: {
       ignored: ["**/public/data/**"],
     },

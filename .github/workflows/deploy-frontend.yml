@@ -42,6 +42,7 @@ jobs:
         run: |
           mkdir -p frontend/public/data/parquet/{meta,stopping,xs}
           cp nucl-parquet/meta/abundances.parquet nucl-parquet/meta/decay.parquet nucl-parquet/meta/elements.parquet frontend/public/data/parquet/meta/
+          cp -f nucl-parquet/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp nucl-parquet/stopping/stopping.parquet frontend/public/data/parquet/stopping/
           cp nucl-parquet/tendl-2024/xs/*.parquet frontend/public/data/parquet/xs/
 
