@@ -109,7 +109,7 @@ def write_xs_parquet(
     """
     rows: list[dict] = []
     for entry in entries:
-        for energy, xs in zip(entry.energies_MeV, entry.xs_mb):
+        for energy, xs in zip(entry.energies_MeV, entry.xs_mb, strict=False):
             rows.append({
                 "target_A": entry.target_A,
                 "residual_Z": entry.residual_Z,
