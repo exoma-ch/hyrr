@@ -6,6 +6,7 @@ import { Z_TO_SYMBOL } from "./formula";
 
 /** Auto-scale activity to the best human-readable unit. */
 export function fmtActivity(bq: number): string {
+  if (typeof bq !== "number" || !isFinite(bq)) return "—";
   const abs = Math.abs(bq);
   if (abs === 0) return "0";
   if (abs >= 1e12) return (bq / 1e12).toPrecision(4) + " TBq";
@@ -18,6 +19,7 @@ export function fmtActivity(bq: number): string {
 
 /** Auto-scale saturation yield. */
 export function fmtYield(val: number): string {
+  if (typeof val !== "number" || !isFinite(val)) return "—";
   if (val === 0) return "0";
   const abs = Math.abs(val);
   if (abs >= 1e12) return (val / 1e12).toPrecision(3) + " TBq/µA";
@@ -47,6 +49,7 @@ export function bestTimeUnit(maxS: number): { label: string; divisor: number } {
 
 /** Auto-scale dose rate (µSv/h input) to the best human-readable unit. */
 export function fmtDoseRate(uSvPerH: number): string {
+  if (typeof uSvPerH !== "number" || !isFinite(uSvPerH)) return "—";
   const abs = Math.abs(uSvPerH);
   if (abs === 0) return "0";
   if (abs >= 1e6) return (uSvPerH / 1e6).toPrecision(3) + " Sv/h";

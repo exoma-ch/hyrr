@@ -11,7 +11,6 @@ from hyrr.models import Beam, BeamProfile
 from hyrr.production import _gauss_hermite_convolved_xs, compute_production_rate
 from hyrr.stopping import bohr_straggling_variance_per_cm, cumulative_straggling_sigma
 
-
 # ---------------------------------------------------------------------------
 # Bohr straggling unit tests
 # ---------------------------------------------------------------------------
@@ -201,17 +200,17 @@ class TestProductionRateWithStraggling:
         def dedx_fn(e):
             return 10.0
 
-        kwargs = dict(
-            xs_energies_MeV=xs_e,
-            xs_mb=xs_mb,
-            dedx_fn=dedx_fn,
-            energy_in_MeV=16.0,
-            energy_out_MeV=12.0,
-            n_target_atoms=1e21,
-            beam_particles_per_s=1e15,
-            target_volume_cm3=0.02,
-            n_points=200,
-        )
+        kwargs = {
+            "xs_energies_MeV": xs_e,
+            "xs_mb": xs_mb,
+            "dedx_fn": dedx_fn,
+            "energy_in_MeV": 16.0,
+            "energy_out_MeV": 12.0,
+            "n_target_atoms": 1e21,
+            "beam_particles_per_s": 1e15,
+            "target_volume_cm3": 0.02,
+            "n_points": 200,
+        }
 
         prate_no_fn, _, _, _ = compute_production_rate(**kwargs, sigma_E_fn=None)
         prate_zero_fn, _, _, _ = compute_production_rate(
@@ -234,17 +233,17 @@ class TestProductionRateWithStraggling:
         def dedx_fn(e):
             return np.full_like(np.asarray(e), 10.0)
 
-        kwargs = dict(
-            xs_energies_MeV=xs_e,
-            xs_mb=xs_mb,
-            dedx_fn=dedx_fn,
-            energy_in_MeV=13.8,
-            energy_out_MeV=12.8,
-            n_target_atoms=1e21,
-            beam_particles_per_s=1e15,
-            target_volume_cm3=0.02,
-            n_points=200,
-        )
+        kwargs = {
+            "xs_energies_MeV": xs_e,
+            "xs_mb": xs_mb,
+            "dedx_fn": dedx_fn,
+            "energy_in_MeV": 13.8,
+            "energy_out_MeV": 12.8,
+            "n_target_atoms": 1e21,
+            "beam_particles_per_s": 1e15,
+            "target_volume_cm3": 0.02,
+            "n_points": 200,
+        }
 
         prate_no, _, _, _ = compute_production_rate(**kwargs, sigma_E_fn=None)
         prate_strag, _, _, _ = compute_production_rate(

@@ -474,7 +474,7 @@ def _cmd_generate_xs(args: argparse.Namespace) -> int:
         return 1
 
     # Resolve target
-    from hyrr.db import ELEMENT_SYMBOLS, _SYMBOL_TO_Z
+    from hyrr.db import _SYMBOL_TO_Z
 
     target_symbol = args.target
     target_Z = _SYMBOL_TO_Z.get(target_symbol)
@@ -523,7 +523,11 @@ def _cmd_generate_xs(args: argparse.Namespace) -> int:
 
     # Import TALYS parser
     sys.path.insert(0, str(Path(__file__).parent.parent.parent / "data"))
-    from parsers.talys import generate_talys_input, parse_talys_residual, write_xs_parquet
+    from parsers.talys import (
+        generate_talys_input,
+        parse_talys_residual,
+        write_xs_parquet,
+    )
 
     all_entries = []
 
@@ -551,8 +555,7 @@ def _cmd_generate_xs(args: argparse.Namespace) -> int:
                 ["talys"],
                 cwd=work_dir,
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 timeout=3600,
             )
             if result.returncode != 0:

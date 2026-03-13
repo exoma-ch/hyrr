@@ -13,12 +13,11 @@ All heavy imports (build123d, tetgen, meshio) are lazy-loaded.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
-
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -153,7 +152,7 @@ def tessellate(
     Returns:
         TetrahedralMesh with material IDs assigned per tet.
     """
-    b3d = _require_build123d()
+    _require_build123d()
     tg = _require_tetgen()
 
     all_nodes = []
@@ -167,7 +166,14 @@ def tessellate(
 
         # Tessellate surface
         mesh_data = solid.tessellate(tolerance=0.01)
-        vertices = np.array(mesh_data[0], dtype=np.float64)
+        # mesh_data[0] may be Vector objects (build123d) — extract X/Y/Z
+        raw_verts = mesh_data[0]
+        if hasattr(raw_verts[0], "X"):
+            vertices = np.array(
+                [[v.X, v.Y, v.Z] for v in raw_verts], dtype=np.float64
+            )
+        else:
+            vertices = np.array(raw_verts, dtype=np.float64)
         faces = np.array(mesh_data[1], dtype=np.int64)
 
         # Use TetGen for volumetric meshing

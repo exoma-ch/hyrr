@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, Literal
 import numpy as np
 
 if TYPE_CHECKING:
-    from hyrr.geometry import MeshSlicePolygon, TetrahedralMesh
     from hyrr.models import BeamProfile, IsotopeResult, LayerResult
 
 Backend = Literal["matplotlib", "plotly"]
@@ -20,7 +19,7 @@ Backend = Literal["matplotlib", "plotly"]
 def plot_depth_profile(
     layer_result: LayerResult,
     quantity: Literal["heat", "energy", "dedx"] = "heat",
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot depth profile for a single layer.
@@ -72,7 +71,7 @@ def plot_activity_vs_time(
     isotope_results: dict[str, IsotopeResult] | list[IsotopeResult],
     top_n: int | None = 10,
     min_activity_Bq: float = 0.0,
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot activity vs time for multiple isotopes.
@@ -127,7 +126,7 @@ def plot_cooling_curve(
     isotope_results: dict[str, IsotopeResult] | list[IsotopeResult],
     irradiation_time_s: float,
     top_n: int | None = 10,
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot activity during cooling phase only.
@@ -186,7 +185,7 @@ def plot_purity_vs_cooling(
     isotope_results: dict[str, IsotopeResult],
     target_isotope: str,
     irradiation_time_s: float,
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot radionuclidic purity of target isotope vs cooling time.
@@ -247,7 +246,7 @@ def plot_purity_vs_cooling(
 def plot_energy_scan(
     energies_MeV: list[float],
     activities: dict[str, list[float]],
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot activity vs beam energy for multiple isotopes.
@@ -289,7 +288,7 @@ def plot_energy_scan(
 
 def plot_straggling_vs_depth(
     layer_results: list[LayerResult],
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot sigma_E [MeV] vs depth [mm] across all layers.
@@ -339,7 +338,7 @@ def plot_straggling_vs_depth(
 def plot_energy_band(
     layer_results: list[LayerResult],
     n_sigma: float = 2.0,
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot E(z) +/- n_sigma * sigma_E(z) as a shaded band.
@@ -410,7 +409,7 @@ def plot_xs_convolution(
     xs_mb: np.ndarray,
     sigma_E_MeV: float,
     reaction_label: str = "",
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Compare point cross-section vs Gauss-convolved cross-section.
@@ -473,7 +472,7 @@ def plot_xs_convolution(
 def plot_production_vs_depth(
     layer_result: LayerResult,
     top_n: int = 5,
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot local production rate vs depth for top isotopes.
@@ -541,7 +540,7 @@ def plot_production_vs_depth(
 def plot_cumulative_yield(
     layer_result: LayerResult,
     top_n: int = 5,
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot cumulative yield fraction vs depth.
@@ -612,7 +611,7 @@ def plot_excitation_function(
     energy_in: float,
     energy_out: float,
     reaction_label: str = "",
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot cross-section with shaded energy window.
@@ -669,7 +668,7 @@ def plot_beam_spot(
     profile: BeamProfile,
     n_sigma: float = 3.0,
     n_points: int = 200,
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot 2D Gaussian beam spot intensity.
@@ -735,7 +734,7 @@ def plot_phase_space(
     profile: BeamProfile,
     plane: str = "x",
     n_sigma: float = 3.0,
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot transverse phase-space ellipse.
@@ -811,7 +810,7 @@ def plot_phase_space(
         f"Phase Space ({plane}-plane, \u03b5={eps:.3f} mm\u00b7mrad)",
     )
 
-    traces = [(x_ell.tolist(), theta_ell.tolist(), f"1\u03c3 ellipse")]
+    traces = [(x_ell.tolist(), theta_ell.tolist(), "1\u03c3 ellipse")]
     if n_sigma > 1:
         x_ell_n = x_ell * n_sigma
         theta_ell_n = theta_ell * n_sigma
@@ -844,10 +843,12 @@ def plot_mesh_cross_section(
     polygons: list,  # list[MeshSlicePolygon]
     values: dict[int, float] | None = None,  # tet_index -> value
     quantity_label: str = "Value",
-    colormap: str = "viridis",
+    colormap: str = "Plasma",
+    log_scale: bool = False,
     show_materials: bool = True,
     materials: dict[int, Any] | None = None,  # material_id -> MaterialInfo
-    backend: Backend = "matplotlib",
+    beam_sigma_cm: float | None = None,
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot a 2D cross-section of the mesh colored by a quantity.
@@ -860,9 +861,11 @@ def plot_mesh_cross_section(
         polygons: List of MeshSlicePolygon from cut_mesh_with_plane.
         values: Optional mapping of tet_index to a scalar value for coloring.
         quantity_label: Label for the color bar.
-        colormap: Matplotlib colormap name.
+        colormap: Colormap/colorscale name.
+        log_scale: If True, apply log10 to values before mapping colors.
         show_materials: If True and values is None, color by material_id.
         materials: Optional mapping of material_id to MaterialInfo (for legend).
+        beam_sigma_cm: If set, overlay beam envelope (sigma circles or lines).
         backend: "matplotlib" or "plotly".
         **kwargs: Additional arguments forwarded to the backend.
 
@@ -886,16 +889,20 @@ def plot_mesh_cross_section(
         polygons,
         values=values,
         quantity_label=quantity_label,
+        colormap=colormap,
+        log_scale=log_scale,
         show_materials=show_materials,
         materials=materials,
+        beam_sigma_cm=beam_sigma_cm,
         title=title,
+        **kwargs,
     )
 
 
 def plot_ray_visualization(
     mesh: Any,  # TetrahedralMesh
     ray_segments: list[list],  # list of list[RaySegment]
-    backend: Backend = "matplotlib",
+    backend: Backend = "plotly",
     **kwargs: Any,
 ) -> Any:
     """Plot mesh wireframe with ray paths overlaid (2D projection).
@@ -1081,9 +1088,9 @@ def _plotly_band_plot(
     import plotly.graph_objects as go
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=y_upper, mode="lines", line=dict(width=0),
+    fig.add_trace(go.Scatter(x=x, y=y_upper, mode="lines", line={"width": 0},
                              showlegend=False))
-    fig.add_trace(go.Scatter(x=x, y=y_lower, mode="lines", line=dict(width=0),
+    fig.add_trace(go.Scatter(x=x, y=y_lower, mode="lines", line={"width": 0},
                              fill="tonexty", fillcolor="rgba(31,119,180,0.3)",
                              name=band_label))
     fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name="Mean energy"))
@@ -1214,7 +1221,7 @@ def _plotly_contour_plot(
             y=Y[:, 0].tolist(),
             z=Z.tolist(),
             colorscale="Inferno",
-            colorbar=dict(title="Relative intensity"),
+            colorbar={"title": "Relative intensity"},
         )
     )
     fig.update_layout(
@@ -1276,7 +1283,7 @@ def _mpl_mesh_cross_section(
 
     # Add material legend if available
     if materials and values is None and show_materials:
-        mat_ids = sorted(set(p.material_id for p in polygons))
+        mat_ids = sorted({p.material_id for p in polygons})
         legend_labels = []
         for mid in mat_ids:
             info = materials.get(mid)
@@ -1289,7 +1296,7 @@ def _mpl_mesh_cross_section(
             xycoords="axes fraction",
             verticalalignment="top",
             fontsize=8,
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8},
         )
 
     ax.set_xlabel("u [cm]")
@@ -1303,12 +1310,16 @@ def _plotly_mesh_cross_section(
     polygons: list,  # list[MeshSlicePolygon]
     values: dict[int, float] | None = None,
     quantity_label: str = "Value",
+    colormap: str = "Plasma",
+    log_scale: bool = False,
     show_materials: bool = True,
     materials: dict[int, Any] | None = None,
+    beam_sigma_cm: float | None = None,
     title: str = "",
     **kwargs: Any,
 ) -> Any:
-    """Plotly mesh cross-section using filled scatter polygons."""
+    """Plotly mesh cross-section with colorscale support."""
+    import plotly.express as px
     import plotly.graph_objects as go
 
     fig = go.Figure()
@@ -1317,31 +1328,126 @@ def _plotly_mesh_cross_section(
         fig.update_layout(title=title + " (no polygons)")
         return fig
 
-    for poly in polygons:
+    # Pre-compute color mapping when values provided
+    if values is not None:
+        raw_vals = [values.get(p.tet_index, 0.0) for p in polygons]
+        if log_scale:
+            mapped = [np.log10(v + 1e-30) for v in raw_vals]
+            finite = [v for v in mapped if v > -20]
+        else:
+            mapped = list(raw_vals)
+            finite = [v for v in mapped if v > 0]
+        vmin = min(finite) if finite else 0.0
+        vmax = max(finite) if finite else 1.0
+        span = vmax - vmin if vmax > vmin else 1.0
+
+    # Assign material colors for material-only mode
+    mat_color_cycle = px.colors.qualitative.Plotly
+    mat_id_list = sorted({p.material_id for p in polygons})
+    mat_color_map = {
+        mid: mat_color_cycle[i % len(mat_color_cycle)]
+        for i, mid in enumerate(mat_id_list)
+    }
+
+    added_legend: set[int] = set()
+    for i, poly in enumerate(polygons):
         verts = poly.vertices_2d
         xs = list(verts[:, 0]) + [verts[0, 0]]
         ys = list(verts[:, 1]) + [verts[0, 1]]
+        info = materials.get(poly.material_id) if materials else None
+        mat_name = info.name if info and hasattr(info, "name") else str(poly.material_id)
 
         if values is not None:
-            val = values.get(poly.tet_index, 0.0)
-            name = f"tet {poly.tet_index}: {val:.3g}"
+            t_norm = max(0.0, min(1.0, (mapped[i] - vmin) / span))
+            color = px.colors.sample_colorscale(colormap, [t_norm])[0]
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="lines", fill="toself",
+                fillcolor=color,
+                line={"color": color, "width": 0},
+                opacity=0.9,
+                showlegend=False,
+                hovertemplate=(
+                    f"<b>{mat_name}</b><br>"
+                    f"{quantity_label}: {raw_vals[i]:.2e}<br>"
+                    f"<extra>tet {poly.tet_index}</extra>"
+                ),
+            ))
         elif show_materials:
-            info = materials.get(poly.material_id) if materials else None
-            mat_name = info.name if info and hasattr(info, "name") else str(poly.material_id)
-            name = f"mat {mat_name}"
+            mid = poly.material_id
+            show = mid not in added_legend
+            added_legend.add(mid)
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="lines", fill="toself",
+                fillcolor=mat_color_map[mid],
+                line={"color": "gray", "width": 0.3},
+                opacity=0.8,
+                name=mat_name,
+                legendgroup=str(mid),
+                showlegend=show,
+            ))
         else:
-            name = ""
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="lines", fill="toself",
+                fillcolor="steelblue",
+                line={"color": "gray", "width": 0.3},
+                showlegend=False,
+            ))
 
+    # Colorbar for values mode
+    if values is not None:
+        cb_vals = np.linspace(vmin, vmax, 50)
+        cb_label = f"log₁₀({quantity_label})" if log_scale else quantity_label
         fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="lines", fill="toself",
-            name=name, showlegend=False,
+            x=[None] * len(cb_vals), y=[None] * len(cb_vals),
+            mode="markers",
+            marker={
+                "size": 0, "color": cb_vals, "colorscale": colormap,
+                "colorbar": {"title": cb_label, "thickness": 15},
+                "showscale": True,
+            },
+            showlegend=False, hoverinfo="skip",
         ))
 
+    # Beam overlay (sigma circles/lines)
+    if beam_sigma_cm is not None:
+        sigma = beam_sigma_cm
+        # Detect orientation: if y-range >> x-range it's longitudinal, else axial
+        all_x = np.concatenate([p.vertices_2d[:, 0] for p in polygons])
+        all_y = np.concatenate([p.vertices_2d[:, 1] for p in polygons])
+        x_span = float(np.ptp(all_x))
+        y_span = float(np.ptp(all_y))
+
+        if x_span > 2 * y_span:
+            # Longitudinal slice (wide): horizontal lines for beam envelope
+            for n, dash in [(1, "dot"), (2, "dash")]:
+                fig.add_hline(y=n * sigma, line={"color": "white", "width": 1, "dash": dash})
+                fig.add_hline(y=-n * sigma, line={"color": "white", "width": 1, "dash": dash})
+                fig.add_annotation(
+                    x=float(np.max(all_x)) + x_span * 0.02, y=n * sigma,
+                    text=f"{n}σ", showarrow=False,
+                    font={"color": "white", "size": 10},
+                )
+        else:
+            # Axial slice (square-ish): circles for beam spot
+            theta = np.linspace(0, 2 * np.pi, 100)
+            for n, dash in [(1, "dot"), (2, "dash")]:
+                r = n * sigma
+                fig.add_trace(go.Scatter(
+                    x=r * np.cos(theta), y=r * np.sin(theta),
+                    mode="lines",
+                    line={"color": "white", "width": 1.5, "dash": dash},
+                    name=f"Beam {n}σ ({n * sigma * 10:.1f} mm)",
+                ))
+
+    bg = "black" if values is not None else "white"
     fig.update_layout(
         title=title,
-        xaxis_title="u [cm]",
-        yaxis_title="v [cm]",
+        xaxis_title=kwargs.get("xlabel", "u [cm]"),
+        yaxis_title=kwargs.get("ylabel", "v [cm]"),
         yaxis_scaleanchor="x",
+        plot_bgcolor=bg,
+        width=kwargs.get("width"),
+        height=kwargs.get("height"),
     )
     return fig
 
@@ -1422,7 +1528,7 @@ def _plotly_ray_visualization(
 
     fig.add_trace(go.Scatter(
         x=mesh_x, y=mesh_z, mode="lines",
-        line=dict(color="lightgray", width=0.5),
+        line={"color": "lightgray", "width": 0.5},
         name="Mesh", showlegend=True,
     ))
 

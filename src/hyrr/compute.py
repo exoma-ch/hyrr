@@ -21,13 +21,13 @@ from hyrr.models import (
     LayerResult,
     StackResult,
 )
-from hyrr.projectile import resolve_projectile
 from hyrr.production import (
     bateman_activity,
     compute_production_rate,
     generate_depth_profile,
     saturation_yield,
 )
+from hyrr.projectile import resolve_projectile
 from hyrr.stopping import (
     bohr_straggling_variance_per_cm,
     compute_energy_out,

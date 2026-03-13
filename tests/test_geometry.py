@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import numpy as np
-import numpy.typing as npt
 import pytest
 
 from hyrr.geometry import (
     MaterialInfo,
-    MeshSlicePolygon,
-    RaySegment,
     TetrahedralMesh,
     _ray_triangle_intersect,
     _tet_faces,
@@ -18,7 +15,6 @@ from hyrr.geometry import (
     cut_mesh_with_plane,
     longitudinal_slice,
 )
-
 
 # ---------------------------------------------------------------------------
 # Ray-triangle intersection

@@ -13,7 +13,6 @@ from hyrr.db import (
     DataStore,
     DecayData,
     DecayMode,
-    load_catalog,
 )
 from hyrr.models import (
     Beam,
