@@ -47,6 +47,32 @@ result.summary()
 
 The browser frontend (`frontend/`) is a standalone Svelte 5 + TypeScript app with pure-TS physics compute (no Python/WASM). Nuclear data is lazy-loaded from Parquet files via hyparquet. All computation runs locally — no server, no data upload.
 
+## Development
+
+```bash
+git clone --recurse-submodules https://github.com/exoma-ch/hyrr.git
+cd hyrr
+uv sync --all-extras
+uv run pytest
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+## Contributing
+
+1. Fork and create a feature branch
+2. `uv sync --all-extras` to install all dependencies
+3. `uv run pytest` — all tests must pass
+4. `uv run ruff check src/` — no lint errors
+5. Commit format: `type(scope): description`
+6. Open a PR against `main`
+
 ## Dependencies
 
 - numpy, scipy — numerics
