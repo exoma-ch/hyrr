@@ -32,15 +32,13 @@ jobs:
         python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout nucl-parquet submodule (sparse)
-        uses: actions/checkout@v4
         with:
-          repository: exoma-ch/nucl-parquet
-          path: nucl-parquet
-          sparse-checkout: |
-            meta
-            stopping
-            tendl-2024
+          submodules: false
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set meta stopping tendl-2024/xs
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
