@@ -28,6 +28,23 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
+      - name: Checkout nucl-parquet submodule (sparse)
+        uses: actions/checkout@v4
+        with:
+          repository: exoma-ch/nucl-parquet
+          path: nucl-parquet
+          sparse-checkout: |
+            meta
+            stopping
+            tendl-2024
+
+      - name: Copy nuclear data for frontend
+        run: |
+          mkdir -p frontend/public/data/parquet/{meta,stopping,xs}
+          cp nucl-parquet/meta/abundances.parquet nucl-parquet/meta/decay.parquet nucl-parquet/meta/elements.parquet frontend/public/data/parquet/meta/
+          cp nucl-parquet/stopping/stopping.parquet frontend/public/data/parquet/stopping/
+          cp nucl-parquet/tendl-2024/xs/*.parquet frontend/public/data/parquet/xs/
+
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
@@ -35,13 +52,6 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
-
-      # TODO: Copy nuclear data chunks into dist/data/ from a release asset
-      # This step will be added once build_chunks.py and the data pipeline exist.
-      # - name: Download nuclear data chunks
-      #   run: |
-      #     gh release download data-v1 -D frontend/dist/data/ -p '*.sql.gz'
-      #     gh release download data-v1 -D frontend/dist/data/ -p 'schema.sql'
 
       - uses: actions/upload-pages-artifact@v3
         with:
