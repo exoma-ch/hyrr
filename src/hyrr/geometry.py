@@ -59,9 +59,11 @@ class RaySegment:
 # Lazy imports
 # ---------------------------------------------------------------------------
 
+
 def _require_build123d():
     try:
         import build123d  # noqa: F811
+
         return build123d
     except ImportError:
         raise ImportError(
@@ -73,6 +75,7 @@ def _require_build123d():
 def _require_tetgen():
     try:
         import tetgen  # noqa: F811
+
         return tetgen
     except ImportError:
         raise ImportError(
@@ -84,6 +87,7 @@ def _require_tetgen():
 # ---------------------------------------------------------------------------
 # STEP import
 # ---------------------------------------------------------------------------
+
 
 def import_step(path: str | Path) -> list[tuple[object, str]]:
     """Import solids from a STEP file.
@@ -139,6 +143,7 @@ def assign_materials(
 # Tessellation
 # ---------------------------------------------------------------------------
 
+
 def tessellate(
     solids_with_materials: list[tuple[object, MaterialInfo]],
     max_volume: float = 0.001,
@@ -169,9 +174,7 @@ def tessellate(
         # mesh_data[0] may be Vector objects (build123d) — extract X/Y/Z
         raw_verts = mesh_data[0]
         if hasattr(raw_verts[0], "X"):
-            vertices = np.array(
-                [[v.X, v.Y, v.Z] for v in raw_verts], dtype=np.float64
-            )
+            vertices = np.array([[v.X, v.Y, v.Z] for v in raw_verts], dtype=np.float64)
         else:
             vertices = np.array(raw_verts, dtype=np.float64)
         faces = np.array(mesh_data[1], dtype=np.int64)
@@ -204,6 +207,7 @@ def tessellate(
 # ---------------------------------------------------------------------------
 # Ray casting (Möller-Trumbore)
 # ---------------------------------------------------------------------------
+
 
 def _ray_triangle_intersect(
     origin: npt.NDArray[np.float64],
@@ -299,13 +303,15 @@ def cast_ray(
         exit_ = origin + t_out * direction
         path_length = float(np.linalg.norm(exit_ - entry))
         if path_length > 1e-12:
-            segments.append(RaySegment(
-                tet_index=tet_idx,
-                entry_point=entry,
-                exit_point=exit_,
-                path_length_cm=path_length,
-                material_id=int(mesh.material_ids[tet_idx]),
-            ))
+            segments.append(
+                RaySegment(
+                    tet_index=tet_idx,
+                    entry_point=entry,
+                    exit_point=exit_,
+                    path_length_cm=path_length,
+                    material_id=int(mesh.material_ids[tet_idx]),
+                )
+            )
 
     # Sort by entry distance
     segments.sort(key=lambda s: float(np.dot(s.entry_point - origin, direction)))
@@ -368,6 +374,7 @@ def cast_pencil_beam(
 # ---------------------------------------------------------------------------
 # Convenience pipeline
 # ---------------------------------------------------------------------------
+
 
 def step_to_mesh(
     path: str | Path,
@@ -554,12 +561,14 @@ def cut_mesh_with_plane(
         pts_3d = pts_3d[order]
         pts_2d = pts_2d[order]
 
-        polygons.append(MeshSlicePolygon(
-            vertices_2d=pts_2d,
-            vertices_3d=pts_3d,
-            tet_index=tet_idx,
-            material_id=int(mesh.material_ids[tet_idx]),
-        ))
+        polygons.append(
+            MeshSlicePolygon(
+                vertices_2d=pts_2d,
+                vertices_3d=pts_3d,
+                tet_index=tet_idx,
+                material_id=int(mesh.material_ids[tet_idx]),
+            )
+        )
 
     return polygons
 

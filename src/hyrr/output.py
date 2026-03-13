@@ -35,27 +35,33 @@ def result_to_polars(result: StackResult) -> pl.DataFrame:
 
     rows: list[dict[str, object]] = []
     for i, lr in enumerate(result.layer_results):
-        sp_sources = ", ".join(sorted(set(lr.stopping_power_sources.values()))) if lr.stopping_power_sources else ""
+        sp_sources = (
+            ", ".join(sorted(set(lr.stopping_power_sources.values())))
+            if lr.stopping_power_sources
+            else ""
+        )
         for name, iso in lr.isotope_results.items():
-            rows.append({
-                "layer_index": i,
-                "isotope": name,
-                "Z": iso.Z,
-                "A": iso.A,
-                "state": iso.state,
-                "half_life_s": iso.half_life_s,
-                "production_rate": iso.production_rate,
-                "activity_Bq": iso.activity_Bq,
-                "saturation_yield_Bq_uA": iso.saturation_yield_Bq_uA,
-                "energy_in_MeV": lr.energy_in,
-                "energy_out_MeV": lr.energy_out,
-                "delta_E_MeV": lr.delta_E_MeV,
-                "heat_kW": lr.heat_kW,
-                "stopping_power_source": sp_sources,
-                "source": iso.source,
-                "activity_direct_Bq": iso.activity_direct_Bq,
-                "activity_ingrowth_Bq": iso.activity_ingrowth_Bq,
-            })
+            rows.append(
+                {
+                    "layer_index": i,
+                    "isotope": name,
+                    "Z": iso.Z,
+                    "A": iso.A,
+                    "state": iso.state,
+                    "half_life_s": iso.half_life_s,
+                    "production_rate": iso.production_rate,
+                    "activity_Bq": iso.activity_Bq,
+                    "saturation_yield_Bq_uA": iso.saturation_yield_Bq_uA,
+                    "energy_in_MeV": lr.energy_in,
+                    "energy_out_MeV": lr.energy_out,
+                    "delta_E_MeV": lr.delta_E_MeV,
+                    "heat_kW": lr.heat_kW,
+                    "stopping_power_source": sp_sources,
+                    "source": iso.source,
+                    "activity_direct_Bq": iso.activity_direct_Bq,
+                    "activity_ingrowth_Bq": iso.activity_ingrowth_Bq,
+                }
+            )
 
     if not rows:
         return pl.DataFrame()
@@ -78,16 +84,18 @@ def layer_result_to_polars(layer_result: LayerResult) -> pl.DataFrame:
 
     rows: list[dict[str, object]] = []
     for name, iso in layer_result.isotope_results.items():
-        rows.append({
-            "isotope": name,
-            "Z": iso.Z,
-            "A": iso.A,
-            "state": iso.state,
-            "half_life_s": iso.half_life_s,
-            "production_rate": iso.production_rate,
-            "activity_Bq": iso.activity_Bq,
-            "saturation_yield_Bq_uA": iso.saturation_yield_Bq_uA,
-        })
+        rows.append(
+            {
+                "isotope": name,
+                "Z": iso.Z,
+                "A": iso.A,
+                "state": iso.state,
+                "half_life_s": iso.half_life_s,
+                "production_rate": iso.production_rate,
+                "activity_Bq": iso.activity_Bq,
+                "saturation_yield_Bq_uA": iso.saturation_yield_Bq_uA,
+            }
+        )
 
     if not rows:
         return pl.DataFrame()
@@ -111,12 +119,14 @@ def depth_profile_to_polars(layer_result: LayerResult) -> pl.DataFrame:
     if not layer_result.depth_profile:
         return pl.DataFrame()
 
-    return pl.DataFrame({
-        "depth_cm": [dp.depth_cm for dp in layer_result.depth_profile],
-        "energy_MeV": [dp.energy_MeV for dp in layer_result.depth_profile],
-        "dedx_MeV_cm": [dp.dedx_MeV_cm for dp in layer_result.depth_profile],
-        "heat_W_cm3": [dp.heat_W_cm3 for dp in layer_result.depth_profile],
-    })
+    return pl.DataFrame(
+        {
+            "depth_cm": [dp.depth_cm for dp in layer_result.depth_profile],
+            "energy_MeV": [dp.energy_MeV for dp in layer_result.depth_profile],
+            "dedx_MeV_cm": [dp.dedx_MeV_cm for dp in layer_result.depth_profile],
+            "heat_W_cm3": [dp.heat_W_cm3 for dp in layer_result.depth_profile],
+        }
+    )
 
 
 def activity_timeseries_to_polars(
@@ -134,12 +144,14 @@ def activity_timeseries_to_polars(
     """
     import polars as pl
 
-    return pl.DataFrame({
-        "time_s": isotope_result.time_grid_s,
-        "time_hours": isotope_result.time_grid_s / 3600.0,
-        "activity_Bq": isotope_result.activity_vs_time_Bq,
-        "activity_GBq": isotope_result.activity_vs_time_Bq * 1e-9,
-    })
+    return pl.DataFrame(
+        {
+            "time_s": isotope_result.time_grid_s,
+            "time_hours": isotope_result.time_grid_s / 3600.0,
+            "activity_Bq": isotope_result.activity_vs_time_Bq,
+            "activity_GBq": isotope_result.activity_vs_time_Bq * 1e-9,
+        }
+    )
 
 
 def result_summary(result: StackResult) -> str:
@@ -197,17 +209,11 @@ def result_summary(result: StackResult) -> str:
 
             for iso in sorted_isos:
                 activity_gbq = iso.activity_Bq * 1e-9
-                hl = (
-                    _format_halflife(iso.half_life_s)
-                    if iso.half_life_s
-                    else "stable"
-                )
+                hl = _format_halflife(iso.half_life_s) if iso.half_life_s else "stable"
 
                 time_h = result.irradiation_time_s / 3600.0
                 charge_mah = beam.current_mA * time_h
-                yield_val = (
-                    activity_gbq / charge_mah if charge_mah > 0 else 0.0
-                )
+                yield_val = activity_gbq / charge_mah if charge_mah > 0 else 0.0
 
                 lines.append(
                     f"  {iso.name:<12} {iso.source:<8} {iso.production_rate:>18.6E} "
@@ -219,12 +225,10 @@ def result_summary(result: StackResult) -> str:
                     direct_gbq = iso.activity_direct_Bq * 1e-9
                     ingrowth_gbq = iso.activity_ingrowth_Bq * 1e-9
                     lines.append(
-                        f"  {'':12} {'':8} {'  direct:':>18} "
-                        f"{direct_gbq:>16.4E}"
+                        f"  {'':12} {'':8} {'  direct:':>18} {direct_gbq:>16.4E}"
                     )
                     lines.append(
-                        f"  {'':12} {'':8} {'  ingrowth:':>18} "
-                        f"{ingrowth_gbq:>16.4E}"
+                        f"  {'':12} {'':8} {'  ingrowth:':>18} {ingrowth_gbq:>16.4E}"
                     )
             lines.append("")
 
@@ -299,27 +303,33 @@ def result_to_pandas(result: StackResult) -> pd.DataFrame:
 
     rows: list[dict[str, object]] = []
     for i, lr in enumerate(result.layer_results):
-        sp_sources = ", ".join(sorted(set(lr.stopping_power_sources.values()))) if lr.stopping_power_sources else ""
+        sp_sources = (
+            ", ".join(sorted(set(lr.stopping_power_sources.values())))
+            if lr.stopping_power_sources
+            else ""
+        )
         for name, iso in lr.isotope_results.items():
-            rows.append({
-                "layer_index": i,
-                "isotope": name,
-                "Z": iso.Z,
-                "A": iso.A,
-                "state": iso.state,
-                "half_life_s": iso.half_life_s,
-                "production_rate": iso.production_rate,
-                "activity_Bq": iso.activity_Bq,
-                "saturation_yield_Bq_uA": iso.saturation_yield_Bq_uA,
-                "energy_in_MeV": lr.energy_in,
-                "energy_out_MeV": lr.energy_out,
-                "delta_E_MeV": lr.delta_E_MeV,
-                "heat_kW": lr.heat_kW,
-                "stopping_power_source": sp_sources,
-                "source": iso.source,
-                "activity_direct_Bq": iso.activity_direct_Bq,
-                "activity_ingrowth_Bq": iso.activity_ingrowth_Bq,
-            })
+            rows.append(
+                {
+                    "layer_index": i,
+                    "isotope": name,
+                    "Z": iso.Z,
+                    "A": iso.A,
+                    "state": iso.state,
+                    "half_life_s": iso.half_life_s,
+                    "production_rate": iso.production_rate,
+                    "activity_Bq": iso.activity_Bq,
+                    "saturation_yield_Bq_uA": iso.saturation_yield_Bq_uA,
+                    "energy_in_MeV": lr.energy_in,
+                    "energy_out_MeV": lr.energy_out,
+                    "delta_E_MeV": lr.delta_E_MeV,
+                    "heat_kW": lr.heat_kW,
+                    "stopping_power_source": sp_sources,
+                    "source": iso.source,
+                    "activity_direct_Bq": iso.activity_direct_Bq,
+                    "activity_ingrowth_Bq": iso.activity_ingrowth_Bq,
+                }
+            )
 
     if not rows:
         return pd.DataFrame()
@@ -362,17 +372,37 @@ def result_to_csv_bundle(result: StackResult, path: str) -> None:
     import zipfile
 
     summary_columns = [
-        "layer_index", "isotope", "Z", "A", "state", "half_life_s",
-        "production_rate", "activity_Bq", "saturation_yield_Bq_uA",
-        "energy_in_MeV", "energy_out_MeV", "delta_E_MeV", "heat_kW",
-        "stopping_power_source", "source",
-        "activity_direct_Bq", "activity_ingrowth_Bq",
+        "layer_index",
+        "isotope",
+        "Z",
+        "A",
+        "state",
+        "half_life_s",
+        "production_rate",
+        "activity_Bq",
+        "saturation_yield_Bq_uA",
+        "energy_in_MeV",
+        "energy_out_MeV",
+        "delta_E_MeV",
+        "heat_kW",
+        "stopping_power_source",
+        "source",
+        "activity_direct_Bq",
+        "activity_ingrowth_Bq",
     ]
     depth_columns = ["depth_cm", "energy_MeV", "dedx_MeV_cm", "heat_W_cm3"]
     isotope_columns = [
-        "isotope", "Z", "A", "state", "half_life_s",
-        "production_rate", "activity_Bq", "saturation_yield_Bq_uA",
-        "source", "activity_direct_Bq", "activity_ingrowth_Bq",
+        "isotope",
+        "Z",
+        "A",
+        "state",
+        "half_life_s",
+        "production_rate",
+        "activity_Bq",
+        "saturation_yield_Bq_uA",
+        "source",
+        "activity_direct_Bq",
+        "activity_ingrowth_Bq",
     ]
 
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -387,14 +417,27 @@ def result_to_csv_bundle(result: StackResult, path: str) -> None:
                 else ""
             )
             for _name, iso in lr.isotope_results.items():
-                writer.writerow([
-                    i, iso.name, iso.Z, iso.A, iso.state, iso.half_life_s,
-                    iso.production_rate, iso.activity_Bq,
-                    iso.saturation_yield_Bq_uA, lr.energy_in, lr.energy_out,
-                    lr.delta_E_MeV, lr.heat_kW, sp_src,
-                    iso.source, iso.activity_direct_Bq,
-                    iso.activity_ingrowth_Bq,
-                ])
+                writer.writerow(
+                    [
+                        i,
+                        iso.name,
+                        iso.Z,
+                        iso.A,
+                        iso.state,
+                        iso.half_life_s,
+                        iso.production_rate,
+                        iso.activity_Bq,
+                        iso.saturation_yield_Bq_uA,
+                        lr.energy_in,
+                        lr.energy_out,
+                        lr.delta_E_MeV,
+                        lr.heat_kW,
+                        sp_src,
+                        iso.source,
+                        iso.activity_direct_Bq,
+                        iso.activity_ingrowth_Bq,
+                    ]
+                )
         zf.writestr("summary.csv", buf.getvalue())
 
         # Per-layer files
@@ -404,9 +447,14 @@ def result_to_csv_bundle(result: StackResult, path: str) -> None:
             writer = csv.writer(buf)
             writer.writerow(depth_columns)
             for dp in lr.depth_profile:
-                writer.writerow([
-                    dp.depth_cm, dp.energy_MeV, dp.dedx_MeV_cm, dp.heat_W_cm3,
-                ])
+                writer.writerow(
+                    [
+                        dp.depth_cm,
+                        dp.energy_MeV,
+                        dp.dedx_MeV_cm,
+                        dp.heat_W_cm3,
+                    ]
+                )
             zf.writestr(f"layer_{i}_depth_profile.csv", buf.getvalue())
 
             # isotopes
@@ -414,13 +462,21 @@ def result_to_csv_bundle(result: StackResult, path: str) -> None:
             writer = csv.writer(buf)
             writer.writerow(isotope_columns)
             for _name, iso in lr.isotope_results.items():
-                writer.writerow([
-                    iso.name, iso.Z, iso.A, iso.state, iso.half_life_s,
-                    iso.production_rate, iso.activity_Bq,
-                    iso.saturation_yield_Bq_uA,
-                    iso.source, iso.activity_direct_Bq,
-                    iso.activity_ingrowth_Bq,
-                ])
+                writer.writerow(
+                    [
+                        iso.name,
+                        iso.Z,
+                        iso.A,
+                        iso.state,
+                        iso.half_life_s,
+                        iso.production_rate,
+                        iso.activity_Bq,
+                        iso.saturation_yield_Bq_uA,
+                        iso.source,
+                        iso.activity_direct_Bq,
+                        iso.activity_ingrowth_Bq,
+                    ]
+                )
             zf.writestr(f"layer_{i}_isotopes.csv", buf.getvalue())
 
 

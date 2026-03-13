@@ -22,10 +22,15 @@ def main(argv: list[str] | None = None) -> int:
     # hyrr info
     info_parser = subparsers.add_parser("info", help="Show data store statistics")
     info_parser.add_argument(
-        "--data-dir", type=Path, default=None, help="Path to nucl-parquet data directory"
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Path to nucl-parquet data directory",
     )
     info_parser.add_argument(
-        "--library", type=str, default=None,
+        "--library",
+        type=str,
+        default=None,
         help="Cross-section library (default: tendl-2024)",
     )
 
@@ -33,10 +38,15 @@ def main(argv: list[str] | None = None) -> int:
     run_parser = subparsers.add_parser("run", help="Run simulation from TOML input")
     run_parser.add_argument("input_file", type=Path, help="TOML input file")
     run_parser.add_argument(
-        "--data-dir", type=Path, default=None, help="Path to nucl-parquet data directory"
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Path to nucl-parquet data directory",
     )
     run_parser.add_argument(
-        "--library", type=str, default=None,
+        "--library",
+        type=str,
+        default=None,
         help="Cross-section library (default: tendl-2024)",
     )
     run_parser.add_argument(
@@ -78,32 +88,34 @@ def main(argv: list[str] | None = None) -> int:
         "generate-xs", help="Generate cross-section data using TALYS"
     )
     genxs_parser.add_argument(
-        "--projectile", required=True,
-        help="Projectile (e.g., C-12, O-16, p)"
+        "--projectile", required=True, help="Projectile (e.g., C-12, O-16, p)"
     )
     genxs_parser.add_argument(
-        "--target", required=True,
-        help="Target element symbol (e.g., Mo, Cu)"
+        "--target", required=True, help="Target element symbol (e.g., Mo, Cu)"
     )
     genxs_parser.add_argument(
-        "--energy-range", type=str, default="5-50",
-        help="Energy range in MeV (e.g., 5-50)"
+        "--energy-range",
+        type=str,
+        default="5-50",
+        help="Energy range in MeV (e.g., 5-50)",
     )
     genxs_parser.add_argument(
-        "--energy-step", type=float, default=0.5,
-        help="Energy step in MeV (default: 0.5)"
+        "--energy-step",
+        type=float,
+        default=0.5,
+        help="Energy step in MeV (default: 0.5)",
     )
     genxs_parser.add_argument(
-        "--data-dir", type=Path, default=None,
-        help="Path to parquet data directory"
+        "--data-dir", type=Path, default=None, help="Path to parquet data directory"
     )
     genxs_parser.add_argument(
-        "--work-dir", type=Path, default=Path("talys_work"),
-        help="Working directory for TALYS runs"
+        "--work-dir",
+        type=Path,
+        default=Path("talys_work"),
+        help="Working directory for TALYS runs",
     )
     genxs_parser.add_argument(
-        "--force", action="store_true",
-        help="Overwrite existing parquet files"
+        "--force", action="store_true", help="Overwrite existing parquet files"
     )
 
     args = parser.parse_args(argv)
@@ -202,8 +214,11 @@ def _cmd_info(args: argparse.Namespace) -> int:
         print(f"Available libraries: {', '.join(libs)}")
     else:
         # Discover from directory structure
-        libs = [p.name for p in sorted(data_dir.iterdir())
-                if p.is_dir() and (p / "xs").is_dir()]
+        libs = [
+            p.name
+            for p in sorted(data_dir.iterdir())
+            if p.is_dir() and (p / "xs").is_dir()
+        ]
         if libs:
             print(f"Available libraries: {', '.join(libs)}")
     print()
@@ -423,9 +438,7 @@ def _cmd_download_data(args: argparse.Namespace) -> int:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    release_url = (
-        "https://github.com/eXoma-ch/nucl-parquet/releases/latest/download/nucl-parquet.tar.zst"
-    )
+    release_url = "https://github.com/eXoma-ch/nucl-parquet/releases/latest/download/nucl-parquet.tar.zst"
 
     print(f"Downloading data from {release_url} ...")
 
@@ -487,7 +500,10 @@ def _cmd_generate_xs(args: argparse.Namespace) -> int:
         parts = args.energy_range.split("-")
         e_min, e_max = float(parts[0]), float(parts[1])
     except (ValueError, IndexError):
-        print(f"Error: Invalid energy range: {args.energy_range}. Use format: MIN-MAX", file=sys.stderr)
+        print(
+            f"Error: Invalid energy range: {args.energy_range}. Use format: MIN-MAX",
+            file=sys.stderr,
+        )
         return 1
 
     # Find data directory for output
@@ -505,7 +521,10 @@ def _cmd_generate_xs(args: argparse.Namespace) -> int:
 
     abundances = db.get_natural_abundances(target_Z)
     if not abundances:
-        print(f"No natural abundance data for {target_symbol} (Z={target_Z})", file=sys.stderr)
+        print(
+            f"No natural abundance data for {target_symbol} (Z={target_Z})",
+            file=sys.stderr,
+        )
         return 1
 
     # Check if output already exists
@@ -519,7 +538,9 @@ def _cmd_generate_xs(args: argparse.Namespace) -> int:
 
     print(f"Generating cross-sections for {args.projectile} + {target_symbol}")
     print(f"Energy range: {e_min}-{e_max} MeV, step: {args.energy_step} MeV")
-    print(f"Target isotopes: {', '.join(f'{target_symbol}-{A}' for A in sorted(abundances))}")
+    print(
+        f"Target isotopes: {', '.join(f'{target_symbol}-{A}' for A in sorted(abundances))}"
+    )
 
     # Import TALYS parser
     sys.path.insert(0, str(Path(__file__).parent.parent.parent / "data"))
@@ -559,12 +580,19 @@ def _cmd_generate_xs(args: argparse.Namespace) -> int:
                 timeout=3600,
             )
             if result.returncode != 0:
-                print(f"    TALYS failed for {target_symbol}-{target_A} (exit code {result.returncode})", file=sys.stderr)
+                print(
+                    f"    TALYS failed for {target_symbol}-{target_A} (exit code {result.returncode})",
+                    file=sys.stderr,
+                )
                 if result.stderr:
-                    print(f"    stderr: {result.stderr.decode()[:200]}", file=sys.stderr)
+                    print(
+                        f"    stderr: {result.stderr.decode()[:200]}", file=sys.stderr
+                    )
                 continue
         except subprocess.TimeoutExpired:
-            print(f"    TALYS timed out for {target_symbol}-{target_A}", file=sys.stderr)
+            print(
+                f"    TALYS timed out for {target_symbol}-{target_A}", file=sys.stderr
+            )
             continue
         except FileNotFoundError:
             print("Error: TALYS executable not found", file=sys.stderr)

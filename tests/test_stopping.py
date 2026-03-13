@@ -267,9 +267,7 @@ class TestComputeThicknessFromEnergy:
 
     def test_thickness_positive(self, db: MockDB) -> None:
         """Thickness should always be positive when E_in > E_out."""
-        result = compute_thickness_from_energy(
-            db, "p", [(42, 1.0)], 10.28, 20.0, 10.0
-        )
+        result = compute_thickness_from_energy(db, "p", [(42, 1.0)], 10.28, 20.0, 10.0)
         assert result > 0.0
 
     def test_zero_energy_loss_gives_zero_thickness(self, db: MockDB) -> None:

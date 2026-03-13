@@ -49,13 +49,9 @@ class BeamProfile:
 
     def __post_init__(self) -> None:
         if self.sigma_x_cm < 0:
-            raise ValueError(
-                f"sigma_x_cm must be >= 0, got {self.sigma_x_cm}"
-            )
+            raise ValueError(f"sigma_x_cm must be >= 0, got {self.sigma_x_cm}")
         if self.sigma_y_cm is not None and self.sigma_y_cm < 0:
-            raise ValueError(
-                f"sigma_y_cm must be >= 0, got {self.sigma_y_cm}"
-            )
+            raise ValueError(f"sigma_y_cm must be >= 0, got {self.sigma_y_cm}")
         if self.divergence_x_mrad < 0:
             raise ValueError(
                 f"divergence_x_mrad must be >= 0, got {self.divergence_x_mrad}"
@@ -262,7 +258,8 @@ class CurrentProfile:
         return float(self.currents_mA[idx])
 
     def intervals(
-        self, t_end: float,
+        self,
+        t_end: float,
     ) -> list[tuple[float, float, float]]:
         """Return list of (t_start, t_end, current_mA) intervals.
 

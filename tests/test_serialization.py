@@ -32,10 +32,12 @@ from hyrr.serialization import (
 def sample_isotope_result() -> IsotopeResult:
     """Synthetic Tc-99m isotope result."""
     time = np.linspace(0, 172800, 200)
-    activity = np.concatenate([
-        1e10 * (1 - np.exp(-0.001 * time[:100])),
-        1e10 * 0.632 * np.exp(-np.log(2) / 21636 * np.linspace(0, 86400, 100)),
-    ])
+    activity = np.concatenate(
+        [
+            1e10 * (1 - np.exp(-0.001 * time[:100])),
+            1e10 * 0.632 * np.exp(-np.log(2) / 21636 * np.linspace(0, 86400, 100)),
+        ]
+    )
     return IsotopeResult(
         name="Tc-99m",
         Z=43,

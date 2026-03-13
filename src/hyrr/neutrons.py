@@ -199,9 +199,12 @@ def compute_neutron_source(
         for elem, _ in layer_result.layer.elements:
             for A_target in elem.isotopes:
                 n_emitted = neutron_multiplicity(
-                    elem.Z, A_target,
-                    projectile_Z, projectile_A,
-                    iso.Z, iso.A,
+                    elem.Z,
+                    A_target,
+                    projectile_Z,
+                    projectile_A,
+                    iso.Z,
+                    iso.A,
                 )
                 if n_emitted > 0:
                     total_n_rate += n_emitted * iso.production_rate
@@ -364,7 +367,10 @@ def compute_neutron_activation(
                 name = f"{symbol}-{xs.residual_A}{state_suffix}"
 
                 time_grid, activity = bateman_activity(
-                    prate, half_life, irradiation_time_s, cooling_time_s,
+                    prate,
+                    half_life,
+                    irradiation_time_s,
+                    cooling_time_s,
                 )
 
                 sat_yield = prate
@@ -373,20 +379,33 @@ def compute_neutron_activation(
                     existing = isotope_results[name]
                     combined_rate = existing.production_rate + prate
                     combined_tg, combined_act = bateman_activity(
-                        combined_rate, half_life,
-                        irradiation_time_s, cooling_time_s,
+                        combined_rate,
+                        half_life,
+                        irradiation_time_s,
+                        cooling_time_s,
                     )
                     isotope_results[name] = _make_isotope_result(
-                        name, xs.residual_Z, xs.residual_A, xs.state,
-                        half_life, combined_rate,
+                        name,
+                        xs.residual_Z,
+                        xs.residual_A,
+                        xs.state,
+                        half_life,
+                        combined_rate,
                         existing.saturation_yield_Bq_uA + sat_yield,
-                        combined_tg, combined_act,
+                        combined_tg,
+                        combined_act,
                     )
                 else:
                     isotope_results[name] = _make_isotope_result(
-                        name, xs.residual_Z, xs.residual_A, xs.state,
-                        half_life, prate, sat_yield,
-                        time_grid, activity,
+                        name,
+                        xs.residual_Z,
+                        xs.residual_A,
+                        xs.state,
+                        half_life,
+                        prate,
+                        sat_yield,
+                        time_grid,
+                        activity,
                     )
 
     return NeutronActivationResult(
@@ -444,7 +463,9 @@ def compute_secondary_neutron_activation(
 ) -> NeutronActivationResult | None:
     """Compute secondary neutron activation from a charged-particle layer."""
     n_source = compute_neutron_source(
-        layer_result, projectile_Z, projectile_A,
+        layer_result,
+        projectile_Z,
+        projectile_A,
         temperature_MeV=temperature_MeV,
     )
 

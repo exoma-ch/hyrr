@@ -25,6 +25,7 @@ from hyrr.models import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _cu_element() -> Element:
     """Natural copper element fixture."""
     return Element(symbol="Cu", Z=29, isotopes={63: 0.6915, 65: 0.3085})
@@ -49,6 +50,7 @@ def _make_layer(**kwargs: object) -> Layer:
 # ---------------------------------------------------------------------------
 # Beam
 # ---------------------------------------------------------------------------
+
 
 class TestBeam:
     """Tests for the Beam dataclass."""
@@ -126,6 +128,7 @@ class TestBeam:
 # Element
 # ---------------------------------------------------------------------------
 
+
 class TestElement:
     """Tests for the Element dataclass."""
 
@@ -160,6 +163,7 @@ class TestElement:
 # Layer
 # ---------------------------------------------------------------------------
 
+
 class TestLayer:
     """Tests for the Layer dataclass."""
 
@@ -169,13 +173,15 @@ class TestLayer:
 
     def test_valid_areal_density(self) -> None:
         layer = _make_layer(
-            thickness_cm=None, areal_density_g_cm2=0.5,
+            thickness_cm=None,
+            areal_density_g_cm2=0.5,
         )
         assert layer.areal_density_g_cm2 == 0.5
 
     def test_valid_energy_out(self) -> None:
         layer = _make_layer(
-            thickness_cm=None, energy_out_MeV=10.0,
+            thickness_cm=None,
+            energy_out_MeV=10.0,
         )
         assert layer.energy_out_MeV == 10.0
 
@@ -249,6 +255,7 @@ class TestLayer:
 # TargetStack
 # ---------------------------------------------------------------------------
 
+
 class TestTargetStack:
     """Tests for the TargetStack dataclass."""
 
@@ -280,6 +287,7 @@ class TestTargetStack:
 # DepthPoint
 # ---------------------------------------------------------------------------
 
+
 class TestDepthPoint:
     """Tests for the DepthPoint dataclass."""
 
@@ -296,8 +304,11 @@ class TestDepthPoint:
 
     def test_frozen(self) -> None:
         dp = DepthPoint(
-            depth_cm=0.0, energy_MeV=18.0, dedx_MeV_cm=0.0,
-            heat_W_cm3=0.0, production_rates={},
+            depth_cm=0.0,
+            energy_MeV=18.0,
+            dedx_MeV_cm=0.0,
+            heat_W_cm3=0.0,
+            production_rates={},
         )
         with pytest.raises(AttributeError):
             dp.depth_cm = 1.0  # type: ignore[misc]
@@ -306,6 +317,7 @@ class TestDepthPoint:
 # ---------------------------------------------------------------------------
 # IsotopeResult
 # ---------------------------------------------------------------------------
+
 
 class TestIsotopeResult:
     """Tests for the IsotopeResult dataclass."""
@@ -331,6 +343,7 @@ class TestIsotopeResult:
 # ---------------------------------------------------------------------------
 # LayerResult / StackResult
 # ---------------------------------------------------------------------------
+
 
 class TestLayerResult:
     """Tests for the LayerResult dataclass."""
@@ -370,6 +383,7 @@ class TestStackResult:
 # DatabaseProtocol
 # ---------------------------------------------------------------------------
 
+
 class TestDatabaseProtocol:
     """Tests for the DatabaseProtocol."""
 
@@ -378,22 +392,34 @@ class TestDatabaseProtocol:
 
         class MockDB:
             def get_cross_sections(
-                self, projectile: str, target_Z: int, target_A: int,
+                self,
+                projectile: str,
+                target_Z: int,
+                target_A: int,
             ) -> list[CrossSectionData]:
                 return []
 
             def get_stopping_power(
-                self, source: str, target_Z: int,
-            ) -> tuple[np.ndarray[Any, np.dtype[np.float64]], np.ndarray[Any, np.dtype[np.float64]]]:
+                self,
+                source: str,
+                target_Z: int,
+            ) -> tuple[
+                np.ndarray[Any, np.dtype[np.float64]],
+                np.ndarray[Any, np.dtype[np.float64]],
+            ]:
                 return np.array([]), np.array([])
 
             def get_natural_abundances(
-                self, Z: int,
+                self,
+                Z: int,
             ) -> dict[int, tuple[float, float]]:
                 return {}
 
             def get_decay_data(
-                self, Z: int, A: int, state: str = "",
+                self,
+                Z: int,
+                A: int,
+                state: str = "",
             ) -> DecayData | None:
                 return None
 
@@ -418,6 +444,7 @@ class TestDatabaseProtocol:
 # DB data structures
 # ---------------------------------------------------------------------------
 
+
 class TestCrossSectionData:
     """Tests for the CrossSectionData dataclass."""
 
@@ -438,7 +465,9 @@ class TestDecayData:
 
     def test_construction(self) -> None:
         dd = DecayData(
-            Z=43, A=99, state="m",
+            Z=43,
+            A=99,
+            state="m",
             half_life_s=21624.0,
             decay_modes=[
                 DecayMode(
@@ -455,7 +484,9 @@ class TestDecayData:
 
     def test_stable_nuclide(self) -> None:
         dd = DecayData(
-            Z=29, A=63, state="",
+            Z=29,
+            A=63,
+            state="",
             half_life_s=None,
             decay_modes=[
                 DecayMode(
@@ -486,8 +517,11 @@ class TestDecayMode:
 
     def test_frozen(self) -> None:
         dm = DecayMode(
-            mode="EC", daughter_Z=42, daughter_A=99,
-            daughter_state="", branching=0.12,
+            mode="EC",
+            daughter_Z=42,
+            daughter_A=99,
+            daughter_state="",
+            branching=0.12,
         )
         with pytest.raises(AttributeError):
             dm.mode = "beta+"  # type: ignore[misc]

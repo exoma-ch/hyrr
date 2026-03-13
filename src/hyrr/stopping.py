@@ -91,7 +91,9 @@ def _generate_catima_table(
 
 
 # Cache: key -> (interpolator_fn, source_label)
-_interpolator_cache: dict[tuple[int, str, int], tuple[Callable[[float], float], str]] = {}
+_interpolator_cache: dict[
+    tuple[int, str, int], tuple[Callable[[float], float], str]
+] = {}
 
 
 def _get_interpolator(
@@ -122,7 +124,9 @@ def _get_interpolator(
     return _interpolator_cache[key]
 
 
-_heavy_interpolator_cache: dict[tuple[int, int, int], tuple[Callable[[float], float], str]] = {}
+_heavy_interpolator_cache: dict[
+    tuple[int, int, int], tuple[Callable[[float], float], str]
+] = {}
 
 
 def _generate_catima_table_heavy(
@@ -155,7 +159,10 @@ def _get_heavy_interpolator(
     key = (proj_Z, proj_A, target_Z)
     if key not in _heavy_interpolator_cache:
         energies, dedx = _generate_catima_table_heavy(proj_Z, proj_A, target_Z)
-        _heavy_interpolator_cache[key] = (_make_interpolator(energies, dedx), SOURCE_CATIMA)
+        _heavy_interpolator_cache[key] = (
+            _make_interpolator(energies, dedx),
+            SOURCE_CATIMA,
+        )
     return _heavy_interpolator_cache[key]
 
 
@@ -435,6 +442,9 @@ def cumulative_straggling_sigma(
         σ_E [MeV] after traversal.
     """
     dsigma2_dz = bohr_straggling_variance_per_cm(
-        projectile_Z, composition, density_g_cm3, atomic_masses,
+        projectile_Z,
+        composition,
+        density_g_cm3,
+        atomic_masses,
     )
     return math.sqrt(sigma_E0_MeV**2 + dsigma2_dz * thickness_cm)

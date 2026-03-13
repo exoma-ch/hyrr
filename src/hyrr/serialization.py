@@ -66,14 +66,16 @@ def _result_to_dict(result: StackResult) -> dict[str, Any]:
                 "activity_ingrowth_vs_time_Bq": iso.activity_ingrowth_vs_time_Bq.tolist(),
             }
 
-        layers_out.append({
-            "layer_index": i,
-            "energy_in": _safe_float(lr.energy_in),
-            "energy_out": _safe_float(lr.energy_out),
-            "delta_E_MeV": _safe_float(lr.delta_E_MeV),
-            "heat_kW": _safe_float(lr.heat_kW),
-            "isotope_results": isotopes_out,
-        })
+        layers_out.append(
+            {
+                "layer_index": i,
+                "energy_in": _safe_float(lr.energy_in),
+                "energy_out": _safe_float(lr.energy_out),
+                "delta_E_MeV": _safe_float(lr.delta_E_MeV),
+                "heat_kW": _safe_float(lr.heat_kW),
+                "isotope_results": isotopes_out,
+            }
+        )
 
     return {
         "config": config,

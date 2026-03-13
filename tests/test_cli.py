@@ -134,36 +134,64 @@ class TestCLIInfo:
         xs = tmp_path / "tendl-2024" / "xs"
         xs.mkdir(parents=True)
 
-        pl.DataFrame({"Z": [42], "symbol": ["Mo"]}).cast(
-            {"Z": pl.Int32}
-        ).write_parquet(meta / "elements.parquet")
-        pl.DataFrame({
-            "Z": [42], "A": [100], "symbol": ["Mo"],
-            "abundance": [0.0974], "atomic_mass": [99.907],
-        }).cast({"Z": pl.Int32, "A": pl.Int32}).write_parquet(
+        pl.DataFrame({"Z": [42], "symbol": ["Mo"]}).cast({"Z": pl.Int32}).write_parquet(
+            meta / "elements.parquet"
+        )
+        pl.DataFrame(
+            {
+                "Z": [42],
+                "A": [100],
+                "symbol": ["Mo"],
+                "abundance": [0.0974],
+                "atomic_mass": [99.907],
+            }
+        ).cast({"Z": pl.Int32, "A": pl.Int32}).write_parquet(
             meta / "abundances.parquet"
         )
-        pl.DataFrame({
-            "Z": [43], "A": [99], "state": ["m"], "half_life_s": [21624.0],
-            "decay_mode": ["IT"], "daughter_Z": [43], "daughter_A": [99],
-            "daughter_state": [""], "branching": [1.0],
-        }).cast({
-            "Z": pl.Int32, "A": pl.Int32,
-            "daughter_Z": pl.Int32, "daughter_A": pl.Int32,
-        }).write_parquet(meta / "decay.parquet")
-        pl.DataFrame({
-            "source": ["PSTAR"], "target_Z": [1],
-            "energy_MeV": [10.0], "dedx": [50.0],
-        }).cast({"target_Z": pl.Int32}).write_parquet(
-            stopping / "stopping.parquet"
-        )
-        pl.DataFrame({
-            "target_A": [100], "residual_Z": [43], "residual_A": [99],
-            "state": ["m"], "energy_MeV": [10.0], "xs_mb": [100.0],
-        }).cast({
-            "target_A": pl.Int32, "residual_Z": pl.Int32,
-            "residual_A": pl.Int32,
-        }).write_parquet(xs / "p_Mo.parquet")
+        pl.DataFrame(
+            {
+                "Z": [43],
+                "A": [99],
+                "state": ["m"],
+                "half_life_s": [21624.0],
+                "decay_mode": ["IT"],
+                "daughter_Z": [43],
+                "daughter_A": [99],
+                "daughter_state": [""],
+                "branching": [1.0],
+            }
+        ).cast(
+            {
+                "Z": pl.Int32,
+                "A": pl.Int32,
+                "daughter_Z": pl.Int32,
+                "daughter_A": pl.Int32,
+            }
+        ).write_parquet(meta / "decay.parquet")
+        pl.DataFrame(
+            {
+                "source": ["PSTAR"],
+                "target_Z": [1],
+                "energy_MeV": [10.0],
+                "dedx": [50.0],
+            }
+        ).cast({"target_Z": pl.Int32}).write_parquet(stopping / "stopping.parquet")
+        pl.DataFrame(
+            {
+                "target_A": [100],
+                "residual_Z": [43],
+                "residual_A": [99],
+                "state": ["m"],
+                "energy_MeV": [10.0],
+                "xs_mb": [100.0],
+            }
+        ).cast(
+            {
+                "target_A": pl.Int32,
+                "residual_Z": pl.Int32,
+                "residual_A": pl.Int32,
+            }
+        ).write_parquet(xs / "p_Mo.parquet")
 
         result = main(["info", "--data-dir", str(tmp_path)])
         assert result == 0
@@ -189,13 +217,23 @@ class TestPctDiff:
 class TestExtractIsotopes:
     def test_basic(self) -> None:
         data = {
-            "layers": [{
-                "layer_index": 0,
-                "isotopes": [
-                    {"name": "Tc-99m", "activity_Bq": 5e9, "saturation_yield_Bq_uA": 6.67e7},
-                    {"name": "Mo-99", "activity_Bq": 1e8, "saturation_yield_Bq_uA": 1e6},
-                ],
-            }]
+            "layers": [
+                {
+                    "layer_index": 0,
+                    "isotopes": [
+                        {
+                            "name": "Tc-99m",
+                            "activity_Bq": 5e9,
+                            "saturation_yield_Bq_uA": 6.67e7,
+                        },
+                        {
+                            "name": "Mo-99",
+                            "activity_Bq": 1e8,
+                            "saturation_yield_Bq_uA": 1e6,
+                        },
+                    ],
+                }
+            ]
         }
         isos = _extract_isotopes(data)
         assert "Tc-99m" in isos
@@ -204,7 +242,10 @@ class TestExtractIsotopes:
     def test_layer_filter(self) -> None:
         data = {
             "layers": [
-                {"layer_index": 0, "isotopes": [{"name": "Tc-99m", "activity_Bq": 5e9}]},
+                {
+                    "layer_index": 0,
+                    "isotopes": [{"name": "Tc-99m", "activity_Bq": 5e9}],
+                },
                 {"layer_index": 1, "isotopes": [{"name": "Cu-64", "activity_Bq": 1e8}]},
             ]
         }
@@ -217,18 +258,40 @@ class TestCompareCommand:
     def test_compare_two_files(self, tmp_path: Path) -> None:
         data1 = {
             "config": {},
-            "layers": [{"layer_index": 0, "isotopes": [
-                {"name": "Tc-99m", "Z": 43, "A": 99, "state": "m",
-                 "activity_Bq": 5e9, "saturation_yield_Bq_uA": 6.67e7},
-            ]}],
+            "layers": [
+                {
+                    "layer_index": 0,
+                    "isotopes": [
+                        {
+                            "name": "Tc-99m",
+                            "Z": 43,
+                            "A": 99,
+                            "state": "m",
+                            "activity_Bq": 5e9,
+                            "saturation_yield_Bq_uA": 6.67e7,
+                        },
+                    ],
+                }
+            ],
             "timestamp": 0,
         }
         data2 = {
             "config": {},
-            "layers": [{"layer_index": 0, "isotopes": [
-                {"name": "Tc-99m", "Z": 43, "A": 99, "state": "m",
-                 "activity_Bq": 5.5e9, "saturation_yield_Bq_uA": 7.0e7},
-            ]}],
+            "layers": [
+                {
+                    "layer_index": 0,
+                    "isotopes": [
+                        {
+                            "name": "Tc-99m",
+                            "Z": 43,
+                            "A": 99,
+                            "state": "m",
+                            "activity_Bq": 5.5e9,
+                            "saturation_yield_Bq_uA": 7.0e7,
+                        },
+                    ],
+                }
+            ],
             "timestamp": 0,
         }
         f1 = tmp_path / "result1.json"
@@ -248,10 +311,23 @@ class TestCompareCommand:
     def test_compare_with_isotope_filter(self, tmp_path: Path) -> None:
         data = {
             "config": {},
-            "layers": [{"layer_index": 0, "isotopes": [
-                {"name": "Tc-99m", "activity_Bq": 5e9, "saturation_yield_Bq_uA": 6.67e7},
-                {"name": "Mo-99", "activity_Bq": 1e8, "saturation_yield_Bq_uA": 1e6},
-            ]}],
+            "layers": [
+                {
+                    "layer_index": 0,
+                    "isotopes": [
+                        {
+                            "name": "Tc-99m",
+                            "activity_Bq": 5e9,
+                            "saturation_yield_Bq_uA": 6.67e7,
+                        },
+                        {
+                            "name": "Mo-99",
+                            "activity_Bq": 1e8,
+                            "saturation_yield_Bq_uA": 1e6,
+                        },
+                    ],
+                }
+            ],
             "timestamp": 0,
         }
         f1 = tmp_path / "r1.json"

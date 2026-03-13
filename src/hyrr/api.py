@@ -40,6 +40,7 @@ def _resolve_material(
     # Try py-mat lookup first
     try:
         import pymat
+
         all_mats = pymat.load_all()
 
         # Handle dotted paths (e.g., "stainless.s316L")
@@ -55,7 +56,9 @@ def _resolve_material(
             if density is None:
                 mech = getattr(getattr(mat, "properties", None), "mechanical", None)
                 if mech:
-                    density = getattr(mech, "density", None) or getattr(mech, "density_value", None)
+                    density = getattr(mech, "density", None) or getattr(
+                        mech, "density_value", None
+                    )
 
             composition = getattr(mat, "composition", None)
             formula = getattr(mat, "formula", None)
@@ -63,12 +66,18 @@ def _resolve_material(
             if density is not None and (composition or formula):
                 if composition:
                     elements = resolve_isotopics(
-                        db, composition, is_atom_fraction=False, overrides=enrichment,
+                        db,
+                        composition,
+                        is_atom_fraction=False,
+                        overrides=enrichment,
                     )
                 else:
                     mass_fracs = formula_to_mass_fractions(formula)
                     elements = resolve_isotopics(
-                        db, mass_fracs, is_atom_fraction=False, overrides=enrichment,
+                        db,
+                        mass_fracs,
+                        is_atom_fraction=False,
+                        overrides=enrichment,
                     )
                 return elements, float(density)
     except ImportError:
@@ -95,7 +104,10 @@ def _resolve_material(
     # Compound formula (e.g., "MoO3")
     mass_fracs = formula_to_mass_fractions(material)
     elements = resolve_isotopics(
-        db, mass_fracs, is_atom_fraction=False, overrides=enrichment,
+        db,
+        mass_fracs,
+        is_atom_fraction=False,
+        overrides=enrichment,
     )
     # For compounds, density must be provided or we use a placeholder
     return elements, _compound_density(material)
@@ -103,21 +115,81 @@ def _resolve_material(
 
 # Densities for common pure elements (g/cm³)
 _ELEMENT_DENSITIES: dict[str, float] = {
-    "H": 0.00009, "He": 0.000164, "Li": 0.534, "Be": 1.85, "B": 2.34,
-    "C": 2.267, "N": 0.00125, "O": 0.00143, "F": 0.0017, "Na": 0.971,
-    "Mg": 1.738, "Al": 2.70, "Si": 2.33, "P": 1.82, "S": 2.07,
-    "K": 0.862, "Ca": 1.55, "Ti": 4.506, "V": 6.11, "Cr": 7.15,
-    "Mn": 7.44, "Fe": 7.874, "Co": 8.90, "Ni": 8.908, "Cu": 8.96,
-    "Zn": 7.134, "Ga": 5.91, "Ge": 5.323, "As": 5.776, "Se": 4.81,
-    "Rb": 1.532, "Sr": 2.64, "Y": 4.469, "Zr": 6.52, "Nb": 8.57,
-    "Mo": 10.28, "Ru": 12.37, "Rh": 12.41, "Pd": 12.02, "Ag": 10.49,
-    "Cd": 8.69, "In": 7.31, "Sn": 7.287, "Sb": 6.685, "Te": 6.24,
-    "I": 4.93, "Cs": 1.873, "Ba": 3.594, "La": 6.145, "Ce": 6.77,
-    "Nd": 7.01, "Sm": 7.52, "Eu": 5.244, "Gd": 7.90, "Tb": 8.23,
-    "Dy": 8.55, "Ho": 8.80, "Er": 9.07, "Tm": 9.32, "Yb": 6.90,
-    "Lu": 9.84, "Hf": 13.31, "Ta": 16.69, "W": 19.25, "Re": 21.02,
-    "Os": 22.59, "Ir": 22.56, "Pt": 21.45, "Au": 19.32, "Hg": 13.534,
-    "Tl": 11.85, "Pb": 11.34, "Bi": 9.78, "Th": 11.72, "U": 19.10,
+    "H": 0.00009,
+    "He": 0.000164,
+    "Li": 0.534,
+    "Be": 1.85,
+    "B": 2.34,
+    "C": 2.267,
+    "N": 0.00125,
+    "O": 0.00143,
+    "F": 0.0017,
+    "Na": 0.971,
+    "Mg": 1.738,
+    "Al": 2.70,
+    "Si": 2.33,
+    "P": 1.82,
+    "S": 2.07,
+    "K": 0.862,
+    "Ca": 1.55,
+    "Ti": 4.506,
+    "V": 6.11,
+    "Cr": 7.15,
+    "Mn": 7.44,
+    "Fe": 7.874,
+    "Co": 8.90,
+    "Ni": 8.908,
+    "Cu": 8.96,
+    "Zn": 7.134,
+    "Ga": 5.91,
+    "Ge": 5.323,
+    "As": 5.776,
+    "Se": 4.81,
+    "Rb": 1.532,
+    "Sr": 2.64,
+    "Y": 4.469,
+    "Zr": 6.52,
+    "Nb": 8.57,
+    "Mo": 10.28,
+    "Ru": 12.37,
+    "Rh": 12.41,
+    "Pd": 12.02,
+    "Ag": 10.49,
+    "Cd": 8.69,
+    "In": 7.31,
+    "Sn": 7.287,
+    "Sb": 6.685,
+    "Te": 6.24,
+    "I": 4.93,
+    "Cs": 1.873,
+    "Ba": 3.594,
+    "La": 6.145,
+    "Ce": 6.77,
+    "Nd": 7.01,
+    "Sm": 7.52,
+    "Eu": 5.244,
+    "Gd": 7.90,
+    "Tb": 8.23,
+    "Dy": 8.55,
+    "Ho": 8.80,
+    "Er": 9.07,
+    "Tm": 9.32,
+    "Yb": 6.90,
+    "Lu": 9.84,
+    "Hf": 13.31,
+    "Ta": 16.69,
+    "W": 19.25,
+    "Re": 21.02,
+    "Os": 22.59,
+    "Ir": 22.56,
+    "Pt": 21.45,
+    "Au": 19.32,
+    "Hg": 13.534,
+    "Tl": 11.85,
+    "Pb": 11.34,
+    "Bi": 9.78,
+    "Th": 11.72,
+    "U": 19.10,
     "Ra": 5.5,
 }
 
@@ -195,7 +267,9 @@ def config_to_stack(
     for layer_cfg in config["layers"]:
         enrichment = _parse_enrichment(layer_cfg.get("enrichment"))
         elements, density = _resolve_material(
-            db, layer_cfg["material"], enrichment,
+            db,
+            layer_cfg["material"],
+            enrichment,
         )
 
         layer = Layer(
@@ -238,28 +312,34 @@ def result_to_json(result: StackResult, config: dict) -> dict:
     for i, lr in enumerate(result.layer_results):
         isotopes_out = []
         for _name, iso in lr.isotope_results.items():
-            isotopes_out.append({
-                "name": iso.name,
-                "Z": iso.Z,
-                "A": iso.A,
-                "state": iso.state,
-                "half_life_s": _safe_float(iso.half_life_s) if iso.half_life_s is not None else None,
-                "production_rate": _safe_float(iso.production_rate),
-                "saturation_yield_Bq_uA": _safe_float(iso.saturation_yield_Bq_uA),
-                "activity_Bq": _safe_float(iso.activity_Bq),
-                "source": iso.source,
-                "activity_direct_Bq": _safe_float(iso.activity_direct_Bq),
-                "activity_ingrowth_Bq": _safe_float(iso.activity_ingrowth_Bq),
-            })
+            isotopes_out.append(
+                {
+                    "name": iso.name,
+                    "Z": iso.Z,
+                    "A": iso.A,
+                    "state": iso.state,
+                    "half_life_s": _safe_float(iso.half_life_s)
+                    if iso.half_life_s is not None
+                    else None,
+                    "production_rate": _safe_float(iso.production_rate),
+                    "saturation_yield_Bq_uA": _safe_float(iso.saturation_yield_Bq_uA),
+                    "activity_Bq": _safe_float(iso.activity_Bq),
+                    "source": iso.source,
+                    "activity_direct_Bq": _safe_float(iso.activity_direct_Bq),
+                    "activity_ingrowth_Bq": _safe_float(iso.activity_ingrowth_Bq),
+                }
+            )
 
-        layers_out.append({
-            "layer_index": i,
-            "energy_in": _safe_float(lr.energy_in),
-            "energy_out": _safe_float(lr.energy_out),
-            "delta_E_MeV": _safe_float(lr.delta_E_MeV),
-            "heat_kW": _safe_float(lr.heat_kW),
-            "isotopes": isotopes_out,
-        })
+        layers_out.append(
+            {
+                "layer_index": i,
+                "energy_in": _safe_float(lr.energy_in),
+                "energy_out": _safe_float(lr.energy_out),
+                "delta_E_MeV": _safe_float(lr.delta_E_MeV),
+                "heat_kW": _safe_float(lr.heat_kW),
+                "isotopes": isotopes_out,
+            }
+        )
 
     return {
         "config": config,

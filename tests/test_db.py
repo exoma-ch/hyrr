@@ -29,61 +29,75 @@ def data_dir(tmp_path):
     xs_dir.mkdir(parents=True)
 
     # -- elements
-    pl.DataFrame({
-        "Z": [42, 43],
-        "symbol": ["Mo", "Tc"],
-    }).cast({"Z": pl.Int32}).write_parquet(meta_dir / "elements.parquet")
+    pl.DataFrame(
+        {
+            "Z": [42, 43],
+            "symbol": ["Mo", "Tc"],
+        }
+    ).cast({"Z": pl.Int32}).write_parquet(meta_dir / "elements.parquet")
 
     # -- abundances: Mo
-    pl.DataFrame({
-        "Z": [42, 42, 42],
-        "A": [92, 94, 100],
-        "symbol": ["Mo", "Mo", "Mo"],
-        "abundance": [0.1453, 0.0915, 0.0974],
-        "atomic_mass": [91.906810, 93.905085, 99.907477],
-    }).cast({"Z": pl.Int32, "A": pl.Int32}).write_parquet(
+    pl.DataFrame(
+        {
+            "Z": [42, 42, 42],
+            "A": [92, 94, 100],
+            "symbol": ["Mo", "Mo", "Mo"],
+            "abundance": [0.1453, 0.0915, 0.0974],
+            "atomic_mass": [91.906810, 93.905085, 99.907477],
+        }
+    ).cast({"Z": pl.Int32, "A": pl.Int32}).write_parquet(
         meta_dir / "abundances.parquet"
     )
 
     # -- decay: Tc-99m
-    pl.DataFrame({
-        "Z": [43, 43],
-        "A": [99, 99],
-        "state": ["m", "m"],
-        "half_life_s": [21624.0, 21624.0],
-        "decay_mode": ["IT", "beta-"],
-        "daughter_Z": [43, 44],
-        "daughter_A": [99, 99],
-        "daughter_state": ["", ""],
-        "branching": [0.885, 0.115],
-    }).cast({
-        "Z": pl.Int32, "A": pl.Int32,
-        "daughter_Z": pl.Int32, "daughter_A": pl.Int32,
-    }).write_parquet(meta_dir / "decay.parquet")
+    pl.DataFrame(
+        {
+            "Z": [43, 43],
+            "A": [99, 99],
+            "state": ["m", "m"],
+            "half_life_s": [21624.0, 21624.0],
+            "decay_mode": ["IT", "beta-"],
+            "daughter_Z": [43, 44],
+            "daughter_A": [99, 99],
+            "daughter_state": ["", ""],
+            "branching": [0.885, 0.115],
+        }
+    ).cast(
+        {
+            "Z": pl.Int32,
+            "A": pl.Int32,
+            "daughter_Z": pl.Int32,
+            "daughter_A": pl.Int32,
+        }
+    ).write_parquet(meta_dir / "decay.parquet")
 
     # -- stopping power: PSTAR for Z=1
-    pl.DataFrame({
-        "source": ["PSTAR", "PSTAR", "PSTAR"],
-        "target_Z": [1, 1, 1],
-        "energy_MeV": [0.1, 1.0, 10.0],
-        "dedx": [500.0, 200.0, 50.0],
-    }).cast({"target_Z": pl.Int32}).write_parquet(
-        stopping_dir / "stopping.parquet"
-    )
+    pl.DataFrame(
+        {
+            "source": ["PSTAR", "PSTAR", "PSTAR"],
+            "target_Z": [1, 1, 1],
+            "energy_MeV": [0.1, 1.0, 10.0],
+            "dedx": [500.0, 200.0, 50.0],
+        }
+    ).cast({"target_Z": pl.Int32}).write_parquet(stopping_dir / "stopping.parquet")
 
     # -- cross-sections: p + Mo
-    xs_data = pl.DataFrame({
-        "target_A": [100, 100, 100, 100, 100],
-        "residual_Z": [43, 43, 43, 43, 43],
-        "residual_A": [99, 99, 99, 99, 99],
-        "state": ["m", "m", "m", "", ""],
-        "energy_MeV": [5.0, 10.0, 15.0, 5.0, 10.0],
-        "xs_mb": [10.0, 50.0, 30.0, 5.0, 25.0],
-    }).cast({
-        "target_A": pl.Int32,
-        "residual_Z": pl.Int32,
-        "residual_A": pl.Int32,
-    })
+    xs_data = pl.DataFrame(
+        {
+            "target_A": [100, 100, 100, 100, 100],
+            "residual_Z": [43, 43, 43, 43, 43],
+            "residual_A": [99, 99, 99, 99, 99],
+            "state": ["m", "m", "m", "", ""],
+            "energy_MeV": [5.0, 10.0, 15.0, 5.0, 10.0],
+            "xs_mb": [10.0, 50.0, 30.0, 5.0, 25.0],
+        }
+    ).cast(
+        {
+            "target_A": pl.Int32,
+            "residual_Z": pl.Int32,
+            "residual_A": pl.Int32,
+        }
+    )
     xs_data.write_parquet(xs_dir / "p_Mo.parquet")
 
     return tmp_path

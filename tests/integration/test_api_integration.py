@@ -55,8 +55,11 @@ class TestConfigToStack:
             "beam": {"projectile": "p", "energy_MeV": 16, "current_mA": 0.15},
             "layers": [
                 {"material": "Cu", "thickness_cm": 0.0025},
-                {"material": "Mo-100", "energy_out_MeV": 12,
-                 "enrichment": {"Mo": {"100": 0.995, "98": 0.005}}},
+                {
+                    "material": "Mo-100",
+                    "energy_out_MeV": 12,
+                    "enrichment": {"Mo": {"100": 0.995, "98": 0.005}},
+                },
             ],
             "irradiation_s": 86400,
             "cooling_s": 86400,

@@ -92,17 +92,14 @@ def plot_activity_vs_time(
         results = list(isotope_results)
 
     # Filter and sort by peak activity
-    filtered = [
-        r for r in results if np.max(r.activity_vs_time_Bq) > min_activity_Bq
-    ]
+    filtered = [r for r in results if np.max(r.activity_vs_time_Bq) > min_activity_Bq]
     filtered.sort(key=lambda r: float(np.max(r.activity_vs_time_Bq)), reverse=True)
 
     if top_n is not None:
         filtered = filtered[:top_n]
 
     traces = [
-        (r.time_grid_s / 3600, r.activity_vs_time_Bq * 1e-9, r.name)
-        for r in filtered
+        (r.time_grid_s / 3600, r.activity_vs_time_Bq * 1e-9, r.name) for r in filtered
     ]
     title = kwargs.pop("title", "Activity vs Time")
 
@@ -219,9 +216,7 @@ def plot_purity_vs_cooling(
                 total_activity += r_cooling
 
     target_activity = target.activity_vs_time_Bq[mask]
-    purity = np.where(
-        total_activity > 0, target_activity / total_activity * 100, 0.0
-    )
+    purity = np.where(total_activity > 0, target_activity / total_activity * 100, 0.0)
 
     title = kwargs.pop("title", f"Radionuclidic Purity \u2014 {target_isotope}")
 
@@ -260,9 +255,7 @@ def plot_energy_scan(
     Returns:
         Figure object.
     """
-    traces = [
-        (energies_MeV, acts, name) for name, acts in activities.items()
-    ]
+    traces = [(energies_MeV, acts, name) for name, acts in activities.items()]
     title = kwargs.pop("title", "Energy Scan")
 
     if backend == "matplotlib":
@@ -435,9 +428,7 @@ def plot_xs_convolution(
         return np.interp(E, xs_energies_MeV, xs_mb, left=0.0, right=0.0)
 
     sigma_arr = np.full_like(xs_energies_MeV, sigma_E_MeV)
-    xs_convolved = _gauss_hermite_convolved_xs(
-        xs_interp_fn, xs_energies_MeV, sigma_arr
-    )
+    xs_convolved = _gauss_hermite_convolved_xs(xs_interp_fn, xs_energies_MeV, sigma_arr)
 
     label_point = reaction_label or "\u03c3(E)"
     label_conv = f"\u27e8\u03c3\u27e9(E), \u03c3_E={sigma_E_MeV:.2f} MeV"
@@ -446,7 +437,10 @@ def plot_xs_convolution(
         (xs_energies_MeV.tolist(), xs_convolved.tolist(), label_conv),
     ]
 
-    title = kwargs.pop("title", f"Cross-Section Convolution{' \u2014 ' + reaction_label if reaction_label else ''}")
+    title = kwargs.pop(
+        "title",
+        f"Cross-Section Convolution{' \u2014 ' + reaction_label if reaction_label else ''}",
+    )
 
     if backend == "matplotlib":
         return _mpl_multi_line_plot(
@@ -504,13 +498,24 @@ def plot_production_vs_depth(
         # No production rate data — return empty plot
         title = kwargs.pop("title", "Production Rate vs Depth (no data)")
         if backend == "matplotlib":
-            return _mpl_line_plot([], [], "Depth [mm]", "Production rate [s\u207b\u00b9/cm]", title, **kwargs)
-        return _plotly_line_plot([], [], "Depth [mm]", "Production rate [s\u207b\u00b9/cm]", title)
+            return _mpl_line_plot(
+                [],
+                [],
+                "Depth [mm]",
+                "Production rate [s\u207b\u00b9/cm]",
+                title,
+                **kwargs,
+            )
+        return _plotly_line_plot(
+            [], [], "Depth [mm]", "Production rate [s\u207b\u00b9/cm]", title
+        )
 
     # Build rate arrays and rank by integrated rate
     isotope_rates: dict[str, list[float]] = {}
     for iso in all_isotopes:
-        isotope_rates[iso] = [dp.production_rates.get(iso, 0.0) for dp in layer_result.depth_profile]
+        isotope_rates[iso] = [
+            dp.production_rates.get(iso, 0.0) for dp in layer_result.depth_profile
+        ]
 
     ranked = sorted(
         isotope_rates.items(),
@@ -566,7 +571,9 @@ def plot_cumulative_yield(
     if not all_isotopes:
         title = kwargs.pop("title", "Cumulative Yield vs Depth (no data)")
         if backend == "matplotlib":
-            return _mpl_line_plot([], [], "Depth [mm]", "Cumulative fraction", title, **kwargs)
+            return _mpl_line_plot(
+                [], [], "Depth [mm]", "Cumulative fraction", title, **kwargs
+            )
         return _plotly_line_plot([], [], "Depth [mm]", "Cumulative fraction", title)
 
     isotope_rates: dict[str, np.ndarray] = {}
@@ -699,7 +706,7 @@ def plot_beam_spot(
     X, Y = np.meshgrid(x, y)
 
     if sx > 1e-9 and sy > 1e-9:
-        Z = np.exp(-X ** 2 / (2 * sx ** 2) - Y ** 2 / (2 * sy ** 2))
+        Z = np.exp(-(X**2) / (2 * sx**2) - Y**2 / (2 * sy**2))
     else:
         Z = np.zeros_like(X)
 
@@ -785,10 +792,10 @@ def plot_phase_space(
 
     # Twiss beta and gamma
     if sigma_mm > 0 and eps > 0:
-        beta = sigma_mm ** 2 / eps
+        beta = sigma_mm**2 / eps
     else:
         beta = 1.0
-    gamma_tw = (1.0 + alpha ** 2) / beta
+    gamma_tw = (1.0 + alpha**2) / beta
 
     # Parametric ellipse: [x, theta] = R * [cos(t), sin(t)]
     # Sigma matrix: [[beta, -alpha], [-alpha, gamma]] * eps
@@ -950,6 +957,7 @@ def _mpl_line_plot(
 ) -> Any:
     """Create a single-line matplotlib plot."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -974,6 +982,7 @@ def _mpl_multi_line_plot(
 ) -> Any:
     """Create a multi-line matplotlib plot."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -1053,13 +1062,19 @@ def _mpl_band_plot(
 ) -> Any:
     """Matplotlib line plot with shaded band and optional vertical lines."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=kwargs.get("figsize", (10, 6)))
     ax.plot(x, y, label="Mean energy", color="C0")
     ax.fill_between(
-        x, y_lower, y_upper, alpha=0.3, color="C0", label=band_label,
+        x,
+        y_lower,
+        y_upper,
+        alpha=0.3,
+        color="C0",
+        label=band_label,
     )
     if vlines:
         for vx in vlines:
@@ -1088,11 +1103,20 @@ def _plotly_band_plot(
     import plotly.graph_objects as go
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=y_upper, mode="lines", line={"width": 0},
-                             showlegend=False))
-    fig.add_trace(go.Scatter(x=x, y=y_lower, mode="lines", line={"width": 0},
-                             fill="tonexty", fillcolor="rgba(31,119,180,0.3)",
-                             name=band_label))
+    fig.add_trace(
+        go.Scatter(x=x, y=y_upper, mode="lines", line={"width": 0}, showlegend=False)
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=y_lower,
+            mode="lines",
+            line={"width": 0},
+            fill="tonexty",
+            fillcolor="rgba(31,119,180,0.3)",
+            name=band_label,
+        )
+    )
     fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name="Mean energy"))
     if vlines:
         for vx in vlines:
@@ -1113,6 +1137,7 @@ def _mpl_excitation_plot(
 ) -> Any:
     """Matplotlib cross-section plot with shaded energy window."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -1120,8 +1145,12 @@ def _mpl_excitation_plot(
     ax.plot(x, y, color="C0")
     e_lo = min(energy_in, energy_out)
     e_hi = max(energy_in, energy_out)
-    ax.axvline(energy_in, color="C1", linestyle="--", label=f"E_in = {energy_in:.1f} MeV")
-    ax.axvline(energy_out, color="C2", linestyle="--", label=f"E_out = {energy_out:.1f} MeV")
+    ax.axvline(
+        energy_in, color="C1", linestyle="--", label=f"E_in = {energy_in:.1f} MeV"
+    )
+    ax.axvline(
+        energy_out, color="C2", linestyle="--", label=f"E_out = {energy_out:.1f} MeV"
+    )
     ax.axvspan(e_lo, e_hi, alpha=0.15, color="C1", label="Energy window")
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -1148,12 +1177,26 @@ def _plotly_excitation_plot(
     fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name="\u03c3(E)"))
     e_lo = min(energy_in, energy_out)
     e_hi = max(energy_in, energy_out)
-    fig.add_vrect(x0=e_lo, x1=e_hi, fillcolor="orange", opacity=0.15,
-                  line_width=0, annotation_text="Energy window")
-    fig.add_vline(x=energy_in, line_dash="dash", line_color="orange",
-                  annotation_text=f"E_in={energy_in:.1f}")
-    fig.add_vline(x=energy_out, line_dash="dash", line_color="green",
-                  annotation_text=f"E_out={energy_out:.1f}")
+    fig.add_vrect(
+        x0=e_lo,
+        x1=e_hi,
+        fillcolor="orange",
+        opacity=0.15,
+        line_width=0,
+        annotation_text="Energy window",
+    )
+    fig.add_vline(
+        x=energy_in,
+        line_dash="dash",
+        line_color="orange",
+        annotation_text=f"E_in={energy_in:.1f}",
+    )
+    fig.add_vline(
+        x=energy_out,
+        line_dash="dash",
+        line_color="green",
+        annotation_text=f"E_out={energy_out:.1f}",
+    )
     fig.update_layout(title=title, xaxis_title=xlabel, yaxis_title=ylabel)
     return fig
 
@@ -1171,6 +1214,7 @@ def _mpl_contour_plot(
 ) -> Any:
     """Matplotlib filled-contour plot with optional sigma ellipses."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Ellipse
@@ -1245,6 +1289,7 @@ def _mpl_mesh_cross_section(
 ) -> Any:
     """Matplotlib mesh cross-section with PatchCollection."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.collections import PatchCollection
@@ -1355,58 +1400,81 @@ def _plotly_mesh_cross_section(
         xs = list(verts[:, 0]) + [verts[0, 0]]
         ys = list(verts[:, 1]) + [verts[0, 1]]
         info = materials.get(poly.material_id) if materials else None
-        mat_name = info.name if info and hasattr(info, "name") else str(poly.material_id)
+        mat_name = (
+            info.name if info and hasattr(info, "name") else str(poly.material_id)
+        )
 
         if values is not None:
             t_norm = max(0.0, min(1.0, (mapped[i] - vmin) / span))
             color = px.colors.sample_colorscale(colormap, [t_norm])[0]
-            fig.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines", fill="toself",
-                fillcolor=color,
-                line={"color": color, "width": 0},
-                opacity=0.9,
-                showlegend=False,
-                hovertemplate=(
-                    f"<b>{mat_name}</b><br>"
-                    f"{quantity_label}: {raw_vals[i]:.2e}<br>"
-                    f"<extra>tet {poly.tet_index}</extra>"
-                ),
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="lines",
+                    fill="toself",
+                    fillcolor=color,
+                    line={"color": color, "width": 0},
+                    opacity=0.9,
+                    showlegend=False,
+                    hovertemplate=(
+                        f"<b>{mat_name}</b><br>"
+                        f"{quantity_label}: {raw_vals[i]:.2e}<br>"
+                        f"<extra>tet {poly.tet_index}</extra>"
+                    ),
+                )
+            )
         elif show_materials:
             mid = poly.material_id
             show = mid not in added_legend
             added_legend.add(mid)
-            fig.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines", fill="toself",
-                fillcolor=mat_color_map[mid],
-                line={"color": "gray", "width": 0.3},
-                opacity=0.8,
-                name=mat_name,
-                legendgroup=str(mid),
-                showlegend=show,
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="lines",
+                    fill="toself",
+                    fillcolor=mat_color_map[mid],
+                    line={"color": "gray", "width": 0.3},
+                    opacity=0.8,
+                    name=mat_name,
+                    legendgroup=str(mid),
+                    showlegend=show,
+                )
+            )
         else:
-            fig.add_trace(go.Scatter(
-                x=xs, y=ys, mode="lines", fill="toself",
-                fillcolor="steelblue",
-                line={"color": "gray", "width": 0.3},
-                showlegend=False,
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=xs,
+                    y=ys,
+                    mode="lines",
+                    fill="toself",
+                    fillcolor="steelblue",
+                    line={"color": "gray", "width": 0.3},
+                    showlegend=False,
+                )
+            )
 
     # Colorbar for values mode
     if values is not None:
         cb_vals = np.linspace(vmin, vmax, 50)
         cb_label = f"log₁₀({quantity_label})" if log_scale else quantity_label
-        fig.add_trace(go.Scatter(
-            x=[None] * len(cb_vals), y=[None] * len(cb_vals),
-            mode="markers",
-            marker={
-                "size": 0, "color": cb_vals, "colorscale": colormap,
-                "colorbar": {"title": cb_label, "thickness": 15},
-                "showscale": True,
-            },
-            showlegend=False, hoverinfo="skip",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=[None] * len(cb_vals),
+                y=[None] * len(cb_vals),
+                mode="markers",
+                marker={
+                    "size": 0,
+                    "color": cb_vals,
+                    "colorscale": colormap,
+                    "colorbar": {"title": cb_label, "thickness": 15},
+                    "showscale": True,
+                },
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
 
     # Beam overlay (sigma circles/lines)
     if beam_sigma_cm is not None:
@@ -1420,11 +1488,17 @@ def _plotly_mesh_cross_section(
         if x_span > 2 * y_span:
             # Longitudinal slice (wide): horizontal lines for beam envelope
             for n, dash in [(1, "dot"), (2, "dash")]:
-                fig.add_hline(y=n * sigma, line={"color": "white", "width": 1, "dash": dash})
-                fig.add_hline(y=-n * sigma, line={"color": "white", "width": 1, "dash": dash})
+                fig.add_hline(
+                    y=n * sigma, line={"color": "white", "width": 1, "dash": dash}
+                )
+                fig.add_hline(
+                    y=-n * sigma, line={"color": "white", "width": 1, "dash": dash}
+                )
                 fig.add_annotation(
-                    x=float(np.max(all_x)) + x_span * 0.02, y=n * sigma,
-                    text=f"{n}σ", showarrow=False,
+                    x=float(np.max(all_x)) + x_span * 0.02,
+                    y=n * sigma,
+                    text=f"{n}σ",
+                    showarrow=False,
                     font={"color": "white", "size": 10},
                 )
         else:
@@ -1432,12 +1506,15 @@ def _plotly_mesh_cross_section(
             theta = np.linspace(0, 2 * np.pi, 100)
             for n, dash in [(1, "dot"), (2, "dash")]:
                 r = n * sigma
-                fig.add_trace(go.Scatter(
-                    x=r * np.cos(theta), y=r * np.sin(theta),
-                    mode="lines",
-                    line={"color": "white", "width": 1.5, "dash": dash},
-                    name=f"Beam {n}σ ({n * sigma * 10:.1f} mm)",
-                ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=r * np.cos(theta),
+                        y=r * np.sin(theta),
+                        mode="lines",
+                        line={"color": "white", "width": 1.5, "dash": dash},
+                        name=f"Beam {n}σ ({n * sigma * 10:.1f} mm)",
+                    )
+                )
 
     bg = "black" if values is not None else "white"
     fig.update_layout(
@@ -1460,6 +1537,7 @@ def _mpl_ray_visualization(
 ) -> Any:
     """Matplotlib 2D projection of mesh wireframe with ray paths (XZ plane)."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -1476,8 +1554,11 @@ def _mpl_ray_visualization(
                 n0 = mesh.nodes[edge[0]]
                 n1 = mesh.nodes[edge[1]]
                 ax.plot(
-                    [n0[0], n1[0]], [n0[2], n1[2]],
-                    color="lightgray", linewidth=0.3, zorder=1,
+                    [n0[0], n1[0]],
+                    [n0[2], n1[2]],
+                    color="lightgray",
+                    linewidth=0.3,
+                    zorder=1,
                 )
 
     # Draw ray paths
@@ -1488,8 +1569,11 @@ def _mpl_ray_visualization(
             entry = seg.entry_point
             exit_ = seg.exit_point
             ax.plot(
-                [entry[0], exit_[0]], [entry[2], exit_[2]],
-                color=color, linewidth=1.5, zorder=2,
+                [entry[0], exit_[0]],
+                [entry[2], exit_[2]],
+                color=color,
+                linewidth=1.5,
+                zorder=2,
             )
 
     ax.set_xlabel("x [cm]")
@@ -1526,11 +1610,16 @@ def _plotly_ray_visualization(
                 mesh_x.extend([float(n0[0]), float(n1[0]), None])
                 mesh_z.extend([float(n0[2]), float(n1[2]), None])
 
-    fig.add_trace(go.Scatter(
-        x=mesh_x, y=mesh_z, mode="lines",
-        line={"color": "lightgray", "width": 0.5},
-        name="Mesh", showlegend=True,
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=mesh_x,
+            y=mesh_z,
+            mode="lines",
+            line={"color": "lightgray", "width": 0.5},
+            name="Mesh",
+            showlegend=True,
+        )
+    )
 
     # Ray paths
     for ray_idx, segments in enumerate(ray_segments):
@@ -1541,10 +1630,14 @@ def _plotly_ray_visualization(
             exit_ = seg.exit_point
             ray_x.extend([float(entry[0]), float(exit_[0]), None])
             ray_z.extend([float(entry[2]), float(exit_[2]), None])
-        fig.add_trace(go.Scatter(
-            x=ray_x, y=ray_z, mode="lines",
-            name=f"Ray {ray_idx}",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=ray_x,
+                y=ray_z,
+                mode="lines",
+                name=f"Ray {ray_idx}",
+            )
+        )
 
     fig.update_layout(
         title=title,

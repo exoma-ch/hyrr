@@ -51,17 +51,25 @@ class MockDB:
         return {}
 
     def get_cross_sections(
-        self, projectile: str, target_Z: int, target_A: int,
+        self,
+        projectile: str,
+        target_Z: int,
+        target_A: int,
     ) -> list[CrossSectionData]:
         return []
 
     def get_decay_data(
-        self, Z: int, A: int, state: str = "",
+        self,
+        Z: int,
+        A: int,
+        state: str = "",
     ) -> DecayData | None:
         return None
 
     def get_stopping_power(
-        self, source: str, target_Z: int,
+        self,
+        source: str,
+        target_Z: int,
     ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
 

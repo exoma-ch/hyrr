@@ -88,7 +88,9 @@ def layer(element: Element) -> Layer:
 def layer_result(layer: Layer) -> LayerResult:
     profile = _make_depth_profile()
     iso1 = _make_isotope_result("Tc-99m", half_life=21624.0, peak_activity=1e10)
-    iso2 = _make_isotope_result("Tc-99g", half_life=2.111e5 * 365.25 * 86400, peak_activity=1e8)
+    iso2 = _make_isotope_result(
+        "Tc-99g", half_life=2.111e5 * 365.25 * 86400, peak_activity=1e8
+    )
     return LayerResult(
         layer=layer,
         energy_in=16.0,
@@ -164,23 +166,17 @@ class TestDepthProfile:
 
 
 class TestActivityVsTime:
-    def test_returns_figure(
-        self, isotope_results_list: list[IsotopeResult]
-    ) -> None:
+    def test_returns_figure(self, isotope_results_list: list[IsotopeResult]) -> None:
         fig = plot_activity_vs_time(isotope_results_list, backend="matplotlib")
         assert isinstance(fig, plt.Figure)
         plt.close(fig)
 
-    def test_accepts_dict(
-        self, isotope_results_dict: dict[str, IsotopeResult]
-    ) -> None:
+    def test_accepts_dict(self, isotope_results_dict: dict[str, IsotopeResult]) -> None:
         fig = plot_activity_vs_time(isotope_results_dict, backend="matplotlib")
         assert isinstance(fig, plt.Figure)
         plt.close(fig)
 
-    def test_top_n_filtering(
-        self, isotope_results_list: list[IsotopeResult]
-    ) -> None:
+    def test_top_n_filtering(self, isotope_results_list: list[IsotopeResult]) -> None:
         fig = plot_activity_vs_time(isotope_results_list, top_n=2, backend="matplotlib")
         ax = fig.axes[0]
         assert len(ax.get_lines()) == 2
@@ -194,7 +190,9 @@ class TestActivityVsTime:
     def test_min_activity_filter(
         self, isotope_results_list: list[IsotopeResult]
     ) -> None:
-        fig = plot_activity_vs_time(isotope_results_list, min_activity_Bq=1e11, backend="matplotlib")
+        fig = plot_activity_vs_time(
+            isotope_results_list, min_activity_Bq=1e11, backend="matplotlib"
+        )
         ax = fig.axes[0]
         # Very high threshold should filter out everything
         assert len(ax.get_lines()) == 0
@@ -207,25 +205,25 @@ class TestActivityVsTime:
 
 
 class TestCoolingCurve:
-    def test_returns_figure(
-        self, isotope_results_list: list[IsotopeResult]
-    ) -> None:
-        fig = plot_cooling_curve(isotope_results_list, irradiation_time_s=86400, backend="matplotlib")
+    def test_returns_figure(self, isotope_results_list: list[IsotopeResult]) -> None:
+        fig = plot_cooling_curve(
+            isotope_results_list, irradiation_time_s=86400, backend="matplotlib"
+        )
         assert isinstance(fig, plt.Figure)
         plt.close(fig)
 
-    def test_log_y_scale(
-        self, isotope_results_list: list[IsotopeResult]
-    ) -> None:
-        fig = plot_cooling_curve(isotope_results_list, irradiation_time_s=86400, backend="matplotlib")
+    def test_log_y_scale(self, isotope_results_list: list[IsotopeResult]) -> None:
+        fig = plot_cooling_curve(
+            isotope_results_list, irradiation_time_s=86400, backend="matplotlib"
+        )
         ax = fig.axes[0]
         assert ax.get_yscale() == "log"
         plt.close(fig)
 
-    def test_accepts_dict(
-        self, isotope_results_dict: dict[str, IsotopeResult]
-    ) -> None:
-        fig = plot_cooling_curve(isotope_results_dict, irradiation_time_s=86400, backend="matplotlib")
+    def test_accepts_dict(self, isotope_results_dict: dict[str, IsotopeResult]) -> None:
+        fig = plot_cooling_curve(
+            isotope_results_dict, irradiation_time_s=86400, backend="matplotlib"
+        )
         assert isinstance(fig, plt.Figure)
         plt.close(fig)
 
@@ -240,7 +238,10 @@ class TestPurityVsCooling:
         self, isotope_results_dict: dict[str, IsotopeResult]
     ) -> None:
         fig = plot_purity_vs_cooling(
-            isotope_results_dict, "Tc-99m", irradiation_time_s=86400, backend="matplotlib"
+            isotope_results_dict,
+            "Tc-99m",
+            irradiation_time_s=86400,
+            backend="matplotlib",
         )
         assert isinstance(fig, plt.Figure)
         plt.close(fig)
@@ -253,11 +254,12 @@ class TestPurityVsCooling:
                 isotope_results_dict, "nonexistent", irradiation_time_s=86400
             )
 
-    def test_purity_label(
-        self, isotope_results_dict: dict[str, IsotopeResult]
-    ) -> None:
+    def test_purity_label(self, isotope_results_dict: dict[str, IsotopeResult]) -> None:
         fig = plot_purity_vs_cooling(
-            isotope_results_dict, "Tc-99m", irradiation_time_s=86400, backend="matplotlib"
+            isotope_results_dict,
+            "Tc-99m",
+            irradiation_time_s=86400,
+            backend="matplotlib",
         )
         ax = fig.axes[0]
         assert "Purity" in ax.get_ylabel()
@@ -318,16 +320,12 @@ class TestPlotlyBackend:
         assert hasattr(fig, "data")
         assert len(fig.data) == 1
 
-    def test_activity_vs_time(
-        self, isotope_results_list: list[IsotopeResult]
-    ) -> None:
+    def test_activity_vs_time(self, isotope_results_list: list[IsotopeResult]) -> None:
         fig = plot_activity_vs_time(isotope_results_list, backend="plotly")
         assert hasattr(fig, "data")
         assert len(fig.data) == 3
 
-    def test_cooling_curve(
-        self, isotope_results_list: list[IsotopeResult]
-    ) -> None:
+    def test_cooling_curve(self, isotope_results_list: list[IsotopeResult]) -> None:
         fig = plot_cooling_curve(
             isotope_results_list, irradiation_time_s=86400, backend="plotly"
         )
