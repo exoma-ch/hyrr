@@ -6,7 +6,9 @@ A pure Python package for predicting radio-isotope production in stacked
 target assemblies, using TENDL cross-section data and NIST stopping power
 tables.
 
-**Try it now: [exoma-ch.github.io/hyrr](https://exoma-ch.github.io/hyrr/)** — full simulation runs in the browser, no install, no data leaves your machine.
+**[Web App](https://exoma-ch.github.io/hyrr/)** | **[Documentation](https://exoma-ch.github.io/hyrr/docs/)**
+
+Try it now — full simulation runs in the browser, no install, no data leaves your machine.
 
 ## What it does
 
