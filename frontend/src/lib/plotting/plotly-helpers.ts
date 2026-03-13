@@ -1,33 +1,45 @@
 /**
- * Plotly dark-theme layout defaults and formatting helpers.
+ * Plotly theme-aware layout defaults and formatting helpers.
  */
 
-/** Dark theme layout overrides for Plotly charts. */
+/** Read a CSS custom property from the document root. */
+function cv(name: string, fallback: string): string {
+  if (typeof document === "undefined") return fallback;
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+/** Theme-aware layout overrides for Plotly charts. */
 export function darkLayout(
   overrides: Record<string, any> = {},
 ): Record<string, any> {
+  const bgSubtle = cv("--c-bg-subtle", "#161b22");
+  const bgDefault = cv("--c-bg-default", "#0d1117");
+  const text = cv("--c-text", "#e1e4e8");
+  const textMuted = cv("--c-text-muted", "#8b949e");
+  const border = cv("--c-border", "#2d333b");
+
   return {
-    paper_bgcolor: "#161b22",
-    plot_bgcolor: "#0d1117",
+    paper_bgcolor: bgSubtle,
+    plot_bgcolor: bgDefault,
     font: {
-      color: "#e1e4e8",
+      color: text,
       family: "-apple-system, BlinkMacSystemFont, sans-serif",
       size: 12,
     },
     xaxis: {
-      gridcolor: "#2d333b",
-      zerolinecolor: "#2d333b",
+      gridcolor: border,
+      zerolinecolor: border,
       ...overrides.xaxis,
     },
     yaxis: {
-      gridcolor: "#2d333b",
-      zerolinecolor: "#2d333b",
+      gridcolor: border,
+      zerolinecolor: border,
       ...overrides.yaxis,
     },
     margin: { t: 30, r: 20, b: 50, l: 60 },
     legend: {
       bgcolor: "transparent",
-      font: { color: "#8b949e", size: 10 },
+      font: { color: textMuted, size: 10 },
     },
     ...overrides,
   };
@@ -78,4 +90,20 @@ export function formatHalfLife(seconds: number | null): string {
   if (seconds < 86400) return fmtNum(seconds / 3600) + " h";
   if (seconds < 86400 * 365) return fmtNum(seconds / 86400) + " d";
   return fmtNum(seconds / (86400 * 365.25)) + " y";
+}
+
+/** Read current theme CSS variable values for use in Plotly trace configs. */
+export function themeColors() {
+  return {
+    border: cv("--c-border", "#2d333b"),
+    textMuted: cv("--c-text-muted", "#8b949e"),
+    textSubtle: cv("--c-text-subtle", "#6e7681"),
+    textFaint: cv("--c-text-faint", "#484f58"),
+    accent: cv("--c-accent", "#58a6ff"),
+    orange: cv("--c-orange", "#f0883e"),
+    greenText: cv("--c-green-text", "#7ee787"),
+    gold: cv("--c-gold", "#d29922"),
+    red: cv("--c-red", "#f85149"),
+    purple: cv("--c-purple", "#bc8cff"),
+  };
 }

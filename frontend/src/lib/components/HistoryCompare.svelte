@@ -99,16 +99,16 @@
   }
 
   .entry-label {
-    color: #58a6ff;
+    color: var(--c-accent);
     font-weight: 500;
   }
 
   .vs {
-    color: #484f58;
+    color: var(--c-text-faint);
   }
 
   .same {
-    color: #7ee787;
+    color: var(--c-green-text);
     font-size: 0.8rem;
     margin: 0;
   }
@@ -122,21 +122,21 @@
   th {
     text-align: left;
     padding: 0.3rem;
-    border-bottom: 1px solid #2d333b;
-    color: #8b949e;
+    border-bottom: 1px solid var(--c-border);
+    color: var(--c-text-muted);
     font-weight: 500;
   }
 
   td {
     padding: 0.3rem;
-    border-bottom: 1px solid #1c2128;
+    border-bottom: 1px solid var(--c-bg-hover);
   }
 
   .val-a {
-    color: #f85149;
+    color: var(--c-red);
   }
 
   .val-b {
-    color: #7ee787;
+    color: var(--c-green-text);
   }
 </style>

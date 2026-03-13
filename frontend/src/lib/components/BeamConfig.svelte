@@ -192,10 +192,10 @@
   .proj-btn {
     flex: 1;
     padding: 0.4rem 0;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.85rem;
     font-weight: 600;
     cursor: pointer;
@@ -203,14 +203,14 @@
   }
 
   .proj-btn:hover {
-    border-color: #58a6ff;
-    color: #e1e4e8;
+    border-color: var(--c-accent);
+    color: var(--c-text);
   }
 
   .proj-btn.active {
-    background: #1f3a5f;
-    border-color: #58a6ff;
-    color: #58a6ff;
+    background: var(--c-bg-active);
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .field-grid {
@@ -220,7 +220,7 @@
   }
 
   .separator {
-    border-top: 1px solid #2d333b;
+    border-top: 1px solid var(--c-border);
     margin: 0.1rem 0;
   }
 
@@ -232,7 +232,7 @@
 
   .time-row label {
     font-size: 0.8rem;
-    color: #c9d1d9;
+    color: var(--c-text-label);
   }
 
   .time-controls {
@@ -242,10 +242,10 @@
 
   .time-input {
     flex: 1;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.35rem 0.5rem;
     font-size: 0.85rem;
     text-align: right;
@@ -253,15 +253,15 @@
 
   .time-input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .unit-select {
     width: 60px;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.35rem;
     font-size: 0.85rem;
     cursor: pointer;
@@ -269,7 +269,7 @@
 
   .unit-select:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .current-profile {
@@ -280,17 +280,17 @@
 
   .profile-btn {
     background: none;
-    border: 1px dashed #2d333b;
+    border: 1px dashed var(--c-border);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.3rem;
     font-size: 0.7rem;
     cursor: pointer;
   }
 
   .profile-btn:hover {
-    border-color: #58a6ff;
-    color: #c9d1d9;
+    border-color: var(--c-accent);
+    color: var(--c-text-label);
   }
 
   .upload-row {
@@ -302,14 +302,14 @@
   .file-input {
     flex: 1;
     font-size: 0.7rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
   }
 
   .cancel-btn {
     background: none;
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.2rem 0.4rem;
     font-size: 0.7rem;
     cursor: pointer;
@@ -317,6 +317,6 @@
 
   .upload-hint {
     font-size: 0.65rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
   }
 </style>

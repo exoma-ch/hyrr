@@ -116,17 +116,17 @@
   .refresh-btn {
     background: none;
     border: none;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 1rem;
     cursor: pointer;
   }
 
   .refresh-btn:hover {
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
   .empty {
-    color: #484f58;
+    color: var(--c-text-faint);
     font-style: italic;
     font-size: 0.8rem;
     margin: 0;
@@ -157,22 +157,22 @@
   }
 
   .history-list::-webkit-scrollbar-track {
-    background: #0d1117;
+    background: var(--c-bg-default);
     border-radius: 3px;
   }
 
   .history-list::-webkit-scrollbar-thumb {
-    background: #2d333b;
+    background: var(--c-border);
     border-radius: 3px;
   }
 
   .history-list::-webkit-scrollbar-thumb:hover {
-    background: #484f58;
+    background: var(--c-text-faint);
   }
 
   .history-item {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     padding: 0.4rem;
   }
@@ -189,7 +189,7 @@
     text-align: left;
     background: none;
     border: none;
-    color: #e1e4e8;
+    color: var(--c-text);
     cursor: pointer;
     padding: 0;
     display: flex;
@@ -198,7 +198,7 @@
   }
 
   .label-btn:hover .label {
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
   .label {
@@ -207,7 +207,7 @@
 
   .timestamp {
     font-size: 0.65rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
   }
 
   .item-actions {
@@ -219,18 +219,18 @@
   .action-btn {
     background: none;
     border: none;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.8rem;
     cursor: pointer;
     padding: 0.1rem 0.2rem;
   }
 
   .action-btn:hover {
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
   .action-btn.delete:hover {
-    color: #f85149;
+    color: var(--c-red);
   }
 
   .edit-row {
@@ -240,10 +240,10 @@
 
   .edit-input {
     flex: 1;
-    background: #161b22;
-    border: 1px solid #58a6ff;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-accent);
     border-radius: 3px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.2rem 0.3rem;
     font-size: 0.8rem;
   }
@@ -251,21 +251,21 @@
   .save-btn,
   .cancel-btn {
     background: none;
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     cursor: pointer;
     font-size: 0.75rem;
     padding: 0.1rem 0.3rem;
   }
 
   .save-btn:hover {
-    color: #7ee787;
-    border-color: #7ee787;
+    color: var(--c-green-text);
+    border-color: var(--c-green-text);
   }
 
   .cancel-btn:hover {
-    color: #f85149;
-    border-color: #f85149;
+    color: var(--c-red);
+    border-color: var(--c-red);
   }
 </style>

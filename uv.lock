@@ -921,12 +921,16 @@ server = [
 dev = [
     { name = "hatchling" },
     { name = "ipykernel" },
+    { name = "jupyter" },
+    { name = "jupytext" },
     { name = "nbmake" },
     { name = "pandas" },
+    { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-benchmark" },
     { name = "pytest-cov" },
     { name = "rich" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -964,12 +968,16 @@ provides-extras = ["dev", "server", "pandas", "plotting", "geometry", "docs", "a
 dev = [
     { name = "hatchling", specifier = ">=1.25" },
     { name = "ipykernel", specifier = ">=6.31.0" },
+    { name = "jupyter", specifier = ">=1.1.1" },
+    { name = "jupytext", specifier = ">=1.19.1" },
     { name = "nbmake", specifier = ">=1.5" },
     { name = "pandas", specifier = ">=2.0" },
+    { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-benchmark", specifier = ">=4.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
+    { name = "ruff", specifier = ">=0.8" },
 ]
 
 [[package]]

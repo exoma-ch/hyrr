@@ -33,6 +33,9 @@ export interface DatabaseProtocol {
 
   getDecayData(Z: number, A: number, state?: string): DecayData | null;
 
+  /** Gamma dose rate constant k (µSv·m²/MBq·h) with source quality tag. */
+  getDoseConstant(Z: number, A: number, state?: string): { k: number; source: string } | null;
+
   getElementSymbol(Z: number): string;
 
   getElementZ(symbol: string): number;

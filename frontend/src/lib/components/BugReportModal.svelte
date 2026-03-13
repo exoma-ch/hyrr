@@ -15,8 +15,7 @@
   let capturing = $state(false);
   let resultMsg = $state<{ ok: boolean; text: string } | null>(null);
 
-  // @ts-ignore – Vite env var, set via .env or build flag
-  const WORKER_URL: string = (import.meta as any).env?.VITE_ISSUE_WORKER_URL ?? "";
+  const WORKER_URL = import.meta.env.VITE_ISSUE_WORKER_URL ?? "";
   const REPO = "exoma-ch/hyrr";
   const MAX_DIM = 1280;
   const JPEG_QUALITY = 0.8;
@@ -31,7 +30,7 @@
       if (panel) panel.style.visibility = "hidden";
 
       const canvas = await html2canvas(document.body, {
-        backgroundColor: "#0d1117",
+        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue("--c-bg-default").trim() || "#0d1117",
         scale: 1,
         logging: false,
         useCORS: true,
@@ -144,6 +143,7 @@
       sections.push(`**Result:** No simulation result available`);
     }
 
+    sections.push(`**Version:** ${__APP_VERSION__}`);
     sections.push(`**Browser:** ${navigator.userAgent}`);
     sections.push(`**Timestamp:** ${new Date().toISOString()}`);
 
@@ -298,10 +298,10 @@
     right: 1rem;
     width: 340px;
     max-height: 80vh;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 10px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 8px 32px var(--c-overlay-heavy);
     z-index: 2000;
     display: flex;
     flex-direction: column;
@@ -313,7 +313,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.6rem 0.75rem;
-    border-bottom: 1px solid #2d333b;
+    border-bottom: 1px solid var(--c-border);
     cursor: grab;
     flex-shrink: 0;
   }
@@ -321,13 +321,13 @@
   .panel-header h3 {
     margin: 0;
     font-size: 0.9rem;
-    color: #e1e4e8;
+    color: var(--c-text);
   }
 
   .close-btn {
     background: none;
     border: none;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 1.2rem;
     cursor: pointer;
     padding: 0.1rem 0.3rem;
@@ -336,8 +336,8 @@
   }
 
   .close-btn:hover {
-    color: #e1e4e8;
-    background: #21262d;
+    color: var(--c-text);
+    background: var(--c-bg-muted);
   }
 
   .panel-body {
@@ -350,12 +350,12 @@
 
   .tip {
     font-size: 0.7rem;
-    color: #d29922;
+    color: var(--c-gold);
     margin: 0;
     padding: 0.3rem 0.5rem;
-    background: rgba(210, 153, 34, 0.08);
+    background: var(--c-gold-tint-faint);
     border-radius: 4px;
-    border-left: 2px solid #d29922;
+    border-left: 2px solid var(--c-gold);
   }
 
   .field {
@@ -366,23 +366,23 @@
 
   label {
     font-size: 0.75rem;
-    color: #c9d1d9;
+    color: var(--c-text-label);
   }
 
   .optional {
-    color: #6e7681;
+    color: var(--c-text-subtle);
     font-weight: normal;
   }
 
   .required {
-    color: #f85149;
+    color: var(--c-red);
   }
 
   input, textarea {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.35rem 0.45rem;
     font-size: 0.8rem;
     font-family: inherit;
@@ -391,7 +391,7 @@
 
   input:focus, textarea:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .screenshot-actions {
@@ -401,10 +401,10 @@
   }
 
   .capture-btn {
-    background: #21262d;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #c9d1d9;
+    color: var(--c-text-label);
     padding: 0.35rem 0.6rem;
     font-size: 0.75rem;
     cursor: pointer;
@@ -412,8 +412,8 @@
   }
 
   .capture-btn:hover:not(:disabled) {
-    background: #30363d;
-    border-color: #484f58;
+    background: var(--c-border-muted);
+    border-color: var(--c-text-faint);
   }
 
   .capture-btn:disabled {
@@ -423,7 +423,7 @@
 
   .file-drop-inline {
     font-size: 0.7rem;
-    color: #58a6ff;
+    color: var(--c-accent);
     cursor: pointer;
   }
 
@@ -444,17 +444,17 @@
     max-width: 100%;
     max-height: 120px;
     border-radius: 4px;
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
   }
 
   .remove-btn {
     position: absolute;
     top: 4px;
     right: 4px;
-    background: rgba(13, 17, 23, 0.8);
-    border: 1px solid #2d333b;
+    background: var(--c-overlay-heavy);
+    border: 1px solid var(--c-border);
     border-radius: 50%;
-    color: #f85149;
+    color: var(--c-red);
     width: 18px;
     height: 18px;
     font-size: 0.7rem;
@@ -467,7 +467,7 @@
 
   .hint {
     font-size: 0.7rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     margin: 0;
   }
 
@@ -479,13 +479,13 @@
   }
 
   .result-msg.success {
-    color: #3fb950;
-    background: rgba(63, 185, 80, 0.1);
+    color: var(--c-green-bright);
+    background: var(--c-green-tint);
   }
 
   .result-msg.error {
-    color: #f85149;
-    background: rgba(248, 81, 73, 0.1);
+    color: var(--c-red);
+    background: var(--c-red-tint-subtle);
   }
 
   .actions {
@@ -496,22 +496,22 @@
 
   .cancel-btn {
     background: none;
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.35rem 0.6rem;
     font-size: 0.75rem;
     cursor: pointer;
   }
 
   .cancel-btn:hover {
-    color: #e1e4e8;
-    border-color: #484f58;
+    color: var(--c-text);
+    border-color: var(--c-text-faint);
   }
 
   .submit-btn {
-    background: #238636;
-    border: 1px solid #2ea043;
+    background: var(--c-green);
+    border: 1px solid var(--c-green-emphasis);
     border-radius: 4px;
     color: #fff;
     padding: 0.35rem 0.6rem;
@@ -521,7 +521,7 @@
   }
 
   .submit-btn:hover:not(:disabled) {
-    background: #2ea043;
+    background: var(--c-green-emphasis);
   }
 
   .submit-btn:disabled {

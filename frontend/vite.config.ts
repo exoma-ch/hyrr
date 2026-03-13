@@ -8,6 +8,11 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
+  server: {
+    watch: {
+      ignored: ["**/public/data/**"],
+    },
+  },
   build: {
     outDir: "dist",
     target: "esnext",

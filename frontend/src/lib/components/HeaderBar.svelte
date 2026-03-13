@@ -5,9 +5,12 @@
   import SessionTabs from "./SessionTabs.svelte";
   import HelpModal from "./HelpModal.svelte";
   import { openBugReport } from "../stores/bugreport.svelte";
+  import { cycleTheme, getThemeMode, getResolvedTheme } from "../stores/theme.svelte";
 
   let historyOpen = $derived(getHistoryOpen());
   let helpOpen = $state(false);
+  let themeMode = $derived(getThemeMode());
+  let resolved = $derived(getResolvedTheme());
 
   function feelingLucky() {
     const idx = Math.floor(Math.random() * PRESETS.length);
@@ -29,6 +32,26 @@
   </div>
 
   <div class="actions">
+    <button
+      class="icon-btn"
+      onclick={cycleTheme}
+      title="Theme: {themeMode} ({resolved})"
+    >
+      {#if themeMode === "auto"}
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 1a7 7 0 100 14A7 7 0 008 1zM0 8a8 8 0 1116 0A8 8 0 010 8zm8-5.5v11a5.5 5.5 0 000-11z"></path>
+        </svg>
+      {:else if resolved === "light"}
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 12a4 4 0 100-8 4 4 0 000 8zm0 1A5 5 0 108 3a5 5 0 000 10zm5.657-9.657a.75.75 0 010 1.06l-.707.707a.75.75 0 11-1.06-1.06l.707-.707a.75.75 0 011.06 0zM3.404 11.89a.75.75 0 010 1.06l-.707.707a.75.75 0 01-1.06-1.06l.707-.707a.75.75 0 011.06 0zM8 0a.75.75 0 01.75.75v1a.75.75 0 01-1.5 0v-1A.75.75 0 018 0zm0 13a.75.75 0 01.75.75v1a.75.75 0 01-1.5 0v-1A.75.75 0 018 13zm7-5a.75.75 0 01-.75.75h-1a.75.75 0 010-1.5h1A.75.75 0 0115 8zM2 8a.75.75 0 01-.75.75h-1a.75.75 0 010-1.5h1A.75.75 0 012 8zm10.596-4.596a.75.75 0 010 1.06l-.707.707a.75.75 0 01-1.06-1.06l.707-.707a.75.75 0 011.06 0z"></path>
+        </svg>
+      {:else}
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M9.598 1.591a.749.749 0 01.785-.175 7.001 7.001 0 01-.785 13.168.748.748 0 01-.785-.175.748.748 0 01.175-.786A5.5 5.5 0 009.5 8a5.5 5.5 0 00-.512-2.323.749.749 0 01.61-1.086z"></path>
+        </svg>
+      {/if}
+    </button>
+
     <button class="icon-btn" onclick={() => helpOpen = true} title="Help">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
         <path d="M0 8a8 8 0 1116 0A8 8 0 010 8zm8-6.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM6.92 6.085h.001a.749.749 0 11-1.342-.67c.169-.339.436-.701.849-.977C6.845 4.16 7.369 4 8 4a2.756 2.756 0 011.637.525c.503.377.863.965.863 1.725 0 .448-.115.83-.329 1.15-.205.307-.478.513-.708.662-.04.027-.08.049-.118.07h-.001l-.001.001v.001L9 8.5l-.343.356a.756.756 0 01-.214.468.751.751 0 01-.788.103.751.751 0 01-.453-.685v-.399c0-.199.079-.39.22-.53.14-.14.332-.22.53-.22h.001l.003-.002.005-.003.025-.016a1.514 1.514 0 00.21-.159c.163-.142.252-.296.252-.478 0-.263-.128-.467-.335-.623A1.26 1.26 0 008 5.5c-.369 0-.626.1-.806.224a1.132 1.132 0 00-.358.447l-.002.005zM9 11a1 1 0 11-2 0 1 1 0 012 0z"></path>
@@ -68,10 +91,10 @@
     display: flex;
     align-items: stretch;
     height: 36px;
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
     border-radius: 3px;
     margin: 0 0 0.75rem;
-    background: #161b22;
+    background: var(--c-bg-subtle);
     overflow: hidden;
   }
 
@@ -81,7 +104,7 @@
     gap: 0.3rem;
     background: none;
     border: none;
-    border-right: 1px solid #2d333b;
+    border-right: 1px solid var(--c-border);
     cursor: pointer;
     padding: 0 0.75rem;
     flex-shrink: 0;
@@ -91,7 +114,7 @@
 
   .home-btn:hover {
     opacity: 1;
-    background: #1c2128;
+    background: var(--c-bg-hover);
   }
 
   .logo {
@@ -103,7 +126,7 @@
   .title {
     font-size: 0.85rem;
     letter-spacing: 0.1em;
-    color: #58a6ff;
+    color: var(--c-accent);
     white-space: nowrap;
     font-weight: 700;
   }
@@ -121,7 +144,7 @@
     box-sizing: border-box;
     background: transparent;
     border: none;
-    border-right: 1px solid #2d333b;
+    border-right: 1px solid var(--c-border);
     font-size: 0.72rem;
     cursor: pointer;
     white-space: nowrap;
@@ -134,15 +157,15 @@
 
   .lucky-tab {
     padding: 0 0.7rem;
-    color: #d29922;
+    color: var(--c-gold);
     font-weight: 500;
-    border-left: 1px solid #2d333b;
+    border-left: 1px solid var(--c-border);
     margin-left: auto;
   }
 
   .lucky-tab:hover {
-    background: #1c2128;
-    color: #e3b341;
+    background: var(--c-bg-hover);
+    color: var(--c-gold-hover);
   }
 
   .actions {
@@ -151,14 +174,14 @@
     gap: 0.3rem;
     padding: 0 0.5rem;
     flex-shrink: 0;
-    border-left: 1px solid #2d333b;
+    border-left: 1px solid var(--c-border);
   }
 
   .icon-btn {
     background: none;
     border: 1px solid transparent;
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.25rem;
     cursor: pointer;
     display: flex;
@@ -168,12 +191,12 @@
   }
 
   .icon-btn:hover {
-    color: #e1e4e8;
-    border-color: #2d333b;
+    color: var(--c-text);
+    border-color: var(--c-border);
   }
 
   .icon-btn.active {
-    color: #58a6ff;
-    border-color: #58a6ff;
+    color: var(--c-accent);
+    border-color: var(--c-accent);
   }
 </style>

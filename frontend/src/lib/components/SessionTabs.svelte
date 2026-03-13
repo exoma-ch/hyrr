@@ -63,12 +63,12 @@
     box-sizing: border-box;
     background: transparent;
     border: none;
-    border-right: 1px solid #2d333b;
+    border-right: 1px solid var(--c-border);
     padding: 0 0.5rem;
     padding-right: 1.5rem;
     padding-left: 0.4rem;
     font-size: 0.7rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     max-width: 180px;
     min-width: 60px;
     overflow: hidden;
@@ -86,14 +86,14 @@
   }
 
   .tab:hover {
-    background: #1c2128;
-    color: #c9d1d9;
+    background: var(--c-bg-hover);
+    color: var(--c-text-label);
   }
 
   .tab.active {
-    background: #0d1117;
-    color: #e1e4e8;
-    box-shadow: inset 0 0 0 1px #58a6ff;
+    background: var(--c-bg-default);
+    color: var(--c-text);
+    box-shadow: inset 0 0 0 1px var(--c-accent);
   }
 
   .tab-favicon {
@@ -103,8 +103,8 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: #2d333b;
-    color: #8b949e;
+    background: var(--c-border);
+    color: var(--c-text-muted);
     font-size: 0.55rem;
     font-weight: 700;
     flex-shrink: 0;
@@ -112,8 +112,8 @@
   }
 
   .tab.active .tab-favicon {
-    background: #58a6ff;
-    color: #0d1117;
+    background: var(--c-accent);
+    color: var(--c-bg-default);
   }
 
   .tab-label {
@@ -145,8 +145,8 @@
 
   .tab-close:hover {
     opacity: 1 !important;
-    color: #f85149;
-    background: rgba(248, 81, 73, 0.15);
+    color: var(--c-red);
+    background: var(--c-red-tint);
   }
 
   .add-tab {
@@ -158,11 +158,11 @@
     justify-content: center;
     font-size: 0.9rem;
     font-weight: 500;
-    color: #484f58;
+    color: var(--c-text-faint);
   }
 
   .add-tab:hover {
-    color: #8b949e;
+    color: var(--c-text-muted);
   }
 
   .tab.just-added {
@@ -170,7 +170,7 @@
   }
 
   @keyframes tab-highlight {
-    0% { box-shadow: inset 0 -2px 0 #58a6ff; }
+    0% { box-shadow: inset 0 -2px 0 var(--c-accent); }
     100% { box-shadow: none; }
   }
 </style>

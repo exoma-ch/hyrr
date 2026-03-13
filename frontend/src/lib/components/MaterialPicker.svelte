@@ -128,10 +128,10 @@
 
   .search-input {
     width: 100%;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.35rem 0.5rem;
     font-size: 0.8rem;
     box-sizing: border-box;
@@ -139,7 +139,7 @@
 
   .search-input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .density-badge {
@@ -147,7 +147,7 @@
     right: 6px;
     top: 6px;
     font-size: 0.65rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     pointer-events: none;
   }
 
@@ -157,8 +157,8 @@
     left: 0;
     right: 0;
     z-index: 100;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 0 0 4px 4px;
     max-height: 250px;
     overflow-y: auto;
@@ -172,7 +172,7 @@
     text-align: left;
     background: none;
     border: none;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.4rem 0.5rem;
     cursor: pointer;
     display: flex;
@@ -182,7 +182,7 @@
   }
 
   .dropdown-item:hover {
-    background: #1c2128;
+    background: var(--c-bg-hover);
   }
 
   .mat-name {
@@ -191,17 +191,17 @@
 
   .mat-meta {
     font-size: 0.7rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
   }
 
   .formula {
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
   .density {
-    color: #7ee787;
+    color: var(--c-green-text);
   }
 </style>

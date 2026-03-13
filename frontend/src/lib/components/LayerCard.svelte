@@ -101,8 +101,8 @@
 
 <style>
   .layer-card {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     padding: 0.6rem;
     display: flex;
@@ -119,7 +119,7 @@
   .layer-num {
     font-size: 0.75rem;
     font-weight: 600;
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
   .layer-controls {
@@ -130,9 +130,9 @@
   .move-btn,
   .remove-btn {
     background: none;
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.75rem;
     width: 22px;
     height: 22px;
@@ -144,8 +144,8 @@
   }
 
   .move-btn:hover {
-    border-color: #58a6ff;
-    color: #58a6ff;
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .move-btn:disabled {
@@ -154,12 +154,12 @@
   }
 
   .remove-btn {
-    color: #f85149;
+    color: var(--c-red);
   }
 
   .remove-btn:hover {
-    border-color: #f85149;
-    background: rgba(248, 81, 73, 0.1);
+    border-color: var(--c-red);
+    background: var(--c-red-tint-subtle);
   }
 
   .monitor-label {
@@ -167,12 +167,12 @@
     align-items: center;
     gap: 0.3rem;
     font-size: 0.75rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     cursor: pointer;
   }
 
   .monitor-label input {
-    accent-color: #58a6ff;
+    accent-color: var(--c-accent);
   }
 
   .enrichments {

@@ -15,6 +15,7 @@ const IMMUTABLE_PATTERNS = [
   /\.sql\.gz$/,
   /sql-wasm\.js$/,
   /pyodide/,
+  /\.parquet$/,
 ];
 
 /** Check if a URL matches an immutable pattern. */

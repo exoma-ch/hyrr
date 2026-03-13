@@ -2,7 +2,7 @@
   import type { SimulationResult } from "../types";
   import { formatHalfLife } from "../plotting/plotly-helpers";
   import { fmtActivity, fmtYield, fmtDoseRate, nucHtml } from "../utils/format";
-  import { getDoseConstant } from "../utils/dose-constants";
+  import { getDoseConstant, type DoseSource } from "../utils/dose-constants";
   import { toggleIsotope, isSelected, clearSelection, getSelectedIsotopes } from "../stores/selection.svelte";
 
   interface Props {
@@ -48,6 +48,7 @@
     rnp_pct: number;
     rnp_eob_pct: number;
     dose_uSv_h: number | null;
+    dose_source: DoseSource | null;
     reactions: string[];
     decayNotations: string[];
     reactionMechanisms: string[];
@@ -105,6 +106,7 @@
         if (mechanisms.length === 0 && (iso.source ?? "direct") === "daughter") {
           mechanisms.push("decay");
         }
+        const doseResult = getDoseConstant(iso.name, iso.activity_Bq, iso.Z, iso.A, iso.state);
         r.push({
           layerIndex: layer.layer_index,
           name: iso.name,
@@ -118,7 +120,8 @@
           activity_ingrowth_Bq: ingrowth,
           rnp_pct: layerTotal > 0 ? (iso.activity_Bq / layerTotal) * 100 : 0,
           rnp_eob_pct: layerEobTotal > 0 ? (eobAct / layerEobTotal) * 100 : 0,
-          dose_uSv_h: getDoseConstant(iso.name, iso.activity_Bq),
+          dose_uSv_h: doseResult?.doseRate ?? null,
+          dose_source: doseResult?.source ?? null,
           reactions: iso.reactions ?? [],
           decayNotations: iso.decay_notations ?? [],
           reactionMechanisms: mechanisms,
@@ -240,7 +243,7 @@
         row.activity_Bq.toExponential(4),
         row.saturation_yield_Bq_uA.toExponential(4),
         row.rnp_eob_pct.toFixed(2), row.rnp_pct.toFixed(2),
-        row.dose_uSv_h !== null ? row.dose_uSv_h.toExponential(4) : "",
+        row.dose_uSv_h !== null ? `${row.dose_source === "it-approx" ? "~" : ""}${row.dose_uSv_h.toExponential(4)}` : "",
         `"${reactionStr}"`,
       ].join(","));
     }
@@ -386,7 +389,7 @@
             <td class="col-yield">{row.source === "daughter" ? "—" : fmtYield(row.saturation_yield_Bq_uA)}</td>
             <td class="col-rnp">{row.rnp_eob_pct < 0.01 ? "<0.01" : row.rnp_eob_pct.toFixed(2)}%</td>
             <td class="col-rnp">{row.rnp_pct < 0.01 ? "<0.01" : row.rnp_pct.toFixed(2)}%</td>
-            <td class="col-dose">{row.dose_uSv_h !== null ? fmtDoseRate(row.dose_uSv_h) : "\u2014"}</td>
+            <td class="col-dose" class:dose-approx={row.dose_source === "it-approx"}>{#if row.dose_uSv_h !== null}{row.dose_source === "it-approx" ? "~" : ""}{fmtDoseRate(row.dose_uSv_h)}{:else}&mdash;{/if}</td>
           </tr>
         {/each}
       </tbody>
@@ -396,8 +399,8 @@
 
 <style>
   .activity-table-enhanced {
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
     padding: 0.5rem;
     display: flex;
@@ -418,28 +421,28 @@
   }
 
   .action-btn {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.25rem 0.5rem;
     font-size: 0.7rem;
     cursor: pointer;
   }
 
   .action-btn:hover {
-    border-color: #58a6ff;
-    color: #e1e4e8;
+    border-color: var(--c-accent);
+    color: var(--c-text);
   }
 
   .action-btn.has-filters {
-    border-color: #58a6ff;
-    color: #58a6ff;
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .row-count {
     font-size: 0.65rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     font-variant-numeric: tabular-nums;
   }
 
@@ -449,8 +452,8 @@
     flex-wrap: wrap;
     gap: 0.5rem 1rem;
     padding: 0.5rem;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     align-items: center;
   }
@@ -467,7 +470,7 @@
 
   .filter-label {
     font-size: 0.65rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     text-transform: uppercase;
     letter-spacing: 0.03em;
     white-space: nowrap;
@@ -475,25 +478,25 @@
 
   .filter-input {
     width: 90px;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.2rem 0.35rem;
     font-size: 0.7rem;
   }
 
   .filter-input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .filter-num {
     width: 38px;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.2rem 0.3rem;
     font-size: 0.7rem;
     text-align: center;
@@ -501,15 +504,15 @@
 
   .filter-num:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .filter-num-wide {
     width: 60px;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.2rem 0.3rem;
     font-size: 0.7rem;
     text-align: right;
@@ -517,11 +520,11 @@
 
   .filter-num-wide:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .filter-sep {
-    color: #484f58;
+    color: var(--c-text-faint);
     font-size: 0.7rem;
   }
 
@@ -533,10 +536,10 @@
   }
 
   .chip {
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     padding: 0.15rem 0.35rem;
     font-size: 0.65rem;
     cursor: pointer;
@@ -545,20 +548,20 @@
   }
 
   .chip:hover {
-    border-color: #58a6ff;
-    color: #8b949e;
+    border-color: var(--c-accent);
+    color: var(--c-text-muted);
   }
 
   .chip.active {
-    background: #1f3a5f;
-    border-color: #58a6ff;
-    color: #58a6ff;
+    background: var(--c-bg-active);
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .clear-btn {
     background: none;
     border: none;
-    color: #f85149;
+    color: var(--c-red);
     font-size: 0.65rem;
     cursor: pointer;
     padding: 0.2rem 0.35rem;
@@ -589,18 +592,18 @@
 
   th {
     text-align: right;
-    border-bottom: 1px solid #2d333b;
-    color: #8b949e;
+    border-bottom: 1px solid var(--c-border);
+    color: var(--c-text-muted);
     font-weight: 500;
     font-size: 0.7rem;
   }
 
   th.sortable { cursor: pointer; }
-  th.sortable:hover { color: #58a6ff; }
+  th.sortable:hover { color: var(--c-accent); }
 
   td {
     text-align: right;
-    border-bottom: 1px solid #1c2128;
+    border-bottom: 1px solid var(--c-bg-hover);
     font-variant-numeric: tabular-nums;
   }
 
@@ -609,22 +612,23 @@
   .col-z { width: 28px; }
   .col-a { width: 28px; }
   .col-hl { width: 70px; }
-  .col-reaction { text-align: left; white-space: normal; min-width: 80px; font-size: 0.65rem; color: #8b949e; }
+  .col-reaction { text-align: left; white-space: normal; min-width: 80px; font-size: 0.65rem; color: var(--c-text-muted); }
   .col-act { width: auto; }
   .col-yield { width: auto; }
   .col-rnp { width: 55px; }
   .col-dose { width: auto; }
+  .dose-approx { opacity: 0.55; }
 
   tr { cursor: pointer; }
-  tr:hover td { background: #1c2128; }
-  tr.selected td { border-left: 2px solid #58a6ff; }
-  tr.selected td:first-child { border-left: 3px solid #58a6ff; }
+  tr:hover td { background: var(--c-bg-hover); }
+  tr.selected td { border-left: 2px solid var(--c-accent); }
+  tr.selected td:first-child { border-left: 3px solid var(--c-accent); }
   tr.zero td { opacity: 0.35; }
 
   .isotope-link {
     background: none;
     border: none;
-    color: #58a6ff;
+    color: var(--c-accent);
     cursor: pointer;
     font-size: inherit;
     font-family: inherit;

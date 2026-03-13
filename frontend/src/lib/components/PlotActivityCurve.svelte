@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import type { SimulationResult, IsotopeResultData } from "../types";
-  import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS } from "../plotting/plotly-helpers";
+  import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
   import { bestActivityUnit, bestTimeUnit, nucLabel } from "../utils/format";
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
 
@@ -122,6 +122,7 @@
 
   function render() {
     if (!Plotly || !plotDiv) return;
+    const tc = themeColors();
 
     const irrTime = result.config.irradiation_s;
     const coolTime = result.config.cooling_s || 86400;
@@ -195,14 +196,14 @@
         type: "line" as const,
         x0: eobX, x1: eobX, y0: 0, y1: 1,
         yref: "paper" as const,
-        line: { color: "#f0883e", width: 1.5, dash: "dash" as const },
+        line: { color: tc.orange, width: 1.5, dash: "dash" as const },
       },
     ];
     const annotations = [
       {
         x: eobX, y: 1.02, yref: "paper" as const,
         text: "EOB", showarrow: false,
-        font: { color: "#f0883e", size: 11 },
+        font: { color: tc.orange, size: 11 },
         xanchor: "center" as const,
       },
     ];
@@ -210,11 +211,11 @@
     const layout = darkLayout({
       xaxis: {
         title: `Time ${useEOBTime ? "from EOB" : ""} (${timeLabel})`,
-        gridcolor: "#2d333b",
+        gridcolor: tc.border,
       },
       yaxis: {
         title: `Activity (${actLabel})`,
-        gridcolor: "#2d333b",
+        gridcolor: tc.border,
         type: logY ? "log" : "linear",
       },
       shapes,
@@ -228,6 +229,7 @@
 
   function renderRNP(irrTime: number, coolTime: number, totalTime: number, timeOffset: number) {
     if (!Plotly || !plotDiv || !rnpIsotope) return;
+    const tc = themeColors();
 
     const { label: timeLabel, divisor: timeDiv } = bestTimeUnit(totalTime);
 
@@ -313,7 +315,7 @@
       {
         x: eobX, y: 1.02, yref: "paper" as const,
         text: "EOB", showarrow: false,
-        font: { color: "#f0883e", size: 11 },
+        font: { color: tc.orange, size: 11 },
         xanchor: "center" as const,
       },
     ];
@@ -324,29 +326,29 @@
         y: peakVal,
         text: `Peak: ${peakVal.toFixed(1)}%`,
         showarrow: true,
-        arrowcolor: "#7ee787",
-        font: { color: "#7ee787", size: 10 },
+        arrowcolor: tc.greenText,
+        font: { color: tc.greenText, size: 10 },
       });
     }
 
     const layout = darkLayout({
       xaxis: {
         title: `Time ${useEOBTime ? "from EOB" : ""} (${timeLabel})`,
-        gridcolor: "#2d333b",
+        gridcolor: tc.border,
       },
-      yaxis: { title: "RNP (%)", gridcolor: "#2d333b", range: [0, 105] },
+      yaxis: { title: "RNP (%)", gridcolor: tc.border, range: [0, 105] },
       yaxis2: {
         title: `Total Activity (${actLabel})`,
         overlaying: "y",
         side: "right",
-        gridcolor: "#2d333b",
+        gridcolor: tc.border,
       },
       shapes: [
         {
           type: "line" as const,
           x0: eobX, x1: eobX, y0: 0, y1: 1,
           yref: "paper" as const,
-          line: { color: "#f0883e", width: 1.5, dash: "dash" as const },
+          line: { color: tc.orange, width: 1.5, dash: "dash" as const },
         },
       ],
       annotations,
@@ -407,8 +409,8 @@
 
 <style>
   .activity-curve {
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
     padding: 0.5rem;
   }
@@ -424,40 +426,40 @@
   .separator {
     width: 1px;
     height: 16px;
-    background: #2d333b;
+    background: var(--c-border);
   }
 
   .ctrl-btn {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.2rem 0.5rem;
     font-size: 0.7rem;
     cursor: pointer;
   }
 
   .ctrl-btn:hover {
-    border-color: #58a6ff;
-    color: #e1e4e8;
+    border-color: var(--c-accent);
+    color: var(--c-text);
   }
 
   .ctrl-btn.active {
-    background: #1f3a5f;
-    border-color: #58a6ff;
-    color: #58a6ff;
+    background: var(--c-bg-active);
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .ctrl-btn.clear {
-    color: #f85149;
-    border-color: #f85149;
+    color: var(--c-red);
+    border-color: var(--c-red);
   }
 
   .rnp-select {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.2rem 0.3rem;
     font-size: 0.7rem;
   }
@@ -470,10 +472,10 @@
   }
 
   .chip {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 12px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.15rem 0.5rem;
     font-size: 0.65rem;
     cursor: pointer;
@@ -481,8 +483,8 @@
   }
 
   .chip.active {
-    border-color: #58a6ff;
-    color: #e1e4e8;
+    border-color: var(--c-accent);
+    color: var(--c-text);
   }
 
   .plot {

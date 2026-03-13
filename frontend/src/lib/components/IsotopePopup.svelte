@@ -4,7 +4,7 @@
   import { getDataStore } from "../scheduler/sim-scheduler.svelte";
   import { getResult } from "../stores/results.svelte";
   import { getConfig } from "../stores/config.svelte";
-  import { formatHalfLife, darkLayout, PLOTLY_CONFIG, TRACE_COLORS } from "../plotting/plotly-helpers";
+  import { formatHalfLife, darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
   import { nudatUrl } from "../utils/format";
 
   import { Z_TO_SYMBOL } from "../utils/formula";
@@ -284,6 +284,7 @@
   function renderXsPlot() {
     ensurePlotly().then(() => {
       if (!Plotly || !xsPlotDiv) return;
+      const tc = themeColors();
 
       const traces: any[] = [];
       const scaled = xsScaled;
@@ -352,7 +353,7 @@
           shapes.push({
             type: "line", x0: le.eIn, x1: le.eIn, y0: 0, y1: 1,
             yref: "paper",
-            line: { color: "#484f58", width: 1, dash: "dot" },
+            line: { color: tc.textFaint, width: 1, dash: "dot" },
           });
         }
         if (eOut !== le.eIn) {
@@ -360,13 +361,13 @@
             shapes.push({
               type: "line", x0: eOut, x1: eOut, y0: 0, y1: 1,
               yref: "paper",
-              line: { color: "#484f58", width: 1, dash: "dot" },
+              line: { color: tc.textFaint, width: 1, dash: "dot" },
             });
           }
           annotations.push({
             x: (le.eIn + eOut) / 2, y: 1.02, yref: "paper",
             text: le.material, showarrow: false,
-            font: { color: "#6e7681", size: 9 },
+            font: { color: tc.textSubtle, size: 9 },
             xanchor: "center",
           });
         }
@@ -381,10 +382,10 @@
       const layout = darkLayout({
         xaxis: {
           title: "Energy (MeV)",
-          gridcolor: "#2d333b",
+          gridcolor: tc.border,
           range: rangeMinE !== undefined && rangeMaxE !== undefined ? [rangeMinE, rangeMaxE] : undefined,
         },
-        yaxis: { title: yTitle, gridcolor: "#2d333b" },
+        yaxis: { title: yTitle, gridcolor: tc.border },
         margin: { t: 20, r: 20, b: 40, l: 55 },
         height: 220,
         showlegend: traces.length > 1,
@@ -424,6 +425,7 @@
 
   function renderDepthPlot() {
     if (!Plotly || !depthPlotDiv) return;
+    const tc = themeColors();
     const preview = getDepthPreview();
     if (preview.length === 0) return;
 
@@ -464,7 +466,7 @@
       name: "Energy",
       type: "scatter",
       mode: "lines",
-      line: { color: "#484f58", width: 1.5, dash: "dot" },
+      line: { color: tc.textFaint, width: 1.5, dash: "dot" },
       yaxis: "y2",
     });
 
@@ -509,24 +511,24 @@
       type: "line" as const,
       x0: b.depth, x1: b.depth, y0: 0, y1: 1,
       yref: "paper" as const,
-      line: { color: "#484f58", width: 1, dash: "dot" as const },
+      line: { color: tc.textFaint, width: 1, dash: "dot" as const },
     }));
 
     const annotations = boundaries.map((b) => ({
       x: b.depth, y: 1.02, yref: "paper" as const,
       text: b.label, showarrow: false,
-      font: { color: "#8b949e", size: 9 },
+      font: { color: tc.textMuted, size: 9 },
       xanchor: "left" as const,
     }));
 
     const layout = darkLayout({
-      xaxis: { title: "Depth (mm)", gridcolor: "#2d333b", range: [0, cumulativeDepth] },
-      yaxis: { title: scaled ? "σ × abundance (mb)" : "σ (mb)", gridcolor: "#2d333b" },
+      xaxis: { title: "Depth (mm)", gridcolor: tc.border, range: [0, cumulativeDepth] },
+      yaxis: { title: scaled ? "σ × abundance (mb)" : "σ (mb)", gridcolor: tc.border },
       yaxis2: {
         title: "Energy (MeV)",
         overlaying: "y",
         side: "right",
-        gridcolor: "#2d333b",
+        gridcolor: tc.border,
       },
       margin: { t: 20, r: 55, b: 40, l: 55 },
       height: 220,
@@ -604,6 +606,7 @@
 
   function renderActivityPlot() {
     if (!Plotly || !activityData?.main || !actPlotDiv) return;
+    const tc = themeColors();
 
     const config = getConfig();
     const totalTime = config.irradiation_s + (config.cooling_s || 86400);
@@ -655,19 +658,19 @@
         y: Array.from(totalAct).map((a) => a / actDiv),
         type: "scatter",
         mode: "lines",
-        line: { color: "#484f58", width: 1, dash: "dot" },
+        line: { color: tc.textFaint, width: 1, dash: "dot" },
         yaxis: "y2",
         name: "Total",
       });
 
       const layout = darkLayout({
-        xaxis: { title: `Time (${timeLabel})`, gridcolor: "#2d333b" },
-        yaxis: { title: "RNP (%)", gridcolor: "#2d333b", range: [0, 105] },
+        xaxis: { title: `Time (${timeLabel})`, gridcolor: tc.border },
+        yaxis: { title: "RNP (%)", gridcolor: tc.border, range: [0, 105] },
         yaxis2: {
           title: `Activity (${actLabel})`,
           overlaying: "y",
           side: "right",
-          gridcolor: "#2d333b",
+          gridcolor: tc.border,
         },
         margin: { t: 10, r: 55, b: 40, l: 55 },
         height: 220,
@@ -677,12 +680,12 @@
           type: "line" as const,
           x0: eobX, x1: eobX, y0: 0, y1: 1,
           yref: "paper" as const,
-          line: { color: "#f0883e", width: 1, dash: "dash" as const },
+          line: { color: tc.orange, width: 1, dash: "dash" as const },
         }],
         annotations: [{
           x: eobX, y: 1.02, yref: "paper" as const,
           text: "EOB", showarrow: false,
-          font: { color: "#f0883e", size: 9 },
+          font: { color: tc.orange, size: 9 },
           xanchor: "center" as const,
         }],
       });
@@ -700,8 +703,8 @@
       });
 
       const layout = darkLayout({
-        xaxis: { title: `Time (${timeLabel})`, gridcolor: "#2d333b" },
-        yaxis: { title: `Activity (${actLabel})`, gridcolor: "#2d333b" },
+        xaxis: { title: `Time (${timeLabel})`, gridcolor: tc.border },
+        yaxis: { title: `Activity (${actLabel})`, gridcolor: tc.border },
         margin: { t: 10, r: 20, b: 40, l: 55 },
         height: 200,
         showlegend: false,
@@ -709,12 +712,12 @@
           type: "line" as const,
           x0: eobX, x1: eobX, y0: 0, y1: 1,
           yref: "paper" as const,
-          line: { color: "#f0883e", width: 1, dash: "dash" as const },
+          line: { color: tc.orange, width: 1, dash: "dash" as const },
         }],
         annotations: [{
           x: eobX, y: 1.02, yref: "paper" as const,
           text: "EOB", showarrow: false,
-          font: { color: "#f0883e", size: 9 },
+          font: { color: tc.orange, size: 9 },
           xanchor: "center" as const,
         }],
       });
@@ -930,7 +933,7 @@
   .nuc-notation {
     font-size: 1.1rem;
     font-weight: 700;
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
 
@@ -938,7 +941,7 @@
   .loading-indicator {
     text-align: center;
     padding: 1rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.8rem;
     font-style: italic;
   }
@@ -951,8 +954,8 @@
   }
 
   .properties {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     padding: 0.4rem 0.5rem;
   }
@@ -964,15 +967,15 @@
     font-size: 0.8rem;
   }
 
-  .prop-label { color: #8b949e; }
-  .prop-value { color: #e1e4e8; font-variant-numeric: tabular-nums; }
-  .prop-sep { color: #484f58; }
-  .branching { color: #6e7681; font-size: 0.7rem; }
+  .prop-label { color: var(--c-text-muted); }
+  .prop-value { color: var(--c-text); font-variant-numeric: tabular-nums; }
+  .prop-sep { color: var(--c-text-faint); }
+  .branching { color: var(--c-text-subtle); font-size: 0.7rem; }
 
   /* Decay chain */
   .decay-chain {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     padding: 0.4rem 0.5rem;
   }
@@ -997,14 +1000,14 @@
     white-space: nowrap;
   }
 
-  .chain-nuc.parent { background: #1c2128; color: #8b949e; border: 1px solid #2d333b; }
-  .chain-nuc.current { background: #1f3a5f; color: #58a6ff; border: 1px solid #58a6ff; font-weight: 600; }
-  .chain-nuc.daughter { background: #1c2128; color: #bc8cff; border: 1px solid #2d333b; }
-  .chain-arrow { color: #484f58; font-size: 0.85rem; }
+  .chain-nuc.parent { background: var(--c-bg-hover); color: var(--c-text-muted); border: 1px solid var(--c-border); }
+  .chain-nuc.current { background: var(--c-bg-active); color: var(--c-accent); border: 1px solid var(--c-accent); font-weight: 600; }
+  .chain-nuc.daughter { background: var(--c-bg-hover); color: var(--c-purple); border: 1px solid var(--c-border); }
+  .chain-arrow { color: var(--c-text-faint); font-size: 0.85rem; }
 
   /* Sections */
   .section {
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     overflow: hidden;
   }
@@ -1014,25 +1017,25 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.3rem 0.5rem;
-    border-bottom: 1px solid #2d333b;
-    background: #0d1117;
+    border-bottom: 1px solid var(--c-border);
+    background: var(--c-bg-default);
     gap: 0.5rem;
     flex-wrap: wrap;
   }
 
   .section-label {
     font-size: 0.65rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     flex-shrink: 0;
   }
 
   .scale-toggle {
-    background: #1c2128;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-hover);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.1rem 0.4rem;
     font-size: 0.6rem;
     cursor: pointer;
@@ -1041,19 +1044,19 @@
   }
 
   .scale-toggle:hover {
-    color: #e1e4e8;
-    border-color: #484f58;
+    color: var(--c-text);
+    border-color: var(--c-text-faint);
   }
 
   .scale-toggle.active {
-    color: #58a6ff;
-    border-color: #58a6ff;
-    background: #1f3a5f;
+    color: var(--c-accent);
+    border-color: var(--c-accent);
+    background: var(--c-bg-active);
   }
 
   /* Compare table */
   .compare-table-wrap {
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     overflow: visible;
   }
@@ -1066,15 +1069,15 @@
   }
 
   .compare-table thead th {
-    background: #0d1117;
-    color: #6e7681;
+    background: var(--c-bg-default);
+    color: var(--c-text-subtle);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.03em;
     font-size: 0.6rem;
     padding: 0.25rem 0.4rem;
     text-align: right;
-    border-bottom: 1px solid #2d333b;
+    border-bottom: 1px solid var(--c-border);
     white-space: nowrap;
   }
 
@@ -1082,21 +1085,21 @@
 
   .compare-table td {
     padding: 0.2rem 0.4rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     text-align: right;
-    border-bottom: 1px solid #1c2128;
+    border-bottom: 1px solid var(--c-bg-hover);
     white-space: nowrap;
   }
 
-  .compare-table td.ct-iso { text-align: left; color: #e1e4e8; }
+  .compare-table td.ct-iso { text-align: left; color: var(--c-text); }
 
   .compare-table tr.ct-main td {
-    color: #e1e4e8;
+    color: var(--c-text);
     font-weight: 500;
   }
 
 
-  .compare-table tr.ct-main td.ct-iso { color: #58a6ff; }
+  .compare-table tr.ct-main td.ct-iso { color: var(--c-accent); }
 
   .compare-table tfoot td {
     border-bottom: none;
@@ -1108,14 +1111,14 @@
   .ct-remove {
     background: none;
     border: none;
-    color: #484f58;
+    color: var(--c-text-faint);
     cursor: pointer;
     font-size: 0.8rem;
     padding: 0;
     line-height: 1;
   }
 
-  .ct-remove:hover { color: #f85149; }
+  .ct-remove:hover { color: var(--c-red); }
 
   .ct-add-cell { text-align: left !important; }
 
@@ -1125,10 +1128,10 @@
   }
 
   .compare-filter {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.1rem 0.25rem;
     font-size: 0.65rem;
     width: 7rem;
@@ -1136,11 +1139,11 @@
   }
 
   .compare-filter:focus {
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .compare-filter::placeholder {
-    color: #6e7681;
+    color: var(--c-text-subtle);
   }
 
   .compare-dropdown {
@@ -1148,14 +1151,14 @@
     top: 100%;
     left: 0;
     z-index: 100;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     max-height: 200px;
     overflow-y: auto;
     min-width: 10rem;
     margin-top: 2px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 4px 12px var(--c-overlay);
   }
 
   .compare-option {
@@ -1165,7 +1168,7 @@
     width: 100%;
     background: none;
     border: none;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.25rem 0.4rem;
     font-size: 0.7rem;
     cursor: pointer;
@@ -1173,15 +1176,15 @@
   }
 
   .compare-option:hover {
-    background: #1c2128;
+    background: var(--c-bg-hover);
   }
 
   .compare-option.selected {
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
   .check-mark {
-    color: #58a6ff;
+    color: var(--c-accent);
     font-size: 0.65rem;
   }
 
@@ -1194,12 +1197,12 @@
   .links {
     display: flex;
     gap: 1rem;
-    border-top: 1px solid #2d333b;
+    border-top: 1px solid var(--c-border);
     padding-top: 0.4rem;
   }
 
   .ext-link {
-    color: #58a6ff;
+    color: var(--c-accent);
     font-size: 0.75rem;
     text-decoration: none;
     display: flex;

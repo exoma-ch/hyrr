@@ -71,6 +71,8 @@ export class DataStore implements DatabaseProtocol {
   private abundanceData: ParquetRow[] = [];
   private decayData: ParquetRow[] = [];
   private stoppingData: ParquetRow[] = [];
+  /** Pre-indexed dose constants: "Z_A_state" -> { k, source } */
+  private doseConstants = new Map<string, { k: number; source: string }>();
 
   // Lazy caches
   private xsCache = new Map<string, ParquetRow[]>();
@@ -100,6 +102,20 @@ export class DataStore implements DatabaseProtocol {
 
     onProgress?.("Loading decay data...", 0.5);
     this.decayData = await readParquetRows(`${this.baseUrl}/meta/decay.parquet`);
+
+    onProgress?.("Loading dose constants...", 0.65);
+    try {
+      const doseRows = await readParquetRows(`${this.baseUrl}/meta/dose_constants.parquet`);
+      for (const row of doseRows) {
+        const key = `${row.Z}_${row.A}_${row.state ?? ""}`;
+        this.doseConstants.set(key, {
+          k: Number(row.k_uSv_m2_MBq_h),
+          source: String(row.source ?? "ensdf"),
+        });
+      }
+    } catch {
+      console.warn("[DataStore] dose_constants.parquet not found, dose rates unavailable");
+    }
 
     onProgress?.("Loading stopping power data...", 0.75);
     this.stoppingData = await readParquetRows(`${this.baseUrl}/stopping/stopping.parquet`);
@@ -262,6 +278,11 @@ export class DataStore implements DatabaseProtocol {
       halfLifeS: filtered[0].half_life_s != null ? Number(filtered[0].half_life_s) : null,
       decayModes: modes,
     };
+  }
+
+  getDoseConstant(Z: number, A: number, state: string = ""): { k: number; source: string } | null {
+    const key = `${Z}_${A}_${state}`;
+    return this.doseConstants.get(key) ?? null;
   }
 
   getElementSymbol(Z: number): string {

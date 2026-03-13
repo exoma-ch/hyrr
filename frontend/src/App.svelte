@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import "./lib/stores/theme.svelte"; // initialise theme (applies data-theme attribute)
   import { registerServiceWorker } from "./lib/sw-register";
   import { decodeConfigFromHash, setConfigInHash } from "./lib/config-url";
   import {
@@ -312,17 +313,104 @@
 <BugReportModal />
 
 <style>
+  /* ─── Theme tokens ─── */
+  :global(:root),
+  :global([data-theme="dark"]) {
+    --c-bg-page: #0f1117;
+    --c-bg-default: #0d1117;
+    --c-bg-subtle: #161b22;
+    --c-bg-hover: #1c2128;
+    --c-bg-muted: #21262d;
+    --c-bg-active: #1f3a5f;
+
+    --c-text: #e1e4e8;
+    --c-text-label: #c9d1d9;
+    --c-text-muted: #8b949e;
+    --c-text-subtle: #6e7681;
+    --c-text-faint: #484f58;
+
+    --c-border: #2d333b;
+    --c-border-muted: #30363d;
+    --c-border-emphasis: #484f58;
+
+    --c-accent: #58a6ff;
+    --c-accent-hover: #79c0ff;
+    --c-green: #238636;
+    --c-green-emphasis: #2ea043;
+    --c-green-bright: #3fb950;
+    --c-green-text: #7ee787;
+    --c-red: #f85149;
+    --c-gold: #d29922;
+    --c-gold-hover: #e3b341;
+    --c-orange: #f0883e;
+    --c-purple: #bc8cff;
+
+    --c-overlay: rgba(0, 0, 0, 0.4);
+    --c-overlay-heavy: rgba(0, 0, 0, 0.6);
+    --c-accent-tint: rgba(88, 166, 255, 0.15);
+    --c-accent-tint-subtle: rgba(88, 166, 255, 0.1);
+    --c-gold-tint: rgba(210, 153, 34, 0.15);
+    --c-gold-tint-subtle: rgba(210, 153, 34, 0.1);
+    --c-gold-tint-faint: rgba(210, 153, 34, 0.08);
+    --c-red-tint: rgba(248, 81, 73, 0.15);
+    --c-red-tint-subtle: rgba(248, 81, 73, 0.1);
+    --c-red-tint-faint: rgba(248, 81, 73, 0.05);
+    --c-green-tint: rgba(63, 185, 80, 0.1);
+  }
+
+  :global([data-theme="light"]) {
+    --c-bg-page: #ffffff;
+    --c-bg-default: #ffffff;
+    --c-bg-subtle: #f6f8fa;
+    --c-bg-hover: #eef1f5;
+    --c-bg-muted: #e8eaed;
+    --c-bg-active: #ddf4ff;
+
+    --c-text: #1f2328;
+    --c-text-label: #31373d;
+    --c-text-muted: #656d76;
+    --c-text-subtle: #6e7681;
+    --c-text-faint: #8c959f;
+
+    --c-border: #d0d7de;
+    --c-border-muted: #d8dee4;
+    --c-border-emphasis: #afb8c1;
+
+    --c-accent: #0969da;
+    --c-accent-hover: #218bff;
+    --c-green: #1a7f37;
+    --c-green-emphasis: #2da44e;
+    --c-green-bright: #1a7f37;
+    --c-green-text: #1a7f37;
+    --c-red: #cf222e;
+    --c-gold: #9a6700;
+    --c-gold-hover: #bf8700;
+    --c-orange: #bc4c00;
+    --c-purple: #8250df;
+
+    --c-overlay: rgba(0, 0, 0, 0.15);
+    --c-overlay-heavy: rgba(0, 0, 0, 0.3);
+    --c-accent-tint: rgba(9, 105, 218, 0.12);
+    --c-accent-tint-subtle: rgba(9, 105, 218, 0.08);
+    --c-gold-tint: rgba(154, 103, 0, 0.12);
+    --c-gold-tint-subtle: rgba(154, 103, 0, 0.08);
+    --c-gold-tint-faint: rgba(154, 103, 0, 0.05);
+    --c-red-tint: rgba(207, 34, 46, 0.12);
+    --c-red-tint-subtle: rgba(207, 34, 46, 0.08);
+    --c-red-tint-faint: rgba(207, 34, 46, 0.04);
+    --c-green-tint: rgba(26, 127, 55, 0.08);
+  }
+
   :global(body) {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #0f1117;
-    color: #e1e4e8;
+    background: var(--c-bg-page);
+    color: var(--c-text);
   }
 
-  /* Dark-themed scrollbars */
   :global(*) {
     scrollbar-width: thin;
-    scrollbar-color: #2d333b #0d1117;
+    scrollbar-color: var(--c-border) var(--c-bg-default);
   }
 
   :global(*::-webkit-scrollbar) {
@@ -331,17 +419,17 @@
   }
 
   :global(*::-webkit-scrollbar-track) {
-    background: #0d1117;
+    background: var(--c-bg-default);
     border-radius: 3px;
   }
 
   :global(*::-webkit-scrollbar-thumb) {
-    background: #2d333b;
+    background: var(--c-border);
     border-radius: 3px;
   }
 
   :global(*::-webkit-scrollbar-thumb:hover) {
-    background: #484f58;
+    background: var(--c-border-emphasis);
   }
 
   main {
@@ -353,13 +441,13 @@
   .loading {
     text-align: center;
     padding: 4rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
   }
 
   .progress-bar {
     width: 300px;
     height: 6px;
-    background: #2d333b;
+    background: var(--c-border);
     border-radius: 3px;
     margin: 1rem auto 0;
     overflow: hidden;
@@ -367,30 +455,30 @@
 
   .progress-fill {
     height: 100%;
-    background: #58a6ff;
+    background: var(--c-accent);
     border-radius: 3px;
     transition: width 0.3s ease;
   }
 
   .loading-error {
-    color: #f85149;
+    color: var(--c-red);
     font-weight: 500;
   }
 
   .retry-btn {
     margin-top: 1rem;
     padding: 0.5rem 1.5rem;
-    background: #21262d;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #e1e4e8;
+    color: var(--c-text);
     cursor: pointer;
     font-size: 0.9rem;
   }
 
   .retry-btn:hover {
-    border-color: #58a6ff;
-    background: #1c2128;
+    border-color: var(--c-accent);
+    background: var(--c-bg-hover);
   }
 
   .app-flow {
@@ -411,17 +499,17 @@
     gap: 0.75rem;
     justify-content: center;
     padding: 1rem;
-    color: #8b949e;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    color: var(--c-text-muted);
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
   }
 
   .spinner {
     width: 18px;
     height: 18px;
-    border: 2px solid #2d333b;
-    border-top-color: #58a6ff;
+    border: 2px solid var(--c-border);
+    border-top-color: var(--c-accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
@@ -433,7 +521,7 @@
   .history-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: var(--c-overlay);
     z-index: 499;
   }
 
@@ -454,8 +542,8 @@
   }
 
   .panel {
-    background: #161b22;
-    border-left: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border-left: 1px solid var(--c-border);
     padding: 1rem;
     height: 100%;
     display: flex;
@@ -472,13 +560,13 @@
   .panel-title {
     font-size: 0.9rem;
     font-weight: 600;
-    color: #e1e4e8;
+    color: var(--c-text);
   }
 
   .close-btn {
     background: none;
     border: none;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 1.2rem;
     cursor: pointer;
     padding: 0.2rem 0.4rem;
@@ -486,21 +574,21 @@
   }
 
   .close-btn:hover {
-    color: #e1e4e8;
-    background: #21262d;
+    color: var(--c-text);
+    background: var(--c-bg-muted);
   }
 
   .site-footer {
     max-width: 1600px;
     margin: 0 auto;
     padding: 1.5rem 1rem 1rem;
-    border-top: 1px solid #2d333b;
+    border-top: 1px solid var(--c-border);
   }
 
   .footer-content {
     text-align: center;
     font-size: 0.7rem;
-    color: #484f58;
+    color: var(--c-text-faint);
     line-height: 1.6;
   }
 
@@ -520,7 +608,7 @@
   }
 
   .footer-links a {
-    color: #58a6ff;
+    color: var(--c-accent);
     text-decoration: none;
   }
 
@@ -529,7 +617,7 @@
   }
 
   .sep {
-    color: #2d333b;
+    color: var(--c-border);
   }
 
   .privacy {

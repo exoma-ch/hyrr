@@ -81,12 +81,16 @@ packages = ["src/hyrr"]
 dev = [
     "hatchling>=1.25",
     "ipykernel>=6.31.0",
+    "jupyter>=1.1.1",
+    "jupytext>=1.19.1",
     "nbmake>=1.5",
     "pandas>=2.0",
+    "pyright>=1.1",
     "pytest>=9.0.2",
     "pytest-benchmark>=4.0",
     "pytest-cov>=7.0.0",
     "rich>=13.0.0",
+    "ruff>=0.8",
 ]
 
 # Ruff

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
-  import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS } from "../plotting/plotly-helpers";
+  import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
 
   let plotDiv = $state<HTMLDivElement | null>(null);
   let Plotly = $state<any>(null);
@@ -32,6 +32,7 @@
   function render() {
     if (!Plotly || !plotDiv) return;
     if (preview.length === 0) return;
+    const tc = themeColors();
 
     const allDepths: number[] = [];
     const allEnergies: number[] = [];
@@ -76,7 +77,7 @@
       y0: 0,
       y1: 1,
       yref: "paper" as const,
-      line: { color: "#484f58", width: 1, dash: "dot" as const },
+      line: { color: tc.textFaint, width: 1, dash: "dot" as const },
     }));
 
     const annotations = boundaries.map((b) => ({
@@ -85,18 +86,18 @@
       yref: "paper" as const,
       text: b.label,
       showarrow: false,
-      font: { color: "#8b949e", size: 10 },
+      font: { color: tc.textMuted, size: 10 },
       xanchor: "left" as const,
     }));
 
     const layout = darkLayout({
-      xaxis: { title: "Depth (mm)", gridcolor: "#2d333b", range: [0, cumulativeDepth] },
-      yaxis: { title: "Energy (MeV)", gridcolor: "#2d333b" },
+      xaxis: { title: "Depth (mm)", gridcolor: tc.border, range: [0, cumulativeDepth] },
+      yaxis: { title: "Energy (MeV)", gridcolor: tc.border },
       yaxis2: {
         title: "Heat (W/mm)",
         overlaying: "y",
         side: "right",
-        gridcolor: "#2d333b",
+        gridcolor: tc.border,
       },
       shapes,
       annotations,
@@ -113,8 +114,8 @@
 
 <style>
   .depth-profile-live {
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
     padding: 0.5rem;
   }

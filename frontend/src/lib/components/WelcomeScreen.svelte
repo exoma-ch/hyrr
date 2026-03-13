@@ -90,14 +90,14 @@
     margin: 0;
     font-size: 2.4rem;
     letter-spacing: 0.15em;
-    color: #58a6ff;
+    color: var(--c-accent);
     line-height: 1;
   }
 
   .hero-sub {
     margin: 0.4rem 0 0;
     font-size: 0.85rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     letter-spacing: 0.02em;
   }
 
@@ -108,7 +108,7 @@
 
   .getting-started h2 {
     font-size: 0.85rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin: 0 0 0.75rem;
@@ -125,8 +125,8 @@
     align-items: flex-start;
     gap: 0.75rem;
     padding: 0.6rem 0.75rem;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
   }
 
@@ -137,8 +137,8 @@
     width: 24px;
     height: 24px;
     border-radius: 50%;
-    background: #21262d;
-    color: #58a6ff;
+    background: var(--c-bg-muted);
+    color: var(--c-accent);
     font-size: 0.75rem;
     font-weight: 700;
     flex-shrink: 0;
@@ -146,23 +146,23 @@
   }
 
   .step strong {
-    color: #e1e4e8;
+    color: var(--c-text);
     font-size: 0.8rem;
   }
 
   .step p {
     margin: 0.15rem 0 0;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.75rem;
   }
 
   kbd {
-    background: #21262d;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
     padding: 0.05rem 0.3rem;
     font-size: 0.7rem;
-    color: #c9d1d9;
+    color: var(--c-text-label);
     font-family: inherit;
   }
 
@@ -173,7 +173,7 @@
 
   .quick-start h2 {
     font-size: 0.85rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin: 0 0 0.75rem;
@@ -191,8 +191,8 @@
     align-items: flex-start;
     gap: 0.15rem;
     padding: 0.55rem 0.75rem;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
     cursor: pointer;
     text-align: left;
@@ -200,18 +200,18 @@
   }
 
   .preset-card:hover {
-    border-color: #58a6ff;
-    background: #1c2128;
+    border-color: var(--c-accent);
+    background: var(--c-bg-hover);
   }
 
   .preset-name {
-    color: #e1e4e8;
+    color: var(--c-text);
     font-size: 0.8rem;
     font-weight: 600;
   }
 
   .preset-desc {
-    color: #6e7681;
+    color: var(--c-text-subtle);
     font-size: 0.7rem;
   }
 
@@ -219,10 +219,10 @@
     margin-top: 0.75rem;
     width: 100%;
     padding: 0.5rem;
-    background: #1c2128;
-    border: 1px dashed #d29922;
+    background: var(--c-bg-hover);
+    border: 1px dashed var(--c-gold);
     border-radius: 3px;
-    color: #d29922;
+    color: var(--c-gold);
     font-size: 0.8rem;
     font-weight: 500;
     cursor: pointer;
@@ -230,7 +230,7 @@
   }
 
   .lucky-btn:hover {
-    background: #21262d;
-    color: #e3b341;
+    background: var(--c-bg-muted);
+    color: var(--c-gold-hover);
   }
 </style>

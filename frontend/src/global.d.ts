@@ -1,5 +1,13 @@
 declare const __APP_VERSION__: string;
 
+interface ImportMetaEnv {
+  readonly VITE_ISSUE_WORKER_URL?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
 declare module "plotly.js-dist-min" {
   const Plotly: any;
   export default Plotly;

@@ -58,7 +58,7 @@
   .modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--c-overlay-heavy);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -67,8 +67,8 @@
   }
 
   .modal-content {
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 8px;
     max-width: 500px;
     max-height: 85vh;
@@ -87,14 +87,14 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid #2d333b;
+    border-bottom: 1px solid var(--c-border);
     flex-shrink: 0;
   }
 
   .modal-header h3 {
     margin: 0;
     font-size: 1rem;
-    color: #e1e4e8;
+    color: var(--c-text);
   }
 
   .header-actions {
@@ -107,7 +107,7 @@
   .bug-btn {
     background: none;
     border: none;
-    color: #484f58;
+    color: var(--c-text-faint);
     cursor: pointer;
     padding: 0.15rem 0.3rem;
     border-radius: 4px;
@@ -117,14 +117,14 @@
   }
 
   .bug-btn:hover {
-    color: #8b949e;
-    background: #21262d;
+    color: var(--c-text-muted);
+    background: var(--c-bg-muted);
   }
 
   .close-btn {
     background: none;
     border: none;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 1.3rem;
     cursor: pointer;
     padding: 0.15rem 0.4rem;
@@ -134,8 +134,8 @@
   }
 
   .close-btn:hover {
-    color: #e1e4e8;
-    background: #21262d;
+    color: var(--c-text);
+    background: var(--c-bg-muted);
   }
 
   .modal-body {

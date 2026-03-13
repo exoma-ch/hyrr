@@ -52,21 +52,21 @@
   }
 
   .label-text {
-    color: #c9d1d9;
+    color: var(--c-text-label);
   }
 
   .unit {
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.75rem;
   }
 
   .text-input {
     width: 100%;
     box-sizing: border-box;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.3rem 0.4rem;
     font-size: 0.8rem;
     text-align: right;
@@ -74,6 +74,6 @@
 
   .text-input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 </style>

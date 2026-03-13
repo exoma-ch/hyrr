@@ -98,8 +98,8 @@
 
 <style>
   .layer-table {
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
     padding: 0.5rem;
   }
@@ -121,27 +121,27 @@
 
   th {
     text-align: right;
-    border-bottom: 1px solid #2d333b;
-    color: #8b949e;
+    border-bottom: 1px solid var(--c-border);
+    color: var(--c-text-muted);
     font-weight: 500;
     font-size: 0.75rem;
   }
 
   td {
-    border-bottom: 1px solid #1c2128;
+    border-bottom: 1px solid var(--c-bg-hover);
     font-variant-numeric: tabular-nums;
   }
 
   .col-idx {
     width: 30px;
     text-align: center;
-    color: #58a6ff;
+    color: var(--c-accent);
     font-weight: 600;
   }
 
   .col-mat {
     text-align: left;
-    color: #e1e4e8;
+    color: var(--c-text);
   }
 
   .col-num {
@@ -149,36 +149,36 @@
   }
 
   .user-input {
-    color: #e1e4e8;
+    color: var(--c-text);
   }
 
   .computed {
-    color: #6e7681;
+    color: var(--c-text-subtle);
   }
 
   tr:hover td {
-    background: #1c2128;
+    background: var(--c-bg-hover);
   }
 
   .total-row td {
-    border-top: 1px solid #2d333b;
+    border-top: 1px solid var(--c-border);
     font-weight: 600;
-    color: #8b949e;
+    color: var(--c-text-muted);
   }
 
   .has-error td {
-    background: rgba(248, 81, 73, 0.05);
+    background: var(--c-red-tint-faint);
   }
 
   .layer-error {
     display: block;
     font-size: 0.65rem;
-    color: #f85149;
+    color: var(--c-red);
     font-weight: 400;
   }
 
   .empty {
-    color: #484f58;
+    color: var(--c-text-faint);
     font-style: italic;
     font-size: 0.8rem;
     margin: 0;

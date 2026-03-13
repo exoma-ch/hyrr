@@ -156,8 +156,8 @@
     gap: 0.75rem;
     align-items: flex-end;
     flex-wrap: wrap;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
     padding: 0.6rem 0.75rem;
   }
@@ -171,17 +171,17 @@
 
   .field label {
     font-size: 0.65rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
 
   .field select,
   .field input {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.3rem 0.4rem;
     font-size: 0.8rem;
   }
@@ -204,7 +204,7 @@
   .field select:focus,
   .field input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .input-group {
@@ -215,7 +215,7 @@
 
   .unit {
     font-size: 0.7rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
   }
 
   .input-with-feedback {
@@ -230,10 +230,10 @@
   }
 
   .feedback.ok {
-    color: #7ee787;
+    color: var(--c-green-text);
   }
 
   .feedback.err {
-    color: #f85149;
+    color: var(--c-red);
   }
 </style>

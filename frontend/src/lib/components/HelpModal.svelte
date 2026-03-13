@@ -92,13 +92,13 @@
   section h3 {
     margin: 0 0 0.3rem;
     font-size: 0.85rem;
-    color: #e1e4e8;
+    color: var(--c-text);
   }
 
   section p,
   section li {
     font-size: 0.8rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     line-height: 1.5;
     margin: 0;
   }
@@ -114,24 +114,24 @@
   }
 
   section li strong {
-    color: #c9d1d9;
+    color: var(--c-text-label);
   }
 
   code {
-    background: #21262d;
+    background: var(--c-bg-muted);
     border-radius: 3px;
     padding: 0.1rem 0.3rem;
     font-size: 0.75rem;
-    color: #c9d1d9;
+    color: var(--c-text-label);
   }
 
   kbd {
-    background: #21262d;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
     padding: 0.05rem 0.3rem;
     font-size: 0.7rem;
-    color: #c9d1d9;
+    color: var(--c-text-label);
     font-family: inherit;
   }
 
@@ -140,6 +140,6 @@
     flex-direction: column;
     gap: 0.3rem;
     font-size: 0.8rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
   }
 </style>

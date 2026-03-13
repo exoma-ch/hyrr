@@ -194,22 +194,22 @@
   .mode-btn {
     flex: 1;
     padding: 0.2rem;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.65rem;
     cursor: pointer;
   }
 
   .mode-btn:hover {
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .mode-btn.active {
-    background: #1f3a5f;
-    border-color: #58a6ff;
-    color: #58a6ff;
+    background: var(--c-bg-active);
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .value-row {
@@ -227,10 +227,10 @@
 
   .val-input {
     flex: 1;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.3rem 0.4rem;
     font-size: 0.8rem;
     text-align: right;
@@ -238,12 +238,12 @@
 
   .val-input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .unit {
     font-size: 0.7rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     min-width: 35px;
   }
 
@@ -253,13 +253,13 @@
   }
 
   .feedback.ok {
-    color: #7ee787;
+    color: var(--c-green-text);
   }
 
   .feedback.err {
-    color: #f85149;
+    color: var(--c-red);
     background: none;
-    border: 1px solid #f85149;
+    border: 1px solid var(--c-red);
     border-radius: 50%;
     width: 16px;
     height: 16px;
@@ -274,12 +274,12 @@
   }
 
   .feedback.err:hover {
-    background: rgba(248, 81, 73, 0.15);
+    background: var(--c-red-tint);
   }
 
   .format-hint {
     font-size: 0.6rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     white-space: nowrap;
   }
 </style>

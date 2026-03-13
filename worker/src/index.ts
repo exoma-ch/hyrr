@@ -26,8 +26,7 @@ export default {
     const origin = request.headers.get("Origin") ?? "";
     const allowed =
       origin === env.ALLOWED_ORIGIN ||
-      origin === "http://localhost:5173" ||
-      origin === "http://localhost:4173";
+      origin.startsWith("http://localhost:");
 
     // CORS preflight
     if (request.method === "OPTIONS") {
