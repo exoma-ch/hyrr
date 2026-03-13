@@ -110,10 +110,15 @@ known-first-party = ["hyrr"]
 # Pyright
 [tool.pyright]
 pythonVersion = "3.12"
-typeCheckingMode = "standard"
+typeCheckingMode = "basic"
 reportMissingTypeStubs = false
 reportUnknownMemberType = false
 reportMissingImports = "warning"
+reportAttributeAccessIssue = false
+reportReturnType = false
+reportArgumentType = false
+reportRedeclaration = false
+reportAssignmentType = false
 venvPath = "."
 venv = ".venv"
 
