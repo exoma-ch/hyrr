@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="beamGlow">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!-- Incoming beam: thick bright line from left -->
+  <line x1="30" y1="256" x2="160" y2="256" stroke="#e6edf3" stroke-width="4" filter="url(#beamGlow)"/>
+  <line x1="30" y1="256" x2="160" y2="256" stroke="#e6edf3" stroke-width="16" opacity="0.06" filter="url(#beamGlow)"/>
+
+  <!-- Layer boundary markers (subtle vertical lines where branching happens) -->
+  <line x1="160" y1="140" x2="160" y2="372" stroke="#2d333b" stroke-width="1" stroke-dasharray="3,6" opacity="0.5"/>
+  <line x1="260" y1="100" x2="260" y2="412" stroke="#2d333b" stroke-width="1" stroke-dasharray="3,6" opacity="0.5"/>
+  <line x1="360" y1="70" x2="360" y2="442" stroke="#2d333b" stroke-width="1" stroke-dasharray="3,6" opacity="0.5"/>
+
+  <!-- Branching: beam splits at each layer boundary into reaction channels -->
+
+  <!-- First split at layer 1 (x=160): beam → 2 branches -->
+  <!-- Main beam continues (slightly dimmer) -->
+  <line x1="160" y1="256" x2="260" y2="256" stroke="#e6edf3" stroke-width="2.5" opacity="0.6" filter="url(#glow)"/>
+  <!-- Branch 1: (p,n) — teal, goes up -->
+  <path d="M160,256 C190,256 220,220 260,200" fill="none" stroke="#2dd4bf" stroke-width="2.5" filter="url(#glow)" opacity="0.9"/>
+
+  <!-- Second split at layer 2 (x=260): more branches -->
+  <!-- Main beam continues -->
+  <line x1="260" y1="256" x2="360" y2="256" stroke="#e6edf3" stroke-width="1.5" opacity="0.35" filter="url(#glow)"/>
+  <!-- Branch from main: (p,α) green, goes down -->
+  <path d="M260,256 C290,256 320,300 360,320" fill="none" stroke="#4ade80" stroke-width="2.2" filter="url(#glow)" opacity="0.85"/>
+  <!-- Branch from teal: sub-branch up (p,2n) violet -->
+  <path d="M260,200 C290,200 320,160 360,140" fill="none" stroke="#a78bfa" stroke-width="2" filter="url(#glow)" opacity="0.8"/>
+  <!-- Teal continues -->
+  <path d="M260,200 C290,200 320,195 360,192" fill="none" stroke="#2dd4bf" stroke-width="2" filter="url(#glow)" opacity="0.7"/>
+
+  <!-- Third split at layer 3 (x=360): final fan-out to endpoints -->
+  <!-- Violet continues out -->
+  <path d="M360,140 C400,130 440,105 480,90" fill="none" stroke="#a78bfa" stroke-width="2" filter="url(#glow)" opacity="0.8"/>
+  <!-- Teal continues out -->
+  <path d="M360,192 C400,188 440,178 480,170" fill="none" stroke="#2dd4bf" stroke-width="2.2" filter="url(#glow)" opacity="0.85"/>
+  <!-- Main beam fades out -->
+  <path d="M360,256 C400,256 440,256 480,256" fill="none" stroke="#fbbf24" stroke-width="2" filter="url(#glow)" opacity="0.7"/>
+  <!-- Green continues, sub-branch -->
+  <path d="M360,320 C400,325 440,340 480,350" fill="none" stroke="#4ade80" stroke-width="2" filter="url(#glow)" opacity="0.8"/>
+  <!-- New branch from green: orange -->
+  <path d="M360,320 C400,340 440,380 480,400" fill="none" stroke="#f59e0b" stroke-width="2" filter="url(#glow)" opacity="0.75"/>
+  <!-- Red branch from main at layer 3 -->
+  <path d="M360,256 C390,280 430,340 480,440" fill="none" stroke="#ef4444" stroke-width="1.8" filter="url(#glow)" opacity="0.65"/>
+
+  <!-- Branch point dots -->
+  <circle cx="160" cy="256" r="4" fill="#e6edf3" opacity="0.7" filter="url(#glow)"/>
+  <circle cx="260" cy="256" r="3" fill="#e6edf3" opacity="0.5" filter="url(#glow)"/>
+  <circle cx="260" cy="200" r="3" fill="#2dd4bf" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="360" cy="320" r="3" fill="#4ade80" opacity="0.5" filter="url(#glow)"/>
+
+  <!-- Endpoint dots (produced isotopes) -->
+  <circle cx="480" cy="90"  r="4" fill="#a78bfa" opacity="0.8" filter="url(#glow)"/>
+  <circle cx="480" cy="170" r="4" fill="#2dd4bf" opacity="0.8" filter="url(#glow)"/>
+  <circle cx="480" cy="256" r="4" fill="#fbbf24" opacity="0.7" filter="url(#glow)"/>
+  <circle cx="480" cy="350" r="4" fill="#4ade80" opacity="0.8" filter="url(#glow)"/>
+  <circle cx="480" cy="400" r="4" fill="#f59e0b" opacity="0.7" filter="url(#glow)"/>
+  <circle cx="480" cy="440" r="4" fill="#ef4444" opacity="0.6" filter="url(#glow)"/>
+</svg>

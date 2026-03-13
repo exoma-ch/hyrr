@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="coreGlow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="centerGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#58a6ff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!-- Concentric rings = material layers, viewed head-on (beam axis) -->
+  <!-- Outermost ring first -->
+  <circle cx="256" cy="256" r="200" fill="none" stroke="#2a2030" stroke-width="36" opacity="0.8"/>
+  <circle cx="256" cy="256" r="160" fill="none" stroke="#3b2818" stroke-width="32" opacity="0.8"/>
+  <circle cx="256" cy="256" r="124" fill="none" stroke="#3d3018" stroke-width="28" opacity="0.8"/>
+  <circle cx="256" cy="256" r="92"  fill="none" stroke="#1a3a2a" stroke-width="24" opacity="0.8"/>
+  <circle cx="256" cy="256" r="66"  fill="none" stroke="#143040" stroke-width="20" opacity="0.8"/>
+
+  <!-- Thin bright ring edges (layer boundaries) -->
+  <circle cx="256" cy="256" r="218" fill="none" stroke="#484f58" stroke-width="0.5" opacity="0.6"/>
+  <circle cx="256" cy="256" r="182" fill="none" stroke="#484f58" stroke-width="0.5" opacity="0.6"/>
+  <circle cx="256" cy="256" r="144" fill="none" stroke="#484f58" stroke-width="0.5" opacity="0.6"/>
+  <circle cx="256" cy="256" r="108" fill="none" stroke="#484f58" stroke-width="0.5" opacity="0.6"/>
+  <circle cx="256" cy="256" r="80"  fill="none" stroke="#484f58" stroke-width="0.5" opacity="0.6"/>
+  <circle cx="256" cy="256" r="56"  fill="none" stroke="#484f58" stroke-width="0.5" opacity="0.6"/>
+
+  <!-- Center glow where beam hits -->
+  <circle cx="256" cy="256" r="50" fill="url(#centerGlow)"/>
+  <circle cx="256" cy="256" r="8" fill="#58a6ff" opacity="0.9" filter="url(#coreGlow)"/>
+  <circle cx="256" cy="256" r="3" fill="#e6edf3"/>
+
+  <!-- Subtle crosshair -->
+  <line x1="256" y1="36" x2="256" y2="476" stroke="#30363d" stroke-width="0.75" opacity="0.4"/>
+  <line x1="36" y1="256" x2="476" y2="256" stroke="#30363d" stroke-width="0.75" opacity="0.4"/>
+</svg>

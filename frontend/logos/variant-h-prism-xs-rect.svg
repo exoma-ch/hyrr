@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!-- PRISM = rectangular layer stack (more realistic target) -->
+  <!-- 4 layers stacked vertically, beam hits from left -->
+  <rect x="130" y="120" width="110" height="272" rx="3" fill="none" stroke="#30363d" stroke-width="1.5"/>
+
+  <!-- Individual layers -->
+  <rect x="130" y="120" width="110" height="68" rx="3" fill="#143040" opacity="0.85"/>
+  <rect x="130" y="188" width="110" height="68"         fill="#1a3a2a" opacity="0.85"/>
+  <rect x="130" y="256" width="110" height="68"         fill="#3d3018" opacity="0.85"/>
+  <rect x="130" y="324" width="110" height="68" rx="3"  fill="#3b2818" opacity="0.85"/>
+
+  <!-- Layer border lines -->
+  <line x1="130" y1="188" x2="240" y2="188" stroke="#0d1117" stroke-width="1.5"/>
+  <line x1="130" y1="256" x2="240" y2="256" stroke="#0d1117" stroke-width="1.5"/>
+  <line x1="130" y1="324" x2="240" y2="324" stroke="#0d1117" stroke-width="1.5"/>
+
+  <!-- Outer border on top -->
+  <rect x="130" y="120" width="110" height="272" rx="3" fill="none" stroke="#30363d" stroke-width="1.5"/>
+
+  <!-- Incoming projectile: bright arrow from left -->
+  <line x1="24" y1="256" x2="130" y2="256" stroke="#e6edf3" stroke-width="3.5" filter="url(#glow)"/>
+  <line x1="24" y1="256" x2="130" y2="256" stroke="#e6edf3" stroke-width="16" opacity="0.06" filter="url(#softGlow)"/>
+  <polygon points="120,249 132,256 120,263" fill="#e6edf3" opacity="0.9"/>
+
+  <!-- Projectile label hint: small "p" -->
+  <text x="55" y="244" fill="#8b949e" font-family="monospace" font-size="18" opacity="0.5">p</text>
+
+  <!-- Emerging cross-section curves from right face
+       Each curve is an excitation function shape: rise → peak → tail
+       They fan out vertically from the exit point and curve into their peak shapes -->
+
+  <!-- Channel 1: (p,n) — dominant, teal -->
+  <path d="M240,256 L260,256 C275,256 290,240 310,210 C330,180 350,165 370,162 C390,164 405,178 420,200 C435,222 445,240 455,248"
+        fill="none" stroke="#2dd4bf" stroke-width="2.5" filter="url(#glow)" opacity="0.9"/>
+
+  <!-- Channel 2: (p,2n) — violet, higher -->
+  <path d="M240,256 L260,252 C275,245 290,218 310,178 C325,150 340,135 358,130 C375,132 390,148 405,172 C418,194 428,210 438,218"
+        fill="none" stroke="#8b5cf6" stroke-width="2.2" filter="url(#glow)" opacity="0.8"/>
+
+  <!-- Channel 3: (p,α) — green, middle -->
+  <path d="M240,256 L260,260 C275,264 290,275 310,290 C325,300 340,303 355,302 C370,299 385,292 400,284 C412,278 420,274 430,272"
+        fill="none" stroke="#4ade80" stroke-width="2.2" filter="url(#glow)" opacity="0.8"/>
+
+  <!-- Channel 4: (p,γ) — amber, lower -->
+  <path d="M240,256 L260,265 C275,278 290,310 310,340 C328,362 345,370 362,368 C380,363 395,348 410,332 C422,320 432,312 440,308"
+        fill="none" stroke="#fbbf24" stroke-width="2.2" filter="url(#glow)" opacity="0.8"/>
+
+  <!-- Channel 5: (p,3n) — red, lowest -->
+  <path d="M240,256 L260,270 C275,292 290,345 310,380 C328,402 348,410 368,405 C385,398 400,382 415,365 C428,352 438,344 448,340"
+        fill="none" stroke="#ef4444" stroke-width="2" filter="url(#glow)" opacity="0.7"/>
+
+  <!-- Soft halos on curves -->
+  <path d="M240,256 L260,256 C275,256 290,240 310,210 C330,180 350,165 370,162 C390,164 405,178 420,200 C435,222 445,240 455,248"
+        fill="none" stroke="#2dd4bf" stroke-width="10" opacity="0.04" filter="url(#softGlow)"/>
+  <path d="M240,256 L260,252 C275,245 290,218 310,178 C325,150 340,135 358,130 C375,132 390,148 405,172 C418,194 428,210 438,218"
+        fill="none" stroke="#8b5cf6" stroke-width="10" opacity="0.04" filter="url(#softGlow)"/>
+  <path d="M240,256 L260,265 C275,278 290,310 310,340 C328,362 345,370 362,368 C380,363 395,348 410,332 C422,320 432,312 440,308"
+        fill="none" stroke="#fbbf24" stroke-width="10" opacity="0.04" filter="url(#softGlow)"/>
+
+  <!-- Subtle axis lines for the "plot" area -->
+  <line x1="255" y1="110" x2="255" y2="400" stroke="#21262d" stroke-width="0.75"/>
+  <line x1="255" y1="400" x2="470" y2="400" stroke="#21262d" stroke-width="0.75"/>
+</svg>

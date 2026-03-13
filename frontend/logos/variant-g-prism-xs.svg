@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="triClip">
+      <polygon points="140,90 140,422 370,256"/>
+    </clipPath>
+  </defs>
+
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!-- PRISM = layered target stack, triangle pointing right -->
+  <polygon points="140,90 140,422 370,256" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+  <g clip-path="url(#triClip)">
+    <rect x="140" y="90"  width="230" height="66" fill="#143040" opacity="0.9"/>
+    <rect x="140" y="156" width="230" height="66" fill="#1a3a2a" opacity="0.9"/>
+    <rect x="140" y="222" width="230" height="68" fill="#3d3018" opacity="0.9"/>
+    <rect x="140" y="290" width="230" height="66" fill="#3b2818" opacity="0.9"/>
+    <rect x="140" y="356" width="230" height="66" fill="#2a2030" opacity="0.9"/>
+    <line x1="140" y1="156" x2="370" y2="156" stroke="#0d1117" stroke-width="1.5"/>
+    <line x1="140" y1="222" x2="370" y2="222" stroke="#0d1117" stroke-width="1.5"/>
+    <line x1="140" y1="290" x2="370" y2="290" stroke="#0d1117" stroke-width="1.5"/>
+    <line x1="140" y1="356" x2="370" y2="356" stroke="#0d1117" stroke-width="1.5"/>
+  </g>
+  <polygon points="140,90 140,422 370,256" fill="none" stroke="#30363d" stroke-width="2"/>
+
+  <!-- Incoming projectile beam — single bright line with arrow -->
+  <line x1="24" y1="256" x2="140" y2="256" stroke="#e6edf3" stroke-width="3" filter="url(#glow)"/>
+  <line x1="24" y1="256" x2="140" y2="256" stroke="#e6edf3" stroke-width="14" opacity="0.06" filter="url(#softGlow)"/>
+  <!-- Arrow tip -->
+  <polygon points="130,250 140,256 130,262" fill="#e6edf3" opacity="0.8"/>
+
+  <!-- Emerging: cross-section excitation curves (not straight lines!)
+       Each curve = a reaction channel, shaped like an excitation function:
+       rises from threshold, peaks, then tails off -->
+
+  <!-- Channel 1 (top, violet) — e.g. (p,2n) high threshold -->
+  <path d="M370,256 C385,240 400,195 420,170 C435,155 445,152 455,155 C468,162 478,180 488,200"
+        fill="none" stroke="#8b5cf6" stroke-width="2.5" filter="url(#glow)" opacity="0.85"/>
+
+  <!-- Channel 2 (teal) — e.g. (p,n) -->
+  <path d="M370,256 C382,248 395,225 415,208 C430,198 445,195 460,200 C475,208 485,220 492,232"
+        fill="none" stroke="#2dd4bf" stroke-width="2.5" filter="url(#glow)" opacity="0.85"/>
+
+  <!-- Channel 3 (green) — e.g. (p,α) -->
+  <path d="M370,256 C385,254 400,250 420,246 C440,244 455,245 470,248 C480,250 488,253 492,255"
+        fill="none" stroke="#4ade80" stroke-width="2.5" filter="url(#glow)" opacity="0.85"/>
+
+  <!-- Channel 4 (amber) — e.g. (p,γ) low energy -->
+  <path d="M370,256 C382,262 395,278 415,295 C430,305 445,308 460,305 C475,300 485,292 492,284"
+        fill="none" stroke="#fbbf24" stroke-width="2.5" filter="url(#glow)" opacity="0.85"/>
+
+  <!-- Channel 5 (orange) -->
+  <path d="M370,256 C385,268 400,305 420,330 C435,345 448,350 460,348 C472,344 482,335 490,325"
+        fill="none" stroke="#f59e0b" stroke-width="2.5" filter="url(#glow)" opacity="0.8"/>
+
+  <!-- Channel 6 (red, bottom) — e.g. (p,3n) -->
+  <path d="M370,256 C382,275 395,330 410,365 C425,385 440,392 455,388 C470,382 480,370 490,358"
+        fill="none" stroke="#ef4444" stroke-width="2.5" filter="url(#glow)" opacity="0.75"/>
+
+  <!-- Soft halos -->
+  <path d="M370,256 C385,240 400,195 420,170 C435,155 445,152 455,155 C468,162 478,180 488,200"
+        fill="none" stroke="#8b5cf6" stroke-width="10" opacity="0.04" filter="url(#softGlow)"/>
+  <path d="M370,256 C382,248 395,225 415,208 C430,198 445,195 460,200 C475,208 485,220 492,232"
+        fill="none" stroke="#2dd4bf" stroke-width="10" opacity="0.04" filter="url(#softGlow)"/>
+  <path d="M370,256 C385,254 400,250 420,246 C440,244 455,245 470,248 C480,250 488,253 492,255"
+        fill="none" stroke="#4ade80" stroke-width="10" opacity="0.04" filter="url(#softGlow)"/>
+  <path d="M370,256 C382,262 395,278 415,295 C430,305 445,308 460,305 C475,300 485,292 492,284"
+        fill="none" stroke="#fbbf24" stroke-width="10" opacity="0.04" filter="url(#softGlow)"/>
+  <path d="M370,256 C385,268 400,305 420,330 C435,345 448,350 460,348 C472,344 482,335 490,325"
+        fill="none" stroke="#f59e0b" stroke-width="10" opacity="0.04" filter="url(#softGlow)"/>
+  <path d="M370,256 C382,275 395,330 410,365 C425,385 440,392 455,388 C470,382 480,370 490,358"
+        fill="none" stroke="#ef4444" stroke-width="10" opacity="0.04" filter="url(#softGlow)"/>
+</svg>

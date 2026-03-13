@@ -1,5 +1,8 @@
 node_modules/
 dist/
+.env
+.env.local
 .svelte-kit/
 public/data/*.sql.gz
 public/data/xs/
+.vite/

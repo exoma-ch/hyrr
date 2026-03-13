@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="beamGlow">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!-- 3D tilted disc stack — each disc is an ellipse (circle seen at angle) -->
+  <!-- Discs are stacked along a diagonal axis (upper-left to lower-right) -->
+  <!-- Back disc first (furthest), front disc last (nearest) -->
+
+  <!-- Disc 5 (back, top-left) -->
+  <ellipse cx="170" cy="140" rx="80" ry="28" fill="#2a2030" opacity="0.6" stroke="#8b5cf6" stroke-width="1" stroke-opacity="0.3"/>
+
+  <!-- Disc 4 -->
+  <ellipse cx="195" cy="185" rx="82" ry="29" fill="#3b2818" opacity="0.65" stroke="#d97706" stroke-width="1" stroke-opacity="0.3"/>
+
+  <!-- Disc 3 (middle) -->
+  <ellipse cx="220" cy="232" rx="84" ry="30" fill="#3d3018" opacity="0.7" stroke="#f59e0b" stroke-width="1" stroke-opacity="0.4"/>
+
+  <!-- Disc 2 -->
+  <ellipse cx="248" cy="282" rx="86" ry="31" fill="#1a3a2a" opacity="0.75" stroke="#4ade80" stroke-width="1" stroke-opacity="0.4"/>
+
+  <!-- Disc 1 (front, bottom-right) -->
+  <ellipse cx="278" cy="335" rx="88" ry="32" fill="#143040" opacity="0.8" stroke="#2dd4bf" stroke-width="1.5" stroke-opacity="0.5"/>
+
+  <!-- Beam piercing through all discs — diagonal line -->
+  <!-- Behind the stack -->
+  <line x1="50" y1="60" x2="155" y2="120" stroke="#e6edf3" stroke-width="3" filter="url(#beamGlow)" opacity="0.5"/>
+  <!-- Through the stack (brighter) -->
+  <line x1="155" y1="120" x2="310" y2="360" stroke="#58a6ff" stroke-width="2.5" filter="url(#beamGlow)"/>
+  <!-- Exiting (dimmer, beam lost energy) -->
+  <line x1="310" y1="360" x2="460" y2="450" stroke="#58a6ff" stroke-width="1.5" filter="url(#glow)" opacity="0.25"/>
+
+  <!-- Glow where beam hits each disc -->
+  <circle cx="170" cy="140" r="6" fill="#58a6ff" opacity="0.5" filter="url(#glow)"/>
+  <circle cx="195" cy="185" r="6" fill="#58a6ff" opacity="0.5" filter="url(#glow)"/>
+  <circle cx="222" cy="233" r="7" fill="#58a6ff" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="248" cy="282" r="6" fill="#58a6ff" opacity="0.5" filter="url(#glow)"/>
+  <circle cx="278" cy="335" r="6" fill="#58a6ff" opacity="0.4" filter="url(#glow)"/>
+
+  <!-- Scattered reaction products (small colored dots flying off each disc) -->
+  <!-- From disc 3 (middle, most reactions) -->
+  <circle cx="310" cy="218" r="3" fill="#2dd4bf" opacity="0.7" filter="url(#glow)"/>
+  <circle cx="320" cy="240" r="2.5" fill="#4ade80" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="148" cy="248" r="2.5" fill="#f59e0b" opacity="0.6" filter="url(#glow)"/>
+  <!-- From disc 2 -->
+  <circle cx="345" cy="270" r="2.5" fill="#a78bfa" opacity="0.6" filter="url(#glow)"/>
+  <circle cx="175" cy="298" r="2" fill="#fbbf24" opacity="0.5" filter="url(#glow)"/>
+  <!-- From disc 1 -->
+  <circle cx="370" cy="322" r="2" fill="#ef4444" opacity="0.5" filter="url(#glow)"/>
+  <circle cx="200" cy="352" r="2" fill="#2dd4bf" opacity="0.5" filter="url(#glow)"/>
+</svg>

@@ -67,13 +67,6 @@
     return result;
   }
 
-  /** TENDL-2023 residual production page URL for a target isotope */
-  function tendlUrl(proj: string, targetSymbol: string, targetA: number): string {
-    const projName = ({ p: "proton", d: "deuteron", t: "triton", h: "he3", a: "alpha" } as Record<string, string>)[proj] ?? "proton";
-    const aaa = String(targetA).padStart(3, "0");
-    const sym = targetSymbol.charAt(0).toUpperCase() + targetSymbol.slice(1).toLowerCase();
-    return `https://tendl.web.psi.ch/tendl_2023/${projName}_html/${projName.charAt(0).toUpperCase() + projName.slice(1)}${aaa}${sym}/residual.html`;
-  }
 
   // XS channel: one per target isotope that produces this residual
   interface XsChannel {
@@ -84,7 +77,6 @@
     abundance: number; // isotopic fraction (0-1), reflecting enrichment
     label: string; // e.g. "⁴⁴Ca(p,n)"
     reaction: string; // e.g. "(p,n)"
-    tendlLink: string;
   }
 
   /** Convert "Sc-44" → "<sup>44</sup>Sc", "Sc-44 (m)" → "<sup>44m</sup>Sc" */
@@ -242,7 +234,6 @@
                   abundance: atomFrac * isoAbundance,
                   label: `<sup>${targetA}</sup>${tSym}${rxn}<sup>${xs.residualA}</sup>${rSym}`,
                   reaction: rxn,
-                  tendlLink: tendlUrl(proj, tSym, targetA),
                 };
                 if (!allChanMap.has(isoKey)) allChanMap.set(isoKey, []);
                 allChanMap.get(isoKey)!.push(ch);
@@ -938,12 +929,6 @@
         <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854.22a.75.75 0 011.396-.04L14 5.5a.75.75 0 01-1.5 0V4.56l-3.97 3.97a.75.75 0 01-1.06-1.06L11.44 3.5H10.5a.75.75 0 010-1.5h.104z"></path></svg>
         JANIS (NEA)
       </a>
-      {#each xsChannels as ch}
-        <a href={ch.tendlLink} target="_blank" rel="noopener noreferrer" class="ext-link tendl-link">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854.22a.75.75 0 011.396-.04L14 5.5a.75.75 0 01-1.5 0V4.56l-3.97 3.97a.75.75 0 01-1.06-1.06L11.44 3.5H10.5a.75.75 0 010-1.5h.104z"></path></svg>
-          TENDL {ch.label}
-        </a>
-      {/each}
     </div>
   </div>
 </Modal>
@@ -1282,5 +1267,4 @@
 
   .ext-link:hover { text-decoration: underline; }
 
-  .tendl-link { color: #8b949e; }
 </style>

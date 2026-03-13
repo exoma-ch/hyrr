@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="prismFill" x1="0.3" y1="0" x2="0.7" y2="1">
+      <stop offset="0%" stop-color="#1c2128"/>
+      <stop offset="50%" stop-color="#21262d"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="wideGlow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!-- The "prism" — a stack of material layers (trapezoid/parallelogram shape) -->
+  <!-- Stack of 5 horizontal layers forming a triangular prism shape -->
+  <polygon points="200,80 312,80 340,152 172,152" fill="#1b3a4b" opacity="0.8" stroke="#2dd4bf" stroke-width="1" stroke-opacity="0.4"/>
+  <polygon points="172,152 340,152 358,224 154,224" fill="#2a3a28" opacity="0.8" stroke="#4ade80" stroke-width="1" stroke-opacity="0.4"/>
+  <polygon points="154,224 358,224 376,296 136,296" fill="#4a3728" opacity="0.8" stroke="#f59e0b" stroke-width="1" stroke-opacity="0.4"/>
+  <polygon points="136,296 376,296 394,368 118,368" fill="#3b2d1a" opacity="0.8" stroke="#d97706" stroke-width="1" stroke-opacity="0.4"/>
+  <polygon points="118,368 394,368 412,440 100,440" fill="#2d333b" opacity="0.8" stroke="#8b949e" stroke-width="1" stroke-opacity="0.4"/>
+
+  <!-- Incoming beam (single white-blue line from left) -->
+  <line x1="20" y1="256" x2="200" y2="256" stroke="#58a6ff" stroke-width="3" filter="url(#glow)"/>
+  <line x1="20" y1="256" x2="200" y2="256" stroke="#58a6ff" stroke-width="14" opacity="0.08" filter="url(#wideGlow)"/>
+
+  <!-- Outgoing "spectrum" — multiple colored beams fanning out from the right side of the prism
+       Each beam = a different isotope/reaction channel, like light dispersing through a prism -->
+
+  <!-- Fan of isotope beams emerging from right side -->
+  <line x1="370" y1="210" x2="490" y2="120" stroke="#2dd4bf" stroke-width="2.5" filter="url(#glow)" opacity="0.9"/>
+  <line x1="375" y1="235" x2="490" y2="195" stroke="#4ade80" stroke-width="2.5" filter="url(#glow)" opacity="0.85"/>
+  <line x1="378" y1="256" x2="490" y2="256" stroke="#f59e0b" stroke-width="2.5" filter="url(#glow)" opacity="0.8"/>
+  <line x1="380" y1="280" x2="490" y2="320" stroke="#d97706" stroke-width="2.5" filter="url(#glow)" opacity="0.75"/>
+  <line x1="383" y1="305" x2="490" y2="395" stroke="#ef4444" stroke-width="2.5" filter="url(#glow)" opacity="0.7"/>
+
+  <!-- Subtle glow halos on emerging beams -->
+  <line x1="370" y1="210" x2="490" y2="120" stroke="#2dd4bf" stroke-width="10" opacity="0.06" filter="url(#wideGlow)"/>
+  <line x1="375" y1="235" x2="490" y2="195" stroke="#4ade80" stroke-width="10" opacity="0.06" filter="url(#wideGlow)"/>
+  <line x1="378" y1="256" x2="490" y2="256" stroke="#f59e0b" stroke-width="10" opacity="0.06" filter="url(#wideGlow)"/>
+  <line x1="380" y1="280" x2="490" y2="320" stroke="#d97706" stroke-width="10" opacity="0.06" filter="url(#wideGlow)"/>
+  <line x1="383" y1="305" x2="490" y2="395" stroke="#ef4444" stroke-width="10" opacity="0.06" filter="url(#wideGlow)"/>
+</svg>

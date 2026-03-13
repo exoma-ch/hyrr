@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="wideGlow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!-- Prism: vertical stack of layers forming a triangular cross-section
+       Beam enters left face, isotope channels exit right face dispersed -->
+
+  <!-- Layer stack as a prism (side view: triangle pointing right) -->
+  <!-- Left face at x=120, apex at x=350, layers are horizontal bands -->
+  <polygon points="120,130 350,256 120,382" fill="none" stroke="#2d333b" stroke-width="2"/>
+
+  <!-- Layer fills within the prism -->
+  <clipPath id="prismClip">
+    <polygon points="120,130 350,256 120,382"/>
+  </clipPath>
+
+  <g clip-path="url(#prismClip)">
+    <rect x="120" y="130" width="230" height="50" fill="#1b3a4b" opacity="0.7"/>
+    <rect x="120" y="180" width="230" height="50" fill="#1a3a2a" opacity="0.7"/>
+    <rect x="120" y="230" width="230" height="52" fill="#4a3728" opacity="0.7"/>
+    <rect x="120" y="282" width="230" height="50" fill="#3b2d1a" opacity="0.7"/>
+    <rect x="120" y="332" width="230" height="50" fill="#2d333b" opacity="0.7"/>
+    <!-- Layer borders -->
+    <line x1="120" y1="180" x2="350" y2="180" stroke="#2d333b" stroke-width="0.5" opacity="0.5"/>
+    <line x1="120" y1="230" x2="350" y2="230" stroke="#2d333b" stroke-width="0.5" opacity="0.5"/>
+    <line x1="120" y1="282" x2="350" y2="282" stroke="#2d333b" stroke-width="0.5" opacity="0.5"/>
+    <line x1="120" y1="332" x2="350" y2="332" stroke="#2d333b" stroke-width="0.5" opacity="0.5"/>
+  </g>
+
+  <!-- Incoming beam -->
+  <line x1="30" y1="256" x2="120" y2="256" stroke="#c9d1d9" stroke-width="3.5" filter="url(#glow)"/>
+  <line x1="30" y1="256" x2="120" y2="256" stroke="#c9d1d9" stroke-width="16" opacity="0.06" filter="url(#wideGlow)"/>
+
+  <!-- Dispersed isotope channels emerging from the right hypotenuse -->
+  <!-- Each exits at a different angle, like spectral lines -->
+  <line x1="310" y1="238" x2="480" y2="100" stroke="#2dd4bf" stroke-width="2.5" filter="url(#glow)" opacity="0.9"/>
+  <line x1="320" y1="244" x2="480" y2="170" stroke="#4ade80" stroke-width="2.5" filter="url(#glow)" opacity="0.85"/>
+  <line x1="330" y1="250" x2="480" y2="230" stroke="#fbbf24" stroke-width="2.5" filter="url(#glow)" opacity="0.8"/>
+  <line x1="335" y1="254" x2="480" y2="280" stroke="#f59e0b" stroke-width="2.5" filter="url(#glow)" opacity="0.8"/>
+  <line x1="340" y1="258" x2="480" y2="340" stroke="#d97706" stroke-width="2.5" filter="url(#glow)" opacity="0.75"/>
+  <line x1="345" y1="263" x2="480" y2="410" stroke="#ef4444" stroke-width="2.5" filter="url(#glow)" opacity="0.7"/>
+
+  <!-- Subtle beam glow halos -->
+  <line x1="310" y1="238" x2="480" y2="100" stroke="#2dd4bf" stroke-width="12" opacity="0.04" filter="url(#wideGlow)"/>
+  <line x1="330" y1="250" x2="480" y2="230" stroke="#fbbf24" stroke-width="12" opacity="0.04" filter="url(#wideGlow)"/>
+  <line x1="340" y1="258" x2="480" y2="340" stroke="#d97706" stroke-width="12" opacity="0.04" filter="url(#wideGlow)"/>
+  <line x1="345" y1="263" x2="480" y2="410" stroke="#ef4444" stroke-width="12" opacity="0.04" filter="url(#wideGlow)"/>
+</svg>

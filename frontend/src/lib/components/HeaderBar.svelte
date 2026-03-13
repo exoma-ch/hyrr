@@ -17,7 +17,7 @@
 <header class="header-bar">
   <div class="tab-strip">
     <img src="/hyrr/logo.svg" alt="HYRR logo" class="logo" />
-    <h1 class="title">HYRR</h1>
+    <h1 class="title" title="HYRR v0.2.0">HYRR</h1>
     <SessionTabs />
     <button class="lucky-btn" onclick={feelingLucky} title="Load random preset">
       Feeling Lucky
@@ -26,7 +26,7 @@
 
   <div class="actions">
     <a
-      href="https://github.com/MorePET/hyrr"
+      href="https://github.com/exoma-ch/hyrr"
       target="_blank"
       rel="noopener noreferrer"
       class="icon-btn"

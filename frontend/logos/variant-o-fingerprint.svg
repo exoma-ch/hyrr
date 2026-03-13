@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!-- Fingerprint-like concentric irregular rings -->
+  <!-- Each "ring" is an ellipse with slight offset/rotation for organic feel -->
+  <!-- Colors transition from inner (beam impact) to outer (last layer) -->
+
+  <!-- Outermost rings (layer 5 — slate/violet) -->
+  <ellipse cx="258" cy="260" rx="198" ry="190" fill="none" stroke="#8b5cf6" stroke-width="2" opacity="0.3" transform="rotate(-2,258,260)"/>
+  <ellipse cx="255" cy="258" rx="184" ry="178" fill="none" stroke="#8b5cf6" stroke-width="2" opacity="0.35" transform="rotate(1,255,258)"/>
+  <ellipse cx="257" cy="255" rx="170" ry="165" fill="none" stroke="#2a2030" stroke-width="2.5" opacity="0.4" transform="rotate(-1,257,255)"/>
+
+  <!-- Layer 4 rings (copper/brown) -->
+  <ellipse cx="254" cy="257" rx="152" ry="148" fill="none" stroke="#d97706" stroke-width="2" opacity="0.45" transform="rotate(2,254,257)" filter="url(#glow)"/>
+  <ellipse cx="256" cy="254" rx="138" ry="135" fill="none" stroke="#d97706" stroke-width="2" opacity="0.5" transform="rotate(-1.5,256,254)"/>
+  <ellipse cx="258" cy="256" rx="124" ry="122" fill="none" stroke="#3b2818" stroke-width="2.5" opacity="0.5" transform="rotate(0.5,258,256)"/>
+
+  <!-- Layer 3 rings (amber/gold) -->
+  <ellipse cx="255" cy="258" rx="108" ry="106" fill="none" stroke="#f59e0b" stroke-width="2" opacity="0.55" transform="rotate(-2,255,258)" filter="url(#glow)"/>
+  <ellipse cx="257" cy="255" rx="94"  ry="92"  fill="none" stroke="#f59e0b" stroke-width="2" opacity="0.6" transform="rotate(1.5,257,255)"/>
+  <ellipse cx="256" cy="257" rx="80"  ry="79"  fill="none" stroke="#fbbf24" stroke-width="2" opacity="0.6" transform="rotate(-0.5,256,257)"/>
+
+  <!-- Layer 2 rings (green) -->
+  <ellipse cx="258" cy="254" rx="66" ry="65" fill="none" stroke="#4ade80" stroke-width="2" opacity="0.65" transform="rotate(2,258,254)" filter="url(#glow)"/>
+  <ellipse cx="255" cy="257" rx="52" ry="52" fill="none" stroke="#4ade80" stroke-width="2" opacity="0.7" transform="rotate(-1,255,257)"/>
+
+  <!-- Layer 1 rings (teal, innermost) -->
+  <ellipse cx="257" cy="255" rx="38" ry="38" fill="none" stroke="#2dd4bf" stroke-width="2.5" opacity="0.75" transform="rotate(1,257,255)" filter="url(#glow)"/>
+  <ellipse cx="256" cy="256" rx="24" ry="24" fill="none" stroke="#2dd4bf" stroke-width="2" opacity="0.8"/>
+
+  <!-- Core: beam impact point -->
+  <circle cx="256" cy="256" r="10" fill="none" stroke="#58a6ff" stroke-width="2" opacity="0.9" filter="url(#glow)"/>
+  <circle cx="256" cy="256" r="4" fill="#e6edf3" opacity="0.8"/>
+
+  <!-- Fingerprint "breaks" — some arcs don't complete (like real fingerprints) -->
+  <!-- Achieved by adding small background-colored patches over some ring segments -->
+  <rect x="350" y="180" width="30" height="8" fill="#0d1117" transform="rotate(15,365,184)" opacity="0.8"/>
+  <rect x="130" y="300" width="25" height="8" fill="#0d1117" transform="rotate(-10,142,304)" opacity="0.8"/>
+  <rect x="300" y="360" width="20" height="8" fill="#0d1117" transform="rotate(25,310,364)" opacity="0.8"/>
+  <rect x="180" y="160" width="22" height="8" fill="#0d1117" transform="rotate(-5,191,164)" opacity="0.8"/>
+  <rect x="340" y="280" width="18" height="7" fill="#0d1117" transform="rotate(8,349,283)" opacity="0.7"/>
+  <rect x="160" y="230" width="20" height="7" fill="#0d1117" transform="rotate(-12,170,233)" opacity="0.7"/>
+</svg>

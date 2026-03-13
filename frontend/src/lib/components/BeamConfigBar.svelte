@@ -28,13 +28,19 @@
   let irradFeedback = $state("");
   let coolFeedback = $state("");
 
-  // Initialize text from config
-  let initialized = false;
+  // Sync text from config (tracks external changes like presets/history)
+  let prevIrradS = $state(-1);
+  let prevCoolS = $state(-1);
   $effect(() => {
-    if (!initialized) {
-      initialized = true;
+    if (config.irradiation_s !== prevIrradS) {
+      prevIrradS = config.irradiation_s;
       irradText = formatSeconds(config.irradiation_s);
+      irradFeedback = "";
+    }
+    if (config.cooling_s !== prevCoolS) {
+      prevCoolS = config.cooling_s;
       coolText = formatSeconds(config.cooling_s);
+      coolFeedback = "";
     }
   });
 
