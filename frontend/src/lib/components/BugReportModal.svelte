@@ -29,12 +29,12 @@
   let emailValid = $derived(!email.trim() || EMAIL_RE.test(email));
   /** Worker submit requires email + description; GitHub route only needs description. */
   let canSubmitWorker = $derived(
-    description.trim().length > 0 &&
+    (description.trim().length > 0 || screenshot !== null) &&
     email.trim().length > 0 &&
     EMAIL_RE.test(email) &&
     !submitting
   );
-  let canOpenGitHub = $derived(description.trim().length > 0 && !submitting);
+  let canOpenGitHub = $derived((description.trim().length > 0 || screenshot !== null) && !submitting);
 
   // Render Turnstile widget when panel opens
   $effect(() => {
@@ -186,6 +186,7 @@
   /** Submit via worker (requires email + Turnstile). */
   async function submitViaWorker() {
     if (!canSubmitWorker || !WORKER_URL) return;
+    if (!description.trim() && !screenshot) return;
 
     submitting = true;
     resultMsg = null;
@@ -599,23 +600,23 @@
   }
 
   .gh-btn {
-    background: none;
+    background: var(--c-bg-muted);
     border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: var(--c-text-label);
+    color: var(--c-text);
     padding: 0.35rem 0.6rem;
     font-size: 0.75rem;
     cursor: pointer;
+    font-weight: 500;
   }
 
   .gh-btn:hover:not(:disabled) {
-    color: var(--c-text);
+    background: var(--c-border-muted);
     border-color: var(--c-text-faint);
-    background: var(--c-bg-muted);
   }
 
   .gh-btn:disabled {
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: not-allowed;
   }
 
