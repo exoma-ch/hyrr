@@ -62,16 +62,17 @@ Frontend:
 cd frontend
 npm ci
 npm run dev
+npm test          # vitest
+npm run check     # svelte-check (TypeScript)
 ```
 
 ## Contributing
 
 1. Fork and create a feature branch
-2. `uv sync --all-extras` to install all dependencies
-3. `uv run pytest` — all tests must pass
-4. `uv run ruff check src/` — no lint errors
-5. Commit format: `type(scope): description`
-6. Open a PR against `main`
+2. **Python:** `uv sync --all-extras`, then `uv run pytest` and `uv run ruff check src/`
+3. **Frontend:** `cd frontend && npm ci`, then `npm test` and `npm run check`
+4. Commit format: `type(scope): description`
+5. Open a PR against `main`
 
 ## Dependencies
 
