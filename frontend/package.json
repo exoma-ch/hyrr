@@ -12,7 +12,7 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^5.6.0",
