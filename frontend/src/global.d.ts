@@ -2,6 +2,23 @@ declare const __APP_VERSION__: string;
 
 interface ImportMetaEnv {
   readonly VITE_ISSUE_WORKER_URL?: string;
+  readonly VITE_TURNSTILE_SITE_KEY?: string;
+}
+
+interface TurnstileInstance {
+  render(container: HTMLElement, options: {
+    sitekey: string;
+    size?: "normal" | "compact" | "invisible";
+    callback?: (token: string) => void;
+    "error-callback"?: () => void;
+  }): string;
+  reset(widgetId: string): void;
+  remove(widgetId: string): void;
+  execute(widgetId: string): void;
+}
+
+interface Window {
+  turnstile: TurnstileInstance;
 }
 
 interface ImportMeta {

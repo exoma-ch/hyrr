@@ -14,11 +14,44 @@
   let submitting = $state(false);
   let capturing = $state(false);
   let resultMsg = $state<{ ok: boolean; text: string } | null>(null);
+  let turnstileToken = $state<string | null>(null);
+  let turnstileWidgetId = $state<string | null>(null);
+  let turnstileEl: HTMLDivElement | undefined = $state();
 
   const WORKER_URL = import.meta.env.VITE_ISSUE_WORKER_URL ?? "";
+  const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY ?? "";
   const REPO = "exoma-ch/hyrr";
   const MAX_DIM = 1280;
   const JPEG_QUALITY = 0.8;
+
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  let emailValid = $derived(!email.trim() || EMAIL_RE.test(email));
+  /** Worker submit requires email + description; GitHub route only needs description. */
+  let canSubmitWorker = $derived(
+    description.trim().length > 0 &&
+    email.trim().length > 0 &&
+    EMAIL_RE.test(email) &&
+    !submitting
+  );
+  let canOpenGitHub = $derived(description.trim().length > 0 && !submitting);
+
+  // Render Turnstile widget when panel opens
+  $effect(() => {
+    if (open && turnstileEl && TURNSTILE_SITE_KEY && typeof window.turnstile !== "undefined") {
+      // Reset any previous widget
+      if (turnstileWidgetId !== null) {
+        window.turnstile.remove(turnstileWidgetId);
+      }
+      turnstileToken = null;
+      turnstileWidgetId = window.turnstile.render(turnstileEl, {
+        sitekey: TURNSTILE_SITE_KEY,
+        size: "invisible",
+        callback: (token: string) => { turnstileToken = token; },
+        "error-callback": () => { turnstileToken = null; },
+      });
+    }
+  });
 
   /** Capture the page behind this panel using html2canvas. */
   async function captureScreen() {
@@ -132,7 +165,7 @@
 
     sections.push(`## Debug Context`);
     sections.push(`**[Reproduce this config](${configUrl})**`);
-    sections.push(`**Beam:** ${config.beam?.particle ?? "?"} @ ${config.beam?.energy ?? "?"} MeV, ${config.beam?.current ?? "?"} µA`);
+    sections.push(`**Beam:** ${config.beam?.projectile ?? "?"} @ ${config.beam?.energy_MeV ?? "?"} MeV, ${config.beam?.current_mA ?? "?"} mA`);
     const layerNames = (config.layers ?? []).map((l: any) => l.material).join(" → ");
     sections.push(`**Stack:** ${layerNames || "empty"} (${config.layers?.length ?? 0} layers)`);
 
@@ -150,50 +183,70 @@
     return sections.join("\n\n");
   }
 
-  async function submit() {
-    if (!description.trim()) return;
+  /** Submit via worker (requires email + Turnstile). */
+  async function submitViaWorker() {
+    if (!canSubmitWorker || !WORKER_URL) return;
+
+    submitting = true;
+    resultMsg = null;
+
+    // Get Turnstile token (trigger invisible challenge if needed)
+    if (TURNSTILE_SITE_KEY && !turnstileToken && turnstileWidgetId !== null && typeof window.turnstile !== "undefined") {
+      window.turnstile.execute(turnstileWidgetId);
+      await new Promise<void>((resolve) => {
+        const check = setInterval(() => {
+          if (turnstileToken) { clearInterval(check); resolve(); }
+        }, 100);
+        setTimeout(() => { clearInterval(check); resolve(); }, 5000);
+      });
+    }
 
     const title = `[Bug] ${description.slice(0, 70)}`;
 
-    if (WORKER_URL) {
-      submitting = true;
-      resultMsg = null;
-      try {
-        let screenshotUrl: string | undefined;
-        if (screenshot) {
-          const url = await uploadScreenshot(screenshot);
-          if (url) screenshotUrl = url;
-        }
-
-        const body = buildBody(screenshotUrl);
-        const res = await fetch(WORKER_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title, body, labels: ["bug"] }),
-        });
-        const data = await res.json();
-        if (res.ok) {
-          resultMsg = { ok: true, text: `Issue #${data.number} created` };
-          description = "";
-          screenshot = null;
-          screenshotPreview = null;
-          setTimeout(() => { resultMsg = null; closeBugReport(); }, 2000);
-        } else {
-          resultMsg = { ok: false, text: data.error ?? "Failed to create issue" };
-        }
-      } catch {
-        resultMsg = { ok: false, text: "Network error — falling back to GitHub" };
-        fallbackToGitHub(title, buildBody());
-      } finally {
-        submitting = false;
+    try {
+      let screenshotUrl: string | undefined;
+      if (screenshot) {
+        const url = await uploadScreenshot(screenshot);
+        if (url) screenshotUrl = url;
       }
-      return;
-    }
 
-    fallbackToGitHub(title, buildBody());
+      const body = buildBody(screenshotUrl);
+      const res = await fetch(WORKER_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          body,
+          labels: ["bug"],
+          email,
+          "cf-turnstile-response": turnstileToken ?? "",
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        resultMsg = { ok: true, text: `Issue #${data.number} created` };
+        resetForm();
+        setTimeout(() => { resultMsg = null; closeBugReport(); }, 2000);
+      } else {
+        resultMsg = { ok: false, text: data.error ?? "Failed to create issue" };
+      }
+    } catch {
+      resultMsg = { ok: false, text: "Network error — try 'Open on GitHub' instead" };
+    } finally {
+      submitting = false;
+      if (turnstileWidgetId !== null && typeof window.turnstile !== "undefined") {
+        window.turnstile.reset(turnstileWidgetId);
+        turnstileToken = null;
+      }
+    }
   }
 
-  function fallbackToGitHub(title: string, body: string) {
+  /** Open on GitHub directly (user authenticates via their GH session). */
+  function openOnGitHub() {
+    if (!canOpenGitHub) return;
+    const title = `[Bug] ${description.slice(0, 70)}`;
+    const body = buildBody();
+
     const url = `https://github.com/${REPO}/issues/new?` + new URLSearchParams({
       title,
       body,
@@ -201,10 +254,14 @@
     }).toString();
 
     window.open(url, "_blank");
+    resetForm();
+    closeBugReport();
+  }
+
+  function resetForm() {
     description = "";
     screenshot = null;
     screenshotPreview = null;
-    closeBugReport();
   }
 </script>
 
@@ -226,8 +283,17 @@
       </div>
 
       <div class="field">
-        <label for="bug-email">Email <span class="optional">(optional)</span></label>
-        <input id="bug-email" type="email" bind:value={email} placeholder="your@email.com" />
+        <label for="bug-email">Email {#if WORKER_URL}<span class="required">* for Submit</span>{:else}<span class="optional">(optional)</span>{/if}</label>
+        <input
+          id="bug-email"
+          type="email"
+          bind:value={email}
+          placeholder="your@email.com"
+          class:invalid={email.length > 0 && !emailValid}
+        />
+        {#if email.length > 0 && !emailValid}
+          <span class="field-error">Please enter a valid email address</span>
+        {/if}
       </div>
 
       <div class="field">
@@ -266,9 +332,12 @@
         {/if}
       </div>
 
+      <!-- Invisible Turnstile widget container -->
+      <div bind:this={turnstileEl}></div>
+
       <p class="hint">
         Config and simulation state attached automatically.
-        {#if !WORKER_URL}You'll review the issue on GitHub before submitting.{/if}
+        {#if WORKER_URL}Have a GitHub account? Use "Open on GitHub" — no email needed.{/if}
       </p>
 
       {#if resultMsg}
@@ -280,12 +349,23 @@
       <div class="actions">
         <button class="cancel-btn" onclick={closeBugReport}>Cancel</button>
         <button
-          class="submit-btn"
-          onclick={submit}
-          disabled={!description.trim() || submitting}
+          class="gh-btn"
+          onclick={openOnGitHub}
+          disabled={!canOpenGitHub}
+          title="Opens GitHub — you'll review before submitting"
         >
-          {#if submitting}Submitting...{:else if WORKER_URL}Submit{:else}Open on GitHub{/if}
+          Open on GitHub
         </button>
+        {#if WORKER_URL}
+          <button
+            class="submit-btn"
+            onclick={submitViaWorker}
+            disabled={!canSubmitWorker}
+            title="Submit directly (requires email)"
+          >
+            {#if submitting}Submitting...{:else}Submit{/if}
+          </button>
+        {/if}
       </div>
     </div>
   </div>
@@ -392,6 +472,15 @@
   input:focus, textarea:focus {
     outline: none;
     border-color: var(--c-accent);
+  }
+
+  input.invalid {
+    border-color: var(--c-red);
+  }
+
+  .field-error {
+    font-size: 0.65rem;
+    color: var(--c-red);
   }
 
   .screenshot-actions {
@@ -507,6 +596,27 @@
   .cancel-btn:hover {
     color: var(--c-text);
     border-color: var(--c-text-faint);
+  }
+
+  .gh-btn {
+    background: none;
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    color: var(--c-text-label);
+    padding: 0.35rem 0.6rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .gh-btn:hover:not(:disabled) {
+    color: var(--c-text);
+    border-color: var(--c-text-faint);
+    background: var(--c-bg-muted);
+  }
+
+  .gh-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .submit-btn {

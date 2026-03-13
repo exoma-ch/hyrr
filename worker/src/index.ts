@@ -2,7 +2,7 @@
  * Cloudflare Worker: GitHub App issue proxy + screenshot hosting for HYRR.
  *
  * Routes:
- *   POST /             — Create a GitHub issue (JSON: { title, body, labels?, screenshot? })
+ *   POST /             — Create a GitHub issue (JSON: { title, body, labels?, email, cf-turnstile-response })
  *   POST /upload       — Upload a screenshot to R2 (binary body, returns URL)
  *   GET  /img/:key     — Serve a screenshot from R2
  */
@@ -11,6 +11,7 @@ interface Env {
   GITHUB_APP_ID: string;
   GITHUB_INSTALL_ID: string;
   GITHUB_APP_PRIVATE_KEY: string;
+  TURNSTILE_SECRET: string;
   ALLOWED_ORIGIN: string;
   SCREENSHOTS: R2Bucket;
 }
@@ -19,6 +20,17 @@ const REPO_OWNER = "exoma-ch";
 const REPO_NAME = "hyrr";
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2 MB
 const MAX_BUCKET_OBJECTS = 1000; // hard cap on total screenshots
+const MAX_TITLE_LENGTH = 200;
+const MAX_BODY_LENGTH = 10_000;
+const ALLOWED_LABELS = ["bug"];
+const ALLOWED_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+// Magic bytes for image format validation
+const MAGIC_BYTES: Record<string, number[]> = {
+  "image/jpeg": [0xff, 0xd8, 0xff],
+  "image/png": [0x89, 0x50, 0x4e, 0x47],
+  "image/webp": [0x52, 0x49, 0x46, 0x46], // "RIFF" prefix
+};
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -44,19 +56,25 @@ export default {
       return new Response(obj.body, {
         headers: {
           "Content-Type": obj.httpMetadata?.contentType ?? "image/png",
+          "Content-Disposition": "inline",
           "Cache-Control": "public, max-age=31536000, immutable",
         },
       });
     }
 
+    // ── Origin enforcement for mutation routes ──
+    if (!allowed) {
+      return json({ error: "Forbidden" }, 403, origin, false);
+    }
+
     // Upload screenshot
     if (request.method === "POST" && url.pathname === "/upload") {
-      return handleUpload(request, env, origin, allowed);
+      return handleUpload(request, env, origin);
     }
 
     // Create issue
     if (request.method === "POST" && (url.pathname === "/" || url.pathname === "")) {
-      return handleCreateIssue(request, env, origin, allowed);
+      return handleCreateIssue(request, env, origin);
     }
 
     return json({ error: "Not found" }, 404, origin, allowed);
@@ -69,36 +87,49 @@ async function handleUpload(
   request: Request,
   env: Env,
   origin: string,
-  allowed: boolean
 ): Promise<Response> {
+  const contentType = request.headers.get("Content-Type") ?? "";
+  if (!ALLOWED_CONTENT_TYPES.includes(contentType)) {
+    return json(
+      { error: `Unsupported content type. Allowed: ${ALLOWED_CONTENT_TYPES.join(", ")}` },
+      415, origin, true,
+    );
+  }
+
   const contentLength = parseInt(request.headers.get("Content-Length") ?? "0", 10);
   if (contentLength > MAX_IMAGE_BYTES) {
-    return json({ error: `Image too large (max ${MAX_IMAGE_BYTES / 1024 / 1024} MB)` }, 413, origin, allowed);
+    return json({ error: `Image too large (max ${MAX_IMAGE_BYTES / 1024 / 1024} MB)` }, 413, origin, true);
   }
 
   // Check bucket object count (soft cap)
-  const list = await env.SCREENSHOTS.list({ limit: 1, include: ["httpMetadata"] });
-  // R2 list doesn't return total count directly; use a prefix count approach
   const countList = await env.SCREENSHOTS.list({ limit: MAX_BUCKET_OBJECTS + 1 });
   if (countList.objects.length >= MAX_BUCKET_OBJECTS) {
-    return json({ error: "Screenshot storage is full" }, 507, origin, allowed);
+    return json({ error: "Screenshot storage is full" }, 507, origin, true);
   }
 
   const body = await request.arrayBuffer();
   if (body.byteLength > MAX_IMAGE_BYTES) {
-    return json({ error: `Image too large (max ${MAX_IMAGE_BYTES / 1024 / 1024} MB)` }, 413, origin, allowed);
+    return json({ error: `Image too large (max ${MAX_IMAGE_BYTES / 1024 / 1024} MB)` }, 413, origin, true);
   }
 
-  const contentType = request.headers.get("Content-Type") ?? "image/png";
-  const ext = contentType.includes("jpeg") || contentType.includes("jpg") ? "jpg" : "png";
+  // Validate magic bytes match declared content type
+  const header = new Uint8Array(body.slice(0, 12));
+  const expected = MAGIC_BYTES[contentType];
+  if (expected && !expected.every((b, i) => header[i] === b)) {
+    return json({ error: "File content does not match declared content type" }, 400, origin, true);
+  }
+
+  const ext = contentType === "image/jpeg" ? "jpg"
+    : contentType === "image/webp" ? "webp"
+    : "png";
   const key = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
 
   await env.SCREENSHOTS.put(key, body, {
-    httpMetadata: { contentType },
+    httpMetadata: { contentType, contentDisposition: "inline" },
   });
 
   const imgUrl = `${new URL(request.url).origin}/img/${key}`;
-  return json({ url: imgUrl, key }, 201, origin, allowed);
+  return json({ url: imgUrl, key }, 201, origin, true);
 }
 
 // ── Issue creation handler ──────────────────────────────────
@@ -107,19 +138,59 @@ async function handleCreateIssue(
   request: Request,
   env: Env,
   origin: string,
-  allowed: boolean
 ): Promise<Response> {
   try {
-    const { title, body, labels } = (await request.json()) as {
+    const payload = (await request.json()) as {
       title: string;
       body: string;
       labels?: string[];
+      email?: string;
+      "cf-turnstile-response"?: string;
     };
 
+    const { title, body, email } = payload;
+    const turnstileToken = payload["cf-turnstile-response"];
+
+    // Required fields
     if (!title || !body) {
-      return json({ error: "title and body are required" }, 400, origin, allowed);
+      return json({ error: "title and body are required" }, 400, origin, true);
+    }
+    if (!email || !email.trim()) {
+      return json({ error: "email is required" }, 400, origin, true);
     }
 
+    // Input limits
+    if (title.length > MAX_TITLE_LENGTH) {
+      return json({ error: `title must be ${MAX_TITLE_LENGTH} chars or fewer` }, 400, origin, true);
+    }
+    if (body.length > MAX_BODY_LENGTH) {
+      return json({ error: `body must be ${MAX_BODY_LENGTH} chars or fewer` }, 400, origin, true);
+    }
+
+    // Restrict labels to allowlist
+    const labels = (payload.labels ?? ["bug"]).filter((l) => ALLOWED_LABELS.includes(l));
+
+    // Turnstile verification
+    if (!turnstileToken) {
+      return json({ error: "Turnstile verification required" }, 400, origin, true);
+    }
+
+    const tsRes = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        secret: env.TURNSTILE_SECRET,
+        response: turnstileToken,
+        remoteip: request.headers.get("CF-Connecting-IP") ?? "",
+      }),
+    });
+
+    const tsData = (await tsRes.json()) as { success: boolean };
+    if (!tsData.success) {
+      return json({ error: "Turnstile verification failed" }, 403, origin, true);
+    }
+
+    // GitHub App auth
     const jwt = await createAppJwt(env.GITHUB_APP_ID, env.GITHUB_APP_PRIVATE_KEY);
 
     const tokenRes = await fetch(
@@ -136,7 +207,7 @@ async function handleCreateIssue(
 
     if (!tokenRes.ok) {
       console.error("Token exchange failed:", await tokenRes.text());
-      return json({ error: "GitHub auth failed" }, 502, origin, allowed);
+      return json({ error: "GitHub auth failed" }, 502, origin, true);
     }
 
     const { token } = (await tokenRes.json()) as { token: string };
@@ -153,21 +224,21 @@ async function handleCreateIssue(
         body: JSON.stringify({
           title,
           body,
-          labels: labels ?? ["bug"],
+          labels,
         }),
       }
     );
 
     if (!issueRes.ok) {
       console.error("Issue creation failed:", await issueRes.text());
-      return json({ error: "Failed to create issue" }, 502, origin, allowed);
+      return json({ error: "Failed to create issue" }, 502, origin, true);
     }
 
     const issue = (await issueRes.json()) as { html_url: string; number: number };
-    return json({ url: issue.html_url, number: issue.number }, 201, origin, allowed);
+    return json({ url: issue.html_url, number: issue.number }, 201, origin, true);
   } catch (e) {
     console.error("Worker error:", e);
-    return json({ error: "Internal error" }, 500, origin, allowed);
+    return json({ error: "Internal error" }, 500, origin, true);
   }
 }
 
