@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - uses: actions/setup-node@v4
         with:
@@ -28,16 +30,11 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Checkout nucl-parquet submodule (sparse)
-        uses: actions/checkout@v4
-        with:
-          repository: exoma-ch/nucl-parquet
-          ref: v0.3.1
-          path: nucl-parquet
-          sparse-checkout: |
-            meta
-            stopping
-            tendl-2024
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set meta stopping tendl-2024/xs
 
       - name: Copy nuclear data for frontend
         run: |

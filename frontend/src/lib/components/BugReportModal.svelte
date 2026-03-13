@@ -39,17 +39,21 @@
   // Render Turnstile widget when panel opens
   $effect(() => {
     if (open && turnstileEl && TURNSTILE_SITE_KEY && typeof window.turnstile !== "undefined") {
-      // Reset any previous widget
-      if (turnstileWidgetId !== null) {
-        window.turnstile.remove(turnstileWidgetId);
+      try {
+        // Reset any previous widget
+        if (turnstileWidgetId !== null) {
+          window.turnstile.remove(turnstileWidgetId);
+        }
+        turnstileToken = null;
+        turnstileWidgetId = window.turnstile.render(turnstileEl, {
+          sitekey: TURNSTILE_SITE_KEY,
+          size: "invisible",
+          callback: (token: string) => { turnstileToken = token; },
+          "error-callback": () => { turnstileToken = null; },
+        });
+      } catch (e) {
+        console.warn("Turnstile render failed:", e);
       }
-      turnstileToken = null;
-      turnstileWidgetId = window.turnstile.render(turnstileEl, {
-        sitekey: TURNSTILE_SITE_KEY,
-        size: "invisible",
-        callback: (token: string) => { turnstileToken = token; },
-        "error-callback": () => { turnstileToken = null; },
-      });
     }
   });
 
