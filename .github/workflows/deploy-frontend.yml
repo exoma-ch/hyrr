@@ -32,7 +32,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: exoma-ch/nucl-parquet
-          ref: py_0.3.1
+          ref: v0.3.1
           path: nucl-parquet
           sparse-checkout: |
             meta
