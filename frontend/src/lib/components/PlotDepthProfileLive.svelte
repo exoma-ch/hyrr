@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
+  import { getResolvedTheme } from "../stores/theme.svelte";
 
   let plotDiv = $state<HTMLDivElement | null>(null);
   let Plotly = $state<any>(null);
@@ -21,6 +22,7 @@
     const p = Plotly;
     const div = plotDiv;
     const prev = preview;
+    const _theme = getResolvedTheme();
     if (!p || !div) return;
     if (prev && prev.length > 0) {
       render();

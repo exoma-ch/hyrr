@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import type { SimulationResult, IsotopeResultData } from "../types";
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
+  import { getResolvedTheme } from "../stores/theme.svelte";
   import { bestActivityUnit, bestTimeUnit, nucLabel } from "../utils/format";
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
 
@@ -117,6 +118,7 @@
     const _rnpIso = rnpIsotope;
     const _floor = activityFloor;
     const _filter = layerFilter;
+    const _theme = getResolvedTheme();
     if (p && div) render();
   });
 

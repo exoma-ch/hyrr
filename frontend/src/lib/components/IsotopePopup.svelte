@@ -5,6 +5,7 @@
   import { getResult } from "../stores/results.svelte";
   import { getConfig } from "../stores/config.svelte";
   import { formatHalfLife, darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
+  import { getResolvedTheme } from "../stores/theme.svelte";
   import { nudatUrl } from "../utils/format";
 
   import { Z_TO_SYMBOL } from "../utils/formula";
@@ -273,6 +274,7 @@
     const numCompare = compareIsotopes.length;
     const scaled = xsScaled;
     const div = xsPlotDiv; // eagerly read so Svelte tracks bind:this updates
+    const _theme = getResolvedTheme();
     if (!open || (nChannels === 0 && numCompare === 0) || !div) return;
     requestAnimationFrame(() => renderXsPlot());
   });
@@ -419,6 +421,7 @@
     const scaled = xsScaled;
     const div = depthPlotDiv;
     const prev = getDepthPreview();
+    const _theme = getResolvedTheme();
     if (!open || !div || (nChannels === 0 && numCompare === 0) || prev.length === 0) return;
     requestAnimationFrame(() => ensurePlotly().then(renderDepthPlot));
   });
@@ -600,6 +603,7 @@
     const data = activityData;
     const _cmp = compareIsotopes.length;
     const div = actPlotDiv; // eagerly read so Svelte tracks bind:this updates
+    const _theme = getResolvedTheme();
     if (!open || !data || !data.main || !div) return;
     requestAnimationFrame(() => ensurePlotly().then(renderActivityPlot));
   });
