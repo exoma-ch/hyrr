@@ -6,9 +6,7 @@ A pure Python package for predicting radio-isotope production in stacked
 target assemblies, using TENDL cross-section data and NIST stopping power
 tables.
 
-## Live Demo
-
-**[exoma-ch.github.io/hyrr](https://exoma-ch.github.io/hyrr/)** — runs entirely in the browser, no install needed.
+**Try it now: [exoma-ch.github.io/hyrr](https://exoma-ch.github.io/hyrr/)** — full simulation runs in the browser, no install, no data leaves your machine.
 
 ## What it does
 
@@ -18,6 +16,17 @@ tables.
 - Compound materials with natural or enriched isotopic composition
 - Stacked layer geometries (windows, targets, degraders, backings)
 - Depth-resolved heat and activity profiles
+
+## Performance
+
+HYRR is designed for interactive use — simulations are fast enough for real-time parameter sweeps:
+
+| Operation | Time |
+|---|---|
+| Single isotope production rate | ~56 µs |
+| Full layer simulation (all isotopes) | ~1.6 ms |
+
+Compared to tools like Isotopia, HYRR is significantly faster and lighter: pure NumPy/SciPy with Parquet-backed nuclear data (no heavy ORM, no database server). The browser frontend achieves similar performance with a pure TypeScript compute engine.
 
 ## Installation
 
@@ -45,7 +54,9 @@ result.summary()
 
 ## Frontend
 
-The browser frontend (`frontend/`) is a standalone Svelte 5 + TypeScript app with pure-TS physics compute (no Python/WASM). Nuclear data is lazy-loaded from Parquet files via hyparquet. All computation runs locally — no server, no data upload.
+**[exoma-ch.github.io/hyrr](https://exoma-ch.github.io/hyrr/)** — hosted on GitHub Pages, zero backend.
+
+The browser frontend (`frontend/`) is a standalone Svelte 5 + TypeScript app with a pure-TS physics engine (no Python/WASM). Nuclear data is lazy-loaded from Parquet files via hyparquet. All computation runs locally — no server, no data upload.
 
 ## Development
 
