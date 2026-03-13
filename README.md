@@ -6,9 +6,9 @@ A pure Python package for predicting radio-isotope production in stacked
 target assemblies, using TENDL cross-section data and NIST stopping power
 tables.
 
-## Status
+## Live Demo
 
-Pre-alpha. See `development-plan.md` for the implementation roadmap.
+**[exoma-ch.github.io/hyrr](https://exoma-ch.github.io/hyrr/)** — runs entirely in the browser, no install needed.
 
 ## What it does
 
@@ -22,7 +22,7 @@ Pre-alpha. See `development-plan.md` for the implementation roadmap.
 ## Installation
 
 ```bash
-uv add git+https://github.com/MorePET/hyrr.git
+uv add git+https://github.com/exoma-ch/hyrr.git
 ```
 
 ## Quick start
@@ -43,12 +43,17 @@ result = stack.run(irradiation_time_s=86400, cooling_time_s=86400)
 result.summary()
 ```
 
+## Frontend
+
+The browser frontend (`frontend/`) is a standalone Svelte 5 + TypeScript app with pure-TS physics compute (no Python/WASM). Nuclear data is lazy-loaded from Parquet files via hyparquet. All computation runs locally — no server, no data upload.
+
 ## Dependencies
 
 - numpy, scipy — numerics
 - polars — data access (Parquet backend)
 - matplotlib — plotting
-- pymat — material definitions
+- py-mat — material definitions
+- nucl-parquet — evaluated nuclear data (TENDL, ENDF/B, JENDL, JEFF, EXFOR)
 
 ## License
 

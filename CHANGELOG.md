@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-03-13
+
+### Security
+
+- **Worker origin enforcement** — disallowed origins rejected server-side (not just CORS headers)
+- **Cloudflare Turnstile** (invisible CAPTCHA) required before anonymous issue creation via worker
+- **Upload content-type validation** — allowlist `image/jpeg`, `image/png`, `image/webp` with magic byte verification; `Content-Disposition: inline` forced on served images
+- **Input limits** — title ≤200 chars, body ≤10,000 chars, labels restricted to `["bug"]`
+- **Config URL validation** — shape validation after decode (max 20 layers, finite numeric fields)
+- **History import validation** — validates each entry before storing; skips malformed entries
+
+### Changed
+
+- **Bug report modal** — three-button flow: Cancel / Open on GitHub / Submit. Email required only for worker submit; GitHub route uses the user's own session
+- **nucl-parquet** bumped to v0.3.4
+
 ## [0.2.0] — 2026-03-13
 
 ### Added
