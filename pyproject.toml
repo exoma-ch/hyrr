@@ -1,6 +1,6 @@
 [project]
 name = "hyrr"
-version = "0.1.0"
+version = "0.1.1"
 description = "Hierarchical Yield and Radionuclide Rates — isotope production in stacked target assemblies"
 authors = [
     {name = "MorePET"},
@@ -79,18 +79,21 @@ packages = ["src/hyrr"]
 
 [dependency-groups]
 dev = [
+    "build123d>=0.10.0",
     "hatchling>=1.25",
     "ipykernel>=6.31.0",
     "jupyter>=1.1.1",
     "jupytext>=1.19.1",
     "nbmake>=1.5",
     "pandas>=2.0",
+    "plotly>=6.6.0",
     "pyright>=1.1",
     "pytest>=9.0.2",
     "pytest-benchmark>=4.0",
     "pytest-cov>=7.0.0",
     "rich>=13.0.0",
     "ruff>=0.8",
+    "tetgen>=0.8.3",
 ]
 
 # Ruff
