@@ -28,31 +28,42 @@
   // --- Smart thickness text input (thickness_cm mode) ---
   let thicknessText = $state("");
   let thicknessFeedback = $state("");
-  let textInitialized = false;
+  let showFormatHint = $state(false);
+  let prevThicknessCm = $state(-1);
 
   /** Format a cm value into a human-readable string with best unit. */
   function formatCm(cm: number): string {
     if (cm === 0) return "0";
-    if (cm < 0.01) return `${cm * 1e4}µm`;
-    if (cm < 1) return `${cm * 10}mm`;
-    return `${cm}cm`;
+    const round = (v: number) => parseFloat(v.toPrecision(10));
+    if (cm < 0.01) return `${round(cm * 1e4)}µm`;
+    if (cm < 1) return `${round(cm * 10)}mm`;
+    return `${round(cm)}cm`;
+  }
+
+  /** Only show feedback when parsed display differs meaningfully from input. */
+  function computeFeedback(input: string, display: string): string {
+    // Normalize: strip spaces, lowercase, normalize µ/μ
+    const norm = (s: string) => s.replace(/\s+/g, "").toLowerCase().replace(/μ/g, "µ");
+    return norm(input) === norm(display) ? "" : display;
   }
 
   $effect(() => {
-    if (!textInitialized && mode === "thickness_cm") {
-      textInitialized = true;
-      thicknessText = formatCm(layer.thickness_cm ?? 0.1);
+    const cm = layer.thickness_cm;
+    if (mode === "thickness_cm" && cm !== prevThicknessCm) {
+      prevThicknessCm = cm ?? -1;
+      thicknessText = formatCm(cm ?? 0.1);
       const parsed = parseThickness(thicknessText);
-      thicknessFeedback = parsed ? parsed.display : "";
+      thicknessFeedback = parsed ? computeFeedback(thicknessText, parsed.display) : "";
     }
   });
 
   function onThicknessInput(e: Event) {
     const val = (e.target as HTMLInputElement).value;
     thicknessText = val;
+    showFormatHint = false;
     const parsed = parseThickness(val);
     if (parsed) {
-      thicknessFeedback = parsed.display;
+      thicknessFeedback = computeFeedback(val, parsed.display);
     } else {
       thicknessFeedback = val ? "invalid" : "";
     }
@@ -97,7 +108,7 @@
     delete updated.energy_out_MeV;
     if (newMode === "thickness_cm") {
       updated.thickness_cm = 0.1; // default 1 mm
-      textInitialized = false; // re-initialize text on mode switch
+      prevThicknessCm = -1; // re-initialize text on mode switch
     } else if (newMode === "areal_density_g_cm2") {
       updated.areal_density_g_cm2 = 0.1;
     } else {
@@ -145,7 +156,14 @@
         {#if thicknessFeedback && thicknessFeedback !== "invalid"}
           <span class="feedback ok">{thicknessFeedback}</span>
         {:else if thicknessFeedback === "invalid"}
-          <span class="feedback err">?</span>
+          <button
+            class="feedback err"
+            onclick={() => showFormatHint = !showFormatHint}
+            title="Click for format help"
+          >?</button>
+        {/if}
+        {#if showFormatHint}
+          <span class="format-hint">25µm · 0.5mm · 1.2cm</span>
         {/if}
       </div>
     {:else}
@@ -240,5 +258,28 @@
 
   .feedback.err {
     color: #f85149;
+    background: none;
+    border: 1px solid #f85149;
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    font-weight: 700;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+
+  .feedback.err:hover {
+    background: rgba(248, 81, 73, 0.15);
+  }
+
+  .format-hint {
+    font-size: 0.6rem;
+    color: #8b949e;
+    white-space: nowrap;
   }
 </style>

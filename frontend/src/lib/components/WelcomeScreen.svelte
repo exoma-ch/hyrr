@@ -127,7 +127,7 @@
     padding: 0.6rem 0.75rem;
     background: #161b22;
     border: 1px solid #2d333b;
-    border-radius: 6px;
+    border-radius: 3px;
   }
 
   .step-num {
@@ -193,7 +193,7 @@
     padding: 0.55rem 0.75rem;
     background: #161b22;
     border: 1px solid #2d333b;
-    border-radius: 6px;
+    border-radius: 3px;
     cursor: pointer;
     text-align: left;
     transition: border-color 0.15s, background 0.15s;
@@ -221,7 +221,7 @@
     padding: 0.5rem;
     background: #1c2128;
     border: 1px dashed #d29922;
-    border-radius: 6px;
+    border-radius: 3px;
     color: #d29922;
     font-size: 0.8rem;
     font-weight: 500;

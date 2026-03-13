@@ -144,6 +144,14 @@ export function setCustomDensityLookup(fn: (formula: string) => number | null): 
   customDensityLookup = fn;
 }
 
+/** Custom material composition lookup — returns mass fractions if available. */
+let customCompositionLookup: ((identifier: string) => Record<string, number> | null) | null = null;
+
+/** Register a function that returns custom material mass-fraction compositions. */
+export function setCustomCompositionLookup(fn: (identifier: string) => Record<string, number> | null): void {
+  customCompositionLookup = fn;
+}
+
 /**
  * Resolve a material identifier (name, formula, or element symbol with mass number)
  * into elements, density, and molecular weight.
@@ -159,6 +167,21 @@ export function resolveMaterial(
   if (catalogEntry) {
     const elements = resolveIsotopics(db, catalogEntry.massFractions, false, overrides);
     return { elements, density: catalogEntry.density, molecularWeight: 0 };
+  }
+
+  // Check for custom material with stored mass fractions (wt% materials)
+  if (customCompositionLookup) {
+    const massFracs = customCompositionLookup(identifier);
+    if (massFracs) {
+      const elements = resolveIsotopics(db, massFracs, false, overrides);
+      let density: number | undefined;
+      if (customDensityLookup) {
+        const d = customDensityLookup(identifier);
+        if (d !== null) density = d;
+      }
+      if (density === undefined) density = 5.0;
+      return { elements, density, molecularWeight: 0 };
+    }
   }
 
   // Strip mass numbers from element identifiers: "Mo-100" → "Mo", "Ra-226" → "Ra"

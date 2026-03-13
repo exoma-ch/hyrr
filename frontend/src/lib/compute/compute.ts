@@ -21,7 +21,7 @@ import {
   type TargetStack,
   layerAverageAtomicMass,
 } from "./types";
-import { buildReactionNotation } from "../utils/format";
+import { buildReactionNotation, nucLabel } from "../utils/format";
 import { trapezoid } from "./interpolation";
 import {
   computeEnergyOut,
@@ -514,7 +514,7 @@ function applyChainSolverByComponent(
               const pSym = db.getElementSymbol(parentIso.Z);
               const pState = parentIso.state || "";
               const parentName = `${pSym}-${parentIso.A}${pState}`;
-              decayNotations.push(`${parentName} →${mode.mode}→ ${name}`);
+              decayNotations.push(`${nucLabel(parentName)} →${mode.mode}→ ${nucLabel(name)}`);
             }
           }
         }

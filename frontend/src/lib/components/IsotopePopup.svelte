@@ -10,7 +10,7 @@
   import { Z_TO_SYMBOL } from "../utils/formula";
   import { resolveMaterial } from "../compute/materials";
   import { PROJECTILE_Z, PROJECTILE_A } from "../compute/types";
-  import { bestActivityUnit, bestTimeUnit, fmtActivity, fmtYield } from "../utils/format";
+  import { bestActivityUnit, bestTimeUnit, fmtActivity, fmtYield, nucHtml, nucLabel } from "../utils/format";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import { interp } from "../compute/interpolation";
   import type { DecayMode, CrossSectionData, ProjectileType } from "../compute/types";
@@ -79,13 +79,6 @@
     reaction: string; // e.g. "(p,n)"
   }
 
-  /** Convert "Sc-44" → "<sup>44</sup>Sc", "Sc-44 (m)" → "<sup>44m</sup>Sc" */
-  function nucSup(isotopeName: string): string {
-    const m = isotopeName.match(/^([A-Z][a-z]?)-(\d+)(?:\s*\((\w+)\))?$/);
-    if (!m) return isotopeName;
-    const [, sym, mass, state] = m;
-    return `<sup>${mass}${state ?? ""}</sup>${sym}`;
-  }
 
   // State
   let decayInfo: { halfLifeS: number | null; decayModes: DecayMode[] } | null = $state(null);
@@ -187,7 +180,7 @@
             if (mode.daughterZ === Z && mode.daughterA === A) {
               const sym = Z_TO_SYMBOL[pZ] ?? `Z${pZ}`;
               parents.push({
-                name: `${sym}-${pA}${pState ? ` (${pState})` : ""}`,
+                name: `${sym}-${pA}${pState}`,
                 Z: pZ, A: pA, state: pState,
                 mode: mode.mode, branching: mode.branching,
               });
@@ -652,7 +645,7 @@
           type: "scatter",
           mode: "lines",
           line: { color: TRACE_COLORS[idx % TRACE_COLORS.length], width: idx === 0 ? 2 : 1.5 },
-          name: nucSup(curve.name),
+          name: nucLabel(curve.name),
         });
       });
 
@@ -703,7 +696,7 @@
         type: "scatter",
         mode: "lines",
         line: { color: TRACE_COLORS[0], width: 2 },
-        name: nucSup(name),
+        name: nucLabel(name),
       });
 
       const layout = darkLayout({
@@ -750,16 +743,7 @@
 <Modal {open} {onclose} wide>
   {#snippet headerChildren()}
     <div class="nuc-title">
-      <span class="nuc-notation">
-        <span class="nuc-numbers">
-          <span class="nuc-a">{A}</span>
-          <span class="nuc-z">{Z}</span>
-        </span>
-        <span class="nuc-symbol">{symbol}</span>{#if nuclearState}<span class="nuc-state">{nuclearState}</span>{/if}
-      </span>
-      {#if decayInfo}
-        <span class="nuc-hl">{formatHalfLife(decayInfo.halfLifeS)}</span>
-      {/if}
+      <span class="nuc-notation">{@html nucHtml(name)}</span>
     </div>
   {/snippet}
 
@@ -793,19 +777,19 @@
           {#if parentDecays.length > 0}
             <div class="chain-group">
               {#each parentDecays as p}
-                <span class="chain-nuc parent" title="{p.mode} ({(p.branching * 100).toFixed(1)}%)">{@html nucSup(p.name)}</span>
+                <span class="chain-nuc parent" title="{p.mode} ({(p.branching * 100).toFixed(1)}%)">{@html nucHtml(p.name)}</span>
               {/each}
             </div>
             <span class="chain-arrow">&rarr;</span>
           {/if}
-          <span class="chain-nuc current">{@html nucSup(`${name}${nuclearState ? ` (${nuclearState})` : ""}`)}</span>
+          <span class="chain-nuc current">{@html nucHtml(name)}</span>
           {#if decayInfo && decayInfo.decayModes.some(m => m.daughterZ !== null)}
             <span class="chain-arrow">&rarr;</span>
             <div class="chain-group">
               {#each decayInfo.decayModes.filter(m => m.daughterZ !== null) as mode}
                 {@const dSym = Z_TO_SYMBOL[mode.daughterZ!] ?? `Z${mode.daughterZ}`}
                 <span class="chain-nuc daughter" title="{mode.mode} ({(mode.branching * 100).toFixed(1)}%)">
-                  {@html nucSup(`${dSym}-${mode.daughterA}${mode.daughterState ? ` (${mode.daughterState})` : ""}`)}
+                  {@html nucHtml(`${dSym}-${mode.daughterA}${mode.daughterState || ""}`)}
                 </span>
               {/each}
             </div>
@@ -830,7 +814,7 @@
           </thead>
           <tbody>
             <tr class="ct-main">
-              <td class="ct-iso">{@html nucSup(`${name}${nuclearState ? ` (${nuclearState})` : ""}`)}</td>
+              <td class="ct-iso">{@html nucHtml(name)}</td>
               <td class="ct-hl">{formatHalfLife(activityData.main.halfLifeS)}</td>
               <td class="ct-act">{fmtActivity(activityData.main.eobActivity)}</td>
               <td class="ct-yield">{fmtYield(activityData.main.satYield)}</td>
@@ -839,7 +823,7 @@
             </tr>
             {#each activityData.compare as cmp}
               <tr>
-                <td class="ct-iso">{@html nucSup(cmp.name)}</td>
+                <td class="ct-iso">{@html nucHtml(cmp.name)}</td>
                 <td class="ct-hl">{formatHalfLife(cmp.halfLifeS)}</td>
                 <td class="ct-act">{fmtActivity(cmp.eobActivity)}</td>
                 <td class="ct-yield">{fmtYield(cmp.satYield)}</td>
@@ -871,7 +855,7 @@
                           onmousedown={(e) => { e.preventDefault(); toggleCompare(iso); }}
                         >
                           {#if compareIsotopes.some((c) => c.name === iso.name)}<span class="check-mark">&#10003;</span>{/if}
-                          {@html nucSup(iso.name)}
+                          {@html nucHtml(iso.name)}
                         </button>
                       {/each}
                     </div>
@@ -944,53 +928,11 @@
   }
 
   .nuc-notation {
-    display: inline-flex;
-    align-items: center;
-    line-height: 1;
-  }
-
-  .nuc-numbers {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: flex-end;
-    margin-right: 0.05em;
-    line-height: 1;
-    gap: 0;
-  }
-
-  .nuc-a {
-    font-size: 0.75rem;
-    color: #8b949e;
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .nuc-z {
-    font-size: 0.7rem;
-    color: #6e7681;
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .nuc-symbol {
-    font-size: 1.6rem;
+    font-size: 1.1rem;
     font-weight: 700;
     color: #58a6ff;
   }
 
-  .nuc-state {
-    font-size: 0.65rem;
-    color: #d29922;
-    font-weight: 600;
-    vertical-align: super;
-    margin-left: 0.05em;
-  }
-
-  .nuc-hl {
-    font-size: 0.85rem;
-    color: #6e7681;
-    font-variant-numeric: tabular-nums;
-  }
 
 
   .loading-indicator {

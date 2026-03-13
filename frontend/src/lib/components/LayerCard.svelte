@@ -5,6 +5,7 @@
   import ThicknessInput from "./ThicknessInput.svelte";
   import EnrichmentEditor from "./EnrichmentEditor.svelte";
   import { parseFormula } from "../utils/formula";
+  import { getCustomMaterials } from "../stores/custom-materials.svelte";
 
   interface Props {
     layer: LayerConfig;
@@ -20,7 +21,12 @@
   let { layer, index, total, materials, onchange, onremove, onmoveup, onmovedown }: Props =
     $props();
 
-  let elements = $derived(Object.keys(parseFormula(layer.material || "")));
+  let elements = $derived.by(() => {
+    const id = layer.material || "";
+    const cm = getCustomMaterials().find((m) => m.name === id || m.formula === id);
+    if (cm?.massFractions) return Object.keys(cm.massFractions);
+    try { return Object.keys(parseFormula(id)); } catch { return []; }
+  });
 
   function setMaterial(material: string) {
     onchange({ ...layer, material, enrichment: undefined });

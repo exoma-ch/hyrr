@@ -1,3 +1,5 @@
+declare const __APP_VERSION__: string;
+
 declare module "plotly.js-dist-min" {
   const Plotly: any;
   export default Plotly;

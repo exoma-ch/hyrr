@@ -1,6 +1,6 @@
 <script lang="ts">
   import { toggleHistory, getHistoryOpen } from "../stores/ui.svelte";
-  import { setConfig } from "../stores/config.svelte";
+  import { setConfig, resetConfig } from "../stores/config.svelte";
   import { PRESETS } from "../presets";
   import SessionTabs from "./SessionTabs.svelte";
   import HelpModal from "./HelpModal.svelte";
@@ -16,11 +16,14 @@
 </script>
 
 <header class="header-bar">
-  <div class="tab-strip">
+  <button class="home-btn" onclick={resetConfig} title="New simulation">
     <img src="/hyrr/logo.svg" alt="HYRR logo" class="logo" />
-    <h1 class="title" title="HYRR v0.2.0">HYRR</h1>
+    <span class="title">HYRR</span>
+  </button>
+
+  <div class="tab-strip">
     <SessionTabs />
-    <button class="lucky-btn" onclick={feelingLucky} title="Load random preset">
+    <button class="tab lucky-tab" onclick={feelingLucky} title="Load random preset">
       Feeling Lucky
     </button>
   </div>
@@ -63,69 +66,92 @@
 <style>
   .header-bar {
     display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    padding: 0.5rem 0.75rem 0;
-    border-bottom: 1px solid #2d333b;
-    margin-bottom: 0.75rem;
-    position: relative;
+    align-items: stretch;
+    height: 36px;
+    border: 1px solid #2d333b;
+    border-radius: 3px;
+    margin: 0 0 0.75rem;
+    background: #161b22;
+    overflow: hidden;
+  }
+
+  .home-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: none;
+    border: none;
+    border-right: 1px solid #2d333b;
+    cursor: pointer;
+    padding: 0 0.75rem;
+    flex-shrink: 0;
+    opacity: 0.9;
+    transition: opacity 0.15s;
+  }
+
+  .home-btn:hover {
+    opacity: 1;
+    background: #1c2128;
+  }
+
+  .logo {
+    height: 22px;
+    width: 22px;
+    object-fit: contain;
+  }
+
+  .title {
+    font-size: 0.85rem;
+    letter-spacing: 0.1em;
+    color: #58a6ff;
+    white-space: nowrap;
+    font-weight: 700;
   }
 
   .tab-strip {
     display: flex;
-    align-items: flex-end;
-    gap: 0.35rem;
+    align-items: stretch;
     flex: 1;
     min-width: 0;
+    overflow: hidden;
   }
 
-  .logo {
-    height: 42px;
-    width: 42px;
-    object-fit: contain;
-    flex-shrink: 0;
-    margin-bottom: 0.1rem;
-  }
-
-  .title {
-    margin: 0;
-    font-size: 1.3rem;
-    letter-spacing: 0.1em;
-    color: #58a6ff;
-    padding-bottom: 0.3rem;
-    padding-right: 0.25rem;
-    white-space: nowrap;
-    line-height: 1;
-    flex-shrink: 0;
-  }
-
-  .lucky-btn {
-    background: #1c2128;
-    border: 1px solid #2d333b;
-    border-bottom: none;
-    border-radius: 10px 10px 0 0;
-    color: #d29922;
-    padding: 0.3rem 0.7rem;
-    height: 24px;
+  /* Feeling Lucky tab */
+  .tab {
+    box-sizing: border-box;
+    background: transparent;
+    border: none;
+    border-right: 1px solid #2d333b;
     font-size: 0.72rem;
     cursor: pointer;
-    font-weight: 500;
     white-space: nowrap;
     flex-shrink: 0;
-    transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
   }
 
-  .lucky-btn:hover {
-    background: #21262d;
+  .lucky-tab {
+    padding: 0 0.7rem;
+    color: #d29922;
+    font-weight: 500;
+    border-left: 1px solid #2d333b;
+    margin-left: auto;
+  }
+
+  .lucky-tab:hover {
+    background: #1c2128;
     color: #e3b341;
   }
 
   .actions {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding-bottom: 0.3rem;
+    gap: 0.3rem;
+    padding: 0 0.5rem;
     flex-shrink: 0;
+    border-left: 1px solid #2d333b;
   }
 
   .icon-btn {
@@ -133,7 +159,7 @@
     border: 1px solid transparent;
     border-radius: 4px;
     color: #8b949e;
-    padding: 0.3rem;
+    padding: 0.25rem;
     cursor: pointer;
     display: flex;
     align-items: center;

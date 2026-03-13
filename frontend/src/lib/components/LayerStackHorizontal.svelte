@@ -21,8 +21,15 @@
   let layers = $derived(getLayers());
   let customMaterials = $derived(getCustomMaterials());
 
-  function isCustomMaterial(formula: string): boolean {
-    return customMaterials.some((m) => m.formula === formula || m.name === formula);
+  function isCustomMaterial(identifier: string): boolean {
+    return customMaterials.some((m) => m.formula === identifier || m.name === identifier);
+  }
+
+  /** Get element symbols from a material identifier (custom name or formula). */
+  function materialElements(identifier: string): string[] {
+    const cm = customMaterials.find((m) => m.name === identifier || m.formula === identifier);
+    if (cm?.massFractions) return Object.keys(cm.massFractions);
+    try { return Object.keys(parseFormula(identifier)); } catch { return []; }
   }
 
   let dragIndex = $state<number | null>(null);
@@ -75,21 +82,7 @@
     dragOverIndex = null;
   }
 
-  function thicknessDisplay(layer: LayerConfig): string {
-    if (layer.thickness_cm !== undefined) {
-      const cm = layer.thickness_cm;
-      if (cm < 0.01) return `${(cm * 1e4).toFixed(0)} µm`;
-      if (cm < 1) return `${(cm * 10).toFixed(1)} mm`;
-      return `${cm.toFixed(2)} cm`;
-    }
-    if (layer.areal_density_g_cm2 !== undefined) {
-      return `${layer.areal_density_g_cm2.toFixed(3)} g/cm²`;
-    }
-    if (layer.energy_out_MeV !== undefined) {
-      return `→ ${layer.energy_out_MeV.toFixed(1)} MeV`;
-    }
-    return "—";
-  }
+
 </script>
 
 <div class="layer-stack-h">
@@ -137,7 +130,7 @@
       </button>
 
       {#if layer.material}
-        {@const elements = Object.keys(parseFormula(layer.material))}
+        {@const elements = materialElements(layer.material)}
         {#if elements.length > 0}
           <div class="element-badges">
             {#each elements as el}
@@ -151,8 +144,6 @@
           </div>
         {/if}
       {/if}
-
-      <div class="thickness-display">{thicknessDisplay(layer)}</div>
 
       <ThicknessInput layer={layer} onchange={(l) => handleUpdate(i, l)} />
     </div>
@@ -170,7 +161,7 @@
     padding: 0.5rem;
     background: #161b22;
     border: 1px solid #2d333b;
-    border-radius: 6px;
+    border-radius: 3px;
     min-height: 120px;
   }
 
@@ -300,11 +291,6 @@
     text-transform: uppercase;
     margin-left: 0.2rem;
     vertical-align: middle;
-  }
-
-  .thickness-display {
-    font-size: 0.7rem;
-    color: #8b949e;
   }
 
   .add-btn {

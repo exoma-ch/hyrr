@@ -44,7 +44,7 @@
       for (const pt of layer.depthPoints) {
         allDepths.push(cumulativeDepth + pt.depth_mm);
         allEnergies.push(pt.energy_MeV);
-        allHeat.push(pt.heat_W_cm3);
+        allHeat.push(pt.heat_W_cm3 / 10);
       }
       cumulativeDepth += layer.thickness_mm;
     }
@@ -61,7 +61,7 @@
       {
         x: allDepths,
         y: allHeat,
-        name: "Heat (W/cm³)",
+        name: "Heat (W/mm)",
         type: "scatter",
         mode: "lines",
         line: { color: TRACE_COLORS[3], width: 1.5 },
@@ -93,7 +93,7 @@
       xaxis: { title: "Depth (mm)", gridcolor: "#2d333b", range: [0, cumulativeDepth] },
       yaxis: { title: "Energy (MeV)", gridcolor: "#2d333b" },
       yaxis2: {
-        title: "Heat (W/cm³)",
+        title: "Heat (W/mm)",
         overlaying: "y",
         side: "right",
         gridcolor: "#2d333b",
@@ -115,7 +115,7 @@
   .depth-profile-live {
     background: #161b22;
     border: 1px solid #2d333b;
-    border-radius: 6px;
+    border-radius: 3px;
     padding: 0.5rem;
   }
 

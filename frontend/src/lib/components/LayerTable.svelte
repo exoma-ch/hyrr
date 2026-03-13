@@ -100,7 +100,7 @@
   .layer-table {
     background: #161b22;
     border: 1px solid #2d333b;
-    border-radius: 6px;
+    border-radius: 3px;
     padding: 0.5rem;
   }
 

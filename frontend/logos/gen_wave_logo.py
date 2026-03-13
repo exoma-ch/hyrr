@@ -18,10 +18,16 @@ LAYER_COLORS = ["#2dd4bf", "#4ade80", "#fbbf24", "#d97706", "#8b949e"]
 # ── Physics data ────────────────────────────────────────────
 z = np.linspace(0, 10, 300)
 
-def bragg_curve(z, z_peak=8.2, width=0.6):
+def bragg_curve(z, z_peak=8.2, width=0.5):
     y = np.zeros_like(z)
-    mask_rise = z <= z_peak
-    y[mask_rise] = 0.15 + 0.85 * (z[mask_rise] / z_peak) ** 2.5
+    # Flat plateau up to ~60% of range, then sharp rise to peak
+    knee = z_peak * 0.6
+    mask_plateau = z <= knee
+    y[mask_plateau] = 0.12 + 0.08 * (z[mask_plateau] / knee)
+    mask_rise = (z > knee) & (z <= z_peak)
+    t = (z[mask_rise] - knee) / (z_peak - knee)
+    y[mask_rise] = 0.20 + 0.80 * t ** 3.0
+    # Gaussian falloff after peak (sharp drop)
     mask_fall = z > z_peak
     y[mask_fall] = np.exp(-((z[mask_fall] - z_peak) / width) ** 2)
     return y
@@ -174,28 +180,25 @@ fig.savefig(OUT + "hyrr-logo-transparent.png", format="png",
             bbox_inches="tight", pad_inches=0)
 plt.close(fig)
 
-# Favicon sizes (from dark version)
+# Favicon sizes (all transparent)
 for size in [32, 180, 192, 512]:
     fig = render_logo(
-        bg_color="none" if size <= 32 else "#0d1117",
+        bg_color="none",
         beam_color="#58a6ff",
         bragg_alpha=0.35, xs_alpha=0.30, bar_alpha=0.70,
         edge_curve_alpha=0.80, bragg_line_alpha=0.75, beam_alpha=0.9,
     )
     fig.savefig(OUT + f"hyrr-icon-{size}.png", format="png",
-                facecolor="none" if size <= 32 else "#0d1117",
-                transparent=(size <= 32), dpi=size / 8,
+                facecolor="none", transparent=True, dpi=size / 8,
                 bbox_inches="tight", pad_inches=0)
-    # Also save to public for web use
     fig.savefig(PUBLIC + f"hyrr-icon-{size}.png", format="png",
-                facecolor="none" if size <= 32 else "#0d1117",
-                transparent=(size <= 32), dpi=size / 8,
+                facecolor="none", transparent=True, dpi=size / 8,
                 bbox_inches="tight", pad_inches=0)
     plt.close(fig)
 
-# Copy to public for web use
+# Copy transparent versions to public for web use
 import shutil
-shutil.copy(OUT + "hyrr-logo-dark.svg", PUBLIC + "logo.svg")
-shutil.copy(OUT + "hyrr-logo-dark.svg", PUBLIC + "favicon.svg")
+shutil.copy(OUT + "hyrr-logo-transparent.svg", PUBLIC + "logo.svg")
+shutil.copy(OUT + "hyrr-logo-transparent.svg", PUBLIC + "favicon.svg")
 
 print("Done — all variants generated")

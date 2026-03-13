@@ -58,6 +58,8 @@
     elements: string[];
     density: number | null;
     autoName: string;
+    /** For mass-ratio materials: element → mass fraction (0–1). */
+    massFractions?: Record<string, number>;
   }
 
   type ParseResult = { ok: ParsedMaterial } | { error: string } | null;
@@ -115,15 +117,36 @@
       remainder[0].pct = rest;
     }
 
-    const formula = entries.map((e) => e.symbol).join("");
+    // Convert wt% to atom fractions using atomic masses for stoichiometric formula
+    const massFractions: Record<string, number> = {};
+    const moles: Record<string, number> = {};
+    let totalMoles = 0;
     let density = 0;
     const nameParts: string[] = [];
+
     for (const e of entries) {
-      density += ((e.pct ?? 0) / 100) * (ELEMENT_DENSITIES[e.symbol] ?? 5);
+      const wt = (e.pct ?? 0) / 100;
+      massFractions[e.symbol] = wt;
+      const atomicWeight = STANDARD_ATOMIC_WEIGHT[e.symbol] ?? 1;
+      const mol = wt / atomicWeight;
+      moles[e.symbol] = mol;
+      totalMoles += mol;
+      density += wt * (ELEMENT_DENSITIES[e.symbol] ?? 5);
       nameParts.push(`${e.symbol}${Math.round(e.pct ?? 0)}`);
     }
 
-    return { ok: { type: "mass-ratio", formula, elements: entries.map((e) => e.symbol), density, autoName: nameParts.join("-") } };
+    // Build stoichiometric formula from atom fractions (normalize to smallest)
+    const atomFracs = entries.map((e) => ({ symbol: e.symbol, frac: moles[e.symbol] / totalMoles }));
+    const minFrac = Math.min(...atomFracs.map((a) => a.frac));
+    const formula = atomFracs
+      .map((a) => {
+        const ratio = a.frac / minFrac;
+        const rounded = Math.round(ratio * 100) / 100;
+        return rounded === 1 ? a.symbol : `${a.symbol}${rounded}`;
+      })
+      .join("");
+
+    return { ok: { type: "mass-ratio", formula, elements: entries.map((e) => e.symbol), density, autoName: nameParts.join("-"), massFractions } };
   }
 
   /** Live preview — pure derived, no state mutations. */
@@ -168,11 +191,12 @@
     formulaError = null;
     try {
       if (editingCustomId) {
-        await updateCustomMaterial(editingCustomId, nameVal, preview.formula, densityVal);
+        await updateCustomMaterial(editingCustomId, nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim());
       } else {
-        await saveCustomMaterial(nameVal, preview.formula, densityVal);
+        await saveCustomMaterial(nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim());
       }
-      onselect(preview.formula);
+      // Use name as layer identifier so resolveMaterial can look up stored composition
+      onselect(nameVal);
       onclose();
     } catch {
       formulaError = "Failed to save";
@@ -284,7 +308,14 @@
   }
 
   function select(entry: MaterialInfo) {
-    onselect(entry.formula ?? entry.path);
+    // For custom materials with mass fractions, use the name as identifier
+    // so resolveMaterial can look up the stored composition
+    const custom = findCustomEntry(entry);
+    if (custom) {
+      onselect(custom.name);
+    } else {
+      onselect(entry.formula ?? entry.path);
+    }
     onclose();
   }
 
@@ -303,7 +334,9 @@
   function editCustomMaterial(entry: MaterialInfo & { customId: string }, event: Event) {
     event.stopPropagation();
     defineOpen = true;
-    newFormula = entry.formula ?? "";
+    // Restore original input (wt% string) if available, otherwise fall back to formula
+    const cm = getCustomMaterials().find((m) => m.id === entry.customId);
+    newFormula = cm?.originalInput ?? entry.formula ?? "";
     newName = entry.name;
     nameManuallySet = true;
     newDensity = entry.density_g_cm3 ?? null;
@@ -391,7 +424,7 @@
               class="field-input"
               placeholder="Al2O3  or  Al 80%, Cu 5%, Zn %"
               bind:value={newFormula}
-              oninput={() => { formulaError = null; nameManuallySet = false; }}
+              oninput={() => { formulaError = null; if (!editingCustomId) nameManuallySet = false; }}
             />
           </label>
           <p class="hint">Stoichiometric formula or mass ratios (comma-separated with %)</p>
@@ -399,16 +432,16 @@
           {#if formulaPreview}
             <div class="preview">
               <span class="preview-type">{formulaPreview.type}</span>
-              <span class="preview-elements">{formulaPreview.elements.join(", ")}</span>
-              {#if onenrichment}
-                {#each formulaPreview.elements as el}
-                  <button
-                    class="el-badge"
-                    class:enriched={!!currentEnrichment?.[el]}
-                    onclick={() => onenrichment?.(el)}
-                  >{el}</button>
-                {/each}
+              {#if formulaPreview.type === "mass-ratio"}
+                <span class="preview-formula">{formulaPreview.formula}</span>
               {/if}
+              {#each formulaPreview.elements as el}
+                <button
+                  class="el-badge"
+                  class:enriched={!!currentEnrichment?.[el]}
+                  onclick={() => onenrichment?.(el)}
+                >{el}</button>
+              {/each}
             </div>
           {/if}
 
@@ -712,8 +745,11 @@
     font-weight: 500;
   }
 
-  .preview-elements {
-    color: #8b949e;
+  .preview-formula {
+    color: #c9d1d9;
+    font-weight: 500;
+    font-family: monospace;
+    font-size: 0.8rem;
   }
 
   .form-error {

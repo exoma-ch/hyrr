@@ -18,6 +18,10 @@
         for predicting radio-isotope production in stacked target assemblies. All computation
         runs locally; no server needed.
       </p>
+      <p>
+        Inspired by <a href="https://github.com/arjankoning1/isotopia" target="_blank" rel="noopener noreferrer">ISOTOPIA</a>,
+        the medical isotope production simulator by Arjan Koning (IAEA Nuclear Data Section).
+      </p>
     </section>
 
     <section>
@@ -63,7 +67,8 @@
     <section>
       <h3>Nuclear data</h3>
       <p>
-        Cross-sections from <strong>TENDL-2024</strong>, stopping powers from <strong>PSTAR/ASTAR</strong> (libdEdx).
+        Cross-sections from <strong>TENDL-2024</strong>, stopping powers from <strong>PSTAR/ASTAR</strong> tabulated data
+        with velocity scaling for heavier projectiles (more accurate than Bethe-Bloch, especially at low energies relevant to cyclotron targetry).
         Data is loaded as Parquet files and cached in your browser (IndexedDB).
       </p>
     </section>

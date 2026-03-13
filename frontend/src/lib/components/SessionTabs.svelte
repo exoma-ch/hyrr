@@ -25,14 +25,12 @@
 </script>
 
 <div class="session-tabs" role="tablist">
-  {#each tabs as tab, i (tab.id)}
+  {#each tabs as tab (tab.id)}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="tab"
       class:active={tab.id === activeId}
-      class:inactive={tab.id !== activeId}
       class:just-added={tab.id === newTabId}
-      style:z-index={tab.id === activeId ? tabs.length + 1 : tabs.length - i}
       onclick={() => switchToTab(tab.id)}
       onkeydown={(e) => { if (e.key === 'Enter') switchToTab(tab.id); }}
       title={tab.label}
@@ -49,7 +47,7 @@
     </div>
   {/each}
 
-  <button class="add-btn" onclick={handleAddTab} title="Save current config as new tab">
+  <button class="tab add-tab" onclick={handleAddTab} title="Save current config as new tab">
     +
   </button>
 </div>
@@ -57,20 +55,18 @@
 <style>
   .session-tabs {
     display: flex;
-    align-items: flex-end;
-    gap: 0;
-    position: relative;
+    align-items: stretch;
   }
 
   .tab {
     position: relative;
-    background: #1c2128;
-    border: 1px solid #2d333b;
-    border-bottom: none;
-    border-radius: 10px 10px 0 0;
-    padding: 0.3rem 0.5rem;
-    padding-right: 1.6rem;
-    padding-left: 0.35rem;
+    box-sizing: border-box;
+    background: transparent;
+    border: none;
+    border-right: 1px solid #2d333b;
+    padding: 0 0.5rem;
+    padding-right: 1.5rem;
+    padding-left: 0.4rem;
     font-size: 0.7rem;
     color: #6e7681;
     max-width: 180px;
@@ -85,51 +81,21 @@
     transition: background 0.15s, color 0.15s;
   }
 
-  /* Tab overlap: negative margin on non-first tabs */
-  .tab:not(:first-child) {
-    margin-left: -8px;
-  }
-
-  /* Inactive tabs are slightly shorter */
-  .tab.inactive {
-    height: 22px;
-    margin-bottom: 0;
+  .tab:first-child:not(.add-tab) {
+    margin-left: 4px;
   }
 
   .tab:hover {
-    background: #21262d;
+    background: #1c2128;
     color: #c9d1d9;
   }
 
-  /* Active tab */
   .tab.active {
     background: #0d1117;
     color: #e1e4e8;
-    height: 24px;
+    box-shadow: inset 0 0 0 1px #58a6ff;
   }
 
-  /* Chrome-style curved connectors on active tab */
-  .tab.active::before,
-  .tab.active::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    width: 8px;
-    height: 8px;
-    pointer-events: none;
-  }
-
-  .tab.active::before {
-    left: -8px;
-    background: radial-gradient(circle at 0 0, transparent 8px, #0d1117 8px);
-  }
-
-  .tab.active::after {
-    right: -8px;
-    background: radial-gradient(circle at 100% 0, transparent 8px, #0d1117 8px);
-  }
-
-  /* Favicon circle */
   .tab-favicon {
     display: flex;
     align-items: center;
@@ -158,7 +124,7 @@
 
   .tab-close {
     position: absolute;
-    right: 0.25rem;
+    right: 0.2rem;
     top: 50%;
     transform: translateY(-50%);
     background: none;
@@ -183,25 +149,20 @@
     background: rgba(248, 81, 73, 0.15);
   }
 
-  .add-btn {
-    background: none;
-    border: none;
-    color: #484f58;
+  .add-tab {
+    min-width: 32px;
+    max-width: 32px;
+    padding: 0;
+    padding-right: 0;
+    padding-left: 0;
+    justify-content: center;
     font-size: 0.9rem;
     font-weight: 500;
-    cursor: pointer;
-    padding: 0.15rem 0.4rem;
-    margin-bottom: 0.25rem;
-    margin-left: 0.15rem;
-    border-radius: 4px;
-    line-height: 1;
-    flex-shrink: 0;
-    transition: color 0.15s, background 0.15s;
+    color: #484f58;
   }
 
-  .add-btn:hover {
+  .add-tab:hover {
     color: #8b949e;
-    background: #21262d;
   }
 
   .tab.just-added {
@@ -209,7 +170,7 @@
   }
 
   @keyframes tab-highlight {
-    0% { box-shadow: 0 0 0 2px #58a6ff; }
-    100% { box-shadow: 0 0 0 0 transparent; }
+    0% { box-shadow: inset 0 -2px 0 #58a6ff; }
+    100% { box-shadow: none; }
   }
 </style>

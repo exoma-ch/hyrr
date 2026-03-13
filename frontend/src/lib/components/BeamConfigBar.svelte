@@ -58,9 +58,15 @@
     const parsed = parseTime(val);
     if (parsed) {
       irradFeedback = parsed.display;
-      setIrradiation(parsed.seconds);
     } else {
       irradFeedback = val ? "invalid" : "";
+    }
+  }
+
+  function commitIrrad() {
+    const parsed = parseTime(irradText);
+    if (parsed) {
+      setIrradiation(parsed.seconds);
     }
   }
 
@@ -70,9 +76,15 @@
     const parsed = parseTime(val);
     if (parsed) {
       coolFeedback = parsed.display;
-      setCooling(parsed.seconds);
     } else {
       coolFeedback = val ? "invalid" : "";
+    }
+  }
+
+  function commitCool() {
+    const parsed = parseTime(coolText);
+    if (parsed) {
+      setCooling(parsed.seconds);
     }
   }
 
@@ -116,7 +128,7 @@
   <div class="field">
     <label>Irradiation</label>
     <div class="input-with-feedback">
-      <input type="text" value={irradText} oninput={onIrradInput} placeholder="e.g. 24h" />
+      <input type="text" value={irradText} oninput={onIrradInput} onblur={commitIrrad} onkeydown={(e) => { if (e.key === 'Enter') { commitIrrad(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 24h" />
       {#if irradFeedback && irradFeedback !== "invalid"}
         <span class="feedback ok">{irradFeedback}</span>
       {:else if irradFeedback === "invalid"}
@@ -128,7 +140,7 @@
   <div class="field">
     <label>Cooling</label>
     <div class="input-with-feedback">
-      <input type="text" value={coolText} oninput={onCoolInput} placeholder="e.g. 1d" />
+      <input type="text" value={coolText} oninput={onCoolInput} onblur={commitCool} onkeydown={(e) => { if (e.key === 'Enter') { commitCool(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 1d" />
       {#if coolFeedback && coolFeedback !== "invalid"}
         <span class="feedback ok">{coolFeedback}</span>
       {:else if coolFeedback === "invalid"}
@@ -146,7 +158,7 @@
     flex-wrap: wrap;
     background: #161b22;
     border: 1px solid #2d333b;
-    border-radius: 6px;
+    border-radius: 3px;
     padding: 0.6rem 0.75rem;
   }
 
@@ -186,6 +198,7 @@
 
   .field input[type="text"] {
     width: 80px;
+    text-align: right;
   }
 
   .field select:focus,

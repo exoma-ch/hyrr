@@ -25,7 +25,7 @@
   import { initDepthPreview } from "./lib/stores/depth-preview.svelte";
   import { saveRun } from "./lib/history-db";
   import { restoreSessions, syncActiveTab, getActiveTabId } from "./lib/stores/sessions.svelte";
-  import { setCustomDensityLookup } from "./lib/compute/materials";
+  import { setCustomDensityLookup, setCustomCompositionLookup } from "./lib/compute/materials";
   import { getCustomMaterials, loadCustomMaterials } from "./lib/stores/custom-materials.svelte";
 
   // New components
@@ -104,9 +104,13 @@
 
     // Load custom materials and register density lookup
     await loadCustomMaterials();
-    setCustomDensityLookup((formula) => {
-      const cm = getCustomMaterials().find((m) => m.formula === formula || m.name === formula);
+    setCustomDensityLookup((identifier) => {
+      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
       return cm ? cm.density : null;
+    });
+    setCustomCompositionLookup((identifier) => {
+      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
+      return cm?.massFractions ?? null;
     });
 
     loadingState = "Ready";
@@ -214,14 +218,14 @@
       {/if}
     </div>
   {:else}
-    {#if hasLayers}
-      <div class="app-flow">
-        <div class="config-row">
-          <BeamConfigBar />
-        </div>
+    <div class="app-flow">
+      <div class="config-row">
+        <BeamConfigBar />
+      </div>
 
-        <LayerStackHorizontal onmaterialclick={openMaterialPopup} onelementclick={openElementPopup} />
+      <LayerStackHorizontal onmaterialclick={openMaterialPopup} onelementclick={openElementPopup} />
 
+      {#if hasLayers}
         <PlotDepthProfileLive />
 
         <LayerTable />
@@ -237,10 +241,10 @@
           <PlotActivityCurve {result} />
           <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
         {/if}
-      </div>
-    {:else}
-      <WelcomeScreen />
-    {/if}
+      {:else}
+        <WelcomeScreen />
+      {/if}
+    </div>
 
     {#if historyOpen}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -294,7 +298,9 @@
       for clinical, regulatory, or production decisions. Independent verification is required.
     </p>
     <div class="footer-links">
-      <span>&copy; {new Date().getFullYear()} eXoma GmbH</span>
+      <span>&copy; {new Date().getFullYear()} Lars Gerchow</span>
+      <span class="sep">&middot;</span>
+      <span>v{__APP_VERSION__}</span>
       <span class="sep">&middot;</span>
       <a href="https://github.com/exoma-ch/hyrr" target="_blank" rel="noopener noreferrer">Source</a>
       <span class="sep">&middot;</span>
@@ -376,7 +382,7 @@
     padding: 0.5rem 1.5rem;
     background: #21262d;
     border: 1px solid #2d333b;
-    border-radius: 6px;
+    border-radius: 3px;
     color: #e1e4e8;
     cursor: pointer;
     font-size: 0.9rem;
@@ -408,7 +414,7 @@
     color: #8b949e;
     background: #161b22;
     border: 1px solid #2d333b;
-    border-radius: 6px;
+    border-radius: 3px;
   }
 
   .spinner {

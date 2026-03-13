@@ -64,10 +64,45 @@ export function nudatUrl(Z: number, A: number, _state?: string): string {
 
 /** Unicode superscript digits for mass number formatting. */
 const SUPERSCRIPT_DIGITS = "\u2070\u00B9\u00B2\u00B3\u2074\u2075\u2076\u2077\u2078\u2079";
+const SUPERSCRIPT_CHARS: Record<string, string> = { m: "\u1D50" };
 
-/** Convert a number to unicode superscript. */
-function toSuperscript(n: number): string {
-  return String(n).split("").map((d) => SUPERSCRIPT_DIGITS[parseInt(d, 10)]).join("");
+/** Convert a string of digits (and optional 'm') to unicode superscript. */
+export function toSuperscript(s: string | number): string {
+  return String(s).split("").map((c) => {
+    const d = parseInt(c, 10);
+    if (!isNaN(d)) return SUPERSCRIPT_DIGITS[d];
+    return SUPERSCRIPT_CHARS[c] ?? c;
+  }).join("");
+}
+
+/**
+ * Parse an isotope name like "Co-58m" or "Na-22" into parts.
+ * Returns null if the format doesn't match.
+ */
+function parseIsotopeName(name: string): { symbol: string; mass: string; state: string } | null {
+  const m = name.match(/^([A-Z][a-z]?)-(\d+)(m\d?)?$/);
+  if (!m) return null;
+  return { symbol: m[1], mass: m[2], state: m[3] ?? "" };
+}
+
+/**
+ * Spectroscopy notation with unicode superscripts (for Plotly legends, plain text).
+ * "Co-58m" → "⁵⁸ᵐCo", "Na-22" → "²²Na"
+ */
+export function nucLabel(name: string): string {
+  const p = parseIsotopeName(name);
+  if (!p) return name;
+  return `${toSuperscript(p.mass + p.state)}${p.symbol}`;
+}
+
+/**
+ * Spectroscopy notation with HTML superscripts (for Svelte {@html}).
+ * "Co-58m" → "<sup>58m</sup>Co", "Na-22" → "<sup>22</sup>Na"
+ */
+export function nucHtml(name: string): string {
+  const p = parseIsotopeName(name);
+  if (!p) return name;
+  return `<sup>${p.mass}${p.state}</sup>${p.symbol}`;
 }
 
 /** Known light particles by (Z, A). */

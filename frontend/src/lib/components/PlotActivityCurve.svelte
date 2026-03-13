@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import type { SimulationResult, IsotopeResultData } from "../types";
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS } from "../plotting/plotly-helpers";
-  import { bestActivityUnit, bestTimeUnit } from "../utils/format";
+  import { bestActivityUnit, bestTimeUnit, nucLabel } from "../utils/format";
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
 
   interface Props {
@@ -175,7 +175,7 @@
       const times = iso.time_grid_s!.map((t) => (t - timeOffset) / timeDiv);
       const activities = iso.activity_vs_time_Bq!.map((a) => a / actDiv);
 
-      const traceName = `${iso.name}${iso.state ? ` (${iso.state})` : ""}`;
+      const traceName = nucLabel(iso.name);
       traces.push({
         x: times,
         y: activities,
@@ -283,7 +283,7 @@
       totalActivity!.reduce((m, v) => Math.max(m, v), 0),
     );
 
-    const rnpTraceName = `RNP% (${rnpIsotope})`;
+    const rnpTraceName = `RNP% (${nucLabel(rnpIsotope)})`;
     const totalTraceName = `Total activity`;
     const traces: any[] = [
       {
@@ -409,7 +409,7 @@
   .activity-curve {
     background: #161b22;
     border: 1px solid #2d333b;
-    border-radius: 6px;
+    border-radius: 3px;
     padding: 0.5rem;
   }
 
