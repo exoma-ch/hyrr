@@ -36,26 +36,50 @@
   );
   let canOpenGitHub = $derived((description.trim().length > 0 || screenshot !== null) && !submitting);
 
-  // Render Turnstile widget when panel opens
-  $effect(() => {
-    if (open && turnstileEl && TURNSTILE_SITE_KEY && typeof window.turnstile !== "undefined") {
-      try {
-        // Reset any previous widget
-        if (turnstileWidgetId !== null) {
-          window.turnstile.remove(turnstileWidgetId);
-        }
-        turnstileToken = null;
+  /** Wait for the Turnstile API to become available (loaded async). */
+  function waitForTurnstile(timeout = 5000): Promise<boolean> {
+    if (typeof window.turnstile !== "undefined") return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const check = setInterval(() => {
+        if (typeof window.turnstile !== "undefined") { clearInterval(check); resolve(true); }
+        else if (Date.now() - start > timeout) { clearInterval(check); resolve(false); }
+      }, 100);
+    });
+  }
+
+  /** Render or re-render the invisible Turnstile widget. Returns a token promise. */
+  async function getTurnstileToken(): Promise<string | null> {
+    if (!TURNSTILE_SITE_KEY) return null;
+    const ready = await waitForTurnstile();
+    if (!ready || !turnstileEl) return null;
+
+    try {
+      // Clean up previous widget
+      if (turnstileWidgetId !== null) {
+        window.turnstile.remove(turnstileWidgetId);
+        turnstileWidgetId = null;
+      }
+      turnstileToken = null;
+
+      return new Promise((resolve) => {
         turnstileWidgetId = window.turnstile.render(turnstileEl, {
           sitekey: TURNSTILE_SITE_KEY,
           size: "invisible",
-          callback: (token: string) => { turnstileToken = token; },
-          "error-callback": () => { turnstileToken = null; },
+          callback: (token: string) => { turnstileToken = token; resolve(token); },
+          "error-callback": () => { turnstileToken = null; resolve(null); },
+          "expired-callback": () => { turnstileToken = null; resolve(null); },
         });
-      } catch (e) {
-        console.warn("Turnstile render failed:", e);
-      }
+        // Trigger the invisible challenge
+        window.turnstile.execute(turnstileWidgetId!);
+        // Timeout fallback
+        setTimeout(() => resolve(turnstileToken), 10000);
+      });
+    } catch (e) {
+      console.warn("Turnstile failed:", e);
+      return null;
     }
-  });
+  }
 
   /** Capture the page behind this panel using html2canvas. */
   async function captureScreen() {
@@ -195,16 +219,8 @@
     submitting = true;
     resultMsg = null;
 
-    // Get Turnstile token (trigger invisible challenge if needed)
-    if (TURNSTILE_SITE_KEY && !turnstileToken && turnstileWidgetId !== null && typeof window.turnstile !== "undefined") {
-      window.turnstile.execute(turnstileWidgetId);
-      await new Promise<void>((resolve) => {
-        const check = setInterval(() => {
-          if (turnstileToken) { clearInterval(check); resolve(); }
-        }, 100);
-        setTimeout(() => { clearInterval(check); resolve(); }, 5000);
-      });
-    }
+    // Get Turnstile token (renders widget on demand, waits for challenge)
+    const token = await getTurnstileToken();
 
     const title = `[Bug] ${description.slice(0, 70)}`;
 
@@ -224,7 +240,7 @@
           body,
           labels: ["bug"],
           email,
-          "cf-turnstile-response": turnstileToken ?? "",
+          "cf-turnstile-response": token ?? "",
         }),
       });
       const data = await res.json();
@@ -239,10 +255,6 @@
       resultMsg = { ok: false, text: "Network error — try 'Open on GitHub' instead" };
     } finally {
       submitting = false;
-      if (turnstileWidgetId !== null && typeof window.turnstile !== "undefined") {
-        window.turnstile.reset(turnstileWidgetId);
-        turnstileToken = null;
-      }
     }
   }
 
