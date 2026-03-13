@@ -920,6 +920,7 @@ server = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "build123d" },
     { name = "hatchling" },
     { name = "ipykernel" },
     { name = "jupyter" },
@@ -933,6 +934,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "rich" },
     { name = "ruff" },
+    { name = "tetgen" },
 ]
 
 [package.metadata]
@@ -969,6 +971,7 @@ provides-extras = ["dev", "server", "pandas", "plotting", "geometry", "docs", "a
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "build123d", specifier = ">=0.10.0" },
     { name = "hatchling", specifier = ">=1.25" },
     { name = "ipykernel", specifier = ">=6.31.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
@@ -982,6 +985,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "ruff", specifier = ">=0.8" },
+    { name = "tetgen", specifier = ">=0.8.3" },
 ]
 
 [[package]]

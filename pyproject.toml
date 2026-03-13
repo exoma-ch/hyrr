@@ -80,6 +80,7 @@ packages = ["src/hyrr"]
 
 [dependency-groups]
 dev = [
+    "build123d>=0.10.0",
     "hatchling>=1.25",
     "ipykernel>=6.31.0",
     "jupyter>=1.1.1",
@@ -93,6 +94,7 @@ dev = [
     "pytest-cov>=7.0.0",
     "rich>=13.0.0",
     "ruff>=0.8",
+    "tetgen>=0.8.3",
 ]
 
 # Ruff
