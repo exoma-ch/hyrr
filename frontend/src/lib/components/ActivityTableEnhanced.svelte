@@ -637,4 +637,56 @@
   }
 
   .isotope-link:hover { text-decoration: underline; }
+
+  @media (max-width: 1024px) {
+    .col-layer,
+    .col-name {
+      position: sticky;
+      background: var(--c-bg-subtle);
+      z-index: 1;
+    }
+
+    .col-layer {
+      left: 0;
+    }
+
+    .col-name {
+      left: 30px;
+    }
+
+    tr:hover .col-layer,
+    tr:hover .col-name {
+      background: var(--c-bg-hover);
+    }
+  }
+
+  @media (max-width: 640px) {
+    table {
+      font-size: 0.8rem;
+    }
+
+    th, td {
+      padding: 0.4rem 0.5rem;
+    }
+
+    .col-z,
+    .col-a,
+    .col-yield {
+      display: none;
+    }
+
+    .action-btn {
+      padding: 0.35rem 0.6rem;
+      font-size: 0.75rem;
+    }
+
+    .filter-panel {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .filter-section {
+      width: 100%;
+    }
+  }
 </style>

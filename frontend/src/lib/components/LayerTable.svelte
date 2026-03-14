@@ -184,4 +184,39 @@
     margin: 0;
     padding: 0.5rem;
   }
+
+  @media (max-width: 640px) {
+    table {
+      font-size: 0.85rem;
+    }
+
+    th, td {
+      padding: 0.45rem 0.5rem;
+    }
+
+    .col-idx,
+    .col-mat {
+      position: sticky;
+      background: var(--c-bg-subtle);
+      z-index: 1;
+    }
+
+    .col-idx {
+      left: 0;
+    }
+
+    .col-mat {
+      left: 30px;
+    }
+
+    tr:hover .col-idx,
+    tr:hover .col-mat {
+      background: var(--c-bg-hover);
+    }
+
+    .total-row .col-idx,
+    .total-row .col-mat {
+      background: var(--c-bg-subtle);
+    }
+  }
 </style>

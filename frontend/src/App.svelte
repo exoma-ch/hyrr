@@ -537,7 +537,7 @@
     position: fixed;
     top: 0;
     right: 0;
-    width: 400px;
+    width: min(400px, 100vw);
     height: 100vh;
     z-index: 500;
     overflow-y: auto;
@@ -630,5 +630,24 @@
 
   .privacy {
     font-style: italic;
+  }
+
+  /* ─── Mobile ─── */
+  @media (max-width: 640px) {
+    main {
+      padding: 0.5rem 0.5rem 2rem;
+    }
+
+    .history-drawer {
+      width: 100vw;
+    }
+
+    .panel {
+      padding: 0.75rem;
+    }
+
+    :global(input), :global(select), :global(textarea) {
+      font-size: 16px;
+    }
   }
 </style>

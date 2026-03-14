@@ -173,4 +173,15 @@
     0% { box-shadow: inset 0 -2px 0 var(--c-accent); }
     100% { box-shadow: none; }
   }
+
+  @media (max-width: 640px) {
+    .tab {
+      font-size: 0.8rem;
+    }
+
+    .tab-close {
+      opacity: 0.5;
+      padding: 0.15rem 0.3rem;
+    }
+  }
 </style>

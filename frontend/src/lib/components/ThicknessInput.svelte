@@ -282,4 +282,11 @@
     color: var(--c-text-muted);
     white-space: nowrap;
   }
+
+  @media (max-width: 640px) {
+    .val-input {
+      font-size: 16px;
+      padding: 0.4rem 0.5rem;
+    }
+  }
 </style>

@@ -199,4 +199,26 @@
     color: var(--c-accent);
     border-color: var(--c-accent);
   }
+
+  @media (max-width: 640px) {
+    .header-bar {
+      height: 44px;
+    }
+
+    .title {
+      display: none;
+    }
+
+    .lucky-tab {
+      display: none;
+    }
+
+    .icon-btn {
+      padding: 0.4rem;
+    }
+
+    .tab {
+      font-size: 0.8rem;
+    }
+  }
 </style>

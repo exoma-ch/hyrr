@@ -236,4 +236,39 @@
   .feedback.err {
     color: var(--c-red);
   }
+
+  @media (max-width: 640px) {
+    .beam-bar {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+    }
+
+    .field label {
+      font-size: 0.75rem;
+    }
+
+    .field select,
+    .field input {
+      width: 100%;
+      padding: 0.4rem 0.5rem;
+      font-size: 16px;
+    }
+
+    .field select {
+      width: 100%;
+    }
+
+    .input-group input {
+      width: 100%;
+    }
+
+    .field input[type="text"] {
+      width: 100%;
+    }
+
+    .field:last-child {
+      grid-column: 1 / -1;
+    }
+  }
 </style>

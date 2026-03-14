@@ -144,4 +144,38 @@
     flex: 1;
     min-height: 0;
   }
+
+  @media (max-width: 640px) {
+    .modal-overlay {
+      padding: 0;
+    }
+
+    .modal-content {
+      max-width: 100%;
+      max-height: 100vh;
+      height: 100vh;
+      border-radius: 0;
+      border: none;
+    }
+
+    .modal-content.wide {
+      max-width: 100%;
+    }
+
+    .close-btn {
+      min-width: 44px;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .bug-btn {
+      min-width: 44px;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  }
 </style>

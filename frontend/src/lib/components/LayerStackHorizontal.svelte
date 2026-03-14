@@ -351,4 +351,31 @@
     margin-left: 0.15rem;
     vertical-align: middle;
   }
+
+  @media (max-width: 640px) {
+    .layer-stack-h {
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .layer-card {
+      scroll-snap-align: start;
+    }
+
+    .add-btn {
+      width: 44px;
+      height: 44px;
+    }
+
+    .remove-btn {
+      width: 28px;
+      height: 28px;
+      font-size: 1rem;
+    }
+
+    .el-badge {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.3rem;
+    }
+  }
 </style>
