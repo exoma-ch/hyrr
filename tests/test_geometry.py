@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import numpy as np
-import numpy.typing as npt
 import pytest
 
 from hyrr.geometry import (
     MaterialInfo,
-    MeshSlicePolygon,
-    RaySegment,
     TetrahedralMesh,
     _ray_triangle_intersect,
     _tet_faces,
@@ -18,7 +15,6 @@ from hyrr.geometry import (
     cut_mesh_with_plane,
     longitudinal_slice,
 )
-
 
 # ---------------------------------------------------------------------------
 # Ray-triangle intersection
@@ -107,12 +103,15 @@ def _make_box_mesh() -> TetrahedralMesh:
     A tetrahedron with vertices at:
     (0,0,0), (1,0,0), (0,1,0), (0,0,1)
     """
-    nodes = np.array([
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ], dtype=np.float64)
+    nodes = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
     elements = np.array([[0, 1, 2, 3]], dtype=np.int64)
     material_ids = np.array([0], dtype=np.int32)
     materials = {
@@ -175,17 +174,23 @@ class TestCastRay:
 
 def _make_two_tet_mesh() -> TetrahedralMesh:
     """Two tets sharing a face, stacked along z."""
-    nodes = np.array([
-        [0.0, 0.0, 0.0],  # 0
-        [1.0, 0.0, 0.0],  # 1
-        [0.0, 1.0, 0.0],  # 2
-        [0.0, 0.0, 1.0],  # 3
-        [0.0, 0.0, 2.0],  # 4
-    ], dtype=np.float64)
-    elements = np.array([
-        [0, 1, 2, 3],
-        [1, 2, 3, 4],
-    ], dtype=np.int64)
+    nodes = np.array(
+        [
+            [0.0, 0.0, 0.0],  # 0
+            [1.0, 0.0, 0.0],  # 1
+            [0.0, 1.0, 0.0],  # 2
+            [0.0, 0.0, 1.0],  # 3
+            [0.0, 0.0, 2.0],  # 4
+        ],
+        dtype=np.float64,
+    )
+    elements = np.array(
+        [
+            [0, 1, 2, 3],
+            [1, 2, 3, 4],
+        ],
+        dtype=np.int64,
+    )
     material_ids = np.array([0, 1], dtype=np.int32)
     materials = {
         0: MaterialInfo(
@@ -326,7 +331,10 @@ class TestAxialSlice:
         """Axial slice at depth=0 is at the base of the tet."""
         mesh = _make_box_mesh()
         _, _, polygons = axial_slice(
-            mesh, np.array([0.0, 0.0, 1.0]), np.array([0.0, 0.0, 0.0]), 0.0,
+            mesh,
+            np.array([0.0, 0.0, 1.0]),
+            np.array([0.0, 0.0, 0.0]),
+            0.0,
         )
         # z=0 is a face of the tet — may or may not produce polygons (edge case)
         # Just ensure no crash

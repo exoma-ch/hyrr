@@ -145,7 +145,9 @@ def compute_production_rate(
 
         # Convolved cross-sections
         xs_interp = _gauss_hermite_convolved_xs(
-            xs_interp_fn, energies, sigma_E_arr,
+            xs_interp_fn,
+            energies,
+            sigma_E_arr,
         )
     else:
         # Original path: point-energy cross-section lookup
@@ -198,7 +200,9 @@ def bateman_activity(
 
     t_irr = np.linspace(0, irradiation_time_s, n_irr)
     # Exclude the duplicate point at irradiation_time_s
-    t_cool = np.linspace(irradiation_time_s, irradiation_time_s + cooling_time_s, n_cool + 1)[1:]
+    t_cool = np.linspace(
+        irradiation_time_s, irradiation_time_s + cooling_time_s, n_cool + 1
+    )[1:]
     time_grid = np.concatenate([t_irr, t_cool])
 
     activity = np.zeros_like(time_grid)
@@ -210,7 +214,9 @@ def bateman_activity(
 
     # Irradiation phase
     mask_irr = time_grid <= irradiation_time_s
-    activity[mask_irr] = production_rate * (1.0 - np.exp(-decay_constant * time_grid[mask_irr]))
+    activity[mask_irr] = production_rate * (
+        1.0 - np.exp(-decay_constant * time_grid[mask_irr])
+    )
 
     # Activity at end of irradiation
     a_eoi = production_rate * (1.0 - np.exp(-decay_constant * irradiation_time_s))
@@ -264,7 +270,9 @@ def daughter_ingrowth(
         )
 
     coeff = branching_ratio * parent_activity_eoi_Bq * lambda_d / (lambda_d - lambda_p)
-    return coeff * (np.exp(-lambda_p * cooling_times_s) - np.exp(-lambda_d * cooling_times_s))
+    return coeff * (
+        np.exp(-lambda_p * cooling_times_s) - np.exp(-lambda_d * cooling_times_s)
+    )
 
 
 def saturation_yield(

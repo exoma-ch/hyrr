@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="beamGlow">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="triClip">
+      <polygon points="175,120 175,392 345,256"/>
+    </clipPath>
+    <!-- Gradient for filled area under curves -->
+    <linearGradient id="fadeRight" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-opacity="0.3"/>
+      <stop offset="100%" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Black background -->
+  <rect width="512" height="512" fill="#010409"/>
+
+  <!-- The prism — layered target -->
+  <g clip-path="url(#triClip)">
+    <rect x="175" y="120" width="170" height="54" fill="#0f2a3d" opacity="0.8"/>
+    <rect x="175" y="174" width="170" height="54" fill="#152e1c" opacity="0.8"/>
+    <rect x="175" y="228" width="170" height="56" fill="#3a2d14" opacity="0.8"/>
+    <rect x="175" y="284" width="170" height="54" fill="#33220f" opacity="0.8"/>
+    <rect x="175" y="338" width="170" height="54" fill="#221a30" opacity="0.8"/>
+  </g>
+  <polygon points="175,120 175,392 345,256" fill="none" stroke="#484f58" stroke-width="1.8"/>
+
+  <!-- Incoming beam: diagonal from lower-left -->
+  <line x1="30" y1="320" x2="175" y2="256" stroke="#e6edf3" stroke-width="2.8" filter="url(#beamGlow)"/>
+
+  <!-- Cross-section curves emerging — with filled area under each curve
+       Each is an excitation function plotted radially from the apex -->
+
+  <!-- Energy axis radiates outward from apex; cross section is the curve height -->
+  <!-- The "straight line" direction = zero cross section; curve deflection = σ value -->
+
+  <!-- Channel 1 (top): violet -->
+  <path d="M345,256 L365,236 C380,218 395,192 410,178
+           C425,168 438,168 448,174 C458,182 465,196 472,210"
+        fill="none" stroke="#a78bfa" stroke-width="2.2" filter="url(#glow)" opacity="0.85"/>
+  <!-- Filled area hint -->
+  <path d="M345,256 L365,236 C380,218 395,192 410,178
+           C425,168 438,168 448,174 C458,182 465,196 472,210
+           L472,220 C465,206 458,194 448,186 C438,182 425,182 410,192
+           C395,206 380,228 365,244 Z"
+        fill="#a78bfa" opacity="0.06"/>
+
+  <!-- Channel 2: teal -->
+  <path d="M345,256 L368,246 C385,236 400,218 418,206
+           C432,198 444,196 454,202 C464,210 472,222 480,234"
+        fill="none" stroke="#2dd4bf" stroke-width="2.2" filter="url(#glow)" opacity="0.85"/>
+  <path d="M345,256 L368,246 C385,236 400,218 418,206
+           C432,198 444,196 454,202 C464,210 472,222 480,234
+           L480,242 C472,232 464,222 454,216 C444,212 432,214 418,222
+           C400,232 385,246 368,254 Z"
+        fill="#2dd4bf" opacity="0.06"/>
+
+  <!-- Channel 3: green (dominant, thicker) -->
+  <path d="M345,256 L372,254 C395,252 420,246 440,242
+           C455,240 465,241 474,244 C482,248 486,253 490,256"
+        fill="none" stroke="#4ade80" stroke-width="2.8" filter="url(#glow)" opacity="0.9"/>
+  <path d="M345,256 L372,254 C395,252 420,246 440,242
+           C455,240 465,241 474,244 C482,248 486,253 490,256
+           L490,260 C486,258 482,254 474,252 C465,250 455,250 440,252
+           C420,254 395,257 372,258 Z"
+        fill="#4ade80" opacity="0.08"/>
+
+  <!-- Channel 4: yellow -->
+  <path d="M345,256 L368,266 C385,278 400,298 418,312
+           C432,322 444,324 454,320 C464,314 472,304 480,292"
+        fill="none" stroke="#fbbf24" stroke-width="2.2" filter="url(#glow)" opacity="0.85"/>
+  <path d="M345,256 L368,266 C385,278 400,298 418,312
+           C432,322 444,324 454,320 C464,314 472,304 480,292
+           L480,284 C472,294 464,302 454,306 C444,308 432,306 418,298
+           C400,286 385,270 368,260 Z"
+        fill="#fbbf24" opacity="0.06"/>
+
+  <!-- Channel 5: orange -->
+  <path d="M345,256 L365,272 C380,292 395,322 410,342
+           C425,356 438,360 450,355 C460,348 468,336 476,324"
+        fill="none" stroke="#f59e0b" stroke-width="2.2" filter="url(#glow)" opacity="0.8"/>
+  <path d="M345,256 L365,272 C380,292 395,322 410,342
+           C425,356 438,360 450,355 C460,348 468,336 476,324
+           L476,334 C468,344 460,354 450,360 C438,364 425,362 410,350
+           C395,332 380,302 365,282 Z"
+        fill="#f59e0b" opacity="0.06"/>
+
+  <!-- Channel 6 (bottom): red -->
+  <path d="M345,256 L362,278 C375,304 388,348 402,375
+           C415,394 430,400 444,396
+           C456,390 466,378 476,362"
+        fill="none" stroke="#ef4444" stroke-width="2" filter="url(#glow)" opacity="0.75"/>
+  <path d="M345,256 L362,278 C375,304 388,348 402,375
+           C415,394 430,400 444,396
+           C456,390 466,378 476,362
+           L476,372 C466,386 456,396 444,402
+           C430,406 415,400 402,382
+           C388,358 375,314 362,288 Z"
+        fill="#ef4444" opacity="0.05"/>
+</svg>

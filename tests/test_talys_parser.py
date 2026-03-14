@@ -62,9 +62,7 @@ class TestParseTalysResidual:
         (tmp_path / "rp043099.tot").write_text(
             "  8.0  0.0\n 10.0  50.0\n 12.0  150.0\n"
         )
-        (tmp_path / "rp042098.tot").write_text(
-            "  8.0  10.0\n 10.0  30.0\n"
-        )
+        (tmp_path / "rp042098.tot").write_text("  8.0  10.0\n 10.0  30.0\n")
 
         entries = parse_talys_residual(tmp_path, "C-12", 42, 100)
         assert len(entries) == 2
@@ -126,7 +124,12 @@ class TestWriteXsParquet:
         df = pl.read_parquet(output_path)
         assert len(df) == 3
         assert set(df.columns) == {
-            "target_A", "residual_Z", "residual_A", "state", "energy_MeV", "xs_mb"
+            "target_A",
+            "residual_Z",
+            "residual_A",
+            "state",
+            "energy_MeV",
+            "xs_mb",
         }
         assert df["target_A"].dtype == pl.Int32
         assert df["residual_Z"].dtype == pl.Int32

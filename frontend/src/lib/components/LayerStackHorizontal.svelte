@@ -21,8 +21,15 @@
   let layers = $derived(getLayers());
   let customMaterials = $derived(getCustomMaterials());
 
-  function isCustomMaterial(formula: string): boolean {
-    return customMaterials.some((m) => m.formula === formula || m.name === formula);
+  function isCustomMaterial(identifier: string): boolean {
+    return customMaterials.some((m) => m.formula === identifier || m.name === identifier);
+  }
+
+  /** Get element symbols from a material identifier (custom name or formula). */
+  function materialElements(identifier: string): string[] {
+    const cm = customMaterials.find((m) => m.name === identifier || m.formula === identifier);
+    if (cm?.massFractions) return Object.keys(cm.massFractions);
+    try { return Object.keys(parseFormula(identifier)); } catch { return []; }
   }
 
   let dragIndex = $state<number | null>(null);
@@ -40,8 +47,8 @@
     updateLayer(index, layer);
   }
 
-  function setMaterial(index: number, value: string) {
-    updateLayer(index, { ...layers[index], material: value, enrichment: undefined });
+  function setMaterial(index: number, value: string, enrichment?: Record<string, Record<number, number>>) {
+    updateLayer(index, { ...layers[index], material: value, enrichment });
   }
 
   function onDragStart(e: DragEvent, index: number) {
@@ -75,21 +82,7 @@
     dragOverIndex = null;
   }
 
-  function thicknessDisplay(layer: LayerConfig): string {
-    if (layer.thickness_cm !== undefined) {
-      const cm = layer.thickness_cm;
-      if (cm < 0.01) return `${(cm * 1e4).toFixed(0)} µm`;
-      if (cm < 1) return `${(cm * 10).toFixed(1)} mm`;
-      return `${cm.toFixed(2)} cm`;
-    }
-    if (layer.areal_density_g_cm2 !== undefined) {
-      return `${layer.areal_density_g_cm2.toFixed(3)} g/cm²`;
-    }
-    if (layer.energy_out_MeV !== undefined) {
-      return `→ ${layer.energy_out_MeV.toFixed(1)} MeV`;
-    }
-    return "—";
-  }
+
 </script>
 
 <div class="layer-stack-h">
@@ -137,7 +130,7 @@
       </button>
 
       {#if layer.material}
-        {@const elements = Object.keys(parseFormula(layer.material))}
+        {@const elements = materialElements(layer.material)}
         {#if elements.length > 0}
           <div class="element-badges">
             {#each elements as el}
@@ -151,8 +144,6 @@
           </div>
         {/if}
       {/if}
-
-      <div class="thickness-display">{thicknessDisplay(layer)}</div>
 
       <ThicknessInput layer={layer} onchange={(l) => handleUpdate(i, l)} />
     </div>
@@ -168,29 +159,29 @@
     gap: 0.25rem;
     overflow-x: auto;
     padding: 0.5rem;
-    background: #161b22;
-    border: 1px solid #2d333b;
-    border-radius: 6px;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
     min-height: 120px;
   }
 
   .empty {
-    color: #484f58;
+    color: var(--c-text-faint);
     font-style: italic;
     font-size: 0.8rem;
     padding: 0 0.5rem;
   }
 
   .arrow {
-    color: #484f58;
+    color: var(--c-text-faint);
     font-size: 1.2rem;
     flex-shrink: 0;
     user-select: none;
   }
 
   .layer-card {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     padding: 0.5rem;
     min-width: 140px;
@@ -204,7 +195,7 @@
   }
 
   .layer-card:hover {
-    border-color: #484f58;
+    border-color: var(--c-text-faint);
   }
 
   .layer-card.dragging {
@@ -212,12 +203,12 @@
   }
 
   .layer-card.drag-over {
-    border-color: #58a6ff;
-    background: #1c2128;
+    border-color: var(--c-accent);
+    background: var(--c-bg-hover);
   }
 
   .layer-card.monitor {
-    border-left: 2px solid #d29922;
+    border-left: 2px solid var(--c-gold);
   }
 
   .card-header {
@@ -229,13 +220,13 @@
   .layer-num {
     font-size: 0.7rem;
     font-weight: 600;
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
   .monitor-badge {
     font-size: 0.55rem;
-    background: #d29922;
-    color: #0d1117;
+    background: var(--c-gold);
+    color: var(--c-bg-default);
     padding: 0.05rem 0.25rem;
     border-radius: 2px;
     font-weight: 600;
@@ -247,7 +238,7 @@
     background: none;
     border: 1px solid transparent;
     border-radius: 3px;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     font-size: 0.85rem;
     width: 20px;
     height: 20px;
@@ -259,14 +250,14 @@
   }
 
   .remove-btn:hover {
-    color: #f85149;
-    border-color: #f85149;
+    color: var(--c-red);
+    border-color: var(--c-red);
   }
 
   .material-name {
     background: none;
     border: none;
-    color: #e1e4e8;
+    color: var(--c-text);
     font-size: 0.8rem;
     font-weight: 500;
     cursor: pointer;
@@ -275,13 +266,13 @@
   }
 
   .material-name:hover {
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
   .cstm-badge {
     font-size: 0.55rem;
-    background: rgba(88, 166, 255, 0.15);
-    color: #58a6ff;
+    background: var(--c-accent-tint);
+    color: var(--c-accent);
     padding: 0.05rem 0.2rem;
     border-radius: 2px;
     font-weight: 600;
@@ -292,8 +283,8 @@
 
   .enr-badge {
     font-size: 0.55rem;
-    background: rgba(210, 153, 34, 0.15);
-    color: #d29922;
+    background: var(--c-gold-tint);
+    color: var(--c-gold);
     padding: 0.05rem 0.2rem;
     border-radius: 2px;
     font-weight: 600;
@@ -302,19 +293,14 @@
     vertical-align: middle;
   }
 
-  .thickness-display {
-    font-size: 0.7rem;
-    color: #8b949e;
-  }
-
   .add-btn {
     flex-shrink: 0;
     width: 36px;
     height: 36px;
     background: none;
-    border: 1px dashed #2d333b;
+    border: 1px dashed var(--c-border);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 1.2rem;
     cursor: pointer;
     display: flex;
@@ -323,8 +309,8 @@
   }
 
   .add-btn:hover {
-    border-color: #238636;
-    color: #238636;
+    border-color: var(--c-green);
+    color: var(--c-green);
   }
 
   .element-badges {
@@ -334,10 +320,10 @@
   }
 
   .el-badge {
-    background: #21262d;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.6rem;
     font-weight: 500;
     padding: 0.1rem 0.25rem;
@@ -346,23 +332,50 @@
   }
 
   .el-badge:hover {
-    border-color: #58a6ff;
-    color: #58a6ff;
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .el-badge.enriched {
-    border-color: #d29922;
-    color: #d29922;
-    background: rgba(210, 153, 34, 0.1);
+    border-color: var(--c-gold);
+    color: var(--c-gold);
+    background: var(--c-gold-tint-subtle);
   }
 
   .enr-dot {
     display: inline-block;
     width: 4px;
     height: 4px;
-    background: #d29922;
+    background: var(--c-gold);
     border-radius: 50%;
     margin-left: 0.15rem;
     vertical-align: middle;
+  }
+
+  @media (max-width: 640px) {
+    .layer-stack-h {
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .layer-card {
+      scroll-snap-align: start;
+    }
+
+    .add-btn {
+      width: 44px;
+      height: 44px;
+    }
+
+    .remove-btn {
+      width: 28px;
+      height: 28px;
+      font-size: 1rem;
+    }
+
+    .el-badge {
+      font-size: 0.7rem;
+      padding: 0.15rem 0.3rem;
+    }
   }
 </style>

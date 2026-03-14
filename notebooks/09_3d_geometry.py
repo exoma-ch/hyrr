@@ -28,6 +28,7 @@
 # ## 1. Setup
 
 # %%
+
 import numpy as np
 
 from hyrr.geometry import (

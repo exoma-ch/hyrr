@@ -2,34 +2,62 @@
 
 ## Development setup
 
+### Python
+
 ```bash
-git clone https://github.com/MorePET/hyrr.git
+git clone --recurse-submodules https://github.com/exoma-ch/hyrr.git
 cd hyrr
-pip install -e ".[all]"
+uv sync --all-extras
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm ci
+npm run dev
 ```
 
 ## Running tests
 
+### Python
+
 ```bash
 # Unit tests
-pytest tests/ -v --benchmark-disable
+uv run pytest tests/ -v --benchmark-disable
 
 # With benchmarks
-pytest tests/ -v --benchmark-only
+uv run pytest tests/ -v --benchmark-only
 
-# Integration tests (requires database)
-pytest tests/integration/ -v
+# Integration tests
+uv run pytest tests/integration/ -v
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm test             # vitest
+npm run check        # svelte-check (TypeScript)
 ```
 
 ## Code quality
 
 ```bash
-# Linting
-ruff check src/ tests/ data/
-
-# Type checking
-pyright src/hyrr/
+# Python linting
+uv run ruff check src/ tests/
 
 # Build docs locally
-mkdocs serve
+uv run mkdocs serve
+
+# Frontend type checking
+cd frontend && npm run check
 ```
+
+## Commit format
+
+```
+type(scope): description
+```
+
+Examples: `feat(frontend):`, `fix(worker):`, `docs:`, `chore:`, `build(ci):`

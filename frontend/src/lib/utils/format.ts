@@ -6,6 +6,7 @@ import { Z_TO_SYMBOL } from "./formula";
 
 /** Auto-scale activity to the best human-readable unit. */
 export function fmtActivity(bq: number): string {
+  if (typeof bq !== "number" || !isFinite(bq)) return "—";
   const abs = Math.abs(bq);
   if (abs === 0) return "0";
   if (abs >= 1e12) return (bq / 1e12).toPrecision(4) + " TBq";
@@ -18,6 +19,7 @@ export function fmtActivity(bq: number): string {
 
 /** Auto-scale saturation yield. */
 export function fmtYield(val: number): string {
+  if (typeof val !== "number" || !isFinite(val)) return "—";
   if (val === 0) return "0";
   const abs = Math.abs(val);
   if (abs >= 1e12) return (val / 1e12).toPrecision(3) + " TBq/µA";
@@ -47,6 +49,7 @@ export function bestTimeUnit(maxS: number): { label: string; divisor: number } {
 
 /** Auto-scale dose rate (µSv/h input) to the best human-readable unit. */
 export function fmtDoseRate(uSvPerH: number): string {
+  if (typeof uSvPerH !== "number" || !isFinite(uSvPerH)) return "—";
   const abs = Math.abs(uSvPerH);
   if (abs === 0) return "0";
   if (abs >= 1e6) return (uSvPerH / 1e6).toPrecision(3) + " Sv/h";
@@ -64,10 +67,45 @@ export function nudatUrl(Z: number, A: number, _state?: string): string {
 
 /** Unicode superscript digits for mass number formatting. */
 const SUPERSCRIPT_DIGITS = "\u2070\u00B9\u00B2\u00B3\u2074\u2075\u2076\u2077\u2078\u2079";
+const SUPERSCRIPT_CHARS: Record<string, string> = { m: "\u1D50" };
 
-/** Convert a number to unicode superscript. */
-function toSuperscript(n: number): string {
-  return String(n).split("").map((d) => SUPERSCRIPT_DIGITS[parseInt(d, 10)]).join("");
+/** Convert a string of digits (and optional 'm') to unicode superscript. */
+export function toSuperscript(s: string | number): string {
+  return String(s).split("").map((c) => {
+    const d = parseInt(c, 10);
+    if (!isNaN(d)) return SUPERSCRIPT_DIGITS[d];
+    return SUPERSCRIPT_CHARS[c] ?? c;
+  }).join("");
+}
+
+/**
+ * Parse an isotope name like "Co-58m" or "Na-22" into parts.
+ * Returns null if the format doesn't match.
+ */
+function parseIsotopeName(name: string): { symbol: string; mass: string; state: string } | null {
+  const m = name.match(/^([A-Z][a-z]?)-(\d+)(m\d?)?$/);
+  if (!m) return null;
+  return { symbol: m[1], mass: m[2], state: m[3] ?? "" };
+}
+
+/**
+ * Spectroscopy notation with unicode superscripts (for Plotly legends, plain text).
+ * "Co-58m" → "⁵⁸ᵐCo", "Na-22" → "²²Na"
+ */
+export function nucLabel(name: string): string {
+  const p = parseIsotopeName(name);
+  if (!p) return name;
+  return `${toSuperscript(p.mass + p.state)}${p.symbol}`;
+}
+
+/**
+ * Spectroscopy notation with HTML superscripts (for Svelte {@html}).
+ * "Co-58m" → "<sup>58m</sup>Co", "Na-22" → "<sup>22</sup>Na"
+ */
+export function nucHtml(name: string): string {
+  const p = parseIsotopeName(name);
+  if (!p) return name;
+  return `<sup>${p.mass}${p.state}</sup>${p.symbol}`;
 }
 
 /** Known light particles by (Z, A). */

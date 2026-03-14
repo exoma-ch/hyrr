@@ -28,13 +28,19 @@
   let irradFeedback = $state("");
   let coolFeedback = $state("");
 
-  // Initialize text from config
-  let initialized = false;
+  // Sync text from config (tracks external changes like presets/history)
+  let prevIrradS = $state(-1);
+  let prevCoolS = $state(-1);
   $effect(() => {
-    if (!initialized) {
-      initialized = true;
+    if (config.irradiation_s !== prevIrradS) {
+      prevIrradS = config.irradiation_s;
       irradText = formatSeconds(config.irradiation_s);
+      irradFeedback = "";
+    }
+    if (config.cooling_s !== prevCoolS) {
+      prevCoolS = config.cooling_s;
       coolText = formatSeconds(config.cooling_s);
+      coolFeedback = "";
     }
   });
 
@@ -52,9 +58,15 @@
     const parsed = parseTime(val);
     if (parsed) {
       irradFeedback = parsed.display;
-      setIrradiation(parsed.seconds);
     } else {
       irradFeedback = val ? "invalid" : "";
+    }
+  }
+
+  function commitIrrad() {
+    const parsed = parseTime(irradText);
+    if (parsed) {
+      setIrradiation(parsed.seconds);
     }
   }
 
@@ -64,9 +76,15 @@
     const parsed = parseTime(val);
     if (parsed) {
       coolFeedback = parsed.display;
-      setCooling(parsed.seconds);
     } else {
       coolFeedback = val ? "invalid" : "";
+    }
+  }
+
+  function commitCool() {
+    const parsed = parseTime(coolText);
+    if (parsed) {
+      setCooling(parsed.seconds);
     }
   }
 
@@ -110,7 +128,7 @@
   <div class="field">
     <label>Irradiation</label>
     <div class="input-with-feedback">
-      <input type="text" value={irradText} oninput={onIrradInput} placeholder="e.g. 24h" />
+      <input type="text" value={irradText} oninput={onIrradInput} onblur={commitIrrad} onkeydown={(e) => { if (e.key === 'Enter') { commitIrrad(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 24h" />
       {#if irradFeedback && irradFeedback !== "invalid"}
         <span class="feedback ok">{irradFeedback}</span>
       {:else if irradFeedback === "invalid"}
@@ -122,7 +140,7 @@
   <div class="field">
     <label>Cooling</label>
     <div class="input-with-feedback">
-      <input type="text" value={coolText} oninput={onCoolInput} placeholder="e.g. 1d" />
+      <input type="text" value={coolText} oninput={onCoolInput} onblur={commitCool} onkeydown={(e) => { if (e.key === 'Enter') { commitCool(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 1d" />
       {#if coolFeedback && coolFeedback !== "invalid"}
         <span class="feedback ok">{coolFeedback}</span>
       {:else if coolFeedback === "invalid"}
@@ -138,9 +156,9 @@
     gap: 0.75rem;
     align-items: flex-end;
     flex-wrap: wrap;
-    background: #161b22;
-    border: 1px solid #2d333b;
-    border-radius: 6px;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
     padding: 0.6rem 0.75rem;
   }
 
@@ -153,17 +171,17 @@
 
   .field label {
     font-size: 0.65rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
 
   .field select,
   .field input {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.3rem 0.4rem;
     font-size: 0.8rem;
   }
@@ -180,12 +198,13 @@
 
   .field input[type="text"] {
     width: 80px;
+    text-align: right;
   }
 
   .field select:focus,
   .field input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .input-group {
@@ -196,7 +215,7 @@
 
   .unit {
     font-size: 0.7rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
   }
 
   .input-with-feedback {
@@ -211,10 +230,45 @@
   }
 
   .feedback.ok {
-    color: #7ee787;
+    color: var(--c-green-text);
   }
 
   .feedback.err {
-    color: #f85149;
+    color: var(--c-red);
+  }
+
+  @media (max-width: 640px) {
+    .beam-bar {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+    }
+
+    .field label {
+      font-size: 0.75rem;
+    }
+
+    .field select,
+    .field input {
+      width: 100%;
+      padding: 0.4rem 0.5rem;
+      font-size: 16px;
+    }
+
+    .field select {
+      width: 100%;
+    }
+
+    .input-group input {
+      width: 100%;
+    }
+
+    .field input[type="text"] {
+      width: 100%;
+    }
+
+    .field:last-child {
+      grid-column: 1 / -1;
+    }
   }
 </style>

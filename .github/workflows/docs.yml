@@ -1,18 +1,17 @@
-name: Deploy docs
+# Docs are now built as part of deploy-frontend.yml and served at /docs/
+# This workflow only validates the docs build (no deploy).
+name: Validate docs
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
 
 jobs:
   build:
@@ -23,20 +22,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dependencies
-        run: |
-          pip install -e ".[docs]"
-      - name: Build docs
+        run: pip install -e ".[docs]"
+      - name: Build docs (validation only)
         run: mkdocs build -d site
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/deploy-pages@v4
-        id: deployment

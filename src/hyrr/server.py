@@ -69,6 +69,7 @@ async def lifespan(app: FastAPI):
 
 # ─── Pydantic models ────────────────────────────────────────────────
 
+
 class BeamConfig(BaseModel):
     projectile: str
     energy_MeV: float = Field(gt=0, le=200)
@@ -172,4 +173,5 @@ async def health() -> dict[str, str]:
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("hyrr.server:app", host="0.0.0.0", port=8000, reload=True)

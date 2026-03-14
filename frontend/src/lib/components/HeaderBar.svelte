@@ -1,12 +1,16 @@
 <script lang="ts">
   import { toggleHistory, getHistoryOpen } from "../stores/ui.svelte";
-  import { setConfig } from "../stores/config.svelte";
+  import { setConfig, resetConfig } from "../stores/config.svelte";
   import { PRESETS } from "../presets";
   import SessionTabs from "./SessionTabs.svelte";
-  import BugReportModal from "./BugReportModal.svelte";
+  import HelpModal from "./HelpModal.svelte";
+  import { openBugReport } from "../stores/bugreport.svelte";
+  import { cycleTheme, getThemeMode, getResolvedTheme } from "../stores/theme.svelte";
 
   let historyOpen = $derived(getHistoryOpen());
-  let bugReportOpen = $state(false);
+  let helpOpen = $state(false);
+  let themeMode = $derived(getThemeMode());
+  let resolved = $derived(getResolvedTheme());
 
   function feelingLucky() {
     const idx = Math.floor(Math.random() * PRESETS.length);
@@ -15,18 +19,47 @@
 </script>
 
 <header class="header-bar">
-  <div class="tab-strip">
+  <button class="home-btn" onclick={resetConfig} title="New simulation">
     <img src="/hyrr/logo.svg" alt="HYRR logo" class="logo" />
-    <h1 class="title">HYRR</h1>
+    <span class="title">HYRR</span>
+  </button>
+
+  <div class="tab-strip">
     <SessionTabs />
-    <button class="lucky-btn" onclick={feelingLucky} title="Load random preset">
+    <button class="tab lucky-tab" onclick={feelingLucky} title="Load random preset">
       Feeling Lucky
     </button>
   </div>
 
   <div class="actions">
+    <button
+      class="icon-btn"
+      onclick={cycleTheme}
+      title="Theme: {themeMode} ({resolved})"
+    >
+      {#if themeMode === "auto"}
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 1a7 7 0 100 14A7 7 0 008 1zM0 8a8 8 0 1116 0A8 8 0 010 8zm8-5.5v11a5.5 5.5 0 000-11z"></path>
+        </svg>
+      {:else if resolved === "light"}
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 12a4 4 0 100-8 4 4 0 000 8zm0 1A5 5 0 108 3a5 5 0 000 10zm5.657-9.657a.75.75 0 010 1.06l-.707.707a.75.75 0 11-1.06-1.06l.707-.707a.75.75 0 011.06 0zM3.404 11.89a.75.75 0 010 1.06l-.707.707a.75.75 0 01-1.06-1.06l.707-.707a.75.75 0 011.06 0zM8 0a.75.75 0 01.75.75v1a.75.75 0 01-1.5 0v-1A.75.75 0 018 0zm0 13a.75.75 0 01.75.75v1a.75.75 0 01-1.5 0v-1A.75.75 0 018 13zm7-5a.75.75 0 01-.75.75h-1a.75.75 0 010-1.5h1A.75.75 0 0115 8zM2 8a.75.75 0 01-.75.75h-1a.75.75 0 010-1.5h1A.75.75 0 012 8zm10.596-4.596a.75.75 0 010 1.06l-.707.707a.75.75 0 01-1.06-1.06l.707-.707a.75.75 0 011.06 0z"></path>
+        </svg>
+      {:else}
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M9.598 1.591a.749.749 0 01.785-.175 7.001 7.001 0 01-.785 13.168.748.748 0 01-.785-.175.748.748 0 01.175-.786A5.5 5.5 0 009.5 8a5.5 5.5 0 00-.512-2.323.749.749 0 01.61-1.086z"></path>
+        </svg>
+      {/if}
+    </button>
+
+    <button class="icon-btn" onclick={() => helpOpen = true} title="Help">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M0 8a8 8 0 1116 0A8 8 0 010 8zm8-6.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM6.92 6.085h.001a.749.749 0 11-1.342-.67c.169-.339.436-.701.849-.977C6.845 4.16 7.369 4 8 4a2.756 2.756 0 011.637.525c.503.377.863.965.863 1.725 0 .448-.115.83-.329 1.15-.205.307-.478.513-.708.662-.04.027-.08.049-.118.07h-.001l-.001.001v.001L9 8.5l-.343.356a.756.756 0 01-.214.468.751.751 0 01-.788.103.751.751 0 01-.453-.685v-.399c0-.199.079-.39.22-.53.14-.14.332-.22.53-.22h.001l.003-.002.005-.003.025-.016a1.514 1.514 0 00.21-.159c.163-.142.252-.296.252-.478 0-.263-.128-.467-.335-.623A1.26 1.26 0 008 5.5c-.369 0-.626.1-.806.224a1.132 1.132 0 00-.358.447l-.002.005zM9 11a1 1 0 11-2 0 1 1 0 012 0z"></path>
+      </svg>
+    </button>
+
     <a
-      href="https://github.com/MorePET/hyrr"
+      href="https://github.com/exoma-ch/hyrr"
       target="_blank"
       rel="noopener noreferrer"
       class="icon-btn"
@@ -37,7 +70,7 @@
       </svg>
     </a>
 
-    <button class="icon-btn" onclick={() => bugReportOpen = true} title="Report a bug">
+    <button class="icon-btn" onclick={openBugReport} title="Report a bug">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
         <path d="M4.72.22a.75.75 0 011.06 0l1 1a.75.75 0 01-1.06 1.06l-.293-.293A3.5 3.5 0 008 5.5h.001A3.5 3.5 0 0010.56 1.99l-.293.293a.75.75 0 01-1.06-1.06l1-1a.75.75 0 011.06 0l1 1a.75.75 0 11-1.06 1.06l-.294-.294A4.992 4.992 0 0112.993 5H13.5a.75.75 0 010 1.5h-.333A5.02 5.02 0 0113 7.25v.25h1.25a.75.75 0 010 1.5H13v.25c0 .37-.04.736-.117 1.086l.36.07a.75.75 0 01-.294 1.472l-.36-.07A5.003 5.003 0 018 16a5.003 5.003 0 01-4.589-4.192l-.36.07a.75.75 0 11-.294-1.472l.36-.07A5.02 5.02 0 013 9.25V9H1.75a.75.75 0 010-1.5H3v-.25c0-.263.023-.522.067-.775H2.75a.75.75 0 010-1.5h.743a4.992 4.992 0 012.24-3.012L5.44 1.67l-.293.293A.75.75 0 014.08 1.28l.22-.22zM4.5 7.25V9.5a3.5 3.5 0 107 0V7.25a3.5 3.5 0 00-7 0z"></path>
       </svg>
@@ -51,82 +84,105 @@
   </div>
 </header>
 
-<BugReportModal open={bugReportOpen} onclose={() => bugReportOpen = false} />
+<HelpModal open={helpOpen} onclose={() => helpOpen = false} />
 
 <style>
   .header-bar {
     display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    padding: 0.5rem 0.75rem 0;
-    border-bottom: 1px solid #2d333b;
-    margin-bottom: 0.75rem;
-    position: relative;
+    align-items: stretch;
+    height: 36px;
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    margin: 0 0 0.75rem;
+    background: var(--c-bg-subtle);
+    overflow: hidden;
+  }
+
+  .home-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: none;
+    border: none;
+    border-right: 1px solid var(--c-border);
+    cursor: pointer;
+    padding: 0 0.75rem;
+    flex-shrink: 0;
+    opacity: 0.9;
+    transition: opacity 0.15s;
+  }
+
+  .home-btn:hover {
+    opacity: 1;
+    background: var(--c-bg-hover);
+  }
+
+  .logo {
+    height: 22px;
+    width: 22px;
+    object-fit: contain;
+  }
+
+  .title {
+    font-size: 0.85rem;
+    letter-spacing: 0.1em;
+    color: var(--c-accent);
+    white-space: nowrap;
+    font-weight: 700;
   }
 
   .tab-strip {
     display: flex;
-    align-items: flex-end;
-    gap: 0.35rem;
+    align-items: stretch;
     flex: 1;
     min-width: 0;
+    overflow: hidden;
   }
 
-  .logo {
-    height: 42px;
-    width: 42px;
-    object-fit: contain;
-    flex-shrink: 0;
-    margin-bottom: 0.1rem;
-  }
-
-  .title {
-    margin: 0;
-    font-size: 1.3rem;
-    letter-spacing: 0.1em;
-    color: #58a6ff;
-    padding-bottom: 0.3rem;
-    padding-right: 0.25rem;
-    white-space: nowrap;
-    line-height: 1;
-    flex-shrink: 0;
-  }
-
-  .lucky-btn {
-    background: #1c2128;
-    border: 1px solid #2d333b;
-    border-bottom: none;
-    border-radius: 10px 10px 0 0;
-    color: #d29922;
-    padding: 0.3rem 0.7rem;
-    height: 24px;
+  /* Feeling Lucky tab */
+  .tab {
+    box-sizing: border-box;
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--c-border);
     font-size: 0.72rem;
     cursor: pointer;
-    font-weight: 500;
     white-space: nowrap;
     flex-shrink: 0;
-    transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
   }
 
-  .lucky-btn:hover {
-    background: #21262d;
-    color: #e3b341;
+  .lucky-tab {
+    padding: 0 0.7rem;
+    color: var(--c-gold);
+    font-weight: 500;
+    border-left: 1px solid var(--c-border);
+    margin-left: auto;
+  }
+
+  .lucky-tab:hover {
+    background: var(--c-bg-hover);
+    color: var(--c-gold-hover);
   }
 
   .actions {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding-bottom: 0.3rem;
+    gap: 0.3rem;
+    padding: 0 0.5rem;
     flex-shrink: 0;
+    border-left: 1px solid var(--c-border);
   }
 
   .icon-btn {
     background: none;
     border: 1px solid transparent;
     border-radius: 4px;
-    color: #8b949e;
-    padding: 0.3rem;
+    color: var(--c-text-muted);
+    padding: 0.25rem;
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -135,12 +191,34 @@
   }
 
   .icon-btn:hover {
-    color: #e1e4e8;
-    border-color: #2d333b;
+    color: var(--c-text);
+    border-color: var(--c-border);
   }
 
   .icon-btn.active {
-    color: #58a6ff;
-    border-color: #58a6ff;
+    color: var(--c-accent);
+    border-color: var(--c-accent);
+  }
+
+  @media (max-width: 640px) {
+    .header-bar {
+      height: 44px;
+    }
+
+    .title {
+      display: none;
+    }
+
+    .lucky-tab {
+      display: none;
+    }
+
+    .icon-btn {
+      padding: 0.4rem;
+    }
+
+    .tab {
+      font-size: 0.8rem;
+    }
   }
 </style>

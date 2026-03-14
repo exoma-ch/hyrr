@@ -33,6 +33,9 @@ export interface DatabaseProtocol {
 
   getDecayData(Z: number, A: number, state?: string): DecayData | null;
 
+  /** Gamma dose rate constant k (µSv·m²/MBq·h) with source quality tag. */
+  getDoseConstant(Z: number, A: number, state?: string): { k: number; source: string } | null;
+
   getElementSymbol(Z: number): string;
 
   getElementZ(symbol: string): number;
@@ -181,6 +184,8 @@ export interface LayerResult {
   depthProfile: DepthPoint[];
   isotopeResults: Map<string, IsotopeResult>;
   stoppingPowerSources: Map<number, string>;
+  /** Per-isotope production rate vs depth [atoms/s/cm] at each depth point. */
+  depthProductionRates?: Map<string, Float64Array>;
 }
 
 export interface StackResult {

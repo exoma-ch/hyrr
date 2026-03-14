@@ -71,7 +71,7 @@
   }
 
   .empty {
-    color: #484f58;
+    color: var(--c-text-faint);
     font-style: italic;
     font-size: 0.8rem;
     margin: 0;
@@ -79,9 +79,9 @@
 
   .add-btn {
     background: none;
-    border: 1px dashed #2d333b;
+    border: 1px dashed var(--c-border);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.5rem;
     font-size: 0.8rem;
     cursor: pointer;
@@ -89,7 +89,7 @@
   }
 
   .add-btn:hover {
-    border-color: #238636;
-    color: #238636;
+    border-color: var(--c-green);
+    color: var(--c-green);
   }
 </style>

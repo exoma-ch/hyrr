@@ -16,7 +16,7 @@ import numpy as np
 import numpy.typing as npt
 import scipy.constants as const
 
-from hyrr.geometry import MaterialInfo, RaySegment, TetrahedralMesh, cast_pencil_beam
+from hyrr.geometry import RaySegment, TetrahedralMesh, cast_pencil_beam
 from hyrr.models import Beam, IsotopeResult
 from hyrr.production import bateman_activity, compute_production_rate, saturation_yield
 from hyrr.stopping import bohr_straggling_variance_per_cm, dedx_MeV_per_cm
@@ -32,6 +32,8 @@ class TetResult:
     tet_index: int
     material_id: int
     isotope_production_rates: dict[str, float] = field(default_factory=dict)
+    energy_deposited_MeV: float = 0.0
+    volume_cm3: float = 0.0
     n_rays_hit: int = 0
 
 
@@ -65,6 +67,7 @@ def compute_3d(
     beam_position: npt.NDArray[np.float64] | None = None,
     beam_direction: npt.NDArray[np.float64] | None = None,
     beam_radius_cm: float | None = None,
+    progress: bool = True,
 ) -> Geometry3DResult:
     """Run a 3D pencil-beam simulation through a tetrahedral mesh.
 
@@ -86,6 +89,7 @@ def compute_3d(
         beam_position: Override beam center origin [cm], shape (3,).
         beam_direction: Override beam direction (unit vector), shape (3,).
         beam_radius_cm: Override beam spot radius [cm].
+        progress: Show tqdm progress bar (default True).
 
     Returns:
         Geometry3DResult with per-tet and per-solid production.
@@ -111,15 +115,34 @@ def compute_3d(
     # Per-solid (material_id) rate accumulators
     solid_rates: dict[int, dict[str, float]] = defaultdict(lambda: defaultdict(float))
 
-    for ray_segments in rays:
+    if progress:
+        from tqdm.auto import tqdm
+
+        ray_iter = tqdm(rays, desc="Rays", unit="ray")
+    else:
+        ray_iter = rays
+
+    for ray_segments in ray_iter:
         _process_ray(
-            db, mesh, beam, proj, ray_segments,
-            irradiation_time_s, tet_results, solid_rates,
+            db,
+            mesh,
+            beam,
+            proj,
+            ray_segments,
+            irradiation_time_s,
+            tet_results,
+            solid_rates,
         )
 
     # Build SolidResults with Bateman equations
     solid_results: dict[int, SolidResult] = {}
-    for mat_id, rates in solid_rates.items():
+    solid_items = list(solid_rates.items())
+    if progress:
+        from tqdm.auto import tqdm
+
+        solid_items = tqdm(solid_items, desc="Bateman", unit="solid")
+
+    for mat_id, rates in solid_items:
         mat_info = mesh.materials[mat_id]
         iso_results: dict[str, IsotopeResult] = {}
 
@@ -133,7 +156,10 @@ def compute_3d(
             half_life = decay.half_life_s if decay else None
 
             time_grid, activity = bateman_activity(
-                avg_rate, half_life, irradiation_time_s, cooling_time_s,
+                avg_rate,
+                half_life,
+                irradiation_time_s,
+                cooling_time_s,
             )
             sat_yield = saturation_yield(avg_rate, half_life, beam.current_mA)
 
@@ -176,7 +202,7 @@ def _process_ray(
 ) -> None:
     """Process a single ray through the mesh, accumulating results."""
     energy = beam.energy_MeV
-    sigma_sq = beam.energy_spread_MeV ** 2
+    sigma_sq = beam.energy_spread_MeV**2
 
     for seg in segments:
         mat_info = mesh.materials[seg.material_id]
@@ -189,14 +215,20 @@ def _process_ray(
 
         # Energy out for this segment
         energy_out = _compute_segment_energy_out(
-            dedx_fn, energy, seg.path_length_cm, n_steps=100,
+            dedx_fn,
+            energy,
+            seg.path_length_cm,
+            n_steps=100,
         )
         if energy_out <= 0:
             break
 
         # Straggling
         dsig2_dz = bohr_straggling_variance_per_cm(
-            proj.Z, composition, density, mat_info.atomic_masses,
+            proj.Z,
+            composition,
+            density,
+            mat_info.atomic_masses,
         )
         sigma_E_out_sq = sigma_sq + dsig2_dz * seg.path_length_cm
 
@@ -205,15 +237,17 @@ def _process_ray(
         _ds2 = dsig2_dz
         sigma_E_fn = None
         if _s0_sq > 1e-18 or _ds2 * seg.path_length_cm > 1e-18:
-            sigma_E_fn = lambda z, s0=_s0_sq, ds=_ds2: (s0 + ds * z) ** 0.5
+
+            def sigma_E_fn(z, s0=_s0_sq, ds=_ds2):
+                return (s0 + ds * z) ** 0.5
 
         # Volume and atom count for the segment
         # Approximate: cylindrical segment with beam area
         area = np.pi * 1.0**2  # placeholder 1 cm² per ray
         volume = seg.path_length_cm * area
-        avg_A = sum(
-            w * mat_info.atomic_masses[Z] for Z, w in composition
-        ) / sum(w for _, w in composition)
+        avg_A = sum(w * mat_info.atomic_masses[Z] for Z, w in composition) / sum(
+            w for _, w in composition
+        )
         n_atoms = density * volume * const.Avogadro / avg_A
 
         # Initialize tet result
@@ -223,6 +257,8 @@ def _process_ray(
                 material_id=seg.material_id,
             )
         tet_results[seg.tet_index].n_rays_hit += 1
+        tet_results[seg.tet_index].energy_deposited_MeV += energy - energy_out
+        tet_results[seg.tet_index].volume_cm3 = volume
 
         # Production for each cross-section in the material
         # This requires knowing which isotopes are in the material
@@ -231,8 +267,8 @@ def _process_ray(
             if w_i <= 0:
                 continue
             abundances = db.get_natural_abundances(Z_i)
-            for A_iso, abundance in abundances.items():
-                weight = w_i * abundance
+            for A_iso, (frac_abundance, _atomic_mass) in abundances.items():
+                weight = w_i * frac_abundance
                 xs_list = db.get_cross_sections(beam.projectile, Z_i, A_iso)
                 for xs in xs_list:
                     prate, _, _, _ = compute_production_rate(
@@ -254,7 +290,9 @@ def _process_ray(
                     name = f"{symbol}-{xs.residual_A}{state_suffix}"
 
                     tet_results[seg.tet_index].isotope_production_rates[name] = (
-                        tet_results[seg.tet_index].isotope_production_rates.get(name, 0.0)
+                        tet_results[seg.tet_index].isotope_production_rates.get(
+                            name, 0.0
+                        )
                         + scaled_rate
                     )
                     solid_rates[seg.material_id][name] += scaled_rate
@@ -295,9 +333,9 @@ def _parse_isotope_name(
     state = ""
     a_str = rest
     for suffix in ("m2", "m", "g"):
-        if rest.endswith(suffix) and rest[:-len(suffix)].isdigit():
+        if rest.endswith(suffix) and rest[: -len(suffix)].isdigit():
             state = suffix
-            a_str = rest[:-len(suffix)]
+            a_str = rest[: -len(suffix)]
             break
 
     Z = db.get_element_Z(symbol)

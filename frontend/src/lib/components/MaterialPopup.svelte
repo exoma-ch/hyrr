@@ -15,15 +15,17 @@
   interface Props {
     open: boolean;
     onclose: () => void;
-    onselect: (material: string) => void;
+    onselect: (material: string, enrichment?: Record<string, Record<number, number>>) => void;
     /** Open the enrichment popup for an element */
     onenrichment?: (element: string) => void;
     /** Current layer's enrichment overrides (for display) */
     currentEnrichment?: Record<string, Record<number, number>>;
     materials: MaterialInfo[];
+    /** If set, auto-open editor for this custom material ID when popup opens */
+    editMaterialId?: string | null;
   }
 
-  let { open, onclose, onselect, onenrichment, currentEnrichment, materials }: Props = $props();
+  let { open, onclose, onselect, onenrichment, currentEnrichment, materials, editMaterialId = null }: Props = $props();
 
   let query = $state("");
   let defineOpen = $state(false);
@@ -37,7 +39,20 @@
 
   $effect(() => {
     if (open) {
-      loadCustomMaterials();
+      loadCustomMaterials().then(() => {
+        if (editMaterialId) {
+          const cm = getCustomMaterials().find((m) => m.id === editMaterialId);
+          if (cm) {
+            defineOpen = true;
+            newFormula = cm.originalInput ?? cm.formula;
+            newName = cm.name;
+            nameManuallySet = true;
+            newDensity = cm.density;
+            editingCustomId = cm.id;
+            return;
+          }
+        }
+      });
       query = "";
       defineOpen = false;
       newFormula = "";
@@ -58,6 +73,8 @@
     elements: string[];
     density: number | null;
     autoName: string;
+    /** For mass-ratio materials: element → mass fraction (0–1). */
+    massFractions?: Record<string, number>;
   }
 
   type ParseResult = { ok: ParsedMaterial } | { error: string } | null;
@@ -115,15 +132,36 @@
       remainder[0].pct = rest;
     }
 
-    const formula = entries.map((e) => e.symbol).join("");
+    // Convert wt% to atom fractions using atomic masses for stoichiometric formula
+    const massFractions: Record<string, number> = {};
+    const moles: Record<string, number> = {};
+    let totalMoles = 0;
     let density = 0;
     const nameParts: string[] = [];
+
     for (const e of entries) {
-      density += ((e.pct ?? 0) / 100) * (ELEMENT_DENSITIES[e.symbol] ?? 5);
+      const wt = (e.pct ?? 0) / 100;
+      massFractions[e.symbol] = wt;
+      const atomicWeight = STANDARD_ATOMIC_WEIGHT[e.symbol] ?? 1;
+      const mol = wt / atomicWeight;
+      moles[e.symbol] = mol;
+      totalMoles += mol;
+      density += wt * (ELEMENT_DENSITIES[e.symbol] ?? 5);
       nameParts.push(`${e.symbol}${Math.round(e.pct ?? 0)}`);
     }
 
-    return { ok: { type: "mass-ratio", formula, elements: entries.map((e) => e.symbol), density, autoName: nameParts.join("-") } };
+    // Build stoichiometric formula from atom fractions (normalize to smallest)
+    const atomFracs = entries.map((e) => ({ symbol: e.symbol, frac: moles[e.symbol] / totalMoles }));
+    const minFrac = Math.min(...atomFracs.map((a) => a.frac));
+    const formula = atomFracs
+      .map((a) => {
+        const ratio = a.frac / minFrac;
+        const rounded = Math.round(ratio * 100) / 100;
+        return rounded === 1 ? a.symbol : `${a.symbol}${rounded}`;
+      })
+      .join("");
+
+    return { ok: { type: "mass-ratio", formula, elements: entries.map((e) => e.symbol), density, autoName: nameParts.join("-"), massFractions } };
   }
 
   /** Live preview — pure derived, no state mutations. */
@@ -168,11 +206,12 @@
     formulaError = null;
     try {
       if (editingCustomId) {
-        await updateCustomMaterial(editingCustomId, nameVal, preview.formula, densityVal);
+        await updateCustomMaterial(editingCustomId, nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim(), currentEnrichment);
       } else {
-        await saveCustomMaterial(nameVal, preview.formula, densityVal);
+        await saveCustomMaterial(nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim(), currentEnrichment);
       }
-      onselect(preview.formula);
+      // Use name as layer identifier so resolveMaterial can look up stored composition
+      onselect(nameVal, currentEnrichment);
       onclose();
     } catch {
       formulaError = "Failed to save";
@@ -284,7 +323,15 @@
   }
 
   function select(entry: MaterialInfo) {
-    onselect(entry.formula ?? entry.path);
+    // For custom materials with mass fractions, use the name as identifier
+    // so resolveMaterial can look up the stored composition
+    const custom = findCustomEntry(entry);
+    if (custom) {
+      const cm = getCustomMaterials().find((m) => m.id === custom.customId);
+      onselect(custom.name, cm?.enrichment);
+    } else {
+      onselect(entry.formula ?? entry.path);
+    }
     onclose();
   }
 
@@ -303,7 +350,9 @@
   function editCustomMaterial(entry: MaterialInfo & { customId: string }, event: Event) {
     event.stopPropagation();
     defineOpen = true;
-    newFormula = entry.formula ?? "";
+    // Restore original input (wt% string) if available, otherwise fall back to formula
+    const cm = getCustomMaterials().find((m) => m.id === entry.customId);
+    newFormula = cm?.originalInput ?? entry.formula ?? "";
     newName = entry.name;
     nameManuallySet = true;
     newDensity = entry.density_g_cm3 ?? null;
@@ -391,7 +440,7 @@
               class="field-input"
               placeholder="Al2O3  or  Al 80%, Cu 5%, Zn %"
               bind:value={newFormula}
-              oninput={() => { formulaError = null; nameManuallySet = false; }}
+              oninput={() => { formulaError = null; if (!editingCustomId) nameManuallySet = false; }}
             />
           </label>
           <p class="hint">Stoichiometric formula or mass ratios (comma-separated with %)</p>
@@ -399,16 +448,16 @@
           {#if formulaPreview}
             <div class="preview">
               <span class="preview-type">{formulaPreview.type}</span>
-              <span class="preview-elements">{formulaPreview.elements.join(", ")}</span>
-              {#if onenrichment}
-                {#each formulaPreview.elements as el}
-                  <button
-                    class="el-badge"
-                    class:enriched={!!currentEnrichment?.[el]}
-                    onclick={() => onenrichment?.(el)}
-                  >{el}</button>
-                {/each}
+              {#if formulaPreview.type === "mass-ratio"}
+                <span class="preview-formula">{formulaPreview.formula}</span>
               {/if}
+              {#each formulaPreview.elements as el}
+                <button
+                  class="el-badge"
+                  class:enriched={!!currentEnrichment?.[el]}
+                  onclick={() => onenrichment?.(el)}
+                >{el}</button>
+              {/each}
             </div>
           {/if}
 
@@ -472,19 +521,19 @@
 
   .search {
     flex: 1;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.4rem 0.5rem;
     font-size: 0.85rem;
     box-sizing: border-box;
   }
 
-  .search:focus { outline: none; border-color: #58a6ff; }
+  .search:focus { outline: none; border-color: var(--c-accent); }
 
   .use-btn {
-    background: #238636;
+    background: var(--c-green);
     border: none;
     border-radius: 4px;
     color: white;
@@ -494,29 +543,29 @@
     flex-shrink: 0;
   }
 
-  .use-btn:hover { background: #2ea043; }
+  .use-btn:hover { background: var(--c-green-emphasis); }
 
   .enrichment-row {
     display: flex;
     align-items: center;
     gap: 0.3rem;
     padding: 0.25rem 0.4rem;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
   }
 
   .enr-label {
     font-size: 0.7rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     margin-right: 0.2rem;
   }
 
   .el-badge {
-    background: #21262d;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.7rem;
     font-weight: 500;
     padding: 0.15rem 0.35rem;
@@ -524,19 +573,19 @@
     line-height: 1;
   }
 
-  .el-badge:hover { border-color: #58a6ff; color: #58a6ff; }
+  .el-badge:hover { border-color: var(--c-accent); color: var(--c-accent); }
 
   .el-badge.enriched {
-    border-color: #d29922;
-    color: #d29922;
-    background: rgba(210, 153, 34, 0.1);
+    border-color: var(--c-gold);
+    color: var(--c-gold);
+    background: var(--c-gold-tint-subtle);
   }
 
   .enr-dot {
     display: inline-block;
     width: 4px;
     height: 4px;
-    background: #d29922;
+    background: var(--c-gold);
     border-radius: 50%;
     margin-left: 0.2rem;
     vertical-align: middle;
@@ -561,7 +610,7 @@
     text-align: left;
     background: none;
     border: none;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.3rem 0.5rem;
     cursor: pointer;
     display: flex;
@@ -571,7 +620,7 @@
     border-radius: 4px;
   }
 
-  .result-item:hover { background: #1c2128; }
+  .result-item:hover { background: var(--c-bg-hover); }
 
   .mat-name {
     font-weight: 500;
@@ -582,8 +631,8 @@
 
   .badge-custom {
     font-size: 0.6rem;
-    background: #1f3a5f;
-    color: #58a6ff;
+    background: var(--c-bg-active);
+    color: var(--c-accent);
     padding: 0.05rem 0.35rem;
     border-radius: 3px;
     font-weight: 400;
@@ -592,25 +641,25 @@
 
   .badge-el {
     font-size: 0.6rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     font-weight: 400;
   }
 
   .mat-meta {
     font-size: 0.65rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     display: flex;
     gap: 0.5rem;
   }
 
-  .formula { color: #58a6ff; }
-  .density { color: #7ee787; }
+  .formula { color: var(--c-accent); }
+  .density { color: var(--c-green-text); }
 
   .edit-btn, .delete-btn {
     position: absolute;
     background: none;
     border: none;
-    color: #484f58;
+    color: var(--c-text-faint);
     font-size: 0.85rem;
     cursor: pointer;
     padding: 0.1rem 0.3rem;
@@ -621,25 +670,25 @@
   .edit-btn { right: 1.6rem; }
   .delete-btn { right: 0.3rem; font-size: 1rem; }
 
-  .edit-btn:hover { color: #58a6ff; background: rgba(88, 166, 255, 0.1); }
-  .delete-btn:hover { color: #f85149; background: rgba(248, 81, 73, 0.1); }
+  .edit-btn:hover { color: var(--c-accent); background: var(--c-accent-tint-subtle); }
+  .delete-btn:hover { color: var(--c-red); background: var(--c-red-tint-subtle); }
 
   .no-results {
-    color: #484f58;
+    color: var(--c-text-faint);
     font-style: italic;
     font-size: 0.8rem;
     padding: 0.5rem;
   }
 
   .define-section {
-    border-top: 1px solid #2d333b;
+    border-top: 1px solid var(--c-border);
     padding-top: 0.5rem;
   }
 
   .define-toggle {
     background: none;
     border: none;
-    color: #58a6ff;
+    color: var(--c-accent);
     font-size: 0.8rem;
     cursor: pointer;
     padding: 0.2rem 0;
@@ -648,7 +697,7 @@
     gap: 0.3rem;
   }
 
-  .define-toggle:hover { color: #79c0ff; }
+  .define-toggle:hover { color: var(--c-accent-hover); }
   .toggle-icon { font-size: 0.7rem; }
 
   .define-form {
@@ -657,8 +706,8 @@
     gap: 0.5rem;
     margin-top: 0.5rem;
     padding: 0.5rem;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
   }
 
@@ -667,29 +716,29 @@
     flex-direction: column;
     gap: 0.2rem;
     font-size: 0.75rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
   }
 
   .field-input {
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.3rem 0.5rem;
     font-size: 0.8rem;
   }
 
-  .field-input:focus { outline: none; border-color: #58a6ff; }
+  .field-input:focus { outline: none; border-color: var(--c-accent); }
 
   .field-hint {
     font-size: 0.6rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     font-style: italic;
   }
 
   .hint {
     font-size: 0.65rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     margin: 0;
     font-style: italic;
   }
@@ -699,25 +748,28 @@
     align-items: center;
     gap: 0.4rem;
     padding: 0.3rem 0.4rem;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     font-size: 0.75rem;
   }
 
   .preview-type {
-    color: #7ee787;
+    color: var(--c-green-text);
     font-size: 0.6rem;
     text-transform: uppercase;
     font-weight: 500;
   }
 
-  .preview-elements {
-    color: #8b949e;
+  .preview-formula {
+    color: var(--c-text-label);
+    font-weight: 500;
+    font-family: monospace;
+    font-size: 0.8rem;
   }
 
   .form-error {
-    color: #f85149;
+    color: var(--c-red);
     font-size: 0.75rem;
     margin: 0;
   }
@@ -729,20 +781,20 @@
   }
 
   .use-formula-btn {
-    background: #21262d;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.3rem 0.6rem;
     font-size: 0.75rem;
     cursor: pointer;
   }
 
-  .use-formula-btn:hover:not(:disabled) { border-color: #58a6ff; color: #e1e4e8; }
+  .use-formula-btn:hover:not(:disabled) { border-color: var(--c-accent); color: var(--c-text); }
   .use-formula-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .save-btn {
-    background: #238636;
+    background: var(--c-green);
     border: none;
     border-radius: 4px;
     color: white;
@@ -751,6 +803,6 @@
     cursor: pointer;
   }
 
-  .save-btn:hover:not(:disabled) { background: #2ea043; }
+  .save-btn:hover:not(:disabled) { background: var(--c-green-emphasis); }
   .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

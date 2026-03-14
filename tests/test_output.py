@@ -34,10 +34,12 @@ from hyrr.output import (
 def sample_isotope_result() -> IsotopeResult:
     """Synthetic Tc-99m isotope result with irradiation + decay curve."""
     time = np.linspace(0, 172800, 200)
-    activity = np.concatenate([
-        1e10 * (1 - np.exp(-0.001 * time[:100])),
-        1e10 * 0.632 * np.exp(-np.log(2) / 21636 * np.linspace(0, 86400, 100)),
-    ])
+    activity = np.concatenate(
+        [
+            1e10 * (1 - np.exp(-0.001 * time[:100])),
+            1e10 * 0.632 * np.exp(-np.log(2) / 21636 * np.linspace(0, 86400, 100)),
+        ]
+    )
     return IsotopeResult(
         name="Tc-99m",
         Z=43,
@@ -324,11 +326,23 @@ class TestCsvBundle:
                 reader = csv.reader(io.TextIOWrapper(f))
                 header = next(reader)
         expected = [
-            "layer_index", "isotope", "Z", "A", "state", "half_life_s",
-            "production_rate", "activity_Bq", "saturation_yield_Bq_uA",
-            "energy_in_MeV", "energy_out_MeV", "delta_E_MeV", "heat_kW",
-            "stopping_power_source", "source",
-            "activity_direct_Bq", "activity_ingrowth_Bq",
+            "layer_index",
+            "isotope",
+            "Z",
+            "A",
+            "state",
+            "half_life_s",
+            "production_rate",
+            "activity_Bq",
+            "saturation_yield_Bq_uA",
+            "energy_in_MeV",
+            "energy_out_MeV",
+            "delta_E_MeV",
+            "heat_kW",
+            "stopping_power_source",
+            "source",
+            "activity_direct_Bq",
+            "activity_ingrowth_Bq",
         ]
         assert header == expected
 
@@ -369,9 +383,17 @@ class TestCsvBundle:
                 reader = csv.reader(io.TextIOWrapper(f))
                 header = next(reader)
         expected = [
-            "isotope", "Z", "A", "state", "half_life_s",
-            "production_rate", "activity_Bq", "saturation_yield_Bq_uA",
-            "source", "activity_direct_Bq", "activity_ingrowth_Bq",
+            "isotope",
+            "Z",
+            "A",
+            "state",
+            "half_life_s",
+            "production_rate",
+            "activity_Bq",
+            "saturation_yield_Bq_uA",
+            "source",
+            "activity_direct_Bq",
+            "activity_ingrowth_Bq",
         ]
         assert header == expected
 

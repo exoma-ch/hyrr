@@ -96,7 +96,9 @@ def discover_chains(
                 half_life = decay.half_life_s
                 modes = list(decay.decay_modes)
             isotope_map[key] = ChainIsotope(
-                Z=Z, A=A, state=state,
+                Z=Z,
+                A=A,
+                state=state,
                 half_life_s=half_life,
                 production_rate=rate,
                 decay_modes=modes,
@@ -122,7 +124,9 @@ def discover_chains(
             dkey = (mode.daughter_Z, mode.daughter_A, mode.daughter_state)
             if dkey not in isotope_map:
                 decay = db.get_decay_data(
-                    mode.daughter_Z, mode.daughter_A, mode.daughter_state,
+                    mode.daughter_Z,
+                    mode.daughter_A,
+                    mode.daughter_state,
                 )
                 d_half: float | None = None
                 d_modes: list[DecayMode] = []
@@ -130,14 +134,16 @@ def discover_chains(
                     d_half = decay.half_life_s
                     d_modes = list(decay.decay_modes)
                 isotope_map[dkey] = ChainIsotope(
-                    Z=mode.daughter_Z, A=mode.daughter_A,
+                    Z=mode.daughter_Z,
+                    A=mode.daughter_A,
                     state=mode.daughter_state,
                     half_life_s=d_half,
                     production_rate=0.0,
                     decay_modes=d_modes,
                 )
-                queue.append((mode.daughter_Z, mode.daughter_A,
-                              mode.daughter_state, depth + 1))
+                queue.append(
+                    (mode.daughter_Z, mode.daughter_A, mode.daughter_state, depth + 1)
+                )
 
     # Topological sort: parents before daughters
     return _topological_sort(isotope_map)
@@ -255,7 +261,8 @@ def solve_chain(
 
     # Nominal production rate vector (at nominal beam current)
     R_nominal = np.array(
-        [iso.production_rate for iso in chain], dtype=np.float64,
+        [iso.production_rate for iso in chain],
+        dtype=np.float64,
     )
 
     # Time grid: half irradiation, half cooling
@@ -279,9 +286,15 @@ def solve_chain(
     if current_profile is not None:
         # Piecewise-constant current: step through intervals
         abundances = _solve_irradiation_piecewise(
-            A, R_nominal, t_irr, n, abundances,
-            current_profile, nominal_current_mA,
-            irradiation_time_s, expm,
+            A,
+            R_nominal,
+            t_irr,
+            n,
+            abundances,
+            current_profile,
+            nominal_current_mA,
+            irradiation_time_s,
+            expm,
         )
         # End-of-irradiation state
         N_eoi = abundances[:, n_irr - 1]
@@ -325,8 +338,12 @@ def solve_chain(
 
     # --- Direct component (independent Bateman, no coupling) ---
     activities_direct = _compute_direct_component(
-        chain, time_grid, irradiation_time_s, n_t,
-        current_profile, nominal_current_mA,
+        chain,
+        time_grid,
+        irradiation_time_s,
+        n_t,
+        current_profile,
+        nominal_current_mA,
     )
 
     # Ingrowth = total - direct (clamp to >= 0 for numerical safety)
@@ -458,9 +475,7 @@ def _compute_direct_component(
             activities_direct[i, mask_irr] = iso.production_rate * (
                 1.0 - np.exp(-lam * time_grid[mask_irr])
             )
-            a_eoi = iso.production_rate * (
-                1.0 - np.exp(-lam * irradiation_time_s)
-            )
+            a_eoi = iso.production_rate * (1.0 - np.exp(-lam * irradiation_time_s))
             mask_cool = time_grid > irradiation_time_s
             dt_cool = time_grid[mask_cool] - irradiation_time_s
             activities_direct[i, mask_cool] = a_eoi * np.exp(-lam * dt_cool)
@@ -510,7 +525,8 @@ def _compute_direct_component(
                     iv_idx += 1
                 scale = (
                     intervals[iv_idx][2] / nominal_current_mA
-                    if nominal_current_mA > 0 else 0.0
+                    if nominal_current_mA > 0
+                    else 0.0
                 )
                 R_t = iso.production_rate * scale
 

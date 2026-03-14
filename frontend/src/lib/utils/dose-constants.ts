@@ -1,53 +1,61 @@
 /**
- * Gamma dose rate constants (µSv·m²/MBq·h) for common medical/research isotopes.
+ * Gamma dose rate at 1 m from a point source.
  *
- * Values represent the dose rate at 1 metre from a 1 MBq point source.
- * Sources: ICRP, NCRP, and standard health physics references.
+ * Uses dose constants from meta/dose_constants.parquet (ENSDF-derived,
+ * validated against RADAR reference values). Falls back to a small
+ * hardcoded table if the DataStore is not yet loaded.
  */
 
-/** Lookup table: isotope symbol -> gamma dose rate constant (µSv·m²/MBq·h). */
-const DOSE_CONSTANTS: Record<string, number> = {
-  // Diagnostic SPECT
-  "Tc-99m": 0.0141,
-  "I-123": 0.036,
-  "Ga-67": 0.019,
-  "In-111": 0.081,
-  "Tl-201": 0.017,
+import { getDataStore } from "../scheduler/sim-scheduler.svelte";
 
-  // Diagnostic PET
-  "F-18": 0.143,
-  "Ga-68": 0.130,
-  "Cu-64": 0.029,
-  "Zr-89": 0.109,
+/** Dose source quality: "ensdf" = full spectra, "it-approx" = estimated, "fallback" = hardcoded. */
+export type DoseSource = "ensdf" | "it-approx" | "zero" | "fallback";
 
-  // Therapeutic
-  "I-131": 0.055,
-  "Y-90": 0.0,
-  "Lu-177": 0.0045,
-  "Ac-225": 0.003,
-  "At-211": 0.005,
+export interface DoseResult {
+  doseRate: number; // µSv/h at 1 m
+  source: DoseSource;
+}
 
-  // Generator / production
-  "Mo-99": 0.036,
-
-  // Calibration / industrial
-  "Co-57": 0.014,
-  "Co-60": 0.305,
-  "Cs-137": 0.077,
-  "Na-22": 0.273,
-  "Mn-54": 0.117,
+/** Hardcoded fallback for the most common isotopes (µSv·m²/MBq·h). */
+const FALLBACK: Record<string, number> = {
+  "Tc-99m": 0.0141, "F-18": 0.143, "Ga-68": 0.130, "Co-60": 0.305,
+  "Cs-137": 0.077, "I-131": 0.055, "Na-22": 0.273, "Mo-99": 0.036,
 };
 
 /**
- * Look up the gamma dose rate constant for an isotope and compute dose rate at 1 m.
+ * Compute dose rate at 1 m (µSv/h) for an isotope.
  *
- * @param symbol — Isotope name, e.g. "Tc-99m", "F-18"
- * @param activity_Bq — Activity in Bq
- * @returns Dose rate in µSv/h at 1 m, or null if the isotope is not in the lookup table
+ * @returns DoseResult with dose rate and source quality, or null if unknown
  */
-export function getDoseConstant(symbol: string, activity_Bq: number): number | null {
-  const k = DOSE_CONSTANTS[symbol];
-  if (k === undefined) return null;
-  // dose_uSv_h = (activity_Bq / 1e6) * k
-  return (activity_Bq / 1e6) * k;
+export function getDoseConstant(
+  symbol: string,
+  activity_Bq: number,
+  Z?: number,
+  A?: number,
+  state?: string,
+): DoseResult | null {
+  // Try parquet-backed DataStore first
+  if (Z !== undefined && A !== undefined) {
+    const db = getDataStore();
+    if (db) {
+      const entry = db.getDoseConstant(Z, A, state ?? "");
+      if (entry) {
+        return {
+          doseRate: (activity_Bq / 1e6) * entry.k,
+          source: entry.source as DoseSource,
+        };
+      }
+    }
+  }
+
+  // Fallback to hardcoded table
+  const fb = FALLBACK[symbol];
+  if (fb !== undefined) {
+    return {
+      doseRate: (activity_Bq / 1e6) * fb,
+      source: "fallback",
+    };
+  }
+
+  return null;
 }

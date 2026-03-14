@@ -13,6 +13,12 @@ export interface CustomMaterial {
   formula: string;
   density: number; // g/cm³
   timestamp: number;
+  /** Mass fractions by element symbol (for mass-ratio materials). */
+  massFractions?: Record<string, number>;
+  /** Original user input string (for editing back). */
+  originalInput?: string;
+  /** Isotopic enrichment overrides per element symbol. */
+  enrichment?: Record<string, Record<number, number>>;
 }
 
 const DB_NAME = "hyrr-custom-materials";
@@ -89,6 +95,9 @@ export async function saveCustomMaterial(
   name: string,
   formula: string,
   density: number,
+  massFractions?: Record<string, number>,
+  originalInput?: string,
+  enrichment?: Record<string, Record<number, number>>,
 ): Promise<string> {
   const entry: CustomMaterial = {
     id: generateId(),
@@ -96,6 +105,9 @@ export async function saveCustomMaterial(
     formula,
     density,
     timestamp: Date.now(),
+    massFractions,
+    originalInput,
+    enrichment,
   };
 
   const db = await openDb();
@@ -118,8 +130,11 @@ export async function updateCustomMaterial(
   name: string,
   formula: string,
   density: number,
+  massFractions?: Record<string, number>,
+  originalInput?: string,
+  enrichment?: Record<string, Record<number, number>>,
 ): Promise<void> {
-  const entry: CustomMaterial = { id, name, formula, density, timestamp: Date.now() };
+  const entry: CustomMaterial = { id, name, formula, density, timestamp: Date.now(), massFractions, originalInput, enrichment };
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");

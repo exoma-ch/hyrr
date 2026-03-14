@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from hyrr.db import ELEMENT_SYMBOLS, _SYMBOL_TO_Z
+from hyrr.db import _SYMBOL_TO_Z
 
 
 @dataclass(frozen=True)

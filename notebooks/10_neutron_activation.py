@@ -99,7 +99,8 @@ result_mo = compute_neutron_activation(
 
 print(f"Macroscopic XS: Σ_t = {result_mo.sigma_t:.4f} /cm")
 print(f"Transmission:   T = {result_mo.transmission:.4f}")
-print(f"Mean free path: λ = {1/result_mo.sigma_t:.2f} cm" if result_mo.sigma_t > 0 else "")
+if result_mo.sigma_t > 0:
+    print(f"Mean free path: λ = {1/result_mo.sigma_t:.2f} cm")
 print(f"\nProduced isotopes: {len(result_mo.isotope_results)}")
 print()
 
@@ -139,10 +140,10 @@ if "Mo-99" in result_mo.isotope_results:
             print(f"\nσ(1 MeV) from data: {sigma_1MeV:.1f} mb")
             N_98 = 10.22 * 6.022e23 / 95.95 * 0.2413
             R_hand = N_98 * sigma_1MeV * 1e-27 * 1e12 * 1.0
-            print(f"Hand calc R: {R_hand:.3e} /s")
-            print(f"HYRR R:      {mo99.production_rate:.3e} /s")
+            print(f"Hand calc R (no attenuation): {R_hand:.3e} /s")
+            print(f"HYRR R (with attenuation):    {mo99.production_rate:.3e} /s")
             ratio = mo99.production_rate / R_hand if R_hand > 0 else 0
-            print(f"Ratio:       {ratio:.3f}")
+            print(f"Ratio: {ratio:.3f} (< 1.0 due to exponential attenuation)")
             break
 
 # %% [markdown]
@@ -249,8 +250,10 @@ lr = result.layer_results[0]
 # Step 2: Neutron source from (p,xn) channels
 n_source = compute_neutron_source(lr, projectile_Z=1, projectile_A=1)
 
-print("Primary charged-particle production:")
-print(f"  Tc-99m rate: {lr.isotope_results.get('Tc-99m', None) and lr.isotope_results['Tc-99m'].production_rate:.3e} /s")
+tc99m = lr.isotope_results.get("Tc-99m")
+if tc99m:
+    print(f"Primary charged-particle production:")
+    print(f"  Tc-99m rate: {tc99m.production_rate:.3e} /s")
 print()
 print(f"Secondary neutron source:")
 print(f"  Total neutron rate: {n_source.total_neutrons_per_s:.3e} n/s")

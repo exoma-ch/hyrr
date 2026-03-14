@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <!-- Arrowhead markers -->
+    <marker id="arrowRed" markerWidth="5" markerHeight="4" refX="2.5" refY="2" orient="auto">
+      <polygon points="0,0 5,2 0,4" fill="#ef4444" opacity="0.7"/>
+    </marker>
+    <marker id="arrowTeal" markerWidth="5" markerHeight="4" refX="2.5" refY="2" orient="auto">
+      <polygon points="0,0 5,2 0,4" fill="#2dd4bf" opacity="0.7"/>
+    </marker>
+  </defs>
+
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!--
+    Isometric "travelling wave" layout:
+    Beam axis: (65,425) → (455,130)  (front-left to back-right)
+    Bragg plane (vertical): arrows go UP (0,-1) from beam — red/warm
+    XS plane (perpendicular): arrows go in direction (0.7, 0.38) from beam — teal/cool
+    14 slices along the beam
+
+    Beam positions:
+    0:(65,425) 1:(95,402) 2:(125,380) 3:(155,357) 4:(185,334) 5:(215,311) 6:(245,289)
+    7:(275,266) 8:(305,243) 9:(335,221) 10:(365,198) 11:(395,175) 12:(425,153) 13:(455,130)
+
+    Bragg heights: [14,18,23,30,38,50,65,82,100,118,130,135,60,8]
+    XS lengths:    [8,22,42,62,78,90,95,92,82,65,45,28,12,3]
+  -->
+
+  <!-- ================================================ -->
+  <!-- BRAGG PEAK PLANE — semi-transparent red fill      -->
+  <!-- Polygon: beam line (bottom) + tip curve (top)     -->
+  <!-- ================================================ -->
+  <path d="M65,425 L95,402 L125,380 L155,357 L185,334 L215,311 L245,289
+           L275,266 L305,243 L335,221 L365,198 L395,175 L425,153 L455,130
+           L455,122 L425,93 L395,40 L365,68 L335,103 L305,143
+           L275,184 L245,224 L215,261 L185,296 L155,327 L125,357
+           L95,384 L65,411 Z"
+        fill="#ef4444" opacity="0.04"/>
+
+  <!-- Bragg envelope curve through tips -->
+  <path d="M65,411 C75,398 85,390 95,384
+           C108,372 118,362 125,357
+           C138,342 148,332 155,327
+           C168,310 178,300 185,296
+           C198,276 208,266 215,261
+           C228,244 238,232 245,224
+           C258,204 268,192 275,184
+           C288,164 298,150 305,143
+           C318,122 328,110 335,103
+           C348,82 358,72 365,68
+           C378,52 388,44 395,40
+           C408,54 418,72 425,93
+           C438,114 448,120 455,122"
+        fill="none" stroke="#ef4444" stroke-width="1.5" opacity="0.4" filter="url(#glow)"/>
+
+  <!-- Bragg vertical arrows (beam → tip, going UP) -->
+  <g stroke="#ef4444" stroke-width="1.2" opacity="0.55">
+    <line x1="65"  y1="425" x2="65"  y2="411" marker-end="url(#arrowRed)"/>
+    <line x1="95"  y1="402" x2="95"  y2="384" marker-end="url(#arrowRed)"/>
+    <line x1="125" y1="380" x2="125" y2="357" marker-end="url(#arrowRed)"/>
+    <line x1="155" y1="357" x2="155" y2="327" marker-end="url(#arrowRed)"/>
+    <line x1="185" y1="334" x2="185" y2="296" marker-end="url(#arrowRed)"/>
+    <line x1="215" y1="311" x2="215" y2="261" marker-end="url(#arrowRed)"/>
+    <line x1="245" y1="289" x2="245" y2="224" marker-end="url(#arrowRed)"/>
+    <line x1="275" y1="266" x2="275" y2="184" marker-end="url(#arrowRed)"/>
+    <line x1="305" y1="243" x2="305" y2="143" marker-end="url(#arrowRed)"/>
+    <line x1="335" y1="221" x2="335" y2="103" marker-end="url(#arrowRed)"/>
+    <line x1="365" y1="198" x2="365" y2="68"  marker-end="url(#arrowRed)"/>
+    <line x1="395" y1="175" x2="395" y2="40"  marker-end="url(#arrowRed)"/>
+    <line x1="425" y1="153" x2="425" y2="93"  marker-end="url(#arrowRed)"/>
+    <line x1="455" y1="130" x2="455" y2="122" marker-end="url(#arrowRed)"/>
+  </g>
+
+  <!-- ================================================ -->
+  <!-- XS/YIELD PLANE — semi-transparent teal fill       -->
+  <!-- Arrows go in direction (0.7, 0.38) from beam      -->
+  <!-- ================================================ -->
+
+  <!--
+    XS tip positions (beam + xs_len * (0.7, 0.38)):
+    0:(71,428) 1:(110,410) 2:(154,396) 3:(198,381)
+    4:(240,364) 5:(278,345) 6:(312,325) 7:(339,301)
+    8:(362,274) 9:(381,246) 10:(397,215) 11:(415,186)
+    12:(433,158) 13:(457,131)
+  -->
+
+  <!-- XS filled envelope -->
+  <path d="M65,425 L95,402 L125,380 L155,357 L185,334 L215,311 L245,289
+           L275,266 L305,243 L335,221 L365,198 L395,175 L425,153 L455,130
+           L457,131 L433,158 L415,186 L397,215 L381,246 L362,274
+           L339,301 L312,325 L278,345 L240,364 L198,381 L154,396
+           L110,410 L71,428 Z"
+        fill="#2dd4bf" opacity="0.04"/>
+
+  <!-- XS envelope curve through tips -->
+  <path d="M71,428 C85,420 100,414 110,410
+           C125,404 140,398 154,396
+           C170,390 185,385 198,381
+           C215,374 228,368 240,364
+           C255,356 268,350 278,345
+           C292,336 302,330 312,325
+           C324,316 332,308 339,301
+           C352,288 358,280 362,274
+           C372,262 378,252 381,246
+           C388,232 394,222 397,215
+           C404,202 410,192 415,186
+           C422,174 428,166 433,158
+           C442,148 450,138 457,131"
+        fill="none" stroke="#2dd4bf" stroke-width="1.5" opacity="0.4" filter="url(#glow)"/>
+
+  <!-- XS perpendicular arrows (beam → tip, direction (0.7, 0.38)) -->
+  <g stroke="#2dd4bf" stroke-width="1.2" opacity="0.55">
+    <line x1="65"  y1="425" x2="71"  y2="428" marker-end="url(#arrowTeal)"/>
+    <line x1="95"  y1="402" x2="110" y2="410" marker-end="url(#arrowTeal)"/>
+    <line x1="125" y1="380" x2="154" y2="396" marker-end="url(#arrowTeal)"/>
+    <line x1="155" y1="357" x2="198" y2="381" marker-end="url(#arrowTeal)"/>
+    <line x1="185" y1="334" x2="240" y2="364" marker-end="url(#arrowTeal)"/>
+    <line x1="215" y1="311" x2="278" y2="345" marker-end="url(#arrowTeal)"/>
+    <line x1="245" y1="289" x2="312" y2="325" marker-end="url(#arrowTeal)"/>
+    <line x1="275" y1="266" x2="339" y2="301" marker-end="url(#arrowTeal)"/>
+    <line x1="305" y1="243" x2="362" y2="274" marker-end="url(#arrowTeal)"/>
+    <line x1="335" y1="221" x2="381" y2="246" marker-end="url(#arrowTeal)"/>
+    <line x1="365" y1="198" x2="397" y2="215" marker-end="url(#arrowTeal)"/>
+    <line x1="395" y1="175" x2="415" y2="186" marker-end="url(#arrowTeal)"/>
+    <line x1="425" y1="153" x2="433" y2="158" marker-end="url(#arrowTeal)"/>
+    <line x1="455" y1="130" x2="457" y2="131" marker-end="url(#arrowTeal)"/>
+  </g>
+
+  <!-- ================================================ -->
+  <!-- MATERIAL LAYER BANDS along the beam               -->
+  <!-- Thin colored bars perpendicular to beam at each   -->
+  <!-- layer boundary, plus colored beam segments        -->
+  <!-- ================================================ -->
+
+  <!-- Layer boundary tick marks (perpendicular to beam) -->
+  <!-- Boundary at t≈0.2: beam pos ~(143,362) -->
+  <line x1="138" y1="370" x2="148" y2="354" stroke="#2dd4bf" stroke-width="2.5" opacity="0.5"/>
+  <!-- Boundary at t≈0.5: beam pos ~(260,278) -->
+  <line x1="255" y1="286" x2="265" y2="270" stroke="#4ade80" stroke-width="2.5" opacity="0.5"/>
+  <!-- Boundary at t≈0.75: beam pos ~(358,204) -->
+  <line x1="353" y1="212" x2="363" y2="196" stroke="#f59e0b" stroke-width="2.5" opacity="0.5"/>
+  <!-- Boundary at t≈0.9: beam pos ~(416,162) -->
+  <line x1="411" y1="170" x2="421" y2="154" stroke="#d97706" stroke-width="2.5" opacity="0.5"/>
+
+  <!-- ================================================ -->
+  <!-- BEAM AXIS LINE — the central axis                 -->
+  <!-- Colored by material layer segments                -->
+  <!-- ================================================ -->
+
+  <!-- Layer 1: teal -->
+  <line x1="65" y1="425" x2="143" y2="362" stroke="#2dd4bf" stroke-width="2.5" filter="url(#glow)" opacity="0.8"/>
+  <!-- Layer 2: green -->
+  <line x1="143" y1="362" x2="260" y2="278" stroke="#4ade80" stroke-width="2.5" filter="url(#glow)" opacity="0.8"/>
+  <!-- Layer 3: amber -->
+  <line x1="260" y1="278" x2="358" y2="204" stroke="#f59e0b" stroke-width="2.5" filter="url(#glow)" opacity="0.8"/>
+  <!-- Layer 4: copper -->
+  <line x1="358" y1="204" x2="416" y2="162" stroke="#d97706" stroke-width="2.5" filter="url(#glow)" opacity="0.75"/>
+  <!-- Layer 5: slate (beam exits) -->
+  <line x1="416" y1="162" x2="455" y2="130" stroke="#8b949e" stroke-width="2" filter="url(#glow)" opacity="0.5"/>
+
+  <!-- Beam entry arrow -->
+  <line x1="35" y1="448" x2="65" y2="425" stroke="#e6edf3" stroke-width="2" opacity="0.5"/>
+  <polygon points="58,429 65,425 60,433" fill="#e6edf3" opacity="0.5"/>
+
+  <!-- ================================================ -->
+  <!-- PEAK MARKER                                       -->
+  <!-- ================================================ -->
+  <circle cx="395" cy="40" r="3.5" fill="#ef4444" opacity="0.5" filter="url(#glow)"/>
+
+  <!-- ================================================ -->
+  <!-- AXIS LABELS (very subtle)                         -->
+  <!-- ================================================ -->
+  <!-- Depth axis label near beam end -->
+  <text x="458" y="125" fill="#484f58" font-family="system-ui, sans-serif" font-size="11" opacity="0.5">z</text>
+  <!-- Bragg axis label near peak -->
+  <text x="400" y="35" fill="#ef4444" font-family="system-ui, sans-serif" font-size="10" opacity="0.4">dE/dx</text>
+  <!-- XS axis label -->
+  <text x="316" y="340" fill="#2dd4bf" font-family="system-ui, sans-serif" font-size="10" opacity="0.4">σ</text>
+</svg>

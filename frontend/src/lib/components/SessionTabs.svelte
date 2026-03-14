@@ -25,14 +25,12 @@
 </script>
 
 <div class="session-tabs" role="tablist">
-  {#each tabs as tab, i (tab.id)}
+  {#each tabs as tab (tab.id)}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="tab"
       class:active={tab.id === activeId}
-      class:inactive={tab.id !== activeId}
       class:just-added={tab.id === newTabId}
-      style:z-index={tab.id === activeId ? tabs.length + 1 : tabs.length - i}
       onclick={() => switchToTab(tab.id)}
       onkeydown={(e) => { if (e.key === 'Enter') switchToTab(tab.id); }}
       title={tab.label}
@@ -49,7 +47,7 @@
     </div>
   {/each}
 
-  <button class="add-btn" onclick={handleAddTab} title="Save current config as new tab">
+  <button class="tab add-tab" onclick={handleAddTab} title="Save current config as new tab">
     +
   </button>
 </div>
@@ -57,22 +55,20 @@
 <style>
   .session-tabs {
     display: flex;
-    align-items: flex-end;
-    gap: 0;
-    position: relative;
+    align-items: stretch;
   }
 
   .tab {
     position: relative;
-    background: #1c2128;
-    border: 1px solid #2d333b;
-    border-bottom: none;
-    border-radius: 10px 10px 0 0;
-    padding: 0.3rem 0.5rem;
-    padding-right: 1.6rem;
-    padding-left: 0.35rem;
+    box-sizing: border-box;
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--c-border);
+    padding: 0 0.5rem;
+    padding-right: 1.5rem;
+    padding-left: 0.4rem;
     font-size: 0.7rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     max-width: 180px;
     min-width: 60px;
     overflow: hidden;
@@ -85,51 +81,21 @@
     transition: background 0.15s, color 0.15s;
   }
 
-  /* Tab overlap: negative margin on non-first tabs */
-  .tab:not(:first-child) {
-    margin-left: -8px;
-  }
-
-  /* Inactive tabs are slightly shorter */
-  .tab.inactive {
-    height: 24px;
-    margin-bottom: 0;
+  .tab:first-child:not(.add-tab) {
+    margin-left: 4px;
   }
 
   .tab:hover {
-    background: #21262d;
-    color: #c9d1d9;
+    background: var(--c-bg-hover);
+    color: var(--c-text-label);
   }
 
-  /* Active tab */
   .tab.active {
-    background: #0d1117;
-    color: #e1e4e8;
-    height: 28px;
+    background: var(--c-bg-default);
+    color: var(--c-text);
+    box-shadow: inset 0 0 0 1px var(--c-accent);
   }
 
-  /* Chrome-style curved connectors on active tab */
-  .tab.active::before,
-  .tab.active::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    width: 8px;
-    height: 8px;
-    pointer-events: none;
-  }
-
-  .tab.active::before {
-    left: -8px;
-    background: radial-gradient(circle at 0 0, transparent 8px, #0d1117 8px);
-  }
-
-  .tab.active::after {
-    right: -8px;
-    background: radial-gradient(circle at 100% 0, transparent 8px, #0d1117 8px);
-  }
-
-  /* Favicon circle */
   .tab-favicon {
     display: flex;
     align-items: center;
@@ -137,8 +103,8 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: #2d333b;
-    color: #8b949e;
+    background: var(--c-border);
+    color: var(--c-text-muted);
     font-size: 0.55rem;
     font-weight: 700;
     flex-shrink: 0;
@@ -146,8 +112,8 @@
   }
 
   .tab.active .tab-favicon {
-    background: #58a6ff;
-    color: #0d1117;
+    background: var(--c-accent);
+    color: var(--c-bg-default);
   }
 
   .tab-label {
@@ -158,7 +124,7 @@
 
   .tab-close {
     position: absolute;
-    right: 0.25rem;
+    right: 0.2rem;
     top: 50%;
     transform: translateY(-50%);
     background: none;
@@ -179,29 +145,24 @@
 
   .tab-close:hover {
     opacity: 1 !important;
-    color: #f85149;
-    background: rgba(248, 81, 73, 0.15);
+    color: var(--c-red);
+    background: var(--c-red-tint);
   }
 
-  .add-btn {
-    background: none;
-    border: none;
-    color: #484f58;
+  .add-tab {
+    min-width: 32px;
+    max-width: 32px;
+    padding: 0;
+    padding-right: 0;
+    padding-left: 0;
+    justify-content: center;
     font-size: 0.9rem;
     font-weight: 500;
-    cursor: pointer;
-    padding: 0.15rem 0.4rem;
-    margin-bottom: 0.25rem;
-    margin-left: 0.15rem;
-    border-radius: 4px;
-    line-height: 1;
-    flex-shrink: 0;
-    transition: color 0.15s, background 0.15s;
+    color: var(--c-text-faint);
   }
 
-  .add-btn:hover {
-    color: #8b949e;
-    background: #21262d;
+  .add-tab:hover {
+    color: var(--c-text-muted);
   }
 
   .tab.just-added {
@@ -209,7 +170,18 @@
   }
 
   @keyframes tab-highlight {
-    0% { box-shadow: 0 0 0 2px #58a6ff; }
-    100% { box-shadow: 0 0 0 0 transparent; }
+    0% { box-shadow: inset 0 -2px 0 var(--c-accent); }
+    100% { box-shadow: none; }
+  }
+
+  @media (max-width: 640px) {
+    .tab {
+      font-size: 0.8rem;
+    }
+
+    .tab-close {
+      opacity: 0.5;
+      padding: 0.15rem 0.3rem;
+    }
   }
 </style>

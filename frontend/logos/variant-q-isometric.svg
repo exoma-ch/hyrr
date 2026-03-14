@@ -1,0 +1,189 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!--
+    Isometric coordinate system:
+    - Beam axis (depth/z): from front-left (80,390) to back-right (440,200)
+      direction per unit: (+1.0, -0.528)
+    - Vertical (up): (0, -1)
+    - Perpendicular-back: (-0.75, -0.42)  (towards back/left)
+    - Perpendicular-front: (+0.75, +0.42) (towards viewer/right)
+  -->
+
+  <!-- ============================================ -->
+  <!-- MATERIAL BARS (front side, towards viewer)   -->
+  <!-- 3D parallelogram bars along the beam axis    -->
+  <!-- ============================================ -->
+
+  <!-- Bar 1: layer 0 (teal) — thin, medium height -->
+  <!-- Bottom-back edge on beam line, extends front and up -->
+  <path d="M98,385 L98,340 L130,355 L130,400 Z" fill="#143040" opacity="0.7" stroke="#2dd4bf" stroke-width="0.8" stroke-opacity="0.4"/>
+  <!-- Top face -->
+  <path d="M98,340 L128,323 L160,338 L130,355 Z" fill="#1a4a5a" opacity="0.5" stroke="#2dd4bf" stroke-width="0.5" stroke-opacity="0.3"/>
+  <!-- Right face -->
+  <path d="M130,355 L160,338 L160,382 L130,400 Z" fill="#0f2a3d" opacity="0.6" stroke="#2dd4bf" stroke-width="0.5" stroke-opacity="0.3"/>
+
+  <!-- Bar 2: layer 1 (green) — wider, taller -->
+  <path d="M140,375 L140,305 L180,325 L180,395 Z" fill="#1a3a2a" opacity="0.7" stroke="#4ade80" stroke-width="0.8" stroke-opacity="0.4"/>
+  <path d="M140,305 L185,278 L225,298 L180,325 Z" fill="#224a32" opacity="0.5" stroke="#4ade80" stroke-width="0.5" stroke-opacity="0.3"/>
+  <path d="M180,325 L225,298 L225,368 L180,395 Z" fill="#152e1c" opacity="0.6" stroke="#4ade80" stroke-width="0.5" stroke-opacity="0.3"/>
+
+  <!-- Bar 3: layer 2 (amber) — widest, tallest (most material) -->
+  <path d="M205,355 L205,265 L250,288 L250,378 Z" fill="#3d3018" opacity="0.7" stroke="#f59e0b" stroke-width="0.8" stroke-opacity="0.4"/>
+  <path d="M205,265 L268,228 L313,250 L250,288 Z" fill="#4a3a20" opacity="0.5" stroke="#f59e0b" stroke-width="0.5" stroke-opacity="0.3"/>
+  <path d="M250,288 L313,250 L313,340 L250,378 Z" fill="#33250f" opacity="0.6" stroke="#f59e0b" stroke-width="0.5" stroke-opacity="0.3"/>
+
+  <!-- Bar 4: layer 3 (copper) — medium, shorter -->
+  <path d="M300,322 L300,272 L332,290 L332,340 Z" fill="#3b2818" opacity="0.7" stroke="#d97706" stroke-width="0.8" stroke-opacity="0.4"/>
+  <path d="M300,272 L335,252 L367,270 L332,290 Z" fill="#4a3420" opacity="0.5" stroke="#d97706" stroke-width="0.5" stroke-opacity="0.3"/>
+  <path d="M332,290 L367,270 L367,318 L332,340 Z" fill="#2d1d0e" opacity="0.6" stroke="#d97706" stroke-width="0.5" stroke-opacity="0.3"/>
+
+  <!-- Bar 5: layer 4 (slate) — thin, short -->
+  <path d="M355,305 L355,275 L378,288 L378,318 Z" fill="#2d333b" opacity="0.7" stroke="#8b949e" stroke-width="0.8" stroke-opacity="0.4"/>
+  <path d="M355,275 L380,262 L403,275 L378,288 Z" fill="#363d45" opacity="0.5" stroke="#8b949e" stroke-width="0.5" stroke-opacity="0.3"/>
+  <path d="M378,288 L403,275 L403,305 L378,318 Z" fill="#22272e" opacity="0.6" stroke="#8b949e" stroke-width="0.5" stroke-opacity="0.3"/>
+
+  <!-- ============================================ -->
+  <!-- BEAM LINE (the z-axis, front-left to back-right) -->
+  <!-- ============================================ -->
+  <line x1="50" y1="405" x2="450" y2="190" stroke="#58a6ff" stroke-width="2.5" filter="url(#glow)"/>
+  <line x1="50" y1="405" x2="450" y2="190" stroke="#58a6ff" stroke-width="10" opacity="0.06" filter="url(#softGlow)"/>
+  <!-- Arrow tip -->
+  <polygon points="442,194 450,190 445,200" fill="#58a6ff" opacity="0.8"/>
+
+  <!-- ============================================ -->
+  <!-- BRAGG PEAK (vertical plane along beam, red)  -->
+  <!-- Toned-down red, behind the beam line          -->
+  <!-- The curve follows the beam axis on its bottom -->
+  <!-- and rises vertically for the peak height      -->
+  <!-- ============================================ -->
+
+  <!-- Filled Bragg curve area -->
+  <path d="M80,395
+           L105,382 L105,378
+           L140,363 L140,356
+           L180,342 L180,330
+           L220,322 L220,302
+           L260,302 L260,270
+           L300,282 L300,238
+           L330,268 L330,210
+           L350,258 L350,195
+           L362,252 L362,188
+           L368,250 L368,185
+           L372,250 L372,192
+           L378,254 L378,220
+           L390,260 L390,252
+           L410,250 L410,248
+           L430,240
+           L430,240 L410,250 L390,260 L378,264
+           L372,262 L368,260 L362,262
+           L350,268 L330,278 L300,292
+           L260,312 L220,332 L180,348
+           L140,368 L105,387 L80,398 Z"
+        fill="#ef4444" opacity="0.08"/>
+
+  <!-- Bragg curve stroke -->
+  <path d="M80,395
+           C100,385 130,365 160,352
+           C200,335 240,318 280,298
+           C310,280 335,258 350,232
+           C358,218 364,205 368,195
+           C370,190 372,188 374,188
+           C376,190 378,198 382,215
+           C388,242 395,255 410,250
+           C420,248 430,242 440,238"
+        fill="none" stroke="#ef4444" stroke-width="2" opacity="0.35" filter="url(#glow)"/>
+
+  <!-- Peak dot -->
+  <circle cx="374" cy="188" r="3" fill="#ef4444" opacity="0.5" filter="url(#glow)"/>
+
+  <!-- ============================================ -->
+  <!-- XS/YIELD CURVES (perpendicular planes, back) -->
+  <!-- Each at a beam position, extending back-left  -->
+  <!-- with vertical height = cross section value     -->
+  <!-- ============================================ -->
+
+  <!-- XS curve 1 at ~t=0.2 (teal channel) -->
+  <!-- Base point on beam: ~(152, 358) -->
+  <!-- Perpendicular back: direction (-0.75, -0.42) -->
+  <path d="M152,358
+           C145,352 135,340 125,322
+           C115,306 108,298 100,296
+           C92,298 86,308 80,320"
+        fill="none" stroke="#2dd4bf" stroke-width="1.8" filter="url(#glow)" opacity="0.7"/>
+  <path d="M152,358
+           C145,352 135,340 125,322
+           C115,306 108,298 100,296
+           C92,298 86,308 80,320
+           L80,338 C86,328 92,320 100,318
+           C108,320 115,326 125,340
+           C135,354 145,362 152,365 Z"
+        fill="#2dd4bf" opacity="0.06"/>
+
+  <!-- XS curve 2 at ~t=0.4 (green channel, bigger) -->
+  <!-- Base point on beam: ~(224, 320) -->
+  <path d="M224,320
+           C215,312 200,292 186,268
+           C174,248 165,236 155,232
+           C146,234 138,246 130,262"
+        fill="none" stroke="#4ade80" stroke-width="1.8" filter="url(#glow)" opacity="0.7"/>
+  <path d="M224,320
+           C215,312 200,292 186,268
+           C174,248 165,236 155,232
+           C146,234 138,246 130,262
+           L130,278 C138,264 146,254 155,252
+           C165,254 174,264 186,284
+           C200,306 215,322 224,328 Z"
+        fill="#4ade80" opacity="0.06"/>
+
+  <!-- XS curve 3 at ~t=0.6 (amber, dominant) -->
+  <!-- Base point on beam: ~(296, 282) -->
+  <path d="M296,282
+           C286,273 270,248 254,218
+           C240,192 230,176 220,170
+           C210,172 202,186 194,206"
+        fill="none" stroke="#fbbf24" stroke-width="2" filter="url(#glow)" opacity="0.75"/>
+  <path d="M296,282
+           C286,273 270,248 254,218
+           C240,192 230,176 220,170
+           C210,172 202,186 194,206
+           L194,222 C202,204 210,192 220,190
+           C230,192 240,206 254,232
+           C270,260 286,280 296,288 Z"
+        fill="#fbbf24" opacity="0.06"/>
+
+  <!-- XS curve 4 at ~t=0.75 (orange, medium) -->
+  <!-- Base point on beam: ~(350, 254) -->
+  <path d="M350,254
+           C342,248 332,232 322,212
+           C312,194 305,184 298,180
+           C290,182 284,192 278,206"
+        fill="none" stroke="#f59e0b" stroke-width="1.8" filter="url(#glow)" opacity="0.65"/>
+  <path d="M350,254
+           C342,248 332,232 322,212
+           C312,194 305,184 298,180
+           C290,182 284,192 278,206
+           L278,218 C284,206 290,198 298,196
+           C305,198 312,208 322,226
+           C332,244 342,256 350,260 Z"
+        fill="#f59e0b" opacity="0.05"/>
+
+  <!-- XS curve 5 at ~t=0.88 (violet, small high-threshold) -->
+  <!-- Base point on beam: ~(396, 230) -->
+  <path d="M396,230
+           C390,226 384,218 376,206
+           C370,196 366,190 360,188
+           C355,190 350,196 346,206"
+        fill="none" stroke="#a78bfa" stroke-width="1.5" filter="url(#glow)" opacity="0.55"/>
+</svg>

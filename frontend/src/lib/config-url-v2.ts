@@ -32,8 +32,32 @@ function compactConfig(config: SimulationConfig): any {
   };
 }
 
+const MAX_URL_LAYERS = 20;
+
+/** Validate compact config shape before expanding. Returns true if valid. */
+function isValidCompact(c: any): boolean {
+  if (!c || typeof c !== "object") return false;
+  // beam
+  if (!c.b || typeof c.b !== "object") return false;
+  if (typeof c.b.p !== "string") return false;
+  if (typeof c.b.e !== "number" || !isFinite(c.b.e)) return false;
+  if (typeof c.b.c !== "number" || !isFinite(c.b.c)) return false;
+  // layers
+  if (!Array.isArray(c.l)) return false;
+  if (c.l.length > MAX_URL_LAYERS) return false;
+  for (const cl of c.l) {
+    if (!cl || typeof cl !== "object") return false;
+    if (typeof cl.m !== "string") return false;
+  }
+  // timing
+  if (typeof c.i !== "number" || !isFinite(c.i)) return false;
+  if (typeof c.c !== "number" || !isFinite(c.c)) return false;
+  return true;
+}
+
 /** Expand compact keys back to full config. */
-function expandConfig(compact: any): SimulationConfig {
+function expandConfig(compact: any): SimulationConfig | null {
+  if (!isValidCompact(compact)) return null;
   return {
     beam: {
       projectile: compact.b.p,

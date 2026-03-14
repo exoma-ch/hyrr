@@ -21,7 +21,7 @@ import {
   type TargetStack,
   layerAverageAtomicMass,
 } from "./types";
-import { buildReactionNotation } from "../utils/format";
+import { buildReactionNotation, nucLabel } from "../utils/format";
 import { trapezoid } from "./interpolation";
 import {
   computeEnergyOut,
@@ -31,6 +31,7 @@ import {
 } from "./stopping";
 import {
   batemanActivity,
+  computeDepthProductionRate,
   computeProductionRate,
   generateDepthProfile,
   saturationYield,
@@ -163,6 +164,9 @@ function computeLayer(
   let firstEnergies: Float64Array | null = null;
   let firstDedx: Float64Array | null = null;
 
+  // Collect XS channel data for depth-resolved production rates
+  const xsChannels: Array<{ name: string; xsEnergies: Float64Array; xsMb: Float64Array; weight: number }> = [];
+
   for (const [elem, atomFrac] of layer.elements) {
     for (const [A, isotopeAbundance] of elem.isotopes) {
       const weight = atomFrac * isotopeAbundance;
@@ -184,6 +188,9 @@ function computeLayer(
 
         const scaledRate = prate * weight;
         if (scaledRate <= 0) continue;
+
+        // Record channel for depth-resolved production
+        xsChannels.push({ name: `${db.getElementSymbol(xs.residualZ)}-${xs.residualA}${xs.state || ""}`, xsEnergies: xs.energiesMeV, xsMb: xs.xsMb, weight });
 
         const decay = db.getDecayData(xs.residualZ, xs.residualA, xs.state);
         const halfLife = decay?.halfLifeS ?? null;
@@ -349,6 +356,29 @@ function computeLayer(
     }
   }
 
+  // Depth-resolved production rates per isotope
+  let depthProductionRates: Map<string, Float64Array> | undefined;
+  if (depthProfile.length > 0 && xsChannels.length > 0) {
+    const depthEnergies = new Float64Array(depthProfile.length);
+    for (let i = 0; i < depthProfile.length; i++) {
+      depthEnergies[i] = depthProfile[i].energyMeV;
+    }
+    const numberDensity = nAtoms / volume;
+    depthProductionRates = new Map();
+    for (const ch of xsChannels) {
+      const profile = computeDepthProductionRate(
+        ch.xsEnergies, ch.xsMb, depthEnergies,
+        numberDensity, particlesPerS, area, ch.weight,
+      );
+      const existing = depthProductionRates.get(ch.name);
+      if (existing) {
+        for (let i = 0; i < profile.length; i++) existing[i] += profile[i];
+      } else {
+        depthProductionRates.set(ch.name, profile);
+      }
+    }
+  }
+
   const heatKW = depthProfile.length >= 2 ? integrateHeat(depthProfile, area) : 0;
   const deltaE = energyIn - energyOut;
 
@@ -356,6 +386,7 @@ function computeLayer(
     layer, energyIn, energyOut, deltaEMeV: deltaE,
     heatKW, depthProfile, isotopeResults,
     stoppingPowerSources: spSources,
+    depthProductionRates,
   };
 }
 
@@ -415,7 +446,7 @@ function splitComponents(
 /** Max chain size for matrix exponential solver. Larger chains use independent Bateman. */
 const MAX_CHAIN_SIZE = 40;
 
-function applyChainSolverByComponent(
+export function applyChainSolverByComponent(
   db: DatabaseProtocol,
   isotopeResults: Map<string, IsotopeResult>,
   irrTime: number,
@@ -463,6 +494,25 @@ function applyChainSolverByComponent(
             activityIngrowthBq: 0,
             activityDirectVsTimeBq: new Float64Array(existing.activityVsTimeBq),
             activityIngrowthVsTimeBq: new Float64Array(existing.activityVsTimeBq.length),
+          });
+        } else {
+          // Daughter-only isotope: not directly produced
+          const nPts = 200;
+          const timeGrid = new Float64Array(nPts);
+          const zeroActivity = new Float64Array(nPts);
+          newResults.set(name, {
+            name, Z: ciso.Z, A: ciso.A,
+            state: ciso.state, halfLifeS: ciso.halfLifeS,
+            productionRate: 0,
+            saturationYieldBqUA: 0,
+            activityBq: 0,
+            timeGridS: timeGrid,
+            activityVsTimeBq: zeroActivity,
+            source: "daughter",
+            activityDirectBq: 0,
+            activityIngrowthBq: 0,
+            activityDirectVsTimeBq: new Float64Array(nPts),
+            activityIngrowthVsTimeBq: new Float64Array(nPts),
           });
         }
       }
@@ -514,7 +564,7 @@ function applyChainSolverByComponent(
               const pSym = db.getElementSymbol(parentIso.Z);
               const pState = parentIso.state || "";
               const parentName = `${pSym}-${parentIso.A}${pState}`;
-              decayNotations.push(`${parentName} →${mode.mode}→ ${name}`);
+              decayNotations.push(`${nucLabel(parentName)} →${mode.mode}→ ${nucLabel(name)}`);
             }
           }
         }

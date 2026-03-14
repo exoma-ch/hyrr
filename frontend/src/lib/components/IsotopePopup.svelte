@@ -4,13 +4,14 @@
   import { getDataStore } from "../scheduler/sim-scheduler.svelte";
   import { getResult } from "../stores/results.svelte";
   import { getConfig } from "../stores/config.svelte";
-  import { formatHalfLife, darkLayout, PLOTLY_CONFIG, TRACE_COLORS } from "../plotting/plotly-helpers";
+  import { formatHalfLife, darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
+  import { getResolvedTheme } from "../stores/theme.svelte";
   import { nudatUrl } from "../utils/format";
 
   import { Z_TO_SYMBOL } from "../utils/formula";
   import { resolveMaterial } from "../compute/materials";
   import { PROJECTILE_Z, PROJECTILE_A } from "../compute/types";
-  import { bestActivityUnit, bestTimeUnit, fmtActivity, fmtYield } from "../utils/format";
+  import { bestActivityUnit, bestTimeUnit, fmtActivity, fmtYield, nucHtml, nucLabel } from "../utils/format";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import { interp } from "../compute/interpolation";
   import type { DecayMode, CrossSectionData, ProjectileType } from "../compute/types";
@@ -67,13 +68,6 @@
     return result;
   }
 
-  /** TENDL-2023 residual production page URL for a target isotope */
-  function tendlUrl(proj: string, targetSymbol: string, targetA: number): string {
-    const projName = ({ p: "proton", d: "deuteron", t: "triton", h: "he3", a: "alpha" } as Record<string, string>)[proj] ?? "proton";
-    const aaa = String(targetA).padStart(3, "0");
-    const sym = targetSymbol.charAt(0).toUpperCase() + targetSymbol.slice(1).toLowerCase();
-    return `https://tendl.web.psi.ch/tendl_2023/${projName}_html/${projName.charAt(0).toUpperCase() + projName.slice(1)}${aaa}${sym}/residual.html`;
-  }
 
   // XS channel: one per target isotope that produces this residual
   interface XsChannel {
@@ -84,16 +78,8 @@
     abundance: number; // isotopic fraction (0-1), reflecting enrichment
     label: string; // e.g. "⁴⁴Ca(p,n)"
     reaction: string; // e.g. "(p,n)"
-    tendlLink: string;
   }
 
-  /** Convert "Sc-44" → "<sup>44</sup>Sc", "Sc-44 (m)" → "<sup>44m</sup>Sc" */
-  function nucSup(isotopeName: string): string {
-    const m = isotopeName.match(/^([A-Z][a-z]?)-(\d+)(?:\s*\((\w+)\))?$/);
-    if (!m) return isotopeName;
-    const [, sym, mass, state] = m;
-    return `<sup>${mass}${state ?? ""}</sup>${sym}`;
-  }
 
   // State
   let decayInfo: { halfLifeS: number | null; decayModes: DecayMode[] } | null = $state(null);
@@ -195,7 +181,7 @@
             if (mode.daughterZ === Z && mode.daughterA === A) {
               const sym = Z_TO_SYMBOL[pZ] ?? `Z${pZ}`;
               parents.push({
-                name: `${sym}-${pA}${pState ? ` (${pState})` : ""}`,
+                name: `${sym}-${pA}${pState}`,
                 Z: pZ, A: pA, state: pState,
                 mode: mode.mode, branching: mode.branching,
               });
@@ -242,7 +228,6 @@
                   abundance: atomFrac * isoAbundance,
                   label: `<sup>${targetA}</sup>${tSym}${rxn}<sup>${xs.residualA}</sup>${rSym}`,
                   reaction: rxn,
-                  tendlLink: tendlUrl(proj, tSym, targetA),
                 };
                 if (!allChanMap.has(isoKey)) allChanMap.set(isoKey, []);
                 allChanMap.get(isoKey)!.push(ch);
@@ -289,6 +274,7 @@
     const numCompare = compareIsotopes.length;
     const scaled = xsScaled;
     const div = xsPlotDiv; // eagerly read so Svelte tracks bind:this updates
+    const _theme = getResolvedTheme();
     if (!open || (nChannels === 0 && numCompare === 0) || !div) return;
     requestAnimationFrame(() => renderXsPlot());
   });
@@ -300,6 +286,7 @@
   function renderXsPlot() {
     ensurePlotly().then(() => {
       if (!Plotly || !xsPlotDiv) return;
+      const tc = themeColors();
 
       const traces: any[] = [];
       const scaled = xsScaled;
@@ -368,7 +355,7 @@
           shapes.push({
             type: "line", x0: le.eIn, x1: le.eIn, y0: 0, y1: 1,
             yref: "paper",
-            line: { color: "#484f58", width: 1, dash: "dot" },
+            line: { color: tc.textFaint, width: 1, dash: "dot" },
           });
         }
         if (eOut !== le.eIn) {
@@ -376,13 +363,13 @@
             shapes.push({
               type: "line", x0: eOut, x1: eOut, y0: 0, y1: 1,
               yref: "paper",
-              line: { color: "#484f58", width: 1, dash: "dot" },
+              line: { color: tc.textFaint, width: 1, dash: "dot" },
             });
           }
           annotations.push({
             x: (le.eIn + eOut) / 2, y: 1.02, yref: "paper",
             text: le.material, showarrow: false,
-            font: { color: "#6e7681", size: 9 },
+            font: { color: tc.textSubtle, size: 9 },
             xanchor: "center",
           });
         }
@@ -397,10 +384,10 @@
       const layout = darkLayout({
         xaxis: {
           title: "Energy (MeV)",
-          gridcolor: "#2d333b",
+          gridcolor: tc.border,
           range: rangeMinE !== undefined && rangeMaxE !== undefined ? [rangeMinE, rangeMaxE] : undefined,
         },
-        yaxis: { title: yTitle, gridcolor: "#2d333b" },
+        yaxis: { title: yTitle, gridcolor: tc.border },
         margin: { t: 20, r: 20, b: 40, l: 55 },
         height: 220,
         showlegend: traces.length > 1,
@@ -434,12 +421,14 @@
     const scaled = xsScaled;
     const div = depthPlotDiv;
     const prev = getDepthPreview();
+    const _theme = getResolvedTheme();
     if (!open || !div || (nChannels === 0 && numCompare === 0) || prev.length === 0) return;
     requestAnimationFrame(() => ensurePlotly().then(renderDepthPlot));
   });
 
   function renderDepthPlot() {
     if (!Plotly || !depthPlotDiv) return;
+    const tc = themeColors();
     const preview = getDepthPreview();
     if (preview.length === 0) return;
 
@@ -480,7 +469,7 @@
       name: "Energy",
       type: "scatter",
       mode: "lines",
-      line: { color: "#484f58", width: 1.5, dash: "dot" },
+      line: { color: tc.textFaint, width: 1.5, dash: "dot" },
       yaxis: "y2",
     });
 
@@ -525,24 +514,24 @@
       type: "line" as const,
       x0: b.depth, x1: b.depth, y0: 0, y1: 1,
       yref: "paper" as const,
-      line: { color: "#484f58", width: 1, dash: "dot" as const },
+      line: { color: tc.textFaint, width: 1, dash: "dot" as const },
     }));
 
     const annotations = boundaries.map((b) => ({
       x: b.depth, y: 1.02, yref: "paper" as const,
       text: b.label, showarrow: false,
-      font: { color: "#8b949e", size: 9 },
+      font: { color: tc.textMuted, size: 9 },
       xanchor: "left" as const,
     }));
 
     const layout = darkLayout({
-      xaxis: { title: "Depth (mm)", gridcolor: "#2d333b", range: [0, cumulativeDepth] },
-      yaxis: { title: scaled ? "σ × abundance (mb)" : "σ (mb)", gridcolor: "#2d333b" },
+      xaxis: { title: "Depth (mm)", gridcolor: tc.border, range: [0, cumulativeDepth] },
+      yaxis: { title: scaled ? "σ × abundance (mb)" : "σ (mb)", gridcolor: tc.border },
       yaxis2: {
         title: "Energy (MeV)",
         overlaying: "y",
         side: "right",
-        gridcolor: "#2d333b",
+        gridcolor: tc.border,
       },
       margin: { t: 20, r: 55, b: 40, l: 55 },
       height: 220,
@@ -614,12 +603,14 @@
     const data = activityData;
     const _cmp = compareIsotopes.length;
     const div = actPlotDiv; // eagerly read so Svelte tracks bind:this updates
+    const _theme = getResolvedTheme();
     if (!open || !data || !data.main || !div) return;
     requestAnimationFrame(() => ensurePlotly().then(renderActivityPlot));
   });
 
   function renderActivityPlot() {
     if (!Plotly || !activityData?.main || !actPlotDiv) return;
+    const tc = themeColors();
 
     const config = getConfig();
     const totalTime = config.irradiation_s + (config.cooling_s || 86400);
@@ -661,7 +652,7 @@
           type: "scatter",
           mode: "lines",
           line: { color: TRACE_COLORS[idx % TRACE_COLORS.length], width: idx === 0 ? 2 : 1.5 },
-          name: nucSup(curve.name),
+          name: nucLabel(curve.name),
         });
       });
 
@@ -671,19 +662,19 @@
         y: Array.from(totalAct).map((a) => a / actDiv),
         type: "scatter",
         mode: "lines",
-        line: { color: "#484f58", width: 1, dash: "dot" },
+        line: { color: tc.textFaint, width: 1, dash: "dot" },
         yaxis: "y2",
         name: "Total",
       });
 
       const layout = darkLayout({
-        xaxis: { title: `Time (${timeLabel})`, gridcolor: "#2d333b" },
-        yaxis: { title: "RNP (%)", gridcolor: "#2d333b", range: [0, 105] },
+        xaxis: { title: `Time (${timeLabel})`, gridcolor: tc.border },
+        yaxis: { title: "RNP (%)", gridcolor: tc.border, range: [0, 105] },
         yaxis2: {
           title: `Activity (${actLabel})`,
           overlaying: "y",
           side: "right",
-          gridcolor: "#2d333b",
+          gridcolor: tc.border,
         },
         margin: { t: 10, r: 55, b: 40, l: 55 },
         height: 220,
@@ -693,12 +684,12 @@
           type: "line" as const,
           x0: eobX, x1: eobX, y0: 0, y1: 1,
           yref: "paper" as const,
-          line: { color: "#f0883e", width: 1, dash: "dash" as const },
+          line: { color: tc.orange, width: 1, dash: "dash" as const },
         }],
         annotations: [{
           x: eobX, y: 1.02, yref: "paper" as const,
           text: "EOB", showarrow: false,
-          font: { color: "#f0883e", size: 9 },
+          font: { color: tc.orange, size: 9 },
           xanchor: "center" as const,
         }],
       });
@@ -712,12 +703,12 @@
         type: "scatter",
         mode: "lines",
         line: { color: TRACE_COLORS[0], width: 2 },
-        name: nucSup(name),
+        name: nucLabel(name),
       });
 
       const layout = darkLayout({
-        xaxis: { title: `Time (${timeLabel})`, gridcolor: "#2d333b" },
-        yaxis: { title: `Activity (${actLabel})`, gridcolor: "#2d333b" },
+        xaxis: { title: `Time (${timeLabel})`, gridcolor: tc.border },
+        yaxis: { title: `Activity (${actLabel})`, gridcolor: tc.border },
         margin: { t: 10, r: 20, b: 40, l: 55 },
         height: 200,
         showlegend: false,
@@ -725,12 +716,12 @@
           type: "line" as const,
           x0: eobX, x1: eobX, y0: 0, y1: 1,
           yref: "paper" as const,
-          line: { color: "#f0883e", width: 1, dash: "dash" as const },
+          line: { color: tc.orange, width: 1, dash: "dash" as const },
         }],
         annotations: [{
           x: eobX, y: 1.02, yref: "paper" as const,
           text: "EOB", showarrow: false,
-          font: { color: "#f0883e", size: 9 },
+          font: { color: tc.orange, size: 9 },
           xanchor: "center" as const,
         }],
       });
@@ -759,16 +750,7 @@
 <Modal {open} {onclose} wide>
   {#snippet headerChildren()}
     <div class="nuc-title">
-      <span class="nuc-notation">
-        <span class="nuc-numbers">
-          <span class="nuc-a">{A}</span>
-          <span class="nuc-z">{Z}</span>
-        </span>
-        <span class="nuc-symbol">{symbol}</span>{#if nuclearState}<span class="nuc-state">{nuclearState}</span>{/if}
-      </span>
-      {#if decayInfo}
-        <span class="nuc-hl">{formatHalfLife(decayInfo.halfLifeS)}</span>
-      {/if}
+      <span class="nuc-notation">{@html nucHtml(name)}</span>
     </div>
   {/snippet}
 
@@ -802,19 +784,19 @@
           {#if parentDecays.length > 0}
             <div class="chain-group">
               {#each parentDecays as p}
-                <span class="chain-nuc parent" title="{p.mode} ({(p.branching * 100).toFixed(1)}%)">{@html nucSup(p.name)}</span>
+                <span class="chain-nuc parent" title="{p.mode} ({(p.branching * 100).toFixed(1)}%)">{@html nucHtml(p.name)}</span>
               {/each}
             </div>
             <span class="chain-arrow">&rarr;</span>
           {/if}
-          <span class="chain-nuc current">{@html nucSup(`${name}${nuclearState ? ` (${nuclearState})` : ""}`)}</span>
+          <span class="chain-nuc current">{@html nucHtml(name)}</span>
           {#if decayInfo && decayInfo.decayModes.some(m => m.daughterZ !== null)}
             <span class="chain-arrow">&rarr;</span>
             <div class="chain-group">
               {#each decayInfo.decayModes.filter(m => m.daughterZ !== null) as mode}
                 {@const dSym = Z_TO_SYMBOL[mode.daughterZ!] ?? `Z${mode.daughterZ}`}
                 <span class="chain-nuc daughter" title="{mode.mode} ({(mode.branching * 100).toFixed(1)}%)">
-                  {@html nucSup(`${dSym}-${mode.daughterA}${mode.daughterState ? ` (${mode.daughterState})` : ""}`)}
+                  {@html nucHtml(`${dSym}-${mode.daughterA}${mode.daughterState || ""}`)}
                 </span>
               {/each}
             </div>
@@ -839,7 +821,7 @@
           </thead>
           <tbody>
             <tr class="ct-main">
-              <td class="ct-iso">{@html nucSup(`${name}${nuclearState ? ` (${nuclearState})` : ""}`)}</td>
+              <td class="ct-iso">{@html nucHtml(name)}</td>
               <td class="ct-hl">{formatHalfLife(activityData.main.halfLifeS)}</td>
               <td class="ct-act">{fmtActivity(activityData.main.eobActivity)}</td>
               <td class="ct-yield">{fmtYield(activityData.main.satYield)}</td>
@@ -848,7 +830,7 @@
             </tr>
             {#each activityData.compare as cmp}
               <tr>
-                <td class="ct-iso">{@html nucSup(cmp.name)}</td>
+                <td class="ct-iso">{@html nucHtml(cmp.name)}</td>
                 <td class="ct-hl">{formatHalfLife(cmp.halfLifeS)}</td>
                 <td class="ct-act">{fmtActivity(cmp.eobActivity)}</td>
                 <td class="ct-yield">{fmtYield(cmp.satYield)}</td>
@@ -880,7 +862,7 @@
                           onmousedown={(e) => { e.preventDefault(); toggleCompare(iso); }}
                         >
                           {#if compareIsotopes.some((c) => c.name === iso.name)}<span class="check-mark">&#10003;</span>{/if}
-                          {@html nucSup(iso.name)}
+                          {@html nucHtml(iso.name)}
                         </button>
                       {/each}
                     </div>
@@ -938,12 +920,6 @@
         <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854.22a.75.75 0 011.396-.04L14 5.5a.75.75 0 01-1.5 0V4.56l-3.97 3.97a.75.75 0 01-1.06-1.06L11.44 3.5H10.5a.75.75 0 010-1.5h.104z"></path></svg>
         JANIS (NEA)
       </a>
-      {#each xsChannels as ch}
-        <a href={ch.tendlLink} target="_blank" rel="noopener noreferrer" class="ext-link tendl-link">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854.22a.75.75 0 011.396-.04L14 5.5a.75.75 0 01-1.5 0V4.56l-3.97 3.97a.75.75 0 01-1.06-1.06L11.44 3.5H10.5a.75.75 0 010-1.5h.104z"></path></svg>
-          TENDL {ch.label}
-        </a>
-      {/each}
     </div>
   </div>
 </Modal>
@@ -959,59 +935,17 @@
   }
 
   .nuc-notation {
-    display: inline-flex;
-    align-items: center;
-    line-height: 1;
-  }
-
-  .nuc-numbers {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: flex-end;
-    margin-right: 0.05em;
-    line-height: 1;
-    gap: 0;
-  }
-
-  .nuc-a {
-    font-size: 0.75rem;
-    color: #8b949e;
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .nuc-z {
-    font-size: 0.7rem;
-    color: #6e7681;
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .nuc-symbol {
-    font-size: 1.6rem;
+    font-size: 1.1rem;
     font-weight: 700;
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
-  .nuc-state {
-    font-size: 0.65rem;
-    color: #d29922;
-    font-weight: 600;
-    vertical-align: super;
-    margin-left: 0.05em;
-  }
-
-  .nuc-hl {
-    font-size: 0.85rem;
-    color: #6e7681;
-    font-variant-numeric: tabular-nums;
-  }
 
 
   .loading-indicator {
     text-align: center;
     padding: 1rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.8rem;
     font-style: italic;
   }
@@ -1024,8 +958,8 @@
   }
 
   .properties {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     padding: 0.4rem 0.5rem;
   }
@@ -1037,15 +971,15 @@
     font-size: 0.8rem;
   }
 
-  .prop-label { color: #8b949e; }
-  .prop-value { color: #e1e4e8; font-variant-numeric: tabular-nums; }
-  .prop-sep { color: #484f58; }
-  .branching { color: #6e7681; font-size: 0.7rem; }
+  .prop-label { color: var(--c-text-muted); }
+  .prop-value { color: var(--c-text); font-variant-numeric: tabular-nums; }
+  .prop-sep { color: var(--c-text-faint); }
+  .branching { color: var(--c-text-subtle); font-size: 0.7rem; }
 
   /* Decay chain */
   .decay-chain {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     padding: 0.4rem 0.5rem;
   }
@@ -1070,14 +1004,14 @@
     white-space: nowrap;
   }
 
-  .chain-nuc.parent { background: #1c2128; color: #8b949e; border: 1px solid #2d333b; }
-  .chain-nuc.current { background: #1f3a5f; color: #58a6ff; border: 1px solid #58a6ff; font-weight: 600; }
-  .chain-nuc.daughter { background: #1c2128; color: #bc8cff; border: 1px solid #2d333b; }
-  .chain-arrow { color: #484f58; font-size: 0.85rem; }
+  .chain-nuc.parent { background: var(--c-bg-hover); color: var(--c-text-muted); border: 1px solid var(--c-border); }
+  .chain-nuc.current { background: var(--c-bg-active); color: var(--c-accent); border: 1px solid var(--c-accent); font-weight: 600; }
+  .chain-nuc.daughter { background: var(--c-bg-hover); color: var(--c-purple); border: 1px solid var(--c-border); }
+  .chain-arrow { color: var(--c-text-faint); font-size: 0.85rem; }
 
   /* Sections */
   .section {
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     overflow: hidden;
   }
@@ -1087,25 +1021,25 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.3rem 0.5rem;
-    border-bottom: 1px solid #2d333b;
-    background: #0d1117;
+    border-bottom: 1px solid var(--c-border);
+    background: var(--c-bg-default);
     gap: 0.5rem;
     flex-wrap: wrap;
   }
 
   .section-label {
     font-size: 0.65rem;
-    color: #6e7681;
+    color: var(--c-text-subtle);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     flex-shrink: 0;
   }
 
   .scale-toggle {
-    background: #1c2128;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-hover);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     padding: 0.1rem 0.4rem;
     font-size: 0.6rem;
     cursor: pointer;
@@ -1114,19 +1048,19 @@
   }
 
   .scale-toggle:hover {
-    color: #e1e4e8;
-    border-color: #484f58;
+    color: var(--c-text);
+    border-color: var(--c-text-faint);
   }
 
   .scale-toggle.active {
-    color: #58a6ff;
-    border-color: #58a6ff;
-    background: #1f3a5f;
+    color: var(--c-accent);
+    border-color: var(--c-accent);
+    background: var(--c-bg-active);
   }
 
   /* Compare table */
   .compare-table-wrap {
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     overflow: visible;
   }
@@ -1139,15 +1073,15 @@
   }
 
   .compare-table thead th {
-    background: #0d1117;
-    color: #6e7681;
+    background: var(--c-bg-default);
+    color: var(--c-text-subtle);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.03em;
     font-size: 0.6rem;
     padding: 0.25rem 0.4rem;
     text-align: right;
-    border-bottom: 1px solid #2d333b;
+    border-bottom: 1px solid var(--c-border);
     white-space: nowrap;
   }
 
@@ -1155,21 +1089,21 @@
 
   .compare-table td {
     padding: 0.2rem 0.4rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
     text-align: right;
-    border-bottom: 1px solid #1c2128;
+    border-bottom: 1px solid var(--c-bg-hover);
     white-space: nowrap;
   }
 
-  .compare-table td.ct-iso { text-align: left; color: #e1e4e8; }
+  .compare-table td.ct-iso { text-align: left; color: var(--c-text); }
 
   .compare-table tr.ct-main td {
-    color: #e1e4e8;
+    color: var(--c-text);
     font-weight: 500;
   }
 
 
-  .compare-table tr.ct-main td.ct-iso { color: #58a6ff; }
+  .compare-table tr.ct-main td.ct-iso { color: var(--c-accent); }
 
   .compare-table tfoot td {
     border-bottom: none;
@@ -1181,14 +1115,14 @@
   .ct-remove {
     background: none;
     border: none;
-    color: #484f58;
+    color: var(--c-text-faint);
     cursor: pointer;
     font-size: 0.8rem;
     padding: 0;
     line-height: 1;
   }
 
-  .ct-remove:hover { color: #f85149; }
+  .ct-remove:hover { color: var(--c-red); }
 
   .ct-add-cell { text-align: left !important; }
 
@@ -1198,10 +1132,10 @@
   }
 
   .compare-filter {
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.1rem 0.25rem;
     font-size: 0.65rem;
     width: 7rem;
@@ -1209,11 +1143,11 @@
   }
 
   .compare-filter:focus {
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .compare-filter::placeholder {
-    color: #6e7681;
+    color: var(--c-text-subtle);
   }
 
   .compare-dropdown {
@@ -1221,14 +1155,14 @@
     top: 100%;
     left: 0;
     z-index: 100;
-    background: #161b22;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
     max-height: 200px;
     overflow-y: auto;
     min-width: 10rem;
     margin-top: 2px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 4px 12px var(--c-overlay);
   }
 
   .compare-option {
@@ -1238,7 +1172,7 @@
     width: 100%;
     background: none;
     border: none;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.25rem 0.4rem;
     font-size: 0.7rem;
     cursor: pointer;
@@ -1246,15 +1180,15 @@
   }
 
   .compare-option:hover {
-    background: #1c2128;
+    background: var(--c-bg-hover);
   }
 
   .compare-option.selected {
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
   .check-mark {
-    color: #58a6ff;
+    color: var(--c-accent);
     font-size: 0.65rem;
   }
 
@@ -1267,12 +1201,12 @@
   .links {
     display: flex;
     gap: 1rem;
-    border-top: 1px solid #2d333b;
+    border-top: 1px solid var(--c-border);
     padding-top: 0.4rem;
   }
 
   .ext-link {
-    color: #58a6ff;
+    color: var(--c-accent);
     font-size: 0.75rem;
     text-decoration: none;
     display: flex;
@@ -1282,5 +1216,4 @@
 
   .ext-link:hover { text-decoration: underline; }
 
-  .tendl-link { color: #8b949e; }
 </style>

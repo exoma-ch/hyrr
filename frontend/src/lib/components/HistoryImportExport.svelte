@@ -50,21 +50,21 @@
 
   .ie-btn {
     padding: 0.3rem 0.6rem;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.75rem;
     cursor: pointer;
   }
 
   .ie-btn:hover {
-    border-color: #58a6ff;
-    color: #e1e4e8;
+    border-color: var(--c-accent);
+    color: var(--c-text);
   }
 
   .import-msg {
     font-size: 0.7rem;
-    color: #7ee787;
+    color: var(--c-green-text);
   }
 </style>

@@ -146,8 +146,8 @@
 
   th {
     text-align: right;
-    border-bottom: 1px solid #2d333b;
-    color: #8b949e;
+    border-bottom: 1px solid var(--c-border);
+    color: var(--c-text-muted);
     font-weight: 500;
     font-size: 0.75rem;
   }
@@ -157,12 +157,12 @@
   }
 
   th.sortable:hover {
-    color: #58a6ff;
+    color: var(--c-accent);
   }
 
   td {
     text-align: right;
-    border-bottom: 1px solid #1c2128;
+    border-bottom: 1px solid var(--c-bg-hover);
     font-variant-numeric: tabular-nums;
   }
 
@@ -181,6 +181,6 @@
   }
 
   tr:hover td {
-    background: #1c2128;
+    background: var(--c-bg-hover);
   }
 </style>

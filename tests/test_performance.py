@@ -24,9 +24,7 @@ class BenchmarkDB:
         dedx = 200.0 / (energies**0.4 + 0.1)
         return energies, dedx
 
-    def get_cross_sections(
-        self, projectile: str, target_Z: int, target_A: int
-    ) -> list:
+    def get_cross_sections(self, projectile: str, target_Z: int, target_A: int) -> list:
         from hyrr.db import CrossSectionData
 
         # Return ~10 residual channels with realistic energy grids
@@ -115,7 +113,9 @@ class TestProductionRatePerformance:
     """Production rate integration -- the core compute loop."""
 
     @pytest.mark.benchmark
-    def test_single_isotope_production_rate(self, bench_db: BenchmarkDB, benchmark) -> None:  # type: ignore[no-untyped-def]
+    def test_single_isotope_production_rate(
+        self, bench_db: BenchmarkDB, benchmark
+    ) -> None:  # type: ignore[no-untyped-def]
         """100-point quadrature for one isotope should be < 1ms."""
         from hyrr.production import compute_production_rate
         from hyrr.stopping import dedx_MeV_per_cm
@@ -182,9 +182,7 @@ class TestProductionRatePerformance:
                     beam_particles_per_s=9.36e14,
                     target_volume_cm3=0.021,
                 )
-                time_grid, activity = bateman_activity(
-                    prate, 21636.0, 86400.0, 86400.0
-                )
+                time_grid, activity = bateman_activity(prate, 21636.0, 86400.0, 86400.0)
                 results.append((prate, activity[-1]))
             return results
 

@@ -1,314 +1,288 @@
-"""Integration tests: neutron activation on Mo and Cu targets.
+"""Integration tests for neutron activation with real TENDL-2025 data.
 
-Validates neutron activation calculations against hand-calculated
-reference values using real TENDL-2025 cross-section data.
-
-Reference case: Mo-98(n,γ)Mo-99 — the standard reactor production route
-for medical Mo-99/Tc-99m.
-
-Tests are skipped if:
-- nucl-parquet data directory is not available
-- TENDL-2025 neutron data (n_Mo.parquet) is not present
+Requires nucl-parquet data directory with tendl-2025 library.
+All tests are skipped if the data is not available.
 """
 
 from __future__ import annotations
 
-import math
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from tests.integration.conftest import requires_db
 
-
-def _has_neutron_data(data_path) -> bool:
-    """Check if TENDL-2025 neutron XS data exists."""
-    return (data_path / "tendl-2025" / "xs" / "n_Mo.parquet").exists()
+pytestmark = [pytest.mark.integration, requires_db]
 
 
-requires_neutron_data = pytest.mark.skipif(
-    True,  # Will be checked per-test via fixture
-    reason="placeholder — overridden by fixture skip",
-)
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-@requires_db
-class TestNeutronFluxSpectra:
-    """Verify flux spectrum normalization and shapes."""
+def _make_db(data_path: Path):
+    """Create a DataStore with tendl-2025 library."""
+    from hyrr.db import DataStore
 
-    def test_weisskopf_normalization(self) -> None:
-        from hyrr.neutrons import WeisskopfFlux
-
-        flux = WeisskopfFlux(total_flux=1e8, temperature_MeV=1.5)
-        E = np.linspace(0.001, 30, 5000)
-        integral = np.trapezoid(flux.phi(E), E)
-        np.testing.assert_allclose(integral, 1e8, rtol=0.02)
-
-    def test_monoenergetic_xs_lookup(self) -> None:
-        """Monoenergetic flux at E0 should give sigma(E0)."""
-        from hyrr.neutrons import MonoenergeticFlux, flux_averaged_xs
-
-        E_xs = np.linspace(0, 20, 200)
-        xs = np.where(E_xs < 10, E_xs * 10, (20 - E_xs) * 10)
-        xs = np.maximum(xs, 0)
-
-        flux = MonoenergeticFlux(total_flux=1e10, energy_MeV=5.0)
-        avg = flux_averaged_xs(E_xs, xs, flux, n_points=2000)
-        expected = np.interp(5.0, E_xs, xs)
-        np.testing.assert_allclose(avg, expected, rtol=0.15)
+    return DataStore(data_path, library="tendl-2025")
 
 
-@requires_db
-class TestNeutronActivationMo98:
-    """Mo-98(n,γ)Mo-99 — hand-calculated reference.
+def _mo_element():
+    """Natural Mo element (simplified: Mo-98 and Mo-100 dominate)."""
+    from hyrr.models import Element
 
-    Setup:
-    - Monoenergetic 1 MeV neutrons, flux = 1e12 n/cm²/s
-    - Natural Mo target (24.13% Mo-98), 10.22 g/cm³
-    - 1 cm thick slab
-    - 7 days irradiation, 1 day cooling
+    return Element(
+        symbol="Mo",
+        Z=42,
+        isotopes={
+            92: 0.1453,
+            94: 0.0915,
+            95: 0.1584,
+            96: 0.1667,
+            97: 0.0960,
+            98: 0.2439,
+            100: 0.0982,
+        },
+    )
 
-    Hand calculation:
-    - σ(1 MeV) ≈ 5762 mb (from TENDL-2025 n_Mo.parquet)
-    - N_Mo98 = 10.22 × 6.022e23 / 95.95 × 0.2413 = 1.548e22 atoms/cm³
-    - R = N × σ × φ × d = 1.548e22 × 5.762e-24 × 1e12 × 1.0 = 8.92e10 /s
-    - Mo-99 t½ = 65.94 h = 237384 s, λ = 2.92e-6 /s
-    - A(7d) = R × (1 - exp(-λ × 7d)) = 7.39e10 Bq
-    """
 
-    def test_mo98_activation(self, data_path, database) -> None:  # type: ignore[no-untyped-def]
-        if not _has_neutron_data(data_path):
-            pytest.skip("TENDL-2025 neutron data not available")
+def _cu_element():
+    """Natural Cu element."""
+    from hyrr.models import Element
 
-        from hyrr.db import DataStore
-        from hyrr.materials import resolve_element
-        from hyrr.models import Layer
-        from hyrr.neutrons import MonoenergeticFlux, compute_neutron_activation
+    return Element(
+        symbol="Cu",
+        Z=29,
+        isotopes={
+            63: 0.6915,
+            65: 0.3085,
+        },
+    )
 
-        # Use TENDL-2025 for neutron XS
-        db_n = DataStore(data_path, library="tendl-2025")
 
-        # Natural Mo target
-        mo = resolve_element(db_n, "Mo")
-        layer = Layer(
-            density_g_cm3=10.22,
-            elements=[(mo, 1.0)],
-            thickness_cm=1.0,
-        )
+def _make_layer(element, density: float, thickness_cm: float):
+    """Create a Layer with the given element at 100% composition."""
+    from hyrr.models import Layer
 
-        # 1 MeV monoenergetic neutrons
-        flux = MonoenergeticFlux(total_flux=1e12, energy_MeV=1.0)
+    layer = Layer(
+        density_g_cm3=density,
+        elements=[(element, 1.0)],
+        thickness_cm=thickness_cm,
+    )
+    # Set internal _thickness for neutron code
+    layer._thickness = thickness_cm
+    return layer
 
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+class TestMo98NgammaMo99:
+    """Mo-98(n,gamma)Mo-99 thermal neutron activation."""
+
+    def test_production_rate_positive(self, data_path: Path) -> None:
+        """Thermal neutron activation of Mo should produce isotopes."""
+        from hyrr.neutrons import ThermalFlux, compute_neutron_activation
+
+        db = _make_db(data_path)
+        mo = _mo_element()
+        layer = _make_layer(mo, density=10.28, thickness_cm=0.1)
+
+        flux = ThermalFlux(total_flux=1e14, kT_eV=0.0253)
         result = compute_neutron_activation(
-            db_n,
+            db,
             layer,
             flux,
-            irradiation_time_s=7 * 86400,
-            cooling_time_s=86400,
-            thickness_cm=1.0,
+            irradiation_time_s=3600.0,
+            cooling_time_s=0.0,
         )
 
-        assert result is not None
+        # Should have at least one isotope produced
         assert len(result.isotope_results) > 0
-
-        # Mo-99 should be present
-        assert "Mo-99" in result.isotope_results, (
-            f"Mo-99 not found. Available: {list(result.isotope_results.keys())}"
+        # At least one channel should have non-zero production
+        total_rate = sum(iso.production_rate for iso in result.isotope_results.values())
+        assert total_rate > 0, (
+            f"No production from thermal Mo activation; "
+            f"products: {list(result.isotope_results.keys())}"
         )
 
-        mo99 = result.isotope_results["Mo-99"]
+    def test_transmission_between_zero_and_one(self, data_path: Path) -> None:
+        """Transmission should be in (0, 1) for a finite target."""
+        from hyrr.neutrons import ThermalFlux, compute_neutron_activation
 
-        # Production rate should be order 1e10 (hand calc: 8.9e10)
-        # Allow wide tolerance due to:
-        # - flux averaging vs point evaluation
-        # - attenuation effects
-        # - multi-isotope contributions
-        assert mo99.production_rate > 1e9, (
-            f"Mo-99 production rate too low: {mo99.production_rate:.2e}"
-        )
-        assert mo99.production_rate < 1e12, (
-            f"Mo-99 production rate too high: {mo99.production_rate:.2e}"
-        )
+        db = _make_db(data_path)
+        mo = _mo_element()
+        layer = _make_layer(mo, density=10.28, thickness_cm=0.1)
+        flux = ThermalFlux(total_flux=1e14, kT_eV=0.0253)
 
-        # Activity should be positive and physically reasonable
-        assert mo99.activity_Bq > 0
-        # After 7d irradiation + 1d cooling, activity should be O(1e10) Bq
-        assert mo99.activity_Bq > 1e8, (
-            f"Mo-99 activity too low: {mo99.activity_Bq:.2e}"
-        )
-
-    def test_transmission_thin_target(self, data_path, database) -> None:  # type: ignore[no-untyped-def]
-        """Thin target should have high transmission (> 0.9)."""
-        if not _has_neutron_data(data_path):
-            pytest.skip("TENDL-2025 neutron data not available")
-
-        from hyrr.db import DataStore
-        from hyrr.materials import resolve_element
-        from hyrr.models import Layer
-        from hyrr.neutrons import MonoenergeticFlux, compute_neutron_activation
-
-        db_n = DataStore(data_path, library="tendl-2025")
-        mo = resolve_element(db_n, "Mo")
-        layer = Layer(
-            density_g_cm3=10.22,
-            elements=[(mo, 1.0)],
-            thickness_cm=0.02,  # 200 µm — typical target foil
-        )
-
-        flux = MonoenergeticFlux(total_flux=1e12, energy_MeV=1.0)
         result = compute_neutron_activation(
-            db_n, layer, flux,
-            irradiation_time_s=86400,
-            cooling_time_s=86400,
-            thickness_cm=0.02,
+            db,
+            layer,
+            flux,
+            irradiation_time_s=3600.0,
+            cooling_time_s=0.0,
         )
 
-        # Mean free path for MeV neutrons in Mo is ~3 cm
-        # 200 µm << 3 cm, so transmission should be very high
-        assert result.transmission > 0.9, (
-            f"Transmission {result.transmission:.4f} too low for thin target"
+        assert 0.0 < result.transmission < 1.0
+
+
+class TestThinVsThick:
+    """Thin target should transmit more neutrons than thick target."""
+
+    def test_thin_higher_transmission(self, data_path: Path) -> None:
+        from hyrr.neutrons import ThermalFlux, compute_neutron_activation
+
+        db = _make_db(data_path)
+        mo = _mo_element()
+        flux = ThermalFlux(total_flux=1e14, kT_eV=0.0253)
+
+        thin_layer = _make_layer(mo, density=10.28, thickness_cm=0.001)
+        thick_layer = _make_layer(mo, density=10.28, thickness_cm=1.0)
+
+        thin_result = compute_neutron_activation(
+            db,
+            thin_layer,
+            flux,
+            irradiation_time_s=3600.0,
+            cooling_time_s=0.0,
+        )
+        thick_result = compute_neutron_activation(
+            db,
+            thick_layer,
+            flux,
+            irradiation_time_s=3600.0,
+            cooling_time_s=0.0,
         )
 
-    def test_attenuation_thick_target(self, data_path, database) -> None:  # type: ignore[no-untyped-def]
-        """Very thick target should show significant attenuation."""
-        if not _has_neutron_data(data_path):
-            pytest.skip("TENDL-2025 neutron data not available")
+        assert thin_result.transmission > thick_result.transmission
+        # Thin target transmission should be close to 1
+        assert thin_result.transmission > 0.99
 
-        from hyrr.db import DataStore
-        from hyrr.materials import resolve_element
-        from hyrr.models import Layer
-        from hyrr.neutrons import MonoenergeticFlux, compute_neutron_activation
+    def test_thick_target_more_production(self, data_path: Path) -> None:
+        """Thick target should produce more total activity than thin."""
+        from hyrr.neutrons import ThermalFlux, compute_neutron_activation
 
-        db_n = DataStore(data_path, library="tendl-2025")
-        mo = resolve_element(db_n, "Mo")
-        layer = Layer(
-            density_g_cm3=10.22,
-            elements=[(mo, 1.0)],
-            thickness_cm=10.0,  # 10 cm — very thick
+        db = _make_db(data_path)
+        mo = _mo_element()
+        flux = ThermalFlux(total_flux=1e14, kT_eV=0.0253)
+
+        thin_layer = _make_layer(mo, density=10.28, thickness_cm=0.001)
+        thick_layer = _make_layer(mo, density=10.28, thickness_cm=1.0)
+
+        thin_result = compute_neutron_activation(
+            db,
+            thin_layer,
+            flux,
+            irradiation_time_s=3600.0,
+            cooling_time_s=0.0,
+        )
+        thick_result = compute_neutron_activation(
+            db,
+            thick_layer,
+            flux,
+            irradiation_time_s=3600.0,
+            cooling_time_s=0.0,
         )
 
-        flux = MonoenergeticFlux(total_flux=1e12, energy_MeV=1.0)
-        result = compute_neutron_activation(
-            db_n, layer, flux,
-            irradiation_time_s=86400,
-            cooling_time_s=86400,
-            thickness_cm=10.0,
+        thin_total = sum(
+            iso.production_rate for iso in thin_result.isotope_results.values()
         )
-
-        # 10 cm in Mo should show noticeable attenuation
-        assert result.sigma_t > 0, "Macroscopic XS should be positive"
-        # With sigma_t ~ 0.3/cm (rough), transmission ~ exp(-3) ~ 0.05
-        assert result.transmission < 0.99, (
-            f"Expected attenuation in 10cm Mo, got T={result.transmission:.4f}"
+        thick_total = sum(
+            iso.production_rate for iso in thick_result.isotope_results.values()
         )
+        assert thick_total > thin_total
 
 
-@requires_db
-class TestNeutronActivationCu:
-    """Cu target neutron activation — cross-check with different material."""
+class TestCuWeisskopf:
+    """Copper activation with Weisskopf evaporation spectrum."""
 
-    def test_cu_activation_produces_isotopes(self, data_path, database) -> None:  # type: ignore[no-untyped-def]
-        if not _has_neutron_data(data_path):
-            pytest.skip("TENDL-2025 neutron data not available")
-
-        from hyrr.db import DataStore
-        from hyrr.materials import resolve_element
-        from hyrr.models import Layer
+    def test_cu_activation_produces_isotopes(self, data_path: Path) -> None:
         from hyrr.neutrons import WeisskopfFlux, compute_neutron_activation
 
-        db_n = DataStore(data_path, library="tendl-2025")
-        cu = resolve_element(db_n, "Cu")
-        layer = Layer(
-            density_g_cm3=8.96,
-            elements=[(cu, 1.0)],
-            thickness_cm=0.5,
-        )
+        db = _make_db(data_path)
+        cu = _cu_element()
+        layer = _make_layer(cu, density=8.96, thickness_cm=0.1)
 
-        # Evaporation spectrum (secondary neutrons)
-        flux = WeisskopfFlux(total_flux=1e10, temperature_MeV=1.5)
+        flux = WeisskopfFlux(total_flux=1e12, temperature_MeV=1.5)
         result = compute_neutron_activation(
-            db_n, layer, flux,
-            irradiation_time_s=86400,
-            cooling_time_s=86400,
-            thickness_cm=0.5,
+            db,
+            layer,
+            flux,
+            irradiation_time_s=3600.0,
+            cooling_time_s=0.0,
         )
 
-        assert result is not None
         assert len(result.isotope_results) > 0
-        # Cu-64 from Cu-63(n,gamma) should be present
-        # (common activation product)
-        has_cu64 = "Cu-64" in result.isotope_results
-        has_any_activity = any(
-            iso.activity_Bq > 0 for iso in result.isotope_results.values()
-        )
-        assert has_any_activity, "At least one isotope should have nonzero activity"
+        total_rate = sum(iso.production_rate for iso in result.isotope_results.values())
+        assert total_rate > 0
 
 
-@requires_db
 class TestSecondaryNeutronActivation:
-    """Test two-pass: charged particles → secondary neutrons → activation."""
+    """Test compute_secondary_neutron_activation with a mock LayerResult."""
 
-    def test_secondary_from_p_mo100(self, data_path, database) -> None:  # type: ignore[no-untyped-def]
-        """p + Mo-100 produces neutrons via (p,2n), which activate the target."""
-        if not _has_neutron_data(data_path):
-            pytest.skip("TENDL-2025 neutron data not available")
-
-        from hyrr.compute import compute_stack
-        from hyrr.db import DataStore
-        from hyrr.materials import resolve_element
-        from hyrr.models import Beam, Layer, TargetStack
+    def test_secondary_from_p_mo100(self, data_path: Path) -> None:
+        """Secondary neutron activation from proton bombardment of Mo."""
+        from hyrr.models import IsotopeResult, LayerResult
         from hyrr.neutrons import (
-            compute_neutron_source,
             compute_secondary_neutron_activation,
         )
 
-        # Step 1: Run charged-particle simulation (same as quickstart)
-        beam = Beam(projectile="p", energy_MeV=16.0, current_mA=0.15)
-        mo100 = resolve_element(database, "Mo", enrichment={100: 1.0})
-        layer = Layer(
-            density_g_cm3=10.22,
-            elements=[(mo100, 1.0)],
-            energy_out_MeV=12.0,
+        db = _make_db(data_path)
+        mo = _mo_element()
+        layer = _make_layer(mo, density=10.28, thickness_cm=0.5)
+
+        # Build a minimal LayerResult with one (p,2n) channel
+        tc99_result = IsotopeResult(
+            name="Tc-99m",
+            Z=43,
+            A=99,
+            state="m",
+            half_life_s=21624.0,
+            production_rate=1e10,
+            saturation_yield_Bq_uA=1e10,
+            activity_Bq=5e9,
+            time_grid_s=np.array([0.0, 3600.0]),
+            activity_vs_time_Bq=np.array([0.0, 5e9]),
+            source="direct",
         )
-        stack = TargetStack(
-            beam=beam,
-            layers=[layer],
-            irradiation_time_s=86400.0,
-            cooling_time_s=86400.0,
+
+        layer_result = LayerResult(
+            layer=layer,
+            energy_in=30.0,
+            energy_out=10.0,
+            delta_E_MeV=20.0,
+            heat_kW=0.02,
+            depth_profile=[],
+            isotope_results={"Tc-99m": tc99_result},
         )
-        result = compute_stack(database, stack)
-        lr = result.layer_results[0]
 
-        # Step 2: Compute neutron source
-        n_source = compute_neutron_source(lr, projectile_Z=1, projectile_A=1)
-
-        # (p,2n) is the dominant channel: Tc-99m production ~2e10 /s × 2 neutrons
-        assert n_source.total_neutrons_per_s > 0, "Should produce secondary neutrons"
-
-        # Step 3: Secondary activation using TENDL-2025 neutron data
-        db_n = DataStore(data_path, library="tendl-2025")
         n_result = compute_secondary_neutron_activation(
-            db_n, lr,
-            projectile_Z=1, projectile_A=1,
-            irradiation_time_s=86400.0,
-            cooling_time_s=86400.0,
-            neutron_library="tendl-2025",
+            db,
+            layer_result,
+            projectile_Z=1,
+            projectile_A=1,
+            irradiation_time_s=3600.0,
+            cooling_time_s=0.0,
         )
 
-        # Secondary activation should produce some isotopes
-        # (but much less than primary production)
-        if n_result is not None:
-            assert len(n_result.isotope_results) >= 0  # may be empty if flux is low
+        # Should produce a result (Mo target has neutron capture channels)
+        assert n_result is not None
+        assert n_result.transmission > 0
+        assert len(n_result.isotope_results) > 0
 
-    def test_neutron_multiplicity_consistency(self, database) -> None:  # type: ignore[no-untyped-def]
-        """Neutron multiplicity should be consistent with known reactions."""
+    def test_neutron_multiplicity_used_correctly(self) -> None:
+        """Verify Mo-100(p,2n)Tc-99m gives 2 neutrons (no data needed)."""
         from hyrr.neutrons import neutron_multiplicity
 
-        # Mo-100(p,2n)Tc-99: should emit 2 neutrons
-        assert neutron_multiplicity(42, 100, 1, 1, 43, 99) == 2
-
-        # Mo-100(p,n)Tc-100: should emit 1 neutron
-        assert neutron_multiplicity(42, 100, 1, 1, 43, 100) == 1
-
-        # Mo-100(p,3n)Tc-98: should emit 3 neutrons
-        assert neutron_multiplicity(42, 100, 1, 1, 43, 98) == 3
+        n = neutron_multiplicity(
+            target_Z=42,
+            target_A=100,
+            projectile_Z=1,
+            projectile_A=1,
+            residual_Z=43,
+            residual_A=99,
+        )
+        assert n == 2

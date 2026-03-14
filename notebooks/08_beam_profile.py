@@ -27,6 +27,7 @@
 # ## 1. Setup
 
 # %%
+
 from hyrr.models import BeamProfile
 from hyrr.plotting import plot_beam_spot, plot_phase_space
 
@@ -94,28 +95,33 @@ plot_phase_space(twiss, plane="y")
 # Side-by-side spots for the three profiles.
 
 # %%
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import numpy as np
 
-fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-for ax, (prof, label) in zip(axes, [
-    (circular, "Circular"),
-    (elliptical, "Elliptical"),
-    (twiss, "Twiss"),
-]):
+fig = make_subplots(
+    rows=1, cols=3,
+    subplot_titles=[
+        f"{label}<br>σ_x={prof.sigma_x_cm*10:.1f} mm, σ_y={prof.effective_sigma_y_cm*10:.1f} mm"
+        for prof, label in [(circular, "Circular"), (elliptical, "Elliptical"), (twiss, "Twiss")]
+    ],
+)
+
+t = np.linspace(0, 2 * np.pi, 100)
+colors = ["#636EFA", "#EF553B", "#00CC96"]
+
+for col, (prof, label) in enumerate([(circular, "Circular"), (elliptical, "Elliptical"), (twiss, "Twiss")], 1):
     sx = prof.sigma_x_cm * 10.0
     sy = prof.effective_sigma_y_cm * 10.0
-    ax.set_title(f"{label}\n$\\sigma_x$={sx:.1f} mm, $\\sigma_y$={sy:.1f} mm")
-    ax.set_aspect("equal")
-
-    import numpy as np
-    t = np.linspace(0, 2 * np.pi, 100)
     for n in [1, 2, 3]:
-        ax.plot(n * sx * np.cos(t), n * sy * np.sin(t), label=f"{n}$\\sigma$")
-    ax.legend(fontsize=8)
-    ax.set_xlabel("x [mm]")
-    ax.set_ylabel("y [mm]")
+        fig.add_trace(go.Scatter(
+            x=n * sx * np.cos(t), y=n * sy * np.sin(t),
+            mode="lines", name=f"{n}σ",
+            line=dict(color=colors[n - 1]),
+            showlegend=(col == 1),
+        ), row=1, col=col)
 
-fig.tight_layout()
+fig.update_xaxes(title_text="x [mm]", scaleanchor="y", scaleratio=1)
+fig.update_yaxes(title_text="y [mm]")
+fig.update_layout(height=400, width=1000, title_text="Beam Profile Comparison")
 fig

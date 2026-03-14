@@ -15,12 +15,14 @@ def _find_data_dir() -> Path | None:
     if env_dir:
         candidates.append(Path(env_dir))
     repo_root = Path(__file__).parent.parent.parent
-    candidates.extend([
-        repo_root / "nucl-parquet",                # git submodule
-        repo_root / ".." / "nucl-parquet",          # sibling repo
-        repo_root / "data" / "parquet",             # legacy
-        Path.home() / ".hyrr" / "nucl-parquet",
-    ])
+    candidates.extend(
+        [
+            repo_root / "nucl-parquet",  # git submodule
+            repo_root / ".." / "nucl-parquet",  # sibling repo
+            repo_root / "data" / "parquet",  # legacy
+            Path.home() / ".hyrr" / "nucl-parquet",
+        ]
+    )
     for p in candidates:
         p = p.resolve()
         if p.is_dir() and (p / "meta").is_dir():

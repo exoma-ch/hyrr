@@ -76,6 +76,8 @@ export interface LayerResultData {
   heat_kW: number;
   isotopes: IsotopeResultData[];
   depth_profile: DepthPointData[];
+  /** Per-isotope production rate vs depth [atoms/s/cm] at each depth point. */
+  depth_production_rates?: Record<string, number[]>;
 }
 
 export interface SimulationResult {

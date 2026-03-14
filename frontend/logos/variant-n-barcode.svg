@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="lineGlow">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!-- Spectral barcode: vertical colored lines of varying width and brightness -->
+  <!-- Each line = a reaction channel at its characteristic energy -->
+  <!-- Grouped by layer color temperature: cool (left) → warm (right) -->
+
+  <!-- Background emission glow -->
+  <rect x="60" y="100" width="392" height="312" fill="#0d1117" rx="4"/>
+
+  <!-- Cool channels (teal family) -->
+  <rect x="72"  y="120" width="4"  height="272" fill="#2dd4bf" opacity="0.9" filter="url(#glow)"/>
+  <rect x="84"  y="120" width="2"  height="272" fill="#2dd4bf" opacity="0.5"/>
+  <rect x="94"  y="120" width="6"  height="272" fill="#2dd4bf" opacity="0.7" filter="url(#glow)"/>
+  <rect x="108" y="120" width="3"  height="272" fill="#2dd4bf" opacity="0.4"/>
+
+  <!-- Green channels -->
+  <rect x="126" y="120" width="5"  height="272" fill="#4ade80" opacity="0.85" filter="url(#glow)"/>
+  <rect x="140" y="120" width="2"  height="272" fill="#4ade80" opacity="0.45"/>
+  <rect x="152" y="120" width="8"  height="272" fill="#4ade80" opacity="0.7" filter="url(#glow)"/>
+  <rect x="168" y="120" width="3"  height="272" fill="#4ade80" opacity="0.35"/>
+  <rect x="178" y="120" width="2"  height="272" fill="#4ade80" opacity="0.55"/>
+
+  <!-- Yellow channels -->
+  <rect x="198" y="120" width="6"  height="272" fill="#fbbf24" opacity="0.8" filter="url(#glow)"/>
+  <rect x="214" y="120" width="3"  height="272" fill="#fbbf24" opacity="0.5"/>
+  <rect x="226" y="120" width="10" height="272" fill="#fbbf24" opacity="0.65" filter="url(#glow)"/>
+  <rect x="244" y="120" width="2"  height="272" fill="#fbbf24" opacity="0.4"/>
+
+  <!-- Amber/orange channels (dominant region) -->
+  <rect x="262" y="120" width="8"  height="272" fill="#f59e0b" opacity="0.9" filter="url(#lineGlow)"/>
+  <rect x="280" y="120" width="12" height="272" fill="#f59e0b" opacity="0.75" filter="url(#glow)"/>
+  <rect x="300" y="120" width="4"  height="272" fill="#d97706" opacity="0.6"/>
+  <rect x="312" y="120" width="6"  height="272" fill="#d97706" opacity="0.8" filter="url(#glow)"/>
+  <rect x="326" y="120" width="3"  height="272" fill="#d97706" opacity="0.45"/>
+
+  <!-- Red channels -->
+  <rect x="344" y="120" width="5"  height="272" fill="#ef4444" opacity="0.7" filter="url(#glow)"/>
+  <rect x="358" y="120" width="2"  height="272" fill="#ef4444" opacity="0.4"/>
+  <rect x="368" y="120" width="7"  height="272" fill="#ef4444" opacity="0.6" filter="url(#glow)"/>
+  <rect x="384" y="120" width="3"  height="272" fill="#f87171" opacity="0.35"/>
+
+  <!-- Violet channels (high threshold) -->
+  <rect x="402" y="120" width="4"  height="272" fill="#a78bfa" opacity="0.6" filter="url(#glow)"/>
+  <rect x="414" y="120" width="2"  height="272" fill="#a78bfa" opacity="0.35"/>
+  <rect x="424" y="120" width="5"  height="272" fill="#8b5cf6" opacity="0.5" filter="url(#glow)"/>
+  <rect x="438" y="120" width="2"  height="272" fill="#8b5cf6" opacity="0.3"/>
+
+  <!-- Subtle frame -->
+  <rect x="60" y="100" width="392" height="312" fill="none" stroke="#21262d" stroke-width="1" rx="4"/>
+</svg>

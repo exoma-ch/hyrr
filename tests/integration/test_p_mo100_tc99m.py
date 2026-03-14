@@ -174,7 +174,9 @@ class TestProductionRates:
         tc100 = lr.isotope_results["Tc-100"]
 
         # EOI activity: find activity at irradiation_time_s
-        irr_idx = np.searchsorted(tc100.time_grid_s, P_MO100_PARAMS["irradiation_time_s"])
+        irr_idx = np.searchsorted(
+            tc100.time_grid_s, P_MO100_PARAMS["irradiation_time_s"]
+        )
         irr_idx = min(irr_idx, len(tc100.activity_vs_time_Bq) - 1)
         activity_eoi_GBq = tc100.activity_vs_time_Bq[irr_idx] * 1e-9
 
@@ -263,9 +265,7 @@ class TestFullPipeline:
 
         # -- energy --
         assert lr.energy_in == pytest.approx(P_MO100_BEAM["energy_MeV"])
-        assert lr.energy_out == pytest.approx(
-            P_MO100_TARGET["energy_out_MeV"], abs=0.5
-        )
+        assert lr.energy_out == pytest.approx(P_MO100_TARGET["energy_out_MeV"], abs=0.5)
 
         # -- heat (order-of-magnitude) --
         assert lr.heat_kW > 0, "Heat should be positive"

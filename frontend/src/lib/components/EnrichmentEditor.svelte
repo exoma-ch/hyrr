@@ -143,9 +143,9 @@
 
   .toggle-btn {
     background: none;
-    border: 1px dashed #2d333b;
+    border: 1px dashed var(--c-border);
     border-radius: 3px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.7rem;
     padding: 0.2rem 0.4rem;
     cursor: pointer;
@@ -153,8 +153,8 @@
 
   .toggle-btn.active {
     border-style: solid;
-    border-color: #d29922;
-    color: #d29922;
+    border-color: var(--c-gold);
+    color: var(--c-gold);
   }
 
   .isotope-list {
@@ -162,7 +162,7 @@
     flex-direction: column;
     gap: 0.2rem;
     padding-left: 0.5rem;
-    border-left: 2px solid #2d333b;
+    border-left: 2px solid var(--c-border);
   }
 
   .isotope-row {
@@ -173,15 +173,15 @@
 
   .a-label {
     font-size: 0.7rem;
-    color: #8b949e;
+    color: var(--c-text-muted);
   }
 
   .a-input {
     width: 45px;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.2rem;
     font-size: 0.75rem;
     text-align: center;
@@ -189,10 +189,10 @@
 
   .frac-input {
     width: 70px;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.2rem;
     font-size: 0.75rem;
     text-align: right;
@@ -201,13 +201,13 @@
   .a-input:focus,
   .frac-input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .rm-btn {
     background: none;
     border: none;
-    color: #f85149;
+    color: var(--c-red);
     cursor: pointer;
     font-size: 0.9rem;
     padding: 0 0.2rem;
@@ -221,33 +221,33 @@
 
   .add-btn {
     background: none;
-    border: 1px dashed #2d333b;
+    border: 1px dashed var(--c-border);
     border-radius: 3px;
-    color: #8b949e;
+    color: var(--c-text-muted);
     font-size: 0.65rem;
     padding: 0.15rem 0.3rem;
     cursor: pointer;
   }
 
   .add-btn:hover {
-    border-color: #58a6ff;
-    color: #58a6ff;
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .total {
     font-size: 0.7rem;
-    color: #7ee787;
+    color: var(--c-green-text);
   }
 
   .total.warn {
-    color: #f85149;
+    color: var(--c-red);
   }
 
   .norm-btn {
     background: none;
-    border: 1px solid #2d333b;
+    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: #d29922;
+    color: var(--c-gold);
     font-size: 0.6rem;
     padding: 0.1rem 0.3rem;
     cursor: pointer;

@@ -1,33 +1,40 @@
 # Installation
 
-## From PyPI (when released)
+## Web App (no install)
+
+The fastest way to use HYRR: **[exoma-ch.github.io/hyrr](https://exoma-ch.github.io/hyrr/)**
+
+Everything runs in your browser — no Python, no install, no data upload.
+
+## Python Package
+
+### From PyPI (when released)
 
 ```bash
-pip install hyrr
+uv add hyrr
 ```
 
-## From source
+### From source
 
 ```bash
-git clone https://github.com/MorePET/hyrr.git
+git clone --recurse-submodules https://github.com/exoma-ch/hyrr.git
 cd hyrr
-pip install -e ".[dev]"
+uv sync
 ```
 
-## Data setup
+## Nuclear Data
 
-HYRR requires parquet data files with nuclear data. Download pre-built data:
+HYRR uses the [nucl-parquet](https://github.com/exoma-ch/nucl-parquet) data package, included as a git submodule. The data is resolved in this order:
+
+1. `--data-dir` CLI argument
+2. `HYRR_DATA` environment variable
+3. `../nucl-parquet` sibling directory (submodule)
+4. `~/.hyrr/nucl-parquet` fallback
+
+To download data manually:
 
 ```bash
 hyrr download-data
 ```
 
-Or build from source data:
-
-```bash
-python data/build_parquet.py \
-  --tendl-path path/to/isotopia.libs/ \
-  --abundance-path path/to/abundance/ \
-  --decay-path path/to/decay/ \
-  --output-dir data/parquet
-```
+The default library is `tendl-2024`. Override with `--library` or `HYRR_LIBRARY` env var.

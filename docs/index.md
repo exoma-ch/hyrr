@@ -2,7 +2,9 @@
 
 **Hierarchical Yield and Radionuclide Rates**
 
-A pure Python package for predicting radio-isotope production in stacked target assemblies, replacing the Fortran-based ISOTOPIA with better stopping powers, compound/multilayer support, and depth-resolved output.
+A pure Python package and browser app for predicting radio-isotope production in stacked target assemblies.
+
+**[Launch the web app](https://exoma-ch.github.io/hyrr/)** — runs entirely in the browser, no install needed.
 
 ## Features
 
@@ -11,7 +13,17 @@ A pure Python package for predicting radio-isotope production in stacked target 
 - **Stacked layer geometries** — beam propagation through windows, targets, degraders, backings
 - **Depth profiles** — spatially resolved heat deposition and activity distributions
 - **Parquet data store** — fast columnar lookups via Polars, replaces 547,000 text files
-- **Pure Python** — no Fortran compiler, no container, `pip install hyrr`
+- **Pure Python** — no Fortran compiler, no container, `uv add hyrr`
+- **Browser frontend** — Svelte 5 + TypeScript with a pure-TS physics engine, zero backend
+
+## Performance
+
+| Operation | Time |
+|---|---|
+| Single isotope production rate | ~56 µs |
+| Full layer simulation (all isotopes) | ~1.6 ms |
+
+Significantly faster and lighter than Isotopia: pure NumPy/SciPy with Parquet-backed nuclear data, no heavy ORM or database server.
 
 ## Quick Example
 
@@ -27,3 +39,5 @@ target = Layer(
 )
 stack = TargetStack(beam=beam, layers=[target])
 ```
+
+Or just use the **[web app](https://exoma-ch.github.io/hyrr/)** — configure beams, layers, and enrichments in the UI and get results instantly.

@@ -21,13 +21,13 @@ from hyrr.models import (
     LayerResult,
     StackResult,
 )
-from hyrr.projectile import resolve_projectile
 from hyrr.production import (
     bateman_activity,
     compute_production_rate,
     generate_depth_profile,
     saturation_yield,
 )
+from hyrr.projectile import resolve_projectile
 from hyrr.stopping import (
     bohr_straggling_variance_per_cm,
     compute_energy_out,
@@ -91,16 +91,23 @@ def compute_stack(
     area = stack.area_cm2
 
     energy_in = beam.energy_MeV
-    accumulated_sigma_sq = beam.energy_spread_MeV ** 2
+    accumulated_sigma_sq = beam.energy_spread_MeV**2
     layer_results: list[LayerResult] = []
 
     proj = resolve_projectile(beam.projectile)
     for layer in stack.layers:
-        sigma_E_in = accumulated_sigma_sq ** 0.5
+        sigma_E_in = accumulated_sigma_sq**0.5
         lr = _compute_layer(
-            db, beam.projectile, beam.current_mA,
-            beam.particles_per_second, proj.Z,
-            layer, energy_in, irr_time, cool_time, area,
+            db,
+            beam.projectile,
+            beam.current_mA,
+            beam.particles_per_second,
+            proj.Z,
+            layer,
+            energy_in,
+            irr_time,
+            cool_time,
+            area,
             enable_chains=enable_chains,
             current_profile=stack.current_profile,
             sigma_E_initial=sigma_E_in,
@@ -108,7 +115,7 @@ def compute_stack(
         layer_results.append(lr)
         energy_in = lr.energy_out
         # Accumulate straggling variance for next layer
-        accumulated_sigma_sq = lr.sigma_E_out_MeV ** 2
+        accumulated_sigma_sq = lr.sigma_E_out_MeV**2
 
     return StackResult(
         stack=stack,
@@ -141,19 +148,34 @@ def _compute_layer(
     if layer.energy_out_MeV is not None:
         energy_out = layer.energy_out_MeV
         thickness = compute_thickness_from_energy(
-            db, projectile, composition, density, energy_in, energy_out,
+            db,
+            projectile,
+            composition,
+            density,
+            energy_in,
+            energy_out,
         )
     elif layer.thickness_cm is not None:
         thickness = layer.thickness_cm
         energy_out = compute_energy_out(
-            db, projectile, composition, density, energy_in, thickness,
+            db,
+            projectile,
+            composition,
+            density,
+            energy_in,
+            thickness,
         )
     else:
         # areal_density_g_cm2
         assert layer.areal_density_g_cm2 is not None
         thickness = layer.areal_density_g_cm2 / density
         energy_out = compute_energy_out(
-            db, projectile, composition, density, energy_in, thickness,
+            db,
+            projectile,
+            composition,
+            density,
+            energy_in,
+            thickness,
         )
 
     # Set computed fields on the mutable Layer
@@ -178,7 +200,10 @@ def _compute_layer(
     dsigma2_dz = 0.0
     if sigma_E_initial > 1.0e-9 or any(w > 0 for _, w in composition):
         dsigma2_dz = bohr_straggling_variance_per_cm(
-            projectile_Z, composition, density, atomic_masses,
+            projectile_Z,
+            composition,
+            density,
+            atomic_masses,
         )
     sigma_E_out = (sigma_E_initial**2 + dsigma2_dz * thickness) ** 0.5
 
@@ -242,7 +267,10 @@ def _compute_layer(
 
                 # Bateman activity
                 time_grid, activity = bateman_activity(
-                    scaled_rate, half_life, irr_time, cool_time,
+                    scaled_rate,
+                    half_life,
+                    irr_time,
+                    cool_time,
                 )
 
                 # Saturation yield
@@ -259,7 +287,10 @@ def _compute_layer(
 
                     # Re-compute Bateman for combined rate
                     combined_tg, combined_act = bateman_activity(
-                        combined_rate, half_life, irr_time, cool_time,
+                        combined_rate,
+                        half_life,
+                        irr_time,
+                        cool_time,
                     )
                     isotope_results[name] = IsotopeResult(
                         name=name,
@@ -296,7 +327,11 @@ def _compute_layer(
         enable_chains = True
     if enable_chains and isotope_results:
         isotope_results = _apply_chain_solver(
-            db, isotope_results, irr_time, cool_time, particles_per_s,
+            db,
+            isotope_results,
+            irr_time,
+            cool_time,
+            particles_per_s,
             current_profile=current_profile,
             nominal_current_mA=current_mA,
         )
@@ -305,19 +340,24 @@ def _compute_layer(
     depth_profile: list[DepthPoint] = []
     if first_energies is not None and first_dedx is not None:
         depths, heat_W_cm3 = generate_depth_profile(
-            first_energies, first_dedx,
-            current_mA, area, projectile_Z,
+            first_energies,
+            first_dedx,
+            current_mA,
+            area,
+            projectile_Z,
         )
         for i in range(len(depths)):
             sig_E_i = sigma_E_fn(float(depths[i])) if sigma_E_fn is not None else 0.0
-            depth_profile.append(DepthPoint(
-                depth_cm=float(depths[i]),
-                energy_MeV=float(first_energies[i]),
-                dedx_MeV_cm=float(first_dedx[i]),
-                heat_W_cm3=float(heat_W_cm3[i]),
-                production_rates={},  # per-point rates omitted for performance
-                sigma_E_MeV=sig_E_i,
-            ))
+            depth_profile.append(
+                DepthPoint(
+                    depth_cm=float(depths[i]),
+                    energy_MeV=float(first_energies[i]),
+                    dedx_MeV_cm=float(first_dedx[i]),
+                    heat_W_cm3=float(heat_W_cm3[i]),
+                    production_rates={},  # per-point rates omitted for performance
+                    sigma_E_MeV=sig_E_i,
+                )
+            )
 
     # --- heat ---
     heat_kW = _integrate_heat(depth_profile, area) if depth_profile else 0.0
@@ -365,7 +405,10 @@ def _apply_chain_solver(
         # but populate source attribution fields
         for name, iso in isotope_results.items():
             isotope_results[name] = IsotopeResult(
-                name=iso.name, Z=iso.Z, A=iso.A, state=iso.state,
+                name=iso.name,
+                Z=iso.Z,
+                A=iso.A,
+                state=iso.state,
                 half_life_s=iso.half_life_s,
                 production_rate=iso.production_rate,
                 saturation_yield_Bq_uA=iso.saturation_yield_Bq_uA,
@@ -376,14 +419,15 @@ def _apply_chain_solver(
                 activity_direct_Bq=iso.activity_Bq,
                 activity_ingrowth_Bq=0.0,
                 activity_direct_vs_time_Bq=iso.activity_vs_time_Bq.copy(),
-                activity_ingrowth_vs_time_Bq=np.zeros_like(
-                    iso.activity_vs_time_Bq
-                ),
+                activity_ingrowth_vs_time_Bq=np.zeros_like(iso.activity_vs_time_Bq),
             )
         return isotope_results
 
     solution = solve_chain(
-        chain, irr_time, cool_time, particles_per_s,
+        chain,
+        irr_time,
+        cool_time,
+        particles_per_s,
         current_profile=current_profile,
         nominal_current_mA=nominal_current_mA,
     )
@@ -402,7 +446,9 @@ def _apply_chain_solver(
 
         activity_final = float(total_activity[-1]) if len(total_activity) > 0 else 0.0
         direct_final = float(direct_activity[-1]) if len(direct_activity) > 0 else 0.0
-        ingrowth_final = float(ingrowth_activity[-1]) if len(ingrowth_activity) > 0 else 0.0
+        ingrowth_final = (
+            float(ingrowth_activity[-1]) if len(ingrowth_activity) > 0 else 0.0
+        )
 
         has_direct = ciso.production_rate > 0
         has_ingrowth = ingrowth_final > 0 or float(np.max(ingrowth_activity)) > 0

@@ -125,7 +125,7 @@
 
   label {
     font-size: 0.8rem;
-    color: #c9d1d9;
+    color: var(--c-text-label);
   }
 
   .time-controls {
@@ -135,10 +135,10 @@
 
   .time-input {
     flex: 1;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.35rem 0.5rem;
     font-size: 0.85rem;
     text-align: right;
@@ -146,15 +146,15 @@
 
   .time-input:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 
   .unit-select {
     width: 60px;
-    background: #0d1117;
-    border: 1px solid #2d333b;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: #e1e4e8;
+    color: var(--c-text);
     padding: 0.35rem;
     font-size: 0.85rem;
     cursor: pointer;
@@ -162,6 +162,6 @@
 
   .unit-select:focus {
     outline: none;
-    border-color: #58a6ff;
+    border-color: var(--c-accent);
   }
 </style>

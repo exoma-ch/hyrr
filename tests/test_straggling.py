@@ -11,7 +11,6 @@ from hyrr.models import Beam, BeamProfile
 from hyrr.production import _gauss_hermite_convolved_xs, compute_production_rate
 from hyrr.stopping import bohr_straggling_variance_per_cm, cumulative_straggling_sigma
 
-
 # ---------------------------------------------------------------------------
 # Bohr straggling unit tests
 # ---------------------------------------------------------------------------
@@ -35,7 +34,10 @@ class TestBohrStraggling:
         atomic_masses = {29: 63.546}
 
         result = bohr_straggling_variance_per_cm(
-            Z_proj, composition, density, atomic_masses,
+            Z_proj,
+            composition,
+            density,
+            atomic_masses,
         )
 
         # Compute expected
@@ -51,7 +53,10 @@ class TestBohrStraggling:
     def test_zero_density_gives_zero(self) -> None:
         """Zero density means zero straggling."""
         result = bohr_straggling_variance_per_cm(
-            1, [(29, 1.0)], 0.0, {29: 63.546},
+            1,
+            [(29, 1.0)],
+            0.0,
+            {29: 63.546},
         )
         assert result == 0.0
 
@@ -83,7 +88,12 @@ class TestCumulativeStraggling:
     def test_zero_thickness_returns_initial(self) -> None:
         """σ_E after zero thickness equals initial σ_E."""
         result = cumulative_straggling_sigma(
-            0.3, 1, [(29, 1.0)], 8.96, {29: 63.546}, 0.0,
+            0.3,
+            1,
+            [(29, 1.0)],
+            8.96,
+            {29: 63.546},
+            0.0,
         )
         assert result == pytest.approx(0.3, rel=1e-10)
 
@@ -94,7 +104,12 @@ class TestCumulativeStraggling:
         thickness = 0.1  # cm
 
         result = cumulative_straggling_sigma(
-            0.0, 1, [(29, 1.0)], 8.96, am, thickness,
+            0.0,
+            1,
+            [(29, 1.0)],
+            8.96,
+            am,
+            thickness,
         )
         expected = math.sqrt(dsig2 * thickness)
         assert result == pytest.approx(expected, rel=1e-10)
@@ -106,7 +121,12 @@ class TestCumulativeStraggling:
         thickness = 0.2
 
         result = cumulative_straggling_sigma(
-            sigma0, 1, [(29, 1.0)], 8.96, am, thickness,
+            sigma0,
+            1,
+            [(29, 1.0)],
+            8.96,
+            am,
+            thickness,
         )
         dsig2 = bohr_straggling_variance_per_cm(1, [(29, 1.0)], 8.96, am)
         expected = math.sqrt(sigma0**2 + dsig2 * thickness)
@@ -123,6 +143,7 @@ class TestGaussHermiteConvolution:
 
     def test_constant_xs_unchanged(self) -> None:
         """Convolving a constant cross-section returns the same constant."""
+
         def xs_fn(E: np.ndarray) -> np.ndarray:
             return np.full_like(E, 100.0)
 
@@ -201,21 +222,22 @@ class TestProductionRateWithStraggling:
         def dedx_fn(e):
             return 10.0
 
-        kwargs = dict(
-            xs_energies_MeV=xs_e,
-            xs_mb=xs_mb,
-            dedx_fn=dedx_fn,
-            energy_in_MeV=16.0,
-            energy_out_MeV=12.0,
-            n_target_atoms=1e21,
-            beam_particles_per_s=1e15,
-            target_volume_cm3=0.02,
-            n_points=200,
-        )
+        kwargs = {
+            "xs_energies_MeV": xs_e,
+            "xs_mb": xs_mb,
+            "dedx_fn": dedx_fn,
+            "energy_in_MeV": 16.0,
+            "energy_out_MeV": 12.0,
+            "n_target_atoms": 1e21,
+            "beam_particles_per_s": 1e15,
+            "target_volume_cm3": 0.02,
+            "n_points": 200,
+        }
 
         prate_no_fn, _, _, _ = compute_production_rate(**kwargs, sigma_E_fn=None)
         prate_zero_fn, _, _, _ = compute_production_rate(
-            **kwargs, sigma_E_fn=lambda z: 0.0,
+            **kwargs,
+            sigma_E_fn=lambda z: 0.0,
         )
 
         # Both should match closely (zero spread = no convolution effect)
@@ -234,21 +256,22 @@ class TestProductionRateWithStraggling:
         def dedx_fn(e):
             return np.full_like(np.asarray(e), 10.0)
 
-        kwargs = dict(
-            xs_energies_MeV=xs_e,
-            xs_mb=xs_mb,
-            dedx_fn=dedx_fn,
-            energy_in_MeV=13.8,
-            energy_out_MeV=12.8,
-            n_target_atoms=1e21,
-            beam_particles_per_s=1e15,
-            target_volume_cm3=0.02,
-            n_points=200,
-        )
+        kwargs = {
+            "xs_energies_MeV": xs_e,
+            "xs_mb": xs_mb,
+            "dedx_fn": dedx_fn,
+            "energy_in_MeV": 13.8,
+            "energy_out_MeV": 12.8,
+            "n_target_atoms": 1e21,
+            "beam_particles_per_s": 1e15,
+            "target_volume_cm3": 0.02,
+            "n_points": 200,
+        }
 
         prate_no, _, _, _ = compute_production_rate(**kwargs, sigma_E_fn=None)
         prate_strag, _, _, _ = compute_production_rate(
-            **kwargs, sigma_E_fn=lambda z: 0.5,
+            **kwargs,
+            sigma_E_fn=lambda z: 0.5,
         )
 
         # Without straggling: zero (entirely below threshold)
@@ -271,7 +294,9 @@ class TestBeamEnergySpread:
 
     def test_positive_value(self) -> None:
         beam = Beam(
-            projectile="p", energy_MeV=18.0, current_mA=0.15,
+            projectile="p",
+            energy_MeV=18.0,
+            current_mA=0.15,
             energy_spread_MeV=0.3,
         )
         assert beam.energy_spread_MeV == 0.3
@@ -279,7 +304,9 @@ class TestBeamEnergySpread:
     def test_negative_raises(self) -> None:
         with pytest.raises(ValueError, match="energy_spread_MeV"):
             Beam(
-                projectile="p", energy_MeV=18.0, current_mA=0.15,
+                projectile="p",
+                energy_MeV=18.0,
+                current_mA=0.15,
                 energy_spread_MeV=-0.1,
             )
 
@@ -367,8 +394,11 @@ class TestBeamProfile:
         """Beam with full profile."""
         prof = BeamProfile(sigma_x_cm=0.2, divergence_x_mrad=3.0)
         beam = Beam(
-            projectile="p", energy_MeV=18.0, current_mA=0.15,
-            energy_spread_MeV=0.3, profile=prof,
+            projectile="p",
+            energy_MeV=18.0,
+            current_mA=0.15,
+            energy_spread_MeV=0.3,
+            profile=prof,
         )
         assert beam.profile is not None
         assert beam.profile.sigma_x_cm == 0.2
@@ -376,7 +406,9 @@ class TestBeamProfile:
     def test_beam_position_direction(self) -> None:
         """Beam with explicit 3D pose."""
         beam = Beam(
-            projectile="p", energy_MeV=18.0, current_mA=0.15,
+            projectile="p",
+            energy_MeV=18.0,
+            current_mA=0.15,
             position=(1.0, 2.0, 0.0),
             direction=(0.0, 0.0, 1.0),
         )
@@ -386,7 +418,9 @@ class TestBeamProfile:
     def test_beam_direction_normalized(self) -> None:
         """Direction property returns a unit vector."""
         beam = Beam(
-            projectile="p", energy_MeV=18.0, current_mA=0.15,
+            projectile="p",
+            energy_MeV=18.0,
+            current_mA=0.15,
             direction=(3.0, 0.0, 4.0),
         )
         d = beam.direction_array
@@ -403,6 +437,8 @@ class TestBeamProfile:
         """Zero-length direction vector raises."""
         with pytest.raises(ValueError, match="direction"):
             Beam(
-                projectile="p", energy_MeV=18.0, current_mA=0.15,
+                projectile="p",
+                energy_MeV=18.0,
+                current_mA=0.15,
                 direction=(0.0, 0.0, 0.0),
             )

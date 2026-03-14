@@ -196,9 +196,7 @@ class TestParseYandfFile:
 
     def test_2col_total(self, tmp_path: Path) -> None:
         """Parse a 2-column file with total (no state suffix)."""
-        fpath = _write_sample(
-            tmp_path, SAMPLE_2COL_TOTAL, "p-Mo100-rp034076.iaea.2024"
-        )
+        fpath = _write_sample(tmp_path, SAMPLE_2COL_TOTAL, "p-Mo100-rp034076.iaea.2024")
         entry = parse_yandf_file(fpath)
 
         assert entry is not None
@@ -355,7 +353,9 @@ class TestInsertCrossSections:
 
         entries = [
             CrossSectionEntry("p", 42, 100, 43, 99, "m", [6.0], [1.1], "iaea.2024"),
-            CrossSectionEntry("p", 42, 100, 34, 76, "", [130.0], [5.2e-11], "tendl.2023"),
+            CrossSectionEntry(
+                "p", 42, 100, 34, 76, "", [130.0], [5.2e-11], "tendl.2023"
+            ),
         ]
 
         count = insert_cross_sections(conn, entries)
@@ -401,12 +401,8 @@ class TestWalkTendlDirectory:
 
     def test_walk_mini_structure(self, tmp_path: Path) -> None:
         """Walk a minimal directory structure with two files."""
-        _write_sample(
-            tmp_path, SAMPLE_3COL_METASTABLE, "p-Mo100-rp043099m.iaea.2024"
-        )
-        _write_sample(
-            tmp_path, SAMPLE_2COL_TOTAL, "p-Mo100-rp034076.iaea.2024"
-        )
+        _write_sample(tmp_path, SAMPLE_3COL_METASTABLE, "p-Mo100-rp043099m.iaea.2024")
+        _write_sample(tmp_path, SAMPLE_2COL_TOTAL, "p-Mo100-rp034076.iaea.2024")
 
         entries = list(walk_tendl_directory(tmp_path))
         assert len(entries) == 2
@@ -428,9 +424,7 @@ class TestWalkTendlDirectory:
     def test_walk_multiple_projectiles(self, tmp_path: Path) -> None:
         """Walk a structure with multiple projectile directories."""
         # Create p/Mo100/... and d/Mo100/...
-        _write_sample(
-            tmp_path, SAMPLE_2COL_TOTAL, "p-Mo100-rp034076.iaea.2024"
-        )
+        _write_sample(tmp_path, SAMPLE_2COL_TOTAL, "p-Mo100-rp034076.iaea.2024")
 
         # Create d directory manually
         d_dir = tmp_path / "d" / "Mo100" / "iaea.2024" / "tables" / "residual"

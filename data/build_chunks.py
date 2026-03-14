@@ -42,13 +42,13 @@ def _load_element_symbols(conn: sqlite3.Connection) -> None:
     global ELEMENT_SYMBOLS
     rows = conn.execute("SELECT Z, symbol FROM elements").fetchall()
     if rows:
-        ELEMENT_SYMBOLS = {z: sym for z, sym in rows}
+        ELEMENT_SYMBOLS = dict(rows)
     else:
         # Fallback: derive from natural_abundances table
         rows = conn.execute(
             "SELECT DISTINCT Z, symbol FROM natural_abundances"
         ).fetchall()
-        ELEMENT_SYMBOLS = {z: sym for z, sym in rows}
+        ELEMENT_SYMBOLS = dict(rows)
 
 
 def _escape_sql_value(value: object) -> str:

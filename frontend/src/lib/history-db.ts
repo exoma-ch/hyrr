@@ -143,11 +143,28 @@ export async function exportHistory(): Promise<string> {
   return JSON.stringify(runs, null, 2);
 }
 
-/** Import history from JSON (merges with existing). */
+/** Validate that an imported entry has the required shape. */
+function isValidHistoryEntry(e: unknown): e is HistoryEntry {
+  if (!e || typeof e !== "object") return false;
+  const obj = e as Record<string, unknown>;
+  if (typeof obj.timestamp !== "number") return false;
+  if (!obj.config || typeof obj.config !== "object") return false;
+  const cfg = obj.config as Record<string, unknown>;
+  // Must have beam and layers at minimum
+  if (!cfg.beam || typeof cfg.beam !== "object") return false;
+  if (!Array.isArray(cfg.layers)) return false;
+  // result can be null or object
+  if (obj.result !== null && typeof obj.result !== "object") return false;
+  return true;
+}
+
+/** Import history from JSON (merges with existing). Skips invalid entries. */
 export async function importHistory(json: string): Promise<number> {
-  const entries = JSON.parse(json) as HistoryEntry[];
+  const parsed = JSON.parse(json);
+  if (!Array.isArray(parsed)) return 0;
   let count = 0;
-  for (const entry of entries) {
+  for (const entry of parsed) {
+    if (!isValidHistoryEntry(entry)) continue;
     const { id: _, ...rest } = entry;
     await saveRun(rest.config, rest.result, rest.label);
     count++;

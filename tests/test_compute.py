@@ -41,9 +41,7 @@ class MockDB:
             return energies, dedx
         return np.array([]), np.array([])
 
-    def get_cross_sections(
-        self, projectile: str, target_Z: int, target_A: int
-    ) -> list:
+    def get_cross_sections(self, projectile: str, target_Z: int, target_A: int) -> list:
         from hyrr.db import CrossSectionData
 
         if projectile == "p" and target_Z == 42 and target_A == 100:
@@ -52,9 +50,7 @@ class MockDB:
                     residual_Z=43,
                     residual_A=99,
                     state="m",
-                    energies_MeV=np.array(
-                        [8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0]
-                    ),
+                    energies_MeV=np.array([8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0]),
                     xs_mb=np.array([0.0, 50.0, 150.0, 200.0, 180.0, 120.0, 60.0]),
                 ),
             ]

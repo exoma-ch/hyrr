@@ -44,12 +44,15 @@ class ChainMockDB:
     def get_decay_data(self, Z: int, A: int, state: str = "") -> DecayData | None:
         if Z == 21 and A == 44 and state == "m":
             return DecayData(
-                Z=21, A=44, state="m",
+                Z=21,
+                A=44,
+                state="m",
                 half_life_s=210996.0,
                 decay_modes=[
                     DecayMode(
                         mode="IT",
-                        daughter_Z=21, daughter_A=44,
+                        daughter_Z=21,
+                        daughter_A=44,
                         daughter_state="",
                         branching=1.0,
                     ),
@@ -57,12 +60,15 @@ class ChainMockDB:
             )
         if Z == 21 and A == 44 and state == "":
             return DecayData(
-                Z=21, A=44, state="",
+                Z=21,
+                A=44,
+                state="",
                 half_life_s=14292.0,
                 decay_modes=[
                     DecayMode(
                         mode="beta+",
-                        daughter_Z=20, daughter_A=44,
+                        daughter_Z=20,
+                        daughter_A=44,
                         daughter_state="",
                         branching=1.0,
                     ),
@@ -70,12 +76,15 @@ class ChainMockDB:
             )
         if Z == 20 and A == 44 and state == "":
             return DecayData(
-                Z=20, A=44, state="",
+                Z=20,
+                A=44,
+                state="",
                 half_life_s=None,
                 decay_modes=[
                     DecayMode(
                         mode="stable",
-                        daughter_Z=None, daughter_A=None,
+                        daughter_Z=None,
+                        daughter_A=None,
                         daughter_state="",
                         branching=1.0,
                     ),
@@ -130,20 +139,26 @@ class TestDiscoverChains:
     def test_merges_duplicate_production(self) -> None:
         """Same isotope from multiple sources should have summed rates."""
         db = ChainMockDB()
-        chain = discover_chains(db, [
-            (21, 44, "m", 1e8),
-            (21, 44, "m", 2e8),
-        ])
+        chain = discover_chains(
+            db,
+            [
+                (21, 44, "m", 1e8),
+                (21, 44, "m", 2e8),
+            ],
+        )
         iso_map = {iso.key: iso for iso in chain}
         assert iso_map[(21, 44, "m")].production_rate == pytest.approx(3e8)
 
     def test_multiple_direct_isotopes(self) -> None:
         """Two different directly-produced isotopes in the same chain."""
         db = ChainMockDB()
-        chain = discover_chains(db, [
-            (21, 44, "m", 1e8),
-            (21, 44, "", 5e7),  # also directly produced
-        ])
+        chain = discover_chains(
+            db,
+            [
+                (21, 44, "m", 1e8),
+                (21, 44, "", 5e7),  # also directly produced
+            ],
+        )
         iso_map = {iso.key: iso for iso in chain}
         assert iso_map[(21, 44, "m")].production_rate == pytest.approx(1e8)
         assert iso_map[(21, 44, "")].production_rate == pytest.approx(5e7)
@@ -181,12 +196,16 @@ class TestSolveChain:
         irr = 86400.0
         cool = 86400.0
 
-        chain = [ChainIsotope(
-            Z=21, A=44, state="",
-            half_life_s=half_life,
-            production_rate=rate,
-            decay_modes=[],
-        )]
+        chain = [
+            ChainIsotope(
+                Z=21,
+                A=44,
+                state="",
+                half_life_s=half_life,
+                production_rate=rate,
+                decay_modes=[],
+            )
+        ]
 
         sol = solve_chain(chain, irr, cool, 0.0)
         lam = LN2 / half_life
@@ -195,7 +214,8 @@ class TestSolveChain:
         eoi_idx = len(sol.time_grid_s) // 2 - 1
         expected_eoi = rate * (1 - math.exp(-lam * irr))
         assert sol.activities[0, eoi_idx] == pytest.approx(
-            expected_eoi, rel=0.02,
+            expected_eoi,
+            rel=0.02,
         )
 
     def test_total_equals_direct_plus_ingrowth(self) -> None:
@@ -209,8 +229,10 @@ class TestSolveChain:
             direct = sol.activities_direct[i, :]
             ingrowth = sol.activities_ingrowth[i, :]
             np.testing.assert_allclose(
-                direct + ingrowth, total,
-                rtol=1e-6, atol=1e-3,
+                direct + ingrowth,
+                total,
+                rtol=1e-6,
+                atol=1e-3,
             )
 
     def test_daughter_ingrowth_nonzero(self) -> None:
@@ -221,8 +243,7 @@ class TestSolveChain:
 
         # Find Sc-44 index
         sc44_idx = next(
-            i for i, iso in enumerate(sol.isotopes)
-            if iso.key == (21, 44, "")
+            i for i, iso in enumerate(sol.isotopes) if iso.key == (21, 44, "")
         )
 
         # Sc-44 has no direct production, so direct should be zero
@@ -237,11 +258,12 @@ class TestSolveChain:
         sol = solve_chain(chain, 86400.0, 86400.0, 0.0)
 
         ca44_idx = next(
-            i for i, iso in enumerate(sol.isotopes)
-            if iso.key == (20, 44, "")
+            i for i, iso in enumerate(sol.isotopes) if iso.key == (20, 44, "")
         )
         np.testing.assert_allclose(
-            sol.activities[ca44_idx, :], 0.0, atol=1e-10,
+            sol.activities[ca44_idx, :],
+            0.0,
+            atol=1e-10,
         )
 
     def test_empty_chain(self) -> None:
@@ -272,8 +294,7 @@ class TestSolveChain:
         sol = solve_chain(chain, 86400.0, 86400.0, 0.0)
 
         sc44_idx = next(
-            i for i, iso in enumerate(sol.isotopes)
-            if iso.key == (21, 44, "")
+            i for i, iso in enumerate(sol.isotopes) if iso.key == (21, 44, "")
         )
 
         # Peak Sc-44 activity should be substantial
@@ -363,7 +384,10 @@ class TestSolveChainWithCurrentProfile:
 
         # Solve without profile
         sol_const = solve_chain(
-            chain, 86400.0, 86400.0, 0.0,
+            chain,
+            86400.0,
+            86400.0,
+            0.0,
             nominal_current_mA=nominal_mA,
         )
 
@@ -373,31 +397,42 @@ class TestSolveChainWithCurrentProfile:
             currents_mA=np.array([nominal_mA]),
         )
         sol_profile = solve_chain(
-            chain, 86400.0, 86400.0, 0.0,
+            chain,
+            86400.0,
+            86400.0,
+            0.0,
             current_profile=cp,
             nominal_current_mA=nominal_mA,
         )
 
         np.testing.assert_allclose(
-            sol_profile.activities, sol_const.activities,
+            sol_profile.activities,
+            sol_const.activities,
             rtol=0.02,
         )
 
     def test_zero_current_interval_no_production(self) -> None:
         """If current is zero for the full irradiation, no activity."""
-        chain = [ChainIsotope(
-            Z=21, A=44, state="",
-            half_life_s=14292.0,
-            production_rate=1e8,
-            decay_modes=[],
-        )]
+        chain = [
+            ChainIsotope(
+                Z=21,
+                A=44,
+                state="",
+                half_life_s=14292.0,
+                production_rate=1e8,
+                decay_modes=[],
+            )
+        ]
 
         cp = CurrentProfile(
             times_s=np.array([0.0]),
             currents_mA=np.array([0.0]),
         )
         sol = solve_chain(
-            chain, 86400.0, 86400.0, 0.0,
+            chain,
+            86400.0,
+            86400.0,
+            0.0,
             current_profile=cp,
             nominal_current_mA=0.15,
         )
@@ -410,18 +445,25 @@ class TestSolveChainWithCurrentProfile:
         For a single isotope at saturation-like conditions (long irradiation
         relative to half-life), A_eoi ≈ R, so halving R halves A_eoi.
         """
-        chain = [ChainIsotope(
-            Z=21, A=44, state="",
-            half_life_s=14292.0,  # ~4 hours
-            production_rate=1e8,
-            decay_modes=[],
-        )]
+        chain = [
+            ChainIsotope(
+                Z=21,
+                A=44,
+                state="",
+                half_life_s=14292.0,  # ~4 hours
+                production_rate=1e8,
+                decay_modes=[],
+            )
+        ]
         nominal_mA = 0.15
         irr = 86400.0 * 3  # 3 days >> half-life, near saturation
 
         # Full current
         sol_full = solve_chain(
-            chain, irr, 0.0, 0.0,
+            chain,
+            irr,
+            0.0,
+            0.0,
             nominal_current_mA=nominal_mA,
         )
 
@@ -431,7 +473,10 @@ class TestSolveChainWithCurrentProfile:
             currents_mA=np.array([nominal_mA / 2]),
         )
         sol_half = solve_chain(
-            chain, irr, 0.0, 0.0,
+            chain,
+            irr,
+            0.0,
+            0.0,
             current_profile=cp,
             nominal_current_mA=nominal_mA,
         )
@@ -449,7 +494,10 @@ class TestSolveChainWithCurrentProfile:
 
         # Constant
         sol_const = solve_chain(
-            chain, irr, 86400.0, 0.0,
+            chain,
+            irr,
+            86400.0,
+            0.0,
             nominal_current_mA=nominal_mA,
         )
 
@@ -459,20 +507,24 @@ class TestSolveChainWithCurrentProfile:
             currents_mA=np.array([nominal_mA * 2, nominal_mA * 0.5]),
         )
         sol_stepped = solve_chain(
-            chain, irr, 86400.0, 0.0,
+            chain,
+            irr,
+            86400.0,
+            0.0,
             current_profile=cp,
             nominal_current_mA=nominal_mA,
         )
 
         # Activities should differ (not equal to constant case)
         sc44m_idx = next(
-            i for i, iso in enumerate(sol_const.isotopes)
-            if iso.key == (21, 44, "m")
+            i for i, iso in enumerate(sol_const.isotopes) if iso.key == (21, 44, "m")
         )
         # The stepped profile has average current = 1.25 * nominal,
         # but time-weighting matters, so just check they differ
         eoi_const = sol_const.activities[sc44m_idx, len(sol_const.time_grid_s) // 2 - 1]
-        eoi_stepped = sol_stepped.activities[sc44m_idx, len(sol_stepped.time_grid_s) // 2 - 1]
+        eoi_stepped = sol_stepped.activities[
+            sc44m_idx, len(sol_stepped.time_grid_s) // 2 - 1
+        ]
         assert eoi_const != pytest.approx(eoi_stepped, rel=0.01)
 
     def test_total_equals_direct_plus_ingrowth_with_profile(self) -> None:
@@ -485,7 +537,10 @@ class TestSolveChainWithCurrentProfile:
             currents_mA=np.array([0.2, 0.1]),
         )
         sol = solve_chain(
-            chain, 86400.0, 86400.0, 0.0,
+            chain,
+            86400.0,
+            86400.0,
+            0.0,
             current_profile=cp,
             nominal_current_mA=0.15,
         )
@@ -495,6 +550,8 @@ class TestSolveChainWithCurrentProfile:
             direct = sol.activities_direct[i, :]
             ingrowth = sol.activities_ingrowth[i, :]
             np.testing.assert_allclose(
-                direct + ingrowth, total,
-                rtol=1e-4, atol=1e-3,
+                direct + ingrowth,
+                total,
+                rtol=1e-4,
+                atol=1e-3,
             )

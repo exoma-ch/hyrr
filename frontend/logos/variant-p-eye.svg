@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="coreGlow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="irisGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.5"/>
+      <stop offset="40%" stop-color="#143040" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#0d1117" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Eye-shaped clip (almond/vesica piscis) -->
+    <clipPath id="eyeClip">
+      <path d="M40,256 C120,120 240,80 256,80 C272,80 392,120 472,256 C392,392 272,432 256,432 C240,432 120,392 40,256 Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="512" height="512" fill="#0d1117" rx="48"/>
+
+  <!-- Eye outline -->
+  <path d="M40,256 C120,120 240,80 256,80 C272,80 392,120 472,256 C392,392 272,432 256,432 C240,432 120,392 40,256 Z"
+        fill="none" stroke="#30363d" stroke-width="2"/>
+
+  <!-- Iris: concentric colored rings inside the eye shape -->
+  <g clip-path="url(#eyeClip)">
+    <!-- Outer iris ring (layer 5) -->
+    <circle cx="256" cy="256" r="160" fill="#161b22"/>
+    <circle cx="256" cy="256" r="160" fill="none" stroke="#2a2030" stroke-width="20" opacity="0.6"/>
+    <circle cx="256" cy="256" r="138" fill="none" stroke="#3b2818" stroke-width="18" opacity="0.65"/>
+    <circle cx="256" cy="256" r="118" fill="none" stroke="#3d3018" stroke-width="16" opacity="0.7"/>
+    <circle cx="256" cy="256" r="100" fill="none" stroke="#1a3a2a" stroke-width="14" opacity="0.75"/>
+    <circle cx="256" cy="256" r="84"  fill="none" stroke="#143040" stroke-width="12" opacity="0.8"/>
+
+    <!-- Iris texture: radial lines (like real iris fibers) -->
+    <g opacity="0.15" stroke="#8b949e" stroke-width="0.5">
+      <line x1="256" y1="96" x2="256" y2="176"/>
+      <line x1="296" y1="100" x2="280" y2="178" />
+      <line x1="336" y1="112" x2="302" y2="182"/>
+      <line x1="370" y1="134" x2="320" y2="192"/>
+      <line x1="396" y1="164" x2="332" y2="206"/>
+      <line x1="216" y1="100" x2="232" y2="178"/>
+      <line x1="176" y1="112" x2="210" y2="182"/>
+      <line x1="142" y1="134" x2="192" y2="192"/>
+      <line x1="116" y1="164" x2="180" y2="206"/>
+      <line x1="256" y1="416" x2="256" y2="336"/>
+      <line x1="296" y1="412" x2="280" y2="334"/>
+      <line x1="336" y1="400" x2="302" y2="330"/>
+      <line x1="216" y1="412" x2="232" y2="334"/>
+      <line x1="176" y1="400" x2="210" y2="330"/>
+    </g>
+
+    <!-- Inner iris glow -->
+    <circle cx="256" cy="256" r="70" fill="url(#irisGrad)"/>
+  </g>
+
+  <!-- Pupil -->
+  <circle cx="256" cy="256" r="38" fill="#0d1117"/>
+  <circle cx="256" cy="256" r="38" fill="none" stroke="#143040" stroke-width="2" opacity="0.5"/>
+
+  <!-- Beam highlight (the "gleam" in the eye = beam impact) -->
+  <circle cx="242" cy="240" r="12" fill="#58a6ff" opacity="0.4" filter="url(#coreGlow)"/>
+  <circle cx="242" cy="240" r="5" fill="#e6edf3" opacity="0.9"/>
+
+  <!-- Secondary highlight -->
+  <circle cx="270" cy="268" r="4" fill="#58a6ff" opacity="0.25" filter="url(#glow)"/>
+
+  <!-- Re-draw eye outline on top -->
+  <path d="M40,256 C120,120 240,80 256,80 C272,80 392,120 472,256 C392,392 272,432 256,432 C240,432 120,392 40,256 Z"
+        fill="none" stroke="#484f58" stroke-width="1.5"/>
+</svg>
