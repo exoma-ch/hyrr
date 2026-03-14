@@ -28,6 +28,7 @@
 # ## 1. Setup
 
 # %%
+
 from hyrr import Beam, DataStore, Layer, TargetStack, compute_stack
 from hyrr.materials import resolve_element
 from hyrr.plotting import (
@@ -91,11 +92,11 @@ plot_cumulative_yield(lr, top_n=5)
 # (E_in to E_out) highlighted as a shaded region.
 
 # %%
-xs_data = db.getCrossSections(42, 100, 1, 1)
+xs_data = db.get_cross_sections("p", 42, 100)
 for xs in xs_data:
     if xs.residual_Z == 43 and xs.residual_A == 99 and xs.state == "m":
         energies = np.array(xs.energies_MeV)
-        sigmas = np.array(xs.cross_sections_mb)
+        sigmas = np.array(xs.xs_mb)
         break
 
 plot_excitation_function(

@@ -28,6 +28,7 @@
 # ## 1. Setup
 
 # %%
+
 from hyrr import (
     Beam, Element, DataStore, Layer, TargetStack,
     compute_stack, result_summary, result_to_polars,
