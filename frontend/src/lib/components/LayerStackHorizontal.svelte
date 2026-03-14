@@ -47,8 +47,8 @@
     updateLayer(index, layer);
   }
 
-  function setMaterial(index: number, value: string) {
-    updateLayer(index, { ...layers[index], material: value, enrichment: undefined });
+  function setMaterial(index: number, value: string, enrichment?: Record<string, Record<number, number>>) {
+    updateLayer(index, { ...layers[index], material: value, enrichment });
   }
 
   function onDragStart(e: DragEvent, index: number) {

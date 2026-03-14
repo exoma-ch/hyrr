@@ -28,8 +28,8 @@
     try { return Object.keys(parseFormula(id)); } catch { return []; }
   });
 
-  function setMaterial(material: string) {
-    onchange({ ...layer, material, enrichment: undefined });
+  function setMaterial(material: string, enrichment?: Record<string, Record<number, number>>) {
+    onchange({ ...layer, material, enrichment });
   }
 
   function setMonitor(e: Event) {

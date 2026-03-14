@@ -243,6 +243,15 @@ function convertResult(
       heat_W_cm3: dp.heatWCm3,
     }));
 
+    // Convert depth production rates Map<string, Float64Array> → Record<string, number[]>
+    let depth_production_rates: Record<string, number[]> | undefined;
+    if (lr.depthProductionRates && lr.depthProductionRates.size > 0) {
+      depth_production_rates = {};
+      for (const [name, arr] of lr.depthProductionRates) {
+        depth_production_rates[name] = Array.from(arr);
+      }
+    }
+
     return {
       layer_index: idx,
       energy_in: lr.energyIn,
@@ -251,6 +260,7 @@ function convertResult(
       heat_kW: lr.heatKW,
       isotopes,
       depth_profile,
+      depth_production_rates,
     };
   });
 

@@ -15,15 +15,17 @@
   interface Props {
     open: boolean;
     onclose: () => void;
-    onselect: (material: string) => void;
+    onselect: (material: string, enrichment?: Record<string, Record<number, number>>) => void;
     /** Open the enrichment popup for an element */
     onenrichment?: (element: string) => void;
     /** Current layer's enrichment overrides (for display) */
     currentEnrichment?: Record<string, Record<number, number>>;
     materials: MaterialInfo[];
+    /** If set, auto-open editor for this custom material ID when popup opens */
+    editMaterialId?: string | null;
   }
 
-  let { open, onclose, onselect, onenrichment, currentEnrichment, materials }: Props = $props();
+  let { open, onclose, onselect, onenrichment, currentEnrichment, materials, editMaterialId = null }: Props = $props();
 
   let query = $state("");
   let defineOpen = $state(false);
@@ -37,7 +39,20 @@
 
   $effect(() => {
     if (open) {
-      loadCustomMaterials();
+      loadCustomMaterials().then(() => {
+        if (editMaterialId) {
+          const cm = getCustomMaterials().find((m) => m.id === editMaterialId);
+          if (cm) {
+            defineOpen = true;
+            newFormula = cm.originalInput ?? cm.formula;
+            newName = cm.name;
+            nameManuallySet = true;
+            newDensity = cm.density;
+            editingCustomId = cm.id;
+            return;
+          }
+        }
+      });
       query = "";
       defineOpen = false;
       newFormula = "";
@@ -191,12 +206,12 @@
     formulaError = null;
     try {
       if (editingCustomId) {
-        await updateCustomMaterial(editingCustomId, nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim());
+        await updateCustomMaterial(editingCustomId, nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim(), currentEnrichment);
       } else {
-        await saveCustomMaterial(nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim());
+        await saveCustomMaterial(nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim(), currentEnrichment);
       }
       // Use name as layer identifier so resolveMaterial can look up stored composition
-      onselect(nameVal);
+      onselect(nameVal, currentEnrichment);
       onclose();
     } catch {
       formulaError = "Failed to save";
@@ -312,7 +327,8 @@
     // so resolveMaterial can look up the stored composition
     const custom = findCustomEntry(entry);
     if (custom) {
-      onselect(custom.name);
+      const cm = getCustomMaterials().find((m) => m.id === custom.customId);
+      onselect(custom.name, cm?.enrichment);
     } else {
       onselect(entry.formula ?? entry.path);
     }

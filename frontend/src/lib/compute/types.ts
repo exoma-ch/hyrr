@@ -184,6 +184,8 @@ export interface LayerResult {
   depthProfile: DepthPoint[];
   isotopeResults: Map<string, IsotopeResult>;
   stoppingPowerSources: Map<number, string>;
+  /** Per-isotope production rate vs depth [atoms/s/cm] at each depth point. */
+  depthProductionRates?: Map<string, Float64Array>;
 }
 
 export interface StackResult {

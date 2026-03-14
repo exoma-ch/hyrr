@@ -277,7 +277,7 @@
         <span class="filter-label">Layer</span>
         <div class="chip-group">
           {#each availableLayers as idx}
-            <button class="chip" class:active={filterLayers.has(idx)} onclick={() => toggleLayer(idx)}>L{idx + 1}</button>
+            <button class="chip" class:active={filterLayers.has(idx)} onclick={() => toggleLayer(idx)}>L{idx + 1}{result.config.layers[idx]?.material ? ` (${result.config.layers[idx].material})` : ""}</button>
           {/each}
         </div>
       </div>

@@ -36,6 +36,7 @@
   import PlotDepthProfileLive from "./lib/components/PlotDepthProfileLive.svelte";
   import LayerTable from "./lib/components/LayerTable.svelte";
   import PlotActivityCurve from "./lib/components/PlotActivityCurve.svelte";
+  import PlotProductionDepth from "./lib/components/PlotProductionDepth.svelte";
   import ActivityTableEnhanced from "./lib/components/ActivityTableEnhanced.svelte";
   import HistoryPanel from "./lib/components/HistoryPanel.svelte";
   import HistoryImportExport from "./lib/components/HistoryImportExport.svelte";
@@ -60,6 +61,7 @@
   // Popup state
   let materialPopupOpen = $state(false);
   let materialPopupLayerIndex = $state(0);
+  let materialPopupEditId = $state<string | null>(null);
   let elementPopupOpen = $state(false);
   let elementPopupSymbol = $state("");
   let elementPopupEnrichment = $state<Record<number, number> | undefined>(undefined);
@@ -158,16 +160,20 @@
   // Material popup handlers
   function openMaterialPopup(layerIndex: number) {
     materialPopupLayerIndex = layerIndex;
+    const layers = getLayers();
+    const mat = layers[layerIndex]?.material;
+    const cm = mat ? getCustomMaterials().find((m) => m.name === mat || m.formula === mat) : null;
+    materialPopupEditId = cm?.id ?? null;
     materialPopupOpen = true;
   }
 
-  function onMaterialSelected(material: string) {
+  function onMaterialSelected(material: string, enrichment?: Record<string, Record<number, number>>) {
     const layers = getLayers();
     if (materialPopupLayerIndex < layers.length) {
       updateLayer(materialPopupLayerIndex, {
         ...layers[materialPopupLayerIndex],
         material,
-        enrichment: undefined,
+        enrichment,
       });
     }
   }
@@ -240,6 +246,7 @@
 
         {#if result}
           <PlotActivityCurve {result} />
+          <PlotProductionDepth {result} />
           <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
         {/if}
       {:else}
@@ -270,6 +277,7 @@
       onenrichment={(el) => openElementPopup(materialPopupLayerIndex, el)}
       currentEnrichment={getLayers()[materialPopupLayerIndex]?.enrichment}
       materials={[]}
+      editMaterialId={materialPopupEditId}
     />
 
     <ElementPopup

@@ -216,3 +216,29 @@ export function generateDepthProfile(
 
   return { depths, energiesOrdered: eRev, heatWCm3 };
 }
+
+/**
+ * Compute local production rate [atoms/s/cm] at each depth point
+ * for a single reaction channel.
+ *
+ * rate(x) = flux × n_density × σ(E(x)) × weight × MILLIBARN_CM2
+ */
+export function computeDepthProductionRate(
+  xsEnergiesMeV: Float64Array,
+  xsMb: Float64Array,
+  depthEnergiesMeV: Float64Array,
+  numberDensity: number,
+  beamParticlesPerS: number,
+  areaCm2: number,
+  weight: number,
+): Float64Array {
+  const n = depthEnergiesMeV.length;
+  const flux = beamParticlesPerS / areaCm2;
+  const xsAtDepth = interp(depthEnergiesMeV, xsEnergiesMeV, xsMb, 0, 0);
+  const result = new Float64Array(n);
+  const scale = flux * numberDensity * weight * MILLIBARN_CM2;
+  for (let i = 0; i < n; i++) {
+    result[i] = scale * xsAtDepth[i];
+  }
+  return result;
+}
