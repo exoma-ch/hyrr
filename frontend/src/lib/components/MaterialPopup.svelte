@@ -28,6 +28,7 @@
   let { open, onclose, onselect, onenrichment, currentEnrichment, materials, editMaterialId = null }: Props = $props();
 
   let query = $state("");
+  let searchInput: HTMLInputElement | undefined = $state();
   let defineOpen = $state(false);
   let newFormula = $state("");
   let newName = $state("");
@@ -61,6 +62,8 @@
       newDensity = null;
       formulaError = null;
       editingCustomId = null;
+      // Auto-focus search input so user can type immediately
+      requestAnimationFrame(() => searchInput?.focus());
     }
   });
 
@@ -336,6 +339,11 @@
   }
 
   function useQuery() {
+    // Select first search result if available (proper-cased), otherwise use raw query
+    if (results.length > 0 && query.trim()) {
+      select(results[0]);
+      return;
+    }
     const val = query.trim();
     if (!val) return;
     onselect(val);
@@ -376,6 +384,7 @@
         class="search"
         placeholder="Search or type formula (Mo, H2O, NaCl)..."
         bind:value={query}
+        bind:this={searchInput}
         onkeydown={(e) => { if (e.key === "Enter") useQuery(); }}
       />
       {#if query.trim()}
