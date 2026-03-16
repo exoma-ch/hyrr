@@ -22,6 +22,7 @@
   import {
     initScheduler,
     initDataStore,
+    forceRun,
   } from "./lib/scheduler/sim-scheduler.svelte";
   import { initDepthPreview } from "./lib/stores/depth-preview.svelte";
   import { saveRun } from "./lib/history-db";
@@ -96,14 +97,16 @@
       return;
     }
 
-    // Check URL for shared config
+    // Check URL for shared config — URL hash takes priority over session restore
     const urlConfig = decodeConfigFromHash();
-    if (urlConfig) {
-      setConfig(urlConfig);
-    }
 
     // Restore persisted session tabs from IndexedDB
     await restoreSessions();
+
+    // Apply URL config AFTER session restore so it isn't overwritten (#29)
+    if (urlConfig) {
+      setConfig(urlConfig);
+    }
 
     // Load custom materials and register density lookup
     await loadCustomMaterials();
@@ -250,7 +253,7 @@
           <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
         {/if}
       {:else}
-        <WelcomeScreen />
+        <WelcomeScreen onstart={forceRun} />
       {/if}
     </div>
 
