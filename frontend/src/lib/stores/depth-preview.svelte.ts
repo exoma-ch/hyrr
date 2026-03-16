@@ -5,15 +5,15 @@
 
 import { getConfig } from "./config.svelte";
 import { getDataStore } from "../scheduler/sim-scheduler.svelte";
-import { resolveMaterial } from "../compute/materials";
 import {
+  resolveMaterial,
   computeEnergyOut,
   computeThicknessFromEnergy,
   dedxMeVPerCm,
-} from "../compute/stopping";
-import { generateDepthProfile } from "../compute/production";
-import { linspace } from "../compute/interpolation";
-import { PROJECTILE_Z } from "../compute";
+  generateDepthProfile,
+  linspace,
+  PROJECTILE_Z,
+} from "@hyrr/compute";
 import type { LayerConfig } from "../types";
 
 export interface DepthPreviewLayer {

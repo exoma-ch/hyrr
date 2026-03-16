@@ -8,7 +8,7 @@
   } from "../stores/config.svelte";
   import ThicknessInput from "./ThicknessInput.svelte";
   import type { LayerConfig } from "../types";
-  import { parseFormula } from "../utils/formula";
+  import { parseFormula } from "@hyrr/compute";
   import { getCustomMaterials } from "../stores/custom-materials.svelte";
 
   interface Props {

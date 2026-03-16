@@ -1,7 +1,7 @@
 <script lang="ts">
   import Modal from "./Modal.svelte";
   import { getDataStore } from "../scheduler/sim-scheduler.svelte";
-  import { SYMBOL_TO_Z } from "../utils/formula";
+  import { SYMBOL_TO_Z } from "@hyrr/compute";
 
   interface Props {
     open: boolean;

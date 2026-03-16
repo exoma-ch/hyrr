@@ -6,15 +6,22 @@
   import { getConfig } from "../stores/config.svelte";
   import { formatHalfLife, darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
   import { getResolvedTheme } from "../stores/theme.svelte";
-  import { nudatUrl } from "../utils/format";
-
-  import { Z_TO_SYMBOL } from "../utils/formula";
-  import { resolveMaterial } from "../compute/materials";
-  import { PROJECTILE_Z, PROJECTILE_A } from "../compute/types";
-  import { bestActivityUnit, bestTimeUnit, fmtActivity, fmtYield, nucHtml, nucLabel } from "../utils/format";
+  import {
+    nudatUrl,
+    Z_TO_SYMBOL,
+    resolveMaterial,
+    PROJECTILE_Z,
+    PROJECTILE_A,
+    bestActivityUnit,
+    bestTimeUnit,
+    fmtActivity,
+    fmtYield,
+    nucHtml,
+    nucLabel,
+    interp,
+  } from "@hyrr/compute";
+  import type { DecayMode, CrossSectionData, ProjectileType } from "@hyrr/compute";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
-  import { interp } from "../compute/interpolation";
-  import type { DecayMode, CrossSectionData, ProjectileType } from "../compute/types";
 
   interface Props {
     open: boolean;
@@ -86,6 +93,8 @@
   let parentDecays: { name: string; Z: number; A: number; state: string; mode: string; branching: number }[] = $state([]);
   let xsChannels: XsChannel[] = $state([]);
   let xsScaled = $state(false);
+  /** Depth plot mode: false = theory (σ vs depth), true = real (production rate vs depth) */
+  let depthReal = $state(false);
   // Compare: additional isotopes with their own channel arrays
   let loading = $state(false);
   let compareIsotopes: { name: string; Z: number; A: number; state: string; channels: XsChannel[] }[] = $state([]);
@@ -142,6 +151,7 @@
       compareIsotopes = [];
       compareFilter = "";
       compareDropdownOpen = false;
+      depthReal = false;
       return;
     }
     const db = getDataStore();
@@ -414,13 +424,14 @@
     compareIsotopes = compareIsotopes.filter((c) => c.name !== isoName);
   }
 
-  // Depth production density plot — σ(E(x)) overlaid on beam energy
+  // Depth plot — toggle between theory σ(E(x)) and real production rate from simulation
   $effect(() => {
     const nChannels = xsChannels.length;
     const numCompare = compareIsotopes.length;
-    const scaled = xsScaled;
+    const _real = depthReal;
     const div = depthPlotDiv;
     const prev = getDepthPreview();
+    const _result = getResult();
     const _theme = getResolvedTheme();
     if (!open || !div || (nChannels === 0 && numCompare === 0) || prev.length === 0) return;
     requestAnimationFrame(() => ensurePlotly().then(renderDepthPlot));
@@ -431,8 +442,17 @@
     const tc = themeColors();
     const preview = getDepthPreview();
     if (preview.length === 0) return;
+    const real = depthReal;
 
-    // Build cumulative depth + energy arrays from preview
+    if (real) {
+      renderDepthPlotReal(tc);
+    } else {
+      renderDepthPlotTheory(tc, preview);
+    }
+  }
+
+  /** Theory mode: raw σ(E(x)) vs depth — material-agnostic */
+  function renderDepthPlotTheory(tc: ReturnType<typeof themeColors>, preview: ReturnType<typeof getDepthPreview>) {
     const allDepths: number[] = [];
     const allEnergies: number[] = [];
     let cumulativeDepth = 0;
@@ -446,62 +466,39 @@
       }
       cumulativeDepth += layer.thickness_mm;
     }
-
     if (allDepths.length < 2) return;
 
-    // Interpolate σ(E(x)) for each isotope along the depth profile
-    function xsAtDepth(xs: CrossSectionData, scale: number): number[] {
-      const energiesAtDepth = new Float64Array(allEnergies);
-      const sigma = interp(energiesAtDepth, xs.energiesMeV, xs.xsMb);
-      if (scale !== 1) {
-        for (let i = 0; i < sigma.length; i++) sigma[i] *= scale;
-      }
-      return Array.from(sigma);
-    }
-
-    const scaled = xsScaled;
     const traces: any[] = [];
 
     // Energy curve on secondary y-axis
     traces.push({
-      x: allDepths,
-      y: allEnergies,
-      name: "Energy",
-      type: "scatter",
-      mode: "lines",
+      x: allDepths, y: allEnergies,
+      name: "Energy", type: "scatter", mode: "lines",
       line: { color: tc.textFaint, width: 1.5, dash: "dot" },
       yaxis: "y2",
     });
 
-    // All channels for main isotope
+    // σ(E(x)) for each channel — pure cross-section, no scaling
     let colorIdx = 0;
+    function xsAtDepth(xs: CrossSectionData): number[] {
+      return Array.from(interp(new Float64Array(allEnergies), xs.energiesMeV, xs.xsMb));
+    }
+
     for (const ch of xsChannels) {
-      const scale = scaled ? ch.abundance : 1;
-      const pct = scaled ? ` (${(ch.abundance * 100).toFixed(1)}%)` : "";
       traces.push({
-        x: allDepths,
-        y: xsAtDepth(ch.xs, scale),
-        name: `${ch.label}${pct}`,
-        type: "scatter",
-        mode: "lines",
+        x: allDepths, y: xsAtDepth(ch.xs),
+        name: ch.label, type: "scatter", mode: "lines",
         fill: colorIdx === 0 ? "tozeroy" : undefined,
         fillcolor: colorIdx === 0 ? TRACE_COLORS[0].replace(")", ", 0.15)").replace("rgb", "rgba") : undefined,
         line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: colorIdx === 0 ? 2 : 1.5 },
       });
       colorIdx++;
     }
-
-    // Compare isotopes — all channels
     for (const cmp of compareIsotopes) {
       for (const ch of cmp.channels) {
-        const scale = scaled ? ch.abundance : 1;
-        const pct = scaled ? ` (${(ch.abundance * 100).toFixed(1)}%)` : "";
         traces.push({
-          x: allDepths,
-          y: xsAtDepth(ch.xs, scale),
-          name: `${ch.label}${pct}`,
-          type: "scatter",
-          mode: "lines",
+          x: allDepths, y: xsAtDepth(ch.xs),
+          name: ch.label, type: "scatter", mode: "lines",
           line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
           legendgroup: cmp.name,
         });
@@ -509,39 +506,120 @@
       }
     }
 
-    // Layer boundary shapes
+    const { shapes, annotations } = layerMarkers(boundaries, tc);
+    const layout = darkLayout({
+      xaxis: { title: "Depth (mm)", gridcolor: tc.border, range: [0, cumulativeDepth] },
+      yaxis: { title: "σ (mb)", gridcolor: tc.border },
+      yaxis2: { title: "Energy (MeV)", overlaying: "y", side: "right", gridcolor: tc.border },
+      margin: { t: 20, r: 55, b: 40, l: 55 },
+      height: 220, showlegend: true,
+      legend: { x: 1, xanchor: "right", y: 0.95, bgcolor: "rgba(0,0,0,0)" },
+      shapes, annotations,
+    });
+    Plotly.react(depthPlotDiv, traces, layout, PLOTLY_CONFIG);
+  }
+
+  /** Real mode: actual production rate from simulation result — layer/density/abundance aware */
+  function renderDepthPlotReal(tc: ReturnType<typeof themeColors>) {
+    const result = getResult();
+    if (!result) return;
+
+    // Collect the isotope names we care about (main + compare)
+    const wantedNames = new Set<string>();
+    wantedNames.add(name);
+    for (const cmp of compareIsotopes) {
+      // cmp.name may have " (m)" suffix — strip it to match result isotope names
+      const cleanName = cmp.name.replace(/ \(.*\)$/, "");
+      wantedNames.add(cleanName);
+    }
+
+    // Build continuous depth + production rate arrays from simulation result
+    type IsoEntry = { depths: number[]; rates: number[] };
+    const isoData = new Map<string, IsoEntry>();
+    const boundaries: { depth: number; label: string }[] = [];
+    let cumulativeDepth = 0;
+
+    for (const layer of result.layers) {
+      const dp = layer.depth_profile;
+      if (!dp || dp.length === 0) continue;
+
+      const material = result.config.layers[layer.layer_index]?.material ?? "?";
+      boundaries.push({ depth: cumulativeDepth, label: material });
+
+      const dpr = layer.depth_production_rates;
+      if (dpr) {
+        for (const [isoName, rates] of Object.entries(dpr)) {
+          if (!wantedNames.has(isoName)) continue;
+          if (!isoData.has(isoName)) isoData.set(isoName, { depths: [], rates: [] });
+          const entry = isoData.get(isoName)!;
+          for (let i = 0; i < Math.min(dp.length, rates.length); i++) {
+            entry.depths.push(cumulativeDepth + dp[i].depth_mm);
+            entry.rates.push(rates[i]);
+          }
+        }
+      }
+      cumulativeDepth += dp[dp.length - 1].depth_mm;
+    }
+
+    if (isoData.size === 0) return;
+
+    const traces: any[] = [];
+    let colorIdx = 0;
+
+    // Main isotope first
+    const mainData = isoData.get(name);
+    if (mainData && mainData.depths.length > 0) {
+      traces.push({
+        x: mainData.depths, y: mainData.rates,
+        name: nucLabel(name), type: "scatter", mode: "lines",
+        fill: "tozeroy",
+        fillcolor: TRACE_COLORS[0].replace(")", ", 0.15)").replace("rgb", "rgba"),
+        line: { color: TRACE_COLORS[0], width: 2 },
+      });
+      colorIdx++;
+    }
+
+    // Compare isotopes
+    for (const cmp of compareIsotopes) {
+      const cleanName = cmp.name.replace(/ \(.*\)$/, "");
+      const cmpData = isoData.get(cleanName);
+      if (cmpData && cmpData.depths.length > 0) {
+        traces.push({
+          x: cmpData.depths, y: cmpData.rates,
+          name: nucLabel(cleanName), type: "scatter", mode: "lines",
+          line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
+        });
+        colorIdx++;
+      }
+    }
+
+    if (traces.length === 0) return;
+
+    const { shapes, annotations } = layerMarkers(boundaries, tc);
+    const layout = darkLayout({
+      xaxis: { title: "Depth (mm)", gridcolor: tc.border, range: [0, cumulativeDepth] },
+      yaxis: { title: "Production rate (atoms/s/cm)", gridcolor: tc.border },
+      margin: { t: 20, r: 20, b: 40, l: 70 },
+      height: 220, showlegend: traces.length > 1,
+      legend: { x: 1, xanchor: "right", y: 0.95, bgcolor: "rgba(0,0,0,0)" },
+      shapes, annotations,
+    });
+    Plotly.react(depthPlotDiv, traces, layout, PLOTLY_CONFIG);
+  }
+
+  function layerMarkers(boundaries: { depth: number; label: string }[], tc: ReturnType<typeof themeColors>) {
     const shapes = boundaries.slice(1).map((b) => ({
-      type: "line" as const,
-      x0: b.depth, x1: b.depth, y0: 0, y1: 1,
+      type: "line" as const, x0: b.depth, x1: b.depth, y0: 0, y1: 1,
       yref: "paper" as const,
       line: { color: tc.textFaint, width: 1, dash: "dot" as const },
     }));
-
     const annotations = boundaries.map((b) => ({
       x: b.depth, y: 1.02, yref: "paper" as const,
       text: b.label, showarrow: false,
       font: { color: tc.textMuted, size: 9 },
       xanchor: "left" as const,
     }));
-
-    const layout = darkLayout({
-      xaxis: { title: "Depth (mm)", gridcolor: tc.border, range: [0, cumulativeDepth] },
-      yaxis: { title: scaled ? "σ × abundance (mb)" : "σ (mb)", gridcolor: tc.border },
-      yaxis2: {
-        title: "Energy (MeV)",
-        overlaying: "y",
-        side: "right",
-        gridcolor: tc.border,
-      },
-      margin: { t: 20, r: 55, b: 40, l: 55 },
-      height: 220,
-      showlegend: true,
-      legend: { x: 1, xanchor: "right", y: 0.95, bgcolor: "rgba(0,0,0,0)" },
-      shapes,
-      annotations,
-    });
-
-    Plotly.react(depthPlotDiv, traces, layout, PLOTLY_CONFIG);
+    return { shapes, annotations };
   }
 
   // Activity data — pulled from simulation result (no recomputation)
@@ -894,7 +972,10 @@
     {#if (xsChannels.length > 0 || compareIsotopes.length > 0) && getDepthPreview().length > 0}
       <div class="section">
         <div class="section-bar">
-          <span class="section-label">Production vs depth</span>
+          <span class="section-label">{depthReal ? "Production vs depth" : "σ vs depth"}</span>
+          <button class="scale-toggle" class:active={depthReal} onclick={() => { depthReal = !depthReal; }}>
+            {depthReal ? "Real" : "Theory"}
+          </button>
         </div>
         <div bind:this={depthPlotDiv} class="depth-plot"></div>
       </div>

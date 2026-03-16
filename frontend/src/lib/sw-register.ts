@@ -1,7 +1,12 @@
 /**
- * Register the service worker for caching WASM and nuclear data.
- * Call once on app startup.
+ * Register the service worker for caching nuclear data.
+ *
+ * Passes the app version as a query parameter so the SW can create
+ * version-specific caches. On version bump, the new SW activates
+ * immediately and purges old caches.
  */
+
+declare const __APP_VERSION__: string;
 
 export async function registerServiceWorker(): Promise<void> {
   if (!("serviceWorker" in navigator)) {
@@ -10,10 +15,15 @@ export async function registerServiceWorker(): Promise<void> {
   }
 
   try {
-    const registration = await navigator.serviceWorker.register("/hyrr/sw.js", {
+    const swUrl = `/hyrr/sw.js?v=${__APP_VERSION__}`;
+    const registration = await navigator.serviceWorker.register(swUrl, {
       scope: "/hyrr/",
     });
-    console.log("Service Worker registered:", registration.scope);
+
+    // Check for updates on every page load
+    registration.update();
+
+    console.log("Service Worker registered:", registration.scope, `(v${__APP_VERSION__})`);
   } catch (error) {
     console.warn("Service Worker registration failed:", error);
   }

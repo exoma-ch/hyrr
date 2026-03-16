@@ -3,7 +3,7 @@
   import type { SimulationResult, IsotopeResultData } from "../types";
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
   import { getResolvedTheme } from "../stores/theme.svelte";
-  import { bestActivityUnit, bestTimeUnit, nucLabel } from "../utils/format";
+  import { bestActivityUnit, bestTimeUnit, nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
 
   interface Props {

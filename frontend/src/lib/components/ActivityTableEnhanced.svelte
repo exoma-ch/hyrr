@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { SimulationResult } from "../types";
   import { formatHalfLife } from "../plotting/plotly-helpers";
-  import { fmtActivity, fmtYield, fmtDoseRate, nucHtml } from "../utils/format";
+  import { fmtActivity, fmtYield, fmtDoseRate, nucHtml } from "@hyrr/compute";
   import { getDoseConstant, type DoseSource } from "../utils/dose-constants";
   import { toggleIsotope, isSelected, clearSelection, getSelectedIsotopes } from "../stores/selection.svelte";
 

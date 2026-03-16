@@ -4,7 +4,7 @@
   import MaterialPicker from "./MaterialPicker.svelte";
   import ThicknessInput from "./ThicknessInput.svelte";
   import EnrichmentEditor from "./EnrichmentEditor.svelte";
-  import { parseFormula } from "../utils/formula";
+  import { parseFormula } from "@hyrr/compute";
   import { getCustomMaterials } from "../stores/custom-materials.svelte";
 
   interface Props {

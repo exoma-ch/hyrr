@@ -9,8 +9,7 @@
     deleteCustomMaterial,
     validateFormula,
   } from "../stores/custom-materials.svelte";
-  import { ELEMENT_DENSITIES, COMPOUND_DENSITIES, MATERIAL_CATALOG } from "../compute/materials";
-  import { parseFormula, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT } from "../utils/formula";
+  import { ELEMENT_DENSITIES, COMPOUND_DENSITIES, MATERIAL_CATALOG, parseFormula, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT } from "@hyrr/compute";
 
   interface Props {
     open: boolean;

@@ -1,0 +1,14 @@
+{
+  "name": "@hyrr/compute",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "hyparquet": "^1.7.0",
+    "hyparquet-compressors": "^1.1.1"
+  }
+}

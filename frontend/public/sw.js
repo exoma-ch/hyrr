@@ -1,13 +1,17 @@
 /**
- * Service Worker for caching WASM bundles and nuclear data chunks.
+ * Service Worker for caching nuclear data and app assets.
  *
  * Strategy:
- * - WASM/JS bundles: cache-first (they're versioned by hash in filenames)
- * - Nuclear data (.sql.gz): cache-first (immutable — same TENDL version = same data)
+ * - Nuclear data (.parquet, .sql.gz): cache-first (immutable per library version)
+ * - JS/CSS bundles with hashes: cache-first (content-addressed)
  * - HTML/app shell: network-first (pick up new deployments)
+ *
+ * Cache versioning: CACHE_VERSION is replaced at registration time via
+ * a query parameter ?v=<version>. On version bump, old caches are purged.
  */
 
-const CACHE_NAME = "hyrr-v1";
+const APP_VERSION = new URL(self.location).searchParams.get("v") || "0";
+const CACHE_NAME = `hyrr-${APP_VERSION}`;
 
 /** Patterns for assets that should be cached aggressively (immutable content). */
 const IMMUTABLE_PATTERNS = [
@@ -18,7 +22,6 @@ const IMMUTABLE_PATTERNS = [
   /\.parquet$/,
 ];
 
-/** Check if a URL matches an immutable pattern. */
 function isImmutable(url) {
   return IMMUTABLE_PATTERNS.some((pattern) => pattern.test(url));
 }
@@ -29,17 +32,23 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  // Claim all clients immediately
-  event.waitUntil(self.clients.claim());
+  // Purge old versioned caches
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(
+        keys
+          .filter((key) => key.startsWith("hyrr-") && key !== CACHE_NAME)
+          .map((key) => caches.delete(key)),
+      ),
+    ).then(() => self.clients.claim()),
+  );
 });
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Only cache GET requests
   if (event.request.method !== "GET") return;
 
-  // Only cache same-origin + known CDN requests
   if (
     url.origin !== self.location.origin &&
     !url.hostname.includes("sql.js.org") &&
@@ -49,10 +58,8 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (isImmutable(url.pathname)) {
-    // Cache-first for immutable assets
     event.respondWith(cacheFirst(event.request));
   } else {
-    // Network-first for app shell / HTML
     event.respondWith(networkFirst(event.request));
   }
 });

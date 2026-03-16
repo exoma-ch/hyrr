@@ -6,6 +6,7 @@
  * hardcoded table if the DataStore is not yet loaded.
  */
 
+import type { DatabaseProtocol } from "@hyrr/compute";
 import { getDataStore } from "../scheduler/sim-scheduler.svelte";
 
 /** Dose source quality: "ensdf" = full spectra, "it-approx" = estimated, "fallback" = hardcoded. */
@@ -25,6 +26,8 @@ const FALLBACK: Record<string, number> = {
 /**
  * Compute dose rate at 1 m (µSv/h) for an isotope.
  *
+ * @param db - Optional DatabaseProtocol instance. If omitted, falls back to
+ *             the frontend's global DataStore via getDataStore().
  * @returns DoseResult with dose rate and source quality, or null if unknown
  */
 export function getDoseConstant(
@@ -33,12 +36,13 @@ export function getDoseConstant(
   Z?: number,
   A?: number,
   state?: string,
+  db?: DatabaseProtocol,
 ): DoseResult | null {
   // Try parquet-backed DataStore first
   if (Z !== undefined && A !== undefined) {
-    const db = getDataStore();
-    if (db) {
-      const entry = db.getDoseConstant(Z, A, state ?? "");
+    const store = db ?? getDataStore();
+    if (store) {
+      const entry = store.getDoseConstant(Z, A, state ?? "");
       if (entry) {
         return {
           doseRate: (activity_Bq / 1e6) * entry.k,

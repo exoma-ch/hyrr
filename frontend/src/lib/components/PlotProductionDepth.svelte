@@ -3,7 +3,7 @@
   import type { SimulationResult } from "../types";
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
   import { getResolvedTheme } from "../stores/theme.svelte";
-  import { nucLabel } from "../utils/format";
+  import { nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes } from "../stores/selection.svelte";
 
   interface Props {

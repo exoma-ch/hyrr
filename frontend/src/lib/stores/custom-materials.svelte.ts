@@ -5,7 +5,7 @@
  * reactive state for the material list.
  */
 
-import { parseFormula, SYMBOL_TO_Z } from "../utils/formula";
+import { parseFormula, SYMBOL_TO_Z } from "@hyrr/compute";
 
 export interface CustomMaterial {
   id: string;

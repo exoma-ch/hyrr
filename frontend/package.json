@@ -21,6 +21,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@hyrr/compute": "*",
     "fflate": "^0.8.2",
     "html2canvas": "^1.4.1",
     "hyparquet": "^1.7.0",

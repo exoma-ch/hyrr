@@ -238,6 +238,10 @@
       {#if hasLayers}
         <PlotDepthProfileLive />
 
+        {#if result}
+          <PlotProductionDepth {result} />
+        {/if}
+
         <LayerTable />
 
         {#if status === "loading" || status === "running"}
@@ -249,7 +253,6 @@
 
         {#if result}
           <PlotActivityCurve {result} />
-          <PlotProductionDepth {result} />
           <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
         {/if}
       {:else}

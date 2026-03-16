@@ -2,7 +2,7 @@
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import { getResult } from "../stores/results.svelte";
   import { getDoseConstant } from "../utils/dose-constants";
-  import { fmtDoseRate } from "../utils/format";
+  import { fmtDoseRate } from "@hyrr/compute";
 
   let preview = $derived(getDepthPreview());
   let result = $derived(getResult());
