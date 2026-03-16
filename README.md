@@ -95,6 +95,10 @@ npm run check     # svelte-check (TypeScript)
 - py-mat — material definitions
 - nucl-parquet — evaluated nuclear data (TENDL, ENDF/B, JENDL, JEFF, EXFOR)
 
+## About eXoma
+
+**eXoma** — *Exotic Matter Applications* — is a research group at ETH Zürich focused on novel radioisotope production methods and targetry.
+
 ## License
 
 MIT
