@@ -114,9 +114,20 @@ export class NodeDataStore implements DatabaseProtocol {
     this.dataDir = dataDir.endsWith("/") ? dataDir.slice(0, -1) : dataDir;
   }
 
+  /** Resolve a shared directory (meta/, stopping/) — may be in dataDir or parent. */
+  private resolveSharedDir(name: string): string {
+    const local = join(this.dataDir, name);
+    if (existsSync(local)) return local;
+    const parent = join(this.dataDir, "..", name);
+    if (existsSync(parent)) return parent;
+    throw new Error(`Cannot find ${name}/ directory in ${this.dataDir} or its parent`);
+  }
+
   async init(onProgress?: (msg: string, fraction?: number) => void): Promise<void> {
+    const metaDir = this.resolveSharedDir("meta");
+
     onProgress?.("Loading element data...", 0);
-    const elementsPath = join(this.dataDir, "meta", "elements.parquet");
+    const elementsPath = join(metaDir, "elements.parquet");
     if (existsSync(elementsPath)) {
       const elements = await readParquetFile(elementsPath);
       for (const row of elements) {
@@ -128,20 +139,14 @@ export class NodeDataStore implements DatabaseProtocol {
     }
 
     onProgress?.("Loading abundance data...", 0.25);
-    this.abundanceData = await readParquetFile(
-      join(this.dataDir, "meta", "abundances.parquet"),
-    );
+    this.abundanceData = await readParquetFile(join(metaDir, "abundances.parquet"));
 
     onProgress?.("Loading decay data...", 0.5);
-    this.decayData = await readParquetFile(
-      join(this.dataDir, "meta", "decay.parquet"),
-    );
+    this.decayData = await readParquetFile(join(metaDir, "decay.parquet"));
 
     onProgress?.("Loading dose constants...", 0.65);
     try {
-      const doseRows = await readParquetFile(
-        join(this.dataDir, "meta", "dose_constants.parquet"),
-      );
+      const doseRows = await readParquetFile(join(metaDir, "dose_constants.parquet"));
       for (const row of doseRows) {
         const key = `${row.Z}_${row.A}_${row.state ?? ""}`;
         this.doseConstants.set(key, {
@@ -154,13 +159,8 @@ export class NodeDataStore implements DatabaseProtocol {
     }
 
     onProgress?.("Loading stopping power data...", 0.75);
-    // Stopping data is shared across libraries — check parent directory
-    let stoppingPath = join(this.dataDir, "stopping", "stopping.parquet");
-    if (!existsSync(stoppingPath)) {
-      // Try parent directory (nucl-parquet/stopping/)
-      stoppingPath = join(this.dataDir, "..", "stopping", "stopping.parquet");
-    }
-    this.stoppingData = await readParquetFile(stoppingPath);
+    const stoppingDir = this.resolveSharedDir("stopping");
+    this.stoppingData = await readParquetFile(join(stoppingDir, "stopping.parquet"));
 
     for (const row of this.stoppingData) {
       const key = `${row.source}_${row.target_Z}`;

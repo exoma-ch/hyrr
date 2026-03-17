@@ -116,14 +116,14 @@ export function resolveFormula(
 /** Density estimates for single-element targets (g/cm³). */
 export const ELEMENT_DENSITIES: Record<string, number> = {
   H: 0.0899e-3, He: 0.164e-3, Li: 0.534, Be: 1.85, B: 2.34,
-  C: 2.26, N: 1.17e-3, O: 1.33e-3, F: 1.58e-3, Na: 0.97,
+  C: 2.26, N: 1.17e-3, O: 1.33e-3, F: 1.58e-3, Ne: 0.900e-3, Na: 0.97,
   Mg: 1.74, Al: 2.70, Si: 2.33, P: 1.82, S: 2.07, Cl: 2.95e-3,
-  K: 0.86, Ca: 1.55, Sc: 2.99, Ti: 4.51, V: 6.11, Cr: 7.19,
+  Ar: 1.78e-3, K: 0.86, Ca: 1.55, Sc: 2.99, Ti: 4.51, V: 6.11, Cr: 7.19,
   Mn: 7.47, Fe: 7.87, Co: 8.90, Ni: 8.91, Cu: 8.96, Zn: 7.13,
-  Ga: 5.91, Ge: 5.32, As: 5.73, Se: 4.81, Br: 3.12, Rb: 1.53,
+  Ga: 5.91, Ge: 5.32, As: 5.73, Se: 4.81, Br: 3.12, Kr: 3.75e-3, Rb: 1.53,
   Sr: 2.63, Y: 4.47, Zr: 6.51, Nb: 8.57, Mo: 10.28, Ru: 12.37,
   Rh: 12.41, Pd: 12.02, Ag: 10.49, Cd: 8.65, In: 7.31, Sn: 7.31,
-  Sb: 6.68, Te: 6.24, I: 4.93, Cs: 1.87, Ba: 3.51, La: 6.16,
+  Sb: 6.68, Te: 6.24, I: 4.93, Xe: 5.89e-3, Cs: 1.87, Ba: 3.51, La: 6.16,
   Ce: 6.77, Pr: 6.77, Nd: 7.01, Sm: 7.52, Eu: 5.24, Gd: 7.90,
   Tb: 8.23, Dy: 8.54, Ho: 8.80, Er: 9.07, Tm: 9.32, Yb: 6.57,
   Lu: 9.84, Hf: 13.31, Ta: 16.65, W: 19.25, Re: 21.02, Os: 22.59,
