@@ -1,6 +1,7 @@
 <script lang="ts">
   import { setConfig } from "../stores/config.svelte";
   import { PRESETS } from "../presets";
+  import logoUrl from "/logo.svg?url";
 
   interface Props {
     onstart?: () => void;
@@ -21,7 +22,7 @@
 </script>
 
 <div class="welcome">
-  <img src="/hyrr/logo.svg" alt="HYRR logo" class="hero-logo" />
+  <img src={logoUrl} alt="HYRR logo" class="hero-logo" />
   <h1 class="hero-title">HYRR</h1>
   <p class="hero-sub">Hierarchical Yield &amp; Radionuclide Rates</p>
 

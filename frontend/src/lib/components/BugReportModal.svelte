@@ -3,6 +3,7 @@
   import { getResult } from "../stores/results.svelte";
   import { getShareableUrl } from "../config-url";
   import { getBugReportOpen, closeBugReport } from "../stores/bugreport.svelte";
+  import { isTauri } from "../utils/platform";
 
   let open = $derived(getBugReportOpen());
 
@@ -21,6 +22,7 @@
   const WORKER_URL = import.meta.env.VITE_ISSUE_WORKER_URL ?? "";
   const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY ?? "";
   const REPO = "exoma-ch/hyrr";
+  const desktop = isTauri();
   const MAX_DIM = 1280;
   const JPEG_QUALITY = 0.8;
 
@@ -275,6 +277,49 @@
     closeBugReport();
   }
 
+  /** Save bug report + screenshot to a local folder via Tauri dialog. */
+  async function saveToFile() {
+    if (!description.trim() && !screenshot) return;
+    submitting = true;
+    resultMsg = null;
+
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { writeTextFile, writeFile } = await import("@tauri-apps/plugin-fs");
+
+      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const baseName = `hyrr-bugreport-${ts}`;
+
+      // Save markdown report
+      const reportPath = await save({
+        defaultPath: `${baseName}.md`,
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+        title: "Save bug report",
+      });
+      if (!reportPath) { submitting = false; return; }
+
+      const body = buildBody();
+      const title = `[Bug] ${description.slice(0, 70)}`;
+      const content = `# ${title}\n\n${body}`;
+      await writeTextFile(reportPath, content);
+
+      // Save screenshot alongside the report if present
+      if (screenshot) {
+        const imgPath = reportPath.replace(/\.md$/, ".jpg");
+        const buf = await screenshot.arrayBuffer();
+        await writeFile(imgPath, new Uint8Array(buf));
+      }
+
+      resultMsg = { ok: true, text: `Saved to ${reportPath}` };
+      resetForm();
+      setTimeout(() => { resultMsg = null; closeBugReport(); }, 2500);
+    } catch (e) {
+      resultMsg = { ok: false, text: `Save failed: ${e}` };
+    } finally {
+      submitting = false;
+    }
+  }
+
   function resetForm() {
     description = "";
     screenshot = null;
@@ -299,19 +344,21 @@
         <input id="bug-name" type="text" bind:value={name} placeholder="Your name" />
       </div>
 
-      <div class="field">
-        <label for="bug-email">Email {#if WORKER_URL}<span class="required">* for Submit</span>{:else}<span class="optional">(optional)</span>{/if}</label>
-        <input
-          id="bug-email"
-          type="email"
-          bind:value={email}
-          placeholder="your@email.com"
-          class:invalid={email.length > 0 && !emailValid}
-        />
-        {#if email.length > 0 && !emailValid}
-          <span class="field-error">Please enter a valid email address</span>
-        {/if}
-      </div>
+      {#if !desktop}
+        <div class="field">
+          <label for="bug-email">Email {#if WORKER_URL}<span class="required">* for Submit</span>{:else}<span class="optional">(optional)</span>{/if}</label>
+          <input
+            id="bug-email"
+            type="email"
+            bind:value={email}
+            placeholder="your@email.com"
+            class:invalid={email.length > 0 && !emailValid}
+          />
+          {#if email.length > 0 && !emailValid}
+            <span class="field-error">Please enter a valid email address</span>
+          {/if}
+        </div>
+      {/if}
 
       <div class="field">
         <label for="bug-desc">Description <span class="required">*</span></label>
@@ -349,12 +396,18 @@
         {/if}
       </div>
 
-      <!-- Invisible Turnstile widget container -->
-      <div bind:this={turnstileEl}></div>
+      {#if !desktop}
+        <!-- Invisible Turnstile widget container -->
+        <div bind:this={turnstileEl}></div>
+      {/if}
 
       <p class="hint">
         Config and simulation state attached automatically.
-        {#if WORKER_URL}Have a GitHub account? Use "Open on GitHub" — no email needed.{/if}
+        {#if desktop}
+          Save the report as a file and email it, or open on GitHub if you have internet.
+        {:else if WORKER_URL}
+          Have a GitHub account? Use "Open on GitHub" — no email needed.
+        {/if}
       </p>
 
       {#if resultMsg}
@@ -365,23 +418,42 @@
 
       <div class="actions">
         <button class="cancel-btn" onclick={closeBugReport}>Cancel</button>
-        <button
-          class="gh-btn"
-          onclick={openOnGitHub}
-          disabled={!canOpenGitHub}
-          title="Opens GitHub — you'll review before submitting"
-        >
-          Open on GitHub
-        </button>
-        {#if WORKER_URL}
+        {#if desktop}
+          <button
+            class="gh-btn"
+            onclick={openOnGitHub}
+            disabled={!canOpenGitHub}
+            title="Opens GitHub in your browser (needs internet)"
+          >
+            Open on GitHub
+          </button>
           <button
             class="submit-btn"
-            onclick={submitViaWorker}
-            disabled={!canSubmitWorker}
-            title="Submit directly (requires email)"
+            onclick={saveToFile}
+            disabled={!canOpenGitHub || submitting}
+            title="Save report as a file to share later"
           >
-            {#if submitting}Submitting...{:else}Submit{/if}
+            {#if submitting}Saving...{:else}Save to file{/if}
           </button>
+        {:else}
+          <button
+            class="gh-btn"
+            onclick={openOnGitHub}
+            disabled={!canOpenGitHub}
+            title="Opens GitHub — you'll review before submitting"
+          >
+            Open on GitHub
+          </button>
+          {#if WORKER_URL}
+            <button
+              class="submit-btn"
+              onclick={submitViaWorker}
+              disabled={!canSubmitWorker}
+              title="Submit directly (requires email)"
+            >
+              {#if submitting}Submitting...{:else}Submit{/if}
+            </button>
+          {/if}
         {/if}
       </div>
     </div>

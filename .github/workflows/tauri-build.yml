@@ -1,0 +1,85 @@
+name: Tauri Desktop Build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+            rust-target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            rust-target: aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+            rust-target: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ""
+            rust-target: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set meta stopping tendl-2024/xs
+
+      - name: Copy parquet data to frontend public dir
+        shell: bash
+        run: |
+          mkdir -p frontend/public/data/parquet/{xs,meta,stopping}
+          cp nucl-parquet/tendl-2024/xs/*.parquet frontend/public/data/parquet/xs/
+          cp nucl-parquet/meta/*.parquet frontend/public/data/parquet/meta/
+          cp nucl-parquet/stopping/*.parquet frontend/public/data/parquet/stopping/
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build and release desktop app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_ENV_PLATFORM: ${{ matrix.platform }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "HYRR ${{ github.ref_name }}"
+          releaseBody: "Desktop app for offline use. See [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

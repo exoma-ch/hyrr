@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for HYRR desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-save",
+    "fs:default",
+    "fs:allow-write-text-file",
+    "fs:allow-write-file"
+  ]
+}

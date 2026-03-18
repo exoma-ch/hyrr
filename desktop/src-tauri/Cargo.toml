@@ -1,0 +1,21 @@
+[package]
+name = "hyrr-desktop"
+version = "0.5.0"
+description = "HYRR Desktop — offline nuclear data simulation"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"

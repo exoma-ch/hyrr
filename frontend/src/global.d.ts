@@ -1,5 +1,10 @@
 declare const __APP_VERSION__: string;
 
+declare module "*.svg?url" {
+  const src: string;
+  export default src;
+}
+
 interface ImportMetaEnv {
   readonly VITE_ISSUE_WORKER_URL?: string;
   readonly VITE_TURNSTILE_SITE_KEY?: string;

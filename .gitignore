@@ -224,3 +224,6 @@ node_modules/
 # HYRR data (too large for git, downloaded separately)
 data/hyrr.sqlite
 data/*.sqlite
+
+# Tauri
+desktop/src-tauri/target/

@@ -4,7 +4,7 @@ import pkg from "./package.json" with { type: "json" };
 
 export default defineConfig({
   plugins: [svelte()],
-  base: "/hyrr/",
+  base: process.env.TAURI_ENV_PLATFORM ? "./" : "/hyrr/",
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },

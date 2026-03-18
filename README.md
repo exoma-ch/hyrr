@@ -6,9 +6,9 @@ A pure Python package for predicting radio-isotope production in stacked
 target assemblies, using TENDL cross-section data and NIST stopping power
 tables.
 
-**[Web App](https://exoma-ch.github.io/hyrr/)** | **[Documentation](https://exoma-ch.github.io/hyrr/docs/)**
+**[Web App](https://exoma-ch.github.io/hyrr/)** | **[Desktop App](https://github.com/exoma-ch/hyrr/releases)** | **[Documentation](https://exoma-ch.github.io/hyrr/docs/)**
 
-Try it now — full simulation runs in the browser, no install, no data leaves your machine.
+Try it now — full simulation runs in the browser, no install, no data leaves your machine. Need offline access? Download the [desktop app](https://github.com/exoma-ch/hyrr/releases) for Windows, macOS, or Linux.
 
 ## What it does
 
@@ -60,6 +60,20 @@ result.summary()
 
 The browser frontend (`frontend/`) is a standalone Svelte 5 + TypeScript app with a pure-TS physics engine (no Python/WASM). Nuclear data is lazy-loaded from Parquet files via hyparquet. All computation runs locally — no server, no data upload.
 
+## Desktop App
+
+**[Download](https://github.com/exoma-ch/hyrr/releases)** — available for Windows, macOS (Apple Silicon & Intel), and Linux.
+
+The desktop app (`desktop/`) wraps the same frontend in a native window using [Tauri v2](https://v2.tauri.app/). All nuclear data (~68 MB Parquet) is bundled, so it works fully offline on air-gapped machines. Built with the system webview — the installer is ~15 MB.
+
+| Platform | Artifact |
+|---|---|
+| Windows 10+ | `.msi` installer + `.exe` (NSIS) |
+| macOS 10.15+ | `.dmg` (Apple Silicon) / `.dmg` (Intel) |
+| Ubuntu 22.04+ | `.deb` + `.AppImage` |
+
+Releases are built automatically via GitHub Actions on version tags (`v*`).
+
 ## Development
 
 ```bash
@@ -77,6 +91,13 @@ npm ci
 npm run dev
 npm test          # vitest
 npm run check     # svelte-check (TypeScript)
+```
+
+Desktop (requires [Tauri CLI](https://v2.tauri.app/start/prerequisites/) and Rust):
+
+```bash
+npm install -g @tauri-apps/cli
+cd desktop && npx tauri dev
 ```
 
 ## Contributing

@@ -6,6 +6,7 @@
   import HelpModal from "./HelpModal.svelte";
   import { openBugReport } from "../stores/bugreport.svelte";
   import { cycleTheme, getThemeMode, getResolvedTheme } from "../stores/theme.svelte";
+  import logoUrl from "/logo.svg?url";
 
   let historyOpen = $derived(getHistoryOpen());
   let helpOpen = $state(false);
@@ -20,7 +21,7 @@
 
 <header class="header-bar">
   <button class="home-btn" onclick={resetConfig} title="New simulation">
-    <img src="/hyrr/logo.svg" alt="HYRR logo" class="logo" />
+    <img src={logoUrl} alt="HYRR logo" class="logo" />
     <span class="title">HYRR</span>
   </button>
 
