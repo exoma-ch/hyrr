@@ -71,7 +71,7 @@ jobs:
           cache: npm
 
       - name: Install npm dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build and release desktop app
         uses: tauri-apps/tauri-action@v0
