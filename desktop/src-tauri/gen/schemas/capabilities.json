@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default capabilities for HYRR desktop","local":true,"windows":["main"],"permissions":["core:default","dialog:default","dialog:allow-save","fs:default","fs:allow-write-text-file","fs:allow-write-file"]}}
