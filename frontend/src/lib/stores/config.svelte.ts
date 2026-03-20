@@ -202,6 +202,47 @@ export function getLayers(): LayerConfig[] {
   return expandedLayers;
 }
 
+// ─── Serializable state (for persistence: URL hash, sessions, history) ───
+
+/** JSON-serializable snapshot of internal state including groups. */
+export interface SerializableConfig {
+  beam: BeamConfig;
+  items: Array<LayerConfig | (InternalGroup & { _group: true })>;
+  irradiation_s: number;
+  cooling_s: number;
+}
+
+/** Get the internal state in a JSON-serializable form (preserves groups). */
+export function getSerializableConfig(): SerializableConfig {
+  return JSON.parse(JSON.stringify({
+    beam: state.beam,
+    items: state.items.map((item) =>
+      isInternalGroup(item) ? { ...item, _group: true } : item,
+    ),
+    irradiation_s: state.irradiation_s,
+    cooling_s: state.cooling_s,
+  }));
+}
+
+/** Restore internal state from a serialized snapshot (preserves groups). */
+export function restoreSerializableConfig(c: SerializableConfig): void {
+  pushUndo();
+  state = {
+    beam: c.beam,
+    items: c.items.map((item: any) => {
+      if (item._group || item.mode) {
+        // It's a group
+        const { _group, ...group } = item;
+        return group as InternalGroup;
+      }
+      return item as LayerConfig;
+    }),
+    irradiation_s: c.irradiation_s,
+    cooling_s: c.cooling_s,
+  };
+  invalidateExpansion();
+}
+
 // ─── Setters ────────────────────────────────────────────────────────
 
 export function setConfig(c: SimulationConfig): void {
@@ -212,6 +253,7 @@ export function setConfig(c: SimulationConfig): void {
     irradiation_s: c.irradiation_s,
     cooling_s: c.cooling_s,
   };
+  invalidateExpansion();
 }
 
 export function setBeam(beam: BeamConfig): void {

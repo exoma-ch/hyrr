@@ -157,6 +157,15 @@
         const eocMin = sharedFilter.eocMin ? parseFloat(sharedFilter.eocMin) : NaN;
         if (!isNaN(eocMin) && iso.activity_Bq < eocMin) continue;
 
+        // Reaction mechanism filter
+        if (sharedFilter.reactions.size > 0 && iso.reactions) {
+          const isoMechs = iso.reactions.map((r) => {
+            const m = r.match(/\(([^)]+)\)/);
+            return m ? m[1] : "";
+          }).filter(Boolean);
+          if (!isoMechs.some((m) => sharedFilter.reactions.has(m))) continue;
+        }
+
         isosToPlot.push({ iso, layerIdx: layer.layer_index });
       }
     }

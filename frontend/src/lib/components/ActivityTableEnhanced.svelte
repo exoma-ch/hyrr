@@ -19,11 +19,8 @@
 
   let selected = $derived(getSelectedIsotopes());
 
-  // --- Filter state (shared + table-local extras) ---
+  // --- Filter state (all shared) ---
   let sharedFilter = $derived(getIsotopeFilter());
-  let filterReactions = $state(new Set<string>());
-  let filterRnpEobMin = $state("");
-  let filterRnpEocMin = $state("");
 
   interface Row {
     layerIndex: number;
@@ -152,16 +149,16 @@
     if (!isNaN(eobMin)) filtered = filtered.filter((r) => r.activity_eob_Bq >= eobMin);
     const eocMin = sharedFilter.eocMin ? parseFloat(sharedFilter.eocMin) : NaN;
     if (!isNaN(eocMin)) filtered = filtered.filter((r) => r.activity_Bq >= eocMin);
-    // Table-local: reaction filter
-    if (filterReactions.size > 0) {
+    // Reaction mechanism filter
+    if (sharedFilter.reactions.size > 0) {
       filtered = filtered.filter((r) =>
-        r.reactionMechanisms.some((m) => filterReactions.has(m)),
+        r.reactionMechanisms.some((m) => sharedFilter.reactions.has(m)),
       );
     }
     // RNP% min
-    const rnpEobMin = filterRnpEobMin ? parseFloat(filterRnpEobMin) : NaN;
+    const rnpEobMin = sharedFilter.rnpEobMin ? parseFloat(sharedFilter.rnpEobMin) : NaN;
     if (!isNaN(rnpEobMin)) filtered = filtered.filter((r) => r.rnp_eob_pct >= rnpEobMin);
-    const rnpEocMin = filterRnpEocMin ? parseFloat(filterRnpEocMin) : NaN;
+    const rnpEocMin = sharedFilter.rnpEocMin ? parseFloat(sharedFilter.rnpEocMin) : NaN;
     if (!isNaN(rnpEocMin)) filtered = filtered.filter((r) => r.rnp_pct >= rnpEocMin);
 
     return filtered.sort((a, b) => {
@@ -187,11 +184,6 @@
     else { sortKey = key; sortAsc = false; }
   }
 
-  function toggleReaction(mech: string) {
-    const next = new Set(filterReactions);
-    if (next.has(mech)) next.delete(mech); else next.add(mech);
-    filterReactions = next;
-  }
 
   function exportCSV() {
     const headers = ["Layer", "Isotope", "Z", "A", "Half-life", "Direct (Bq)", "Daughter (Bq)", "EOB (Bq)", "EOC (Bq)", "Sat. Yield (Bq/µA)", "RNP% (EOB)", "RNP% (EOC)", "Dose@1m (µSv/h)", "Reaction"];
@@ -228,13 +220,6 @@
     <div class="toolbar-actions">
       {#if selected.size > 0}
         <button class="action-btn" onclick={clearSelection}>Clear sel. ({selected.size})</button>
-      {/if}
-      {#if availableMechanisms.length > 1}
-        <div class="reaction-chips">
-          {#each availableMechanisms as mech}
-            <button class="chip" class:active={filterReactions.has(mech)} onclick={() => toggleReaction(mech)}>{mech}</button>
-          {/each}
-        </div>
       {/if}
       <button class="action-btn" onclick={exportCSV}>CSV</button>
     </div>
