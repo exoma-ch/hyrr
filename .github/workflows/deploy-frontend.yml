@@ -48,8 +48,7 @@ jobs:
           cp nucl-parquet/stopping/stopping.parquet frontend/public/data/parquet/stopping/
           cp nucl-parquet/tendl-2024/xs/*.parquet frontend/public/data/parquet/xs/
 
-      - name: Install frontend dependencies
-        working-directory: frontend
+      - name: Install dependencies
         run: npm install
 
       - name: Build frontend
