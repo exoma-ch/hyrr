@@ -7,9 +7,10 @@
   interface Props {
     layer: LayerConfig;
     onchange: (layer: LayerConfig) => void;
+    isInGroup?: boolean;
   }
 
-  let { layer, onchange }: Props = $props();
+  let { layer, onchange, isInGroup = false }: Props = $props();
 
   let mode = $derived<ThicknessMode>(
     layer.thickness_cm !== undefined
@@ -19,10 +20,10 @@
         : "energy_out_MeV",
   );
 
-  const MODES: { id: ThicknessMode; label: string }[] = [
+  const MODES: { id: ThicknessMode; label: string; disabled?: boolean }[] = [
     { id: "thickness_cm", label: "Thickness" },
     { id: "areal_density_g_cm2", label: "Areal dens." },
-    { id: "energy_out_MeV", label: "E<sub>out</sub>" },
+    { id: "energy_out_MeV", label: "E<sub>out</sub>", disabled: isInGroup },
   ];
 
   // --- Smart thickness text input (thickness_cm mode) ---
@@ -135,7 +136,10 @@
       <button
         class="mode-btn"
         class:active={mode === m.id}
-        onclick={() => setMode(m.id)}
+        class:disabled={m.disabled}
+        onclick={() => !m.disabled && setMode(m.id)}
+        disabled={m.disabled}
+        title={m.disabled ? "E_out not available in groups" : ""}
       >
         {@html m.label}
       </button>
@@ -148,6 +152,7 @@
           type="text"
           value={thicknessText}
           oninput={onThicknessInput}
+          onfocus={(e) => (e.target as HTMLInputElement).select()}
           onblur={commitThickness}
           onkeydown={onThicknessKeydown}
           placeholder="e.g. 25µm"
@@ -171,6 +176,7 @@
         type="text"
         inputmode="decimal"
         value={otherValue}
+        onfocus={(e) => (e.target as HTMLInputElement).select()}
         onchange={setOtherValue}
         class="val-input"
       />
@@ -210,6 +216,16 @@
     background: var(--c-bg-active);
     border-color: var(--c-accent);
     color: var(--c-accent);
+  }
+
+  .mode-btn.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: var(--c-bg-subtle);
+  }
+
+  .mode-btn.disabled:hover {
+    border-color: var(--c-border);
   }
 
   .value-row {

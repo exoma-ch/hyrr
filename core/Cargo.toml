@@ -5,12 +5,16 @@ edition = "2021"
 description = "Rust physics core for HYRR — Hierarchical Yield and Radionuclide Rates"
 license = "MIT"
 
+[features]
+default = ["parquet-store"]
+parquet-store = ["dep:parquet", "dep:arrow"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-parquet = { version = "54", default-features = false, features = ["arrow", "snap"] }
-arrow = { version = "54", default-features = false, features = ["csv", "json"] }
+parquet = { version = "54", default-features = false, features = ["arrow", "snap", "zstd"], optional = true }
+arrow = { version = "54", default-features = false, features = ["csv", "json"], optional = true }
 regex = "1"
 
 [dev-dependencies]

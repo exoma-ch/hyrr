@@ -8,6 +8,11 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
+  resolve: {
+    alias: process.env.TAURI_ENV_PLATFORM
+      ? {}
+      : { "hyrr-wasm": "/src/lib/compute/hyrr-wasm-stub.ts" },
+  },
   server: {
     fs: {
       allow: [".", "../../nucl-parquet"],
@@ -19,5 +24,11 @@ export default defineConfig({
   build: {
     outDir: "dist",
     target: "esnext",
+    rollupOptions: {
+      external: process.env.TAURI_ENV_PLATFORM ? [] : ["hyrr-wasm"],
+    },
+  },
+  test: {
+    exclude: ["e2e/**", "**/node_modules/**"],
   },
 });

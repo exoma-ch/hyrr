@@ -4,6 +4,7 @@
   import { fmtActivity, fmtYield, fmtDoseRate, nucHtml } from "@hyrr/compute";
   import { getDoseConstant, type DoseSource } from "../utils/dose-constants";
   import { toggleIsotope, isSelected, clearSelection, getSelectedIsotopes } from "../stores/selection.svelte";
+  import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -18,17 +19,9 @@
 
   let selected = $derived(getSelectedIsotopes());
 
-  // --- Filter state ---
-  let filterOpen = $state(false);
-  let filterLayers = $state(new Set<number>());
-  let filterText = $state("");
-  let filterZMin = $state("");
-  let filterZMax = $state("");
-  let filterAMin = $state("");
-  let filterAMax = $state("");
+  // --- Filter state (shared + table-local extras) ---
+  let sharedFilter = $derived(getIsotopeFilter());
   let filterReactions = $state(new Set<string>());
-  let filterEobMin = $state("1");
-  let filterEocMin = $state("1");
   let filterRnpEobMin = $state("");
   let filterRnpEocMin = $state("");
 
@@ -140,29 +133,31 @@
 
   let rows = $derived.by(() => {
     let filtered = allRows;
-    if (filterLayers.size > 0) filtered = filtered.filter((r) => filterLayers.has(r.layerIndex));
-    if (filterText) {
-      const lc = filterText.toLowerCase();
+    // Shared filter
+    if (sharedFilter.layers.size > 0) filtered = filtered.filter((r) => sharedFilter.layers.has(r.layerIndex));
+    if (sharedFilter.text) {
+      const lc = sharedFilter.text.toLowerCase();
       filtered = filtered.filter((r) => r.name.toLowerCase().includes(lc));
     }
-    const zMin = filterZMin ? parseInt(filterZMin, 10) : NaN;
-    const zMax = filterZMax ? parseInt(filterZMax, 10) : NaN;
+    const zMin = sharedFilter.zMin ? parseInt(sharedFilter.zMin, 10) : NaN;
+    const zMax = sharedFilter.zMax ? parseInt(sharedFilter.zMax, 10) : NaN;
     if (!isNaN(zMin)) filtered = filtered.filter((r) => r.Z >= zMin);
     if (!isNaN(zMax)) filtered = filtered.filter((r) => r.Z <= zMax);
-    const aMin = filterAMin ? parseInt(filterAMin, 10) : NaN;
-    const aMax = filterAMax ? parseInt(filterAMax, 10) : NaN;
+    const aMin = sharedFilter.aMin ? parseInt(sharedFilter.aMin, 10) : NaN;
+    const aMax = sharedFilter.aMax ? parseInt(sharedFilter.aMax, 10) : NaN;
     if (!isNaN(aMin)) filtered = filtered.filter((r) => r.A >= aMin);
     if (!isNaN(aMax)) filtered = filtered.filter((r) => r.A <= aMax);
+    // Shared EOB/EOC
+    const eobMin = sharedFilter.eobMin ? parseFloat(sharedFilter.eobMin) : NaN;
+    if (!isNaN(eobMin)) filtered = filtered.filter((r) => r.activity_eob_Bq >= eobMin);
+    const eocMin = sharedFilter.eocMin ? parseFloat(sharedFilter.eocMin) : NaN;
+    if (!isNaN(eocMin)) filtered = filtered.filter((r) => r.activity_Bq >= eocMin);
+    // Table-local: reaction filter
     if (filterReactions.size > 0) {
       filtered = filtered.filter((r) =>
         r.reactionMechanisms.some((m) => filterReactions.has(m)),
       );
     }
-    // EOB/EOC min
-    const eobMin = filterEobMin ? parseFloat(filterEobMin) : NaN;
-    if (!isNaN(eobMin)) filtered = filtered.filter((r) => r.activity_eob_Bq >= eobMin);
-    const eocMin = filterEocMin ? parseFloat(filterEocMin) : NaN;
-    if (!isNaN(eocMin)) filtered = filtered.filter((r) => r.activity_Bq >= eocMin);
     // RNP% min
     const rnpEobMin = filterRnpEobMin ? parseFloat(filterRnpEobMin) : NaN;
     if (!isNaN(rnpEobMin)) filtered = filtered.filter((r) => r.rnp_eob_pct >= rnpEobMin);
@@ -187,43 +182,15 @@
     });
   });
 
-  let activeFilterCount = $derived(
-    (filterLayers.size > 0 ? 1 : 0) +
-    (filterText ? 1 : 0) +
-    (filterZMin || filterZMax ? 1 : 0) +
-    (filterAMin || filterAMax ? 1 : 0) +
-    (filterReactions.size > 0 ? 1 : 0) +
-    (filterEobMin ? 1 : 0) +
-    (filterEocMin ? 1 : 0) +
-    (filterRnpEobMin ? 1 : 0) +
-    (filterRnpEocMin ? 1 : 0),
-  );
-
   function toggleSort(key: SortKey) {
     if (sortKey === key) sortAsc = !sortAsc;
     else { sortKey = key; sortAsc = false; }
-  }
-
-  function toggleLayer(idx: number) {
-    const next = new Set(filterLayers);
-    if (next.has(idx)) next.delete(idx); else next.add(idx);
-    filterLayers = next;
   }
 
   function toggleReaction(mech: string) {
     const next = new Set(filterReactions);
     if (next.has(mech)) next.delete(mech); else next.add(mech);
     filterReactions = next;
-  }
-
-  function clearFilters() {
-    filterLayers = new Set();
-    filterText = "";
-    filterZMin = ""; filterZMax = "";
-    filterAMin = ""; filterAMax = "";
-    filterReactions = new Set();
-    filterEobMin = "1"; filterEocMin = "1";
-    filterRnpEobMin = ""; filterRnpEocMin = "";
   }
 
   function exportCSV() {
@@ -257,84 +224,21 @@
 
 <div class="activity-table-enhanced">
   <div class="toolbar">
-    <div class="filter-toggle-wrap">
-      <button class="action-btn" class:has-filters={activeFilterCount > 0} onclick={() => filterOpen = !filterOpen}>
-        Filter{#if activeFilterCount > 0} ({activeFilterCount}){/if}
-      </button>
-    </div>
-    <span class="row-count">{rows.length}/{allRows.length}</span>
+    <span class="row-count">{rows.length}/{allRows.length} isotopes</span>
     <div class="toolbar-actions">
       {#if selected.size > 0}
         <button class="action-btn" onclick={clearSelection}>Clear sel. ({selected.size})</button>
       {/if}
-      <button class="action-btn" onclick={exportCSV}>CSV</button>
-    </div>
-  </div>
-
-  {#if filterOpen}
-    <div class="filter-panel">
-      <div class="filter-section">
-        <span class="filter-label">Layer</span>
-        <div class="chip-group">
-          {#each availableLayers as idx}
-            <button class="chip" class:active={filterLayers.has(idx)} onclick={() => toggleLayer(idx)}>L{idx + 1}{result.config.layers[idx]?.material ? ` (${result.config.layers[idx].material})` : ""}</button>
-          {/each}
-        </div>
-      </div>
-
-      <div class="filter-section">
-        <span class="filter-label">Isotope</span>
-        <input type="text" class="filter-input" placeholder="name..." bind:value={filterText} />
-      </div>
-
-      <div class="filter-section">
-        <span class="filter-label">Z</span>
-        <input type="text" inputmode="numeric" class="filter-num" placeholder="min" bind:value={filterZMin} />
-        <span class="filter-sep">–</span>
-        <input type="text" inputmode="numeric" class="filter-num" placeholder="max" bind:value={filterZMax} />
-      </div>
-
-      <div class="filter-section">
-        <span class="filter-label">A</span>
-        <input type="text" inputmode="numeric" class="filter-num" placeholder="min" bind:value={filterAMin} />
-        <span class="filter-sep">–</span>
-        <input type="text" inputmode="numeric" class="filter-num" placeholder="max" bind:value={filterAMax} />
-      </div>
-
-      <div class="filter-section">
-        <span class="filter-label">EOB ≥</span>
-        <input type="text" inputmode="decimal" class="filter-num-wide" placeholder="Bq" bind:value={filterEobMin} />
-      </div>
-
-      <div class="filter-section">
-        <span class="filter-label">EOC ≥</span>
-        <input type="text" inputmode="decimal" class="filter-num-wide" placeholder="Bq" bind:value={filterEocMin} />
-      </div>
-
-      <div class="filter-section">
-        <span class="filter-label">RNP EOB ≥</span>
-        <input type="text" inputmode="decimal" class="filter-num" placeholder="%" bind:value={filterRnpEobMin} />
-      </div>
-
-      <div class="filter-section">
-        <span class="filter-label">RNP EOC ≥</span>
-        <input type="text" inputmode="decimal" class="filter-num" placeholder="%" bind:value={filterRnpEocMin} />
-      </div>
-
-      <div class="filter-section filter-section-wide">
-        <span class="filter-label">Reaction</span>
-        <div class="chip-group">
+      {#if availableMechanisms.length > 1}
+        <div class="reaction-chips">
           {#each availableMechanisms as mech}
             <button class="chip" class:active={filterReactions.has(mech)} onclick={() => toggleReaction(mech)}>{mech}</button>
           {/each}
         </div>
-      </div>
-
-      {#if activeFilterCount > 0}
-        <button class="clear-btn" onclick={clearFilters}>Clear all</button>
       {/if}
+      <button class="action-btn" onclick={exportCSV}>CSV</button>
     </div>
-  {/if}
+  </div>
 
   <div class="table-wrapper">
     <table>

@@ -7,31 +7,59 @@ use crate::constants::{ELEMENTARY_CHARGE, LN2};
 use crate::projectile::Projectile;
 
 /// Projectile type identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// Serializes as a string: "p", "d", "t", "h", "a" for light ions,
+/// "C-12", "O-16", "Ne-20" etc. for heavy ions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProjectileType {
-    #[serde(rename = "p")]
     Proton,
-    #[serde(rename = "d")]
     Deuteron,
-    #[serde(rename = "t")]
     Tritium,
-    #[serde(rename = "h")]
     Helion,
-    #[serde(rename = "a")]
     Alpha,
+    /// Heavy ion with element symbol, Z, and A (e.g., C-12, O-16).
+    HeavyIon { symbol: String, z: u32, a: u32 },
+}
+
+impl Serialize for ProjectileType {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.symbol_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ProjectileType {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Self::from_str(&s).ok_or_else(|| serde::de::Error::custom(format!("unknown projectile: {s}")))
+    }
 }
 
 impl ProjectileType {
-    pub fn symbol(self) -> &'static str {
+    /// Canonical string representation.
+    pub fn symbol_string(&self) -> String {
+        match self {
+            Self::Proton => "p".to_string(),
+            Self::Deuteron => "d".to_string(),
+            Self::Tritium => "t".to_string(),
+            Self::Helion => "h".to_string(),
+            Self::Alpha => "a".to_string(),
+            Self::HeavyIon { symbol, a, .. } => format!("{}-{}", symbol, a),
+        }
+    }
+
+    /// Short symbol for light ions, element symbol for heavy ions.
+    pub fn symbol(&self) -> &str {
         match self {
             Self::Proton => "p",
             Self::Deuteron => "d",
             Self::Tritium => "t",
             Self::Helion => "h",
             Self::Alpha => "a",
+            Self::HeavyIon { symbol, .. } => symbol,
         }
     }
 
+    /// Parse from string: "p", "d", "t", "h", "a", "C-12", "O-16", etc.
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "p" => Some(Self::Proton),
@@ -39,19 +67,33 @@ impl ProjectileType {
             "t" => Some(Self::Tritium),
             "h" => Some(Self::Helion),
             "a" => Some(Self::Alpha),
-            _ => None,
+            _ => {
+                // Heavy ion notation: Symbol-A (e.g., C-12, O-16, Ne-20)
+                let parts: Vec<&str> = s.splitn(2, '-').collect();
+                if parts.len() != 2 {
+                    return None;
+                }
+                let symbol = parts[0];
+                let a: u32 = parts[1].parse().ok()?;
+                let z = *crate::materials::SYMBOL_TO_Z_MAP.get(symbol)?;
+                Some(Self::HeavyIon {
+                    symbol: symbol.to_string(),
+                    z,
+                    a,
+                })
+            }
         }
     }
 
-    pub fn projectile(self) -> Projectile {
-        Projectile::from_type(self)
+    pub fn projectile(&self) -> Projectile {
+        Projectile::from_type(&self)
     }
 
-    pub fn z(self) -> u32 {
+    pub fn z(&self) -> u32 {
         self.projectile().z
     }
 
-    pub fn a(self) -> u32 {
+    pub fn a(&self) -> u32 {
         self.projectile().a
     }
 }
@@ -169,6 +211,7 @@ pub struct TargetStack {
 /// Cross-section data for one reaction channel.
 #[derive(Debug, Clone)]
 pub struct CrossSectionData {
+    pub target_a: u32,
     pub residual_z: u32,
     pub residual_a: u32,
     pub state: String,

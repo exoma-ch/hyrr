@@ -1,54 +1,55 @@
 <script lang="ts">
   import {
-    getLayers,
+    getInternalItems,
     addLayer,
     removeLayer,
     updateLayer,
     moveLayer,
+    addGroup,
+    removeGroup,
+    updateGroup,
+    moveGroup,
+    type InternalGroup,
   } from "../stores/config.svelte";
-  import ThicknessInput from "./ThicknessInput.svelte";
   import type { LayerConfig } from "../types";
+  import LayerGroupComponent from "./LayerGroup.svelte";
+  import ThicknessInput from "./ThicknessInput.svelte";
   import { parseFormula } from "@hyrr/compute";
   import { getCustomMaterials } from "../stores/custom-materials.svelte";
 
   interface Props {
-    onmaterialclick?: (index: number) => void;
-    onelementclick?: (layerIndex: number, element: string) => void;
+    onmaterialclick?: (groupIndex: number | undefined, layerIndex: number) => void;
+    onelementclick?: (groupIndex: number | undefined, layerIndex: number, element: string) => void;
   }
 
   let { onmaterialclick, onelementclick }: Props = $props();
 
-  let layers = $derived(getLayers());
+  let items = $derived(getInternalItems());
   let customMaterials = $derived(getCustomMaterials());
 
-  function isCustomMaterial(identifier: string): boolean {
-    return customMaterials.some((m) => m.formula === identifier || m.name === identifier);
-  }
-
-  /** Get element symbols from a material identifier (custom name or formula). */
   function materialElements(identifier: string): string[] {
     const cm = customMaterials.find((m) => m.name === identifier || m.formula === identifier);
     if (cm?.massFractions) return Object.keys(cm.massFractions);
     try { return Object.keys(parseFormula(identifier)); } catch { return []; }
   }
 
+  function isCustomMaterial(identifier: string): boolean {
+    return customMaterials.some((m) => m.formula === identifier || m.name === identifier);
+  }
+
   let dragIndex = $state<number | null>(null);
   let dragOverIndex = $state<number | null>(null);
 
-  function handleAdd() {
+  function handleAddLayer() {
     addLayer({ material: "", thickness_cm: 0.01 });
   }
 
-  function handleRemove(index: number) {
-    removeLayer(index);
+  function handleAddGroup() {
+    addGroup();
   }
 
-  function handleUpdate(index: number, layer: LayerConfig) {
-    updateLayer(index, layer);
-  }
-
-  function setMaterial(index: number, value: string, enrichment?: Record<string, Record<number, number>>) {
-    updateLayer(index, { ...layers[index], material: value, enrichment });
+  function isGroup(item: LayerConfig | InternalGroup): item is InternalGroup {
+    return (item as InternalGroup).mode !== undefined;
   }
 
   function onDragStart(e: DragEvent, index: number) {
@@ -56,6 +57,7 @@
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", String(index));
+      e.dataTransfer.setData("application/x-hyrr-stack", String(index));
     }
   }
 
@@ -71,7 +73,18 @@
   function onDrop(e: DragEvent, toIndex: number) {
     e.preventDefault();
     if (dragIndex !== null && dragIndex !== toIndex) {
-      moveLayer(dragIndex, toIndex);
+      const fromItem = items[dragIndex];
+      const toItem = items[toIndex];
+      if (isGroup(fromItem)) {
+        // Reorder group among top-level items
+        moveGroup(dragIndex, toIndex);
+      } else if (isGroup(toItem)) {
+        // Drop standalone layer INTO the group
+        moveLayer(dragIndex, toItem.layers.length, undefined, toIndex);
+      } else {
+        // Reorder standalone layers
+        moveLayer(dragIndex, toIndex);
+      }
     }
     dragIndex = null;
     dragOverIndex = null;
@@ -81,75 +94,105 @@
     dragIndex = null;
     dragOverIndex = null;
   }
-
-
 </script>
 
 <div class="layer-stack-h">
-  {#if layers.length === 0}
+  {#if items.length === 0}
     <div class="empty">No layers configured</div>
   {/if}
 
-  {#each layers as layer, i (i)}
+  {#each items as item, i (i)}
     {#if i > 0}
       <span class="arrow">→</span>
     {/if}
-    <div
-      class="layer-card"
-      class:dragging={dragIndex === i}
-      class:drag-over={dragOverIndex === i}
-      class:monitor={layer.is_monitor}
-      draggable="true"
-      ondragstart={(e) => onDragStart(e, i)}
-      ondragover={(e) => onDragOver(e, i)}
-      ondragleave={onDragLeave}
-      ondrop={(e) => onDrop(e, i)}
-      ondragend={onDragEnd}
-      role="listitem"
-    >
-      <div class="card-header">
-        <span class="layer-num">L{i + 1}</span>
-        {#if layer.is_monitor}
-          <span class="monitor-badge">MON</span>
-        {/if}
-        <button class="remove-btn" onclick={() => handleRemove(i)} title="Remove layer">×</button>
-      </div>
 
-      <button
-        class="material-name"
-        onclick={() => onmaterialclick?.(i)}
-        title="Click to change material"
+    {#if isGroup(item)}
+      <div
+        class="group-wrapper"
+        class:dragging={dragIndex === i}
+        class:drag-over={dragOverIndex === i}
+        draggable="true"
+        ondragstart={(e) => onDragStart(e, i)}
+        ondragover={(e) => onDragOver(e, i)}
+        ondragleave={onDragLeave}
+        ondrop={(e) => onDrop(e, i)}
+        ondragend={onDragEnd}
+        role="listitem"
       >
-        {layer.material || "select..."}
-        {#if isCustomMaterial(layer.material)}
-          <span class="cstm-badge">cstm</span>
-        {/if}
-        {#if layer.enrichment && Object.keys(layer.enrichment).length > 0}
-          <span class="enr-badge">enr</span>
-        {/if}
-      </button>
+        <LayerGroupComponent
+          group={item}
+          groupIndex={i}
+          onUpdate={(g) => updateGroup(i, g)}
+          onRemove={() => removeGroup(i)}
+          onAddLayer={() => addLayer({ material: "", thickness_cm: 0.01 }, i)}
+          onRemoveLayer={(li) => removeLayer(li, i)}
+          onUpdateLayer={(li, l) => updateLayer(li, l, i)}
+          onMoveLayer={(from, to) => moveLayer(from, to, i, i)}
+          onmaterialclick={(gi, li) => onmaterialclick?.(gi, li)}
+          onelementclick={(gi, li, el) => onelementclick?.(gi, li, el)}
+        />
+      </div>
+    {:else}
+      <div
+        class="layer-card"
+        class:dragging={dragIndex === i}
+        class:drag-over={dragOverIndex === i}
+        class:monitor={item.is_monitor}
+        draggable="true"
+        ondragstart={(e) => onDragStart(e, i)}
+        ondragover={(e) => onDragOver(e, i)}
+        ondragleave={onDragLeave}
+        ondrop={(e) => onDrop(e, i)}
+        ondragend={onDragEnd}
+        role="listitem"
+      >
+        <div class="card-header">
+          <span class="layer-num">L{i + 1}</span>
+          {#if item.is_monitor}
+            <span class="monitor-badge">MON</span>
+          {/if}
+          <button class="remove-btn" onclick={() => removeLayer(i)} title="Remove layer">×</button>
+        </div>
 
-      {#if layer.material}
-        {@const elements = materialElements(layer.material)}
-        {#if elements.length > 0}
-          <div class="element-badges">
-            {#each elements as el}
-              <button
-                class="el-badge"
-                class:enriched={!!layer.enrichment?.[el]}
-                onclick={(e) => { e.stopPropagation(); onelementclick?.(i, el); }}
-                title="{el}{layer.enrichment?.[el] ? ' (enriched)' : ''}"
-              >{el}{#if layer.enrichment?.[el]}<span class="enr-dot"></span>{/if}</button>
-            {/each}
-          </div>
-        {/if}
-      {/if}
+        <button
+          class="material-name"
+          onclick={() => onmaterialclick?.(undefined, i)}
+          title="Click to change material"
+        >
+          {item.material || "select..."}
+          {#if isCustomMaterial(item.material)}
+            <span class="cstm-badge">cstm</span>
+          {/if}
+          {#if item.enrichment && Object.keys(item.enrichment).length > 0}
+            <span class="enr-badge">enr</span>
+          {/if}
+        </button>
 
-      <ThicknessInput layer={layer} onchange={(l) => handleUpdate(i, l)} />
-    </div>
+        {#if item.material}
+          {@const elements = materialElements(item.material)}
+          {#if elements.length > 0}
+            <div class="element-badges">
+              {#each elements as el}
+                <button
+                  class="el-badge"
+                  class:enriched={!!item.enrichment?.[el]}
+                  onclick={(e) => { e.stopPropagation(); onelementclick?.(undefined, i, el); }}
+                  title="{el}{item.enrichment?.[el] ? ' (enriched)' : ''}"
+                >{el}{#if item.enrichment?.[el]}<span class="enr-dot"></span>{/if}</button>
+              {/each}
+            </div>
+          {/if}
+        {/if}
+
+        <ThicknessInput layer={item} onchange={(l) => updateLayer(i, l)} />
+      </div>
+    {/if}
   {/each}
 
-  <button class="add-btn" onclick={handleAdd} title="Add layer">+</button>
+  <div class="add-buttons">
+    <button class="add-btn" onclick={handleAddLayer} title="Add layer">+</button>
+    <button class="add-btn add-group" onclick={handleAddGroup} title="Add repeat group">⟳</button>
+  </div>
 </div>
 
 <style>
@@ -198,17 +241,25 @@
     border-color: var(--c-text-faint);
   }
 
-  .layer-card.dragging {
+  .layer-card.dragging,
+  .group-wrapper.dragging {
     opacity: 0.4;
   }
 
-  .layer-card.drag-over {
+  .layer-card.drag-over,
+  .group-wrapper.drag-over {
     border-color: var(--c-accent);
     background: var(--c-bg-hover);
   }
 
   .layer-card.monitor {
     border-left: 2px solid var(--c-gold);
+  }
+
+  .group-wrapper {
+    flex-shrink: 0;
+    cursor: grab;
+    transition: opacity 0.15s;
   }
 
   .card-header {
@@ -293,8 +344,14 @@
     vertical-align: middle;
   }
 
-  .add-btn {
+  .add-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
     flex-shrink: 0;
+  }
+
+  .add-btn {
     width: 36px;
     height: 36px;
     background: none;
@@ -311,6 +368,11 @@
   .add-btn:hover {
     border-color: var(--c-green);
     color: var(--c-green);
+  }
+
+  .add-group:hover {
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .element-badges {
@@ -358,7 +420,8 @@
       -webkit-overflow-scrolling: touch;
     }
 
-    .layer-card {
+    .layer-card,
+    .group-wrapper {
       scroll-snap-align: start;
     }
 

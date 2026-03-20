@@ -9,6 +9,7 @@ use crate::types::ProjectileType;
 
 pub const SOURCE_PSTAR: &str = "PSTAR";
 pub const SOURCE_ASTAR: &str = "ASTAR";
+pub const SOURCE_CATIMA_PREFIX: &str = "catima_";
 
 /// Known NIST PSTAR/ASTAR element Z values.
 const NIST_CANDIDATE_ZS: &[u32] = &[
@@ -92,33 +93,34 @@ fn get_available_zs(db: &dyn DatabaseProtocol, source: &str) -> Vec<u32> {
 /// - a (α): ASTAR at E
 pub fn elemental_dedx(
     db: &dyn DatabaseProtocol,
-    projectile: ProjectileType,
+    projectile: &ProjectileType,
     target_z: u32,
     energies_mev: &[f64],
 ) -> Vec<f64> {
     let proj = projectile.projectile();
 
-    let (lookup_energies, source): (Vec<f64>, &str) = if proj.z == 1 {
-        let scaled: Vec<f64> = energies_mev.iter().map(|&e| e / proj.a as f64).collect();
-        (scaled, SOURCE_PSTAR)
+    if proj.z == 1 {
+        // Proton, deuteron, tritium: velocity-scale to PSTAR
+        let lookup: Vec<f64> = energies_mev.iter().map(|&e| e / proj.a as f64).collect();
+        let (result, _) = get_interpolated_dedx(db, SOURCE_PSTAR, target_z, &lookup);
+        result
     } else if proj.z == 2 {
-        let scaled: Vec<f64> = energies_mev
-            .iter()
-            .map(|&e| e * (4.0 / proj.a as f64))
-            .collect();
-        (scaled, SOURCE_ASTAR)
+        // Helion, alpha: velocity-scale to ASTAR
+        let lookup: Vec<f64> = energies_mev.iter().map(|&e| e * (4.0 / proj.a as f64)).collect();
+        let (result, _) = get_interpolated_dedx(db, SOURCE_ASTAR, target_z, &lookup);
+        result
     } else {
-        panic!("Unsupported projectile: {}", projectile.symbol());
-    };
-
-    let (result, _source_label) = get_interpolated_dedx(db, source, target_z, &lookup_energies);
-    result
+        // Heavy ion: look up pre-generated catima table from nucl-parquet
+        let source = format!("{}{}", SOURCE_CATIMA_PREFIX, projectile.symbol_string());
+        let (result, _) = get_interpolated_dedx(db, &source, target_z, energies_mev);
+        result
+    }
 }
 
 /// Scalar version of elemental_dedx.
 pub fn elemental_dedx_scalar(
     db: &dyn DatabaseProtocol,
-    projectile: ProjectileType,
+    projectile: &ProjectileType,
     target_z: u32,
     energy_mev: f64,
 ) -> f64 {
@@ -128,23 +130,25 @@ pub fn elemental_dedx_scalar(
 /// Return the stopping power source label for an element.
 pub fn get_stopping_source(
     db: &dyn DatabaseProtocol,
-    projectile: ProjectileType,
+    projectile: &ProjectileType,
     target_z: u32,
 ) -> String {
     let proj = projectile.projectile();
     let source = if proj.z == 1 {
-        SOURCE_PSTAR
+        SOURCE_PSTAR.to_string()
+    } else if proj.z == 2 {
+        SOURCE_ASTAR.to_string()
     } else {
-        SOURCE_ASTAR
+        format!("{}{}", SOURCE_CATIMA_PREFIX, projectile.symbol_string())
     };
-    let (_, label) = get_interpolated_dedx(db, source, target_z, &[10.0]);
+    let (_, label) = get_interpolated_dedx(db, &source, target_z, &[10.0]);
     label
 }
 
 /// Return stopping power sources for each element in a composition.
 pub fn get_stopping_sources(
     db: &dyn DatabaseProtocol,
-    projectile: ProjectileType,
+    projectile: &ProjectileType,
     composition: &[(u32, f64)],
 ) -> std::collections::HashMap<u32, String> {
     let mut result = std::collections::HashMap::new();
@@ -158,7 +162,7 @@ pub fn get_stopping_sources(
 /// composition: [(Z, mass_fraction)].
 pub fn compound_dedx(
     db: &dyn DatabaseProtocol,
-    projectile: ProjectileType,
+    projectile: &ProjectileType,
     composition: &[(u32, f64)],
     energies_mev: &[f64],
 ) -> Vec<f64> {
@@ -176,7 +180,7 @@ pub fn compound_dedx(
 /// dE/dx = S [MeV·cm²/g] × ρ [g/cm³]
 pub fn dedx_mev_per_cm(
     db: &dyn DatabaseProtocol,
-    projectile: ProjectileType,
+    projectile: &ProjectileType,
     composition: &[(u32, f64)],
     density_g_cm3: f64,
     energies_mev: &[f64],
@@ -190,7 +194,7 @@ pub fn dedx_mev_per_cm(
 /// Scalar version of dedx_mev_per_cm.
 pub fn dedx_mev_per_cm_scalar(
     db: &dyn DatabaseProtocol,
-    projectile: ProjectileType,
+    projectile: &ProjectileType,
     composition: &[(u32, f64)],
     density_g_cm3: f64,
     energy_mev: f64,
@@ -202,7 +206,7 @@ pub fn dedx_mev_per_cm_scalar(
 /// Integration: dx = dE / (dE/dx) from E_out to E_in using midpoint rule.
 pub fn compute_thickness_from_energy(
     db: &dyn DatabaseProtocol,
-    projectile: ProjectileType,
+    projectile: &ProjectileType,
     composition: &[(u32, f64)],
     density_g_cm3: f64,
     energy_in_mev: f64,
@@ -227,7 +231,7 @@ pub fn compute_thickness_from_energy(
 /// Forward Euler integration of dE/dx.
 pub fn compute_energy_out(
     db: &dyn DatabaseProtocol,
-    projectile: ProjectileType,
+    projectile: &ProjectileType,
     composition: &[(u32, f64)],
     density_g_cm3: f64,
     energy_in_mev: f64,

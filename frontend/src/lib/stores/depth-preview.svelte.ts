@@ -14,7 +14,12 @@ import {
   linspace,
   PROJECTILE_Z,
 } from "@hyrr/compute";
+import type { ProjectileType } from "@hyrr/compute";
 import type { LayerConfig } from "../types";
+import {
+  getActiveBackend,
+  computeDepthPreviewBackend,
+} from "../compute/backend";
 
 export interface DepthPreviewLayer {
   material: string;
@@ -54,7 +59,39 @@ function enrichmentToOverrides(
   return result;
 }
 
-function computePreview(): void {
+async function computePreviewAsync(): Promise<void> {
+  const config = getConfig();
+  const backend = getActiveBackend();
+
+  // Tauri/WASM: delegate entirely to Rust backend
+  if (backend === "tauri" || backend === "wasm") {
+    if (config.layers.length === 0) {
+      preview = [];
+      return;
+    }
+    try {
+      // Config is already flat (groups expanded by config store)
+      preview = await computeDepthPreviewBackend({
+        beam: config.beam,
+        layers: config.layers,
+        irradiation_s: config.irradiation_s ?? 86400,
+        cooling_s: config.cooling_s ?? 86400,
+      });
+    } catch (e) {
+      console.warn("[depth-preview] Rust backend error, clearing preview:", e);
+      preview = [];
+    }
+    return;
+  }
+
+  // TS fallback
+  await computePreviewTS();
+}
+
+let previewGeneration = 0;
+
+async function computePreviewTS(): Promise<void> {
+  const gen = ++previewGeneration;
   const config = getConfig();
   const db = getDataStore();
   if (!db || config.layers.length === 0) {
@@ -65,12 +102,18 @@ function computePreview(): void {
   const projectile = config.beam.projectile;
   const beamCurrentMA = config.beam.current_mA;
   const beamArea = 1.0; // cm², nominal
-  const projZ = PROJECTILE_Z[projectile];
+  const projZ = PROJECTILE_Z[projectile as ProjectileType];
 
   const layers: DepthPreviewLayer[] = [];
   let energyIn = config.beam.energy_MeV;
 
-  for (const layer of config.layers) {
+  for (let idx = 0; idx < config.layers.length; idx++) {
+    // Yield every 5 layers to keep UI responsive
+    if (idx > 0 && idx % 5 === 0) {
+      await new Promise((r) => setTimeout(r, 0));
+      if (gen !== previewGeneration) return; // stale — abort
+    }
+    const layer = config.layers[idx];
     if (!layer.material) {
       layers.push({
         material: "?",
@@ -215,6 +258,7 @@ function computePreview(): void {
     }
   }
 
+  if (gen !== previewGeneration) return; // stale — abort
   preview = layers;
 }
 
@@ -228,7 +272,7 @@ export function initDepthPreview(): void {
     const _db = getDataStore();
 
     const timer = setTimeout(() => {
-      computePreview();
+      computePreviewAsync();
     }, 100);
     return () => clearTimeout(timer);
   });

@@ -9,6 +9,9 @@
     isConfigValid,
     getLayers,
     updateLayer,
+    getGroup,
+    undo,
+    redo,
   } from "./lib/stores/config.svelte";
   import {
     getResult,
@@ -38,6 +41,7 @@
   import LayerTable from "./lib/components/LayerTable.svelte";
   import PlotActivityCurve from "./lib/components/PlotActivityCurve.svelte";
   import PlotProductionDepth from "./lib/components/PlotProductionDepth.svelte";
+  import IsotopeFilterBar from "./lib/components/IsotopeFilterBar.svelte";
   import ActivityTableEnhanced from "./lib/components/ActivityTableEnhanced.svelte";
   import HistoryPanel from "./lib/components/HistoryPanel.svelte";
   import HistoryImportExport from "./lib/components/HistoryImportExport.svelte";
@@ -75,6 +79,21 @@
   initDepthPreview();
 
   onMount(async () => {
+    // Keyboard shortcuts: Cmd/Ctrl+Z = undo, Cmd/Ctrl+Shift+Z = redo
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
+      // Don't intercept when focused on an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      e.preventDefault();
+      if (e.shiftKey) {
+        redo();
+      } else {
+        undo();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+
     await registerServiceWorker();
 
     loadingState = "Loading nuclear data...";
@@ -161,27 +180,44 @@
   });
 
   // Material popup handlers
-  function openMaterialPopup(layerIndex: number) {
+  // groupIndex is set when editing a layer inside a group (used for updateLayer routing)
+  let materialPopupGroupIndex = $state<number | undefined>(undefined);
+  let elementPopupGroupIndex = $state<number | undefined>(undefined);
+
+  function openMaterialPopup(groupIndex: number | undefined, layerIndex: number) {
+    materialPopupGroupIndex = groupIndex;
     materialPopupLayerIndex = layerIndex;
-    const layers = getLayers();
-    const mat = layers[layerIndex]?.material;
+    const mat = groupIndex !== undefined
+      ? getGroup(groupIndex)?.layers[layerIndex]?.material
+      : getLayers()[layerIndex]?.material;
     const cm = mat ? getCustomMaterials().find((m) => m.name === mat || m.formula === mat) : null;
     materialPopupEditId = cm?.id ?? null;
     materialPopupOpen = true;
   }
 
   function onMaterialSelected(material: string, enrichment?: Record<string, Record<number, number>>) {
-    const layers = getLayers();
-    if (materialPopupLayerIndex < layers.length) {
+    if (materialPopupGroupIndex !== undefined) {
+      const group = getGroup(materialPopupGroupIndex);
+      const existing = group?.layers[materialPopupLayerIndex];
       updateLayer(materialPopupLayerIndex, {
-        ...layers[materialPopupLayerIndex],
+        ...(existing ?? { thickness_cm: 0.01 }),
         material,
         enrichment,
-      });
+      }, materialPopupGroupIndex);
+    } else {
+      const layers = getLayers();
+      if (materialPopupLayerIndex < layers.length) {
+        updateLayer(materialPopupLayerIndex, {
+          ...layers[materialPopupLayerIndex],
+          material,
+          enrichment,
+        });
+      }
     }
   }
 
-  function openElementPopup(layerIndex: number, element: string) {
+  function openElementPopup(groupIndex: number | undefined, layerIndex: number, element: string) {
+    elementPopupGroupIndex = groupIndex;
     elementPopupLayerIndex = layerIndex;
     elementPopupSymbol = element;
     const layers = getLayers();
@@ -190,8 +226,12 @@
   }
 
   function onEnrichmentChanged(override: Record<number, number> | undefined) {
-    const layers = getLayers();
-    const layer = layers[elementPopupLayerIndex];
+    let layer: import("./lib/types").LayerConfig | undefined;
+    if (elementPopupGroupIndex !== undefined) {
+      layer = getGroup(elementPopupGroupIndex)?.layers[elementPopupLayerIndex];
+    } else {
+      layer = getLayers()[elementPopupLayerIndex];
+    }
     if (!layer) return;
     const enrichment = { ...(layer.enrichment ?? {}) };
     if (override) {
@@ -202,7 +242,7 @@
     updateLayer(elementPopupLayerIndex, {
       ...layer,
       enrichment: Object.keys(enrichment).length > 0 ? enrichment : undefined,
-    });
+    }, elementPopupGroupIndex);
     elementPopupOpen = false;
   }
 
@@ -252,6 +292,7 @@
         {/if}
 
         {#if result}
+          <IsotopeFilterBar {result} />
           <PlotActivityCurve {result} />
           <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
         {/if}
@@ -280,7 +321,7 @@
       open={materialPopupOpen}
       onclose={() => materialPopupOpen = false}
       onselect={onMaterialSelected}
-      onenrichment={(el) => openElementPopup(materialPopupLayerIndex, el)}
+      onenrichment={(el) => openElementPopup(materialPopupGroupIndex, materialPopupLayerIndex, el)}
       currentEnrichment={getLayers()[materialPopupLayerIndex]?.enrichment}
       materials={[]}
       editMaterialId={materialPopupEditId}

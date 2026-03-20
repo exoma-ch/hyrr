@@ -1,11 +1,15 @@
 <script lang="ts">
   import { getDepthPreview } from "../stores/depth-preview.svelte";
+  import { getLayers } from "../stores/config.svelte";
   import { getResult } from "../stores/results.svelte";
   import { getDoseConstant } from "../utils/dose-constants";
   import { fmtDoseRate } from "@hyrr/compute";
 
   let preview = $derived(getDepthPreview());
   let result = $derived(getResult());
+  let templateLayers = $derived(getLayers());
+
+  // No group boundaries shown in table - layers are already expanded
 
   /** Sum dose@1m (µSv/h) for all isotopes in a layer */
   function layerDose(layerIndex: number): number | null {
@@ -17,7 +21,7 @@
     for (const iso of layerResult.isotopes) {
       const d = getDoseConstant(iso.name, iso.activity_Bq);
       if (d !== null) {
-        total += d;
+        total += d.doseRate;
         hasAny = true;
       }
     }
@@ -168,6 +172,10 @@
 
   .has-error td {
     background: var(--c-red-tint-faint);
+  }
+
+  .group-boundary td {
+    border-top: 2px dashed var(--c-accent);
   }
 
   .layer-error {

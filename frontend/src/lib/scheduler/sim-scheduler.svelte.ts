@@ -26,6 +26,12 @@ import {
   getRequiredElements,
 } from "@hyrr/compute";
 import type { SimulationConfig, SimulationResult } from "@hyrr/compute";
+import {
+  initBackend,
+  computeStackBackend,
+  getActiveBackend,
+  type BackendKind,
+} from "../compute/backend";
 
 export type SchedulerState =
   | "idle"
@@ -35,15 +41,31 @@ export type SchedulerState =
   | "ready"
   | "error";
 
+export type SimMode = "auto" | "manual";
+
 let state = $state<SchedulerState>("idle");
+let mode = $state<SimMode>("auto");
 let lastHash = $state("");
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let cancelled = false;
 
 let dataStore = $state<DataStore | null>(null);
+let backendReady = false;
 
 export function getSchedulerState(): SchedulerState {
   return state;
+}
+
+export function getSimMode(): SimMode {
+  return mode;
+}
+
+export function setSimMode(m: SimMode): void {
+  mode = m;
+  if (m === "auto") {
+    // Trigger a run if config changed while in manual mode
+    lastHash = "";
+  }
 }
 
 export function getDataStore(): DataStore | null {
@@ -58,9 +80,6 @@ export function initScheduler(): void {
     const valid = isConfigValid();
 
     // Force Svelte to track ALL nested config properties by serializing.
-    // Without this, changes to config.layers (material, thickness, enrichment)
-    // may not trigger the effect because configHash's recursive traversal
-    // can lose Svelte proxy tracking context.
     const snapshot = JSON.stringify(config);
 
     if (!valid) {
@@ -72,6 +91,13 @@ export function initScheduler(): void {
 
     const hash = configHash(config);
     if (hash === lastHash) return;
+
+    // In manual mode, just mark as idle (stale) — don't auto-run
+    if (mode === "manual") {
+      cancel();
+      state = "idle";
+      return;
+    }
 
     // Config changed and is valid — start debounce
     cancel();
@@ -88,53 +114,86 @@ export async function initDataStore(
   baseUrl: string,
   onProgress?: (msg: string, fraction?: number) => void,
 ): Promise<void> {
-  dataStore = new DataStore(baseUrl);
-  await dataStore.init(onProgress);
+  // Initialize the best available backend (Tauri → WASM → TS)
+  const backend = await initBackend(baseUrl, undefined, undefined, onProgress);
+  backendReady = true;
+
+  // For TS and WASM fallback, also init the TS DataStore (used for data loading + TS compute)
+  if (backend === "ts" || !dataStore) {
+    dataStore = new DataStore(baseUrl);
+    await dataStore.init(onProgress);
+  }
 }
 
 async function runSimulation(hash: string): Promise<void> {
+  // getConfig() returns already-expanded flat layers (groups resolved by config store)
   const config = getConfig();
   cancelled = false;
 
   try {
-    if (!dataStore?.isInitialized) {
+    if (!backendReady) {
       state = "loading_data";
-      setLoading("Initializing data store...");
+      setLoading("Initializing compute backend...");
       await initDataStore("./data/parquet");
     }
 
-    // Phase 1: Load cross-section data
-    state = "loading_data";
-    setLoading("Loading nuclear data...");
+    const backend = getActiveBackend();
 
-    const elements = getRequiredElements(config);
+    if (backend === "tauri" || backend === "wasm") {
+      // Rust backend — single call handles data + compute
+      state = "running";
+      setRunning("Running simulation (Rust)...");
 
-    await dataStore!.ensureMultipleCrossSections(
-      config.beam.projectile,
-      elements,
-    );
+      const simResult = await computeStackBackend(config);
 
-    if (cancelled) return;
+      if (cancelled) return;
 
-    // Phase 2: Build TargetStack and run simulation
-    state = "running";
-    setRunning("Running simulation...");
+      const currentHash = configHash(getConfig());
+      if (currentHash !== hash) return;
 
-    const stack = buildTargetStack(config, dataStore!);
-    const stackResult = computeStack(dataStore!, stack);
+      lastHash = hash;
+      state = "ready";
+      setResult(simResult);
+    } else {
+      // TS fallback — existing pipeline
+      if (!dataStore?.isInitialized) {
+        state = "loading_data";
+        setLoading("Initializing data store...");
+        await initDataStore("./data/parquet");
+      }
 
-    if (cancelled) return;
+      // Phase 1: Load cross-section data
+      state = "loading_data";
+      setLoading("Loading nuclear data...");
 
-    // Verify config hasn't changed during simulation
-    const currentHash = configHash(getConfig());
-    if (currentHash !== hash) return;
+      const elements = getRequiredElements(config);
 
-    // Convert to SimulationResult
-    const simResult = convertResult(config, stackResult);
+      await dataStore!.ensureMultipleCrossSections(
+        config.beam.projectile,
+        elements,
+      );
 
-    lastHash = hash;
-    state = "ready";
-    setResult(simResult);
+      if (cancelled) return;
+
+      // Phase 2: Build TargetStack and run simulation
+      state = "running";
+      setRunning("Running simulation...");
+
+      const stack = buildTargetStack(config, dataStore!);
+      const stackResult = computeStack(dataStore!, stack);
+
+      if (cancelled) return;
+
+      // Verify config hasn't changed during simulation
+      const currentHash = configHash(getConfig());
+      if (currentHash !== hash) return;
+
+      const simResult = convertResult(config, stackResult);
+
+      lastHash = hash;
+      state = "ready";
+      setResult(simResult);
+    }
   } catch (e: unknown) {
     if (cancelled) return;
     state = "error";

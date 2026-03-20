@@ -104,20 +104,43 @@
       const material = result.config.layers[layer.layer_index]?.material ?? "?";
       boundaries.push({ depth: cumulativeDepth, label: material });
 
+      const layerThickness = dp[dp.length - 1].depth_mm;
+      const layerStart = cumulativeDepth;
+      const layerEnd = cumulativeDepth + layerThickness;
+      const presentInLayer = new Set<string>();
+
       if (dpr) {
         for (const [name, rates] of Object.entries(dpr)) {
+          presentInLayer.add(name);
           if (!isoData.has(name)) {
             isoData.set(name, { depths: [], rates: [] });
           }
           const entry = isoData.get(name)!;
+          // Insert zero at layer start if this isotope had data in a prior layer
+          // (ensures drop to zero at material boundary)
+          if (entry.depths.length > 0) {
+            entry.depths.push(layerStart);
+            entry.rates.push(0);
+          }
           for (let i = 0; i < Math.min(dp.length, rates.length); i++) {
-            entry.depths.push(cumulativeDepth + dp[i].depth_mm);
+            entry.depths.push(layerStart + dp[i].depth_mm);
             entry.rates.push(rates[i]);
           }
         }
       }
 
-      cumulativeDepth += dp[dp.length - 1].depth_mm;
+      // For isotopes NOT produced in this layer but present in prior layers,
+      // insert a zero segment spanning this layer (so the line drops to zero)
+      for (const [name, entry] of isoData) {
+        if (!presentInLayer.has(name) && entry.depths.length > 0) {
+          entry.depths.push(layerStart);
+          entry.rates.push(0);
+          entry.depths.push(layerEnd);
+          entry.rates.push(0);
+        }
+      }
+
+      cumulativeDepth = layerEnd;
     }
 
     // Rank isotopes by total integrated production

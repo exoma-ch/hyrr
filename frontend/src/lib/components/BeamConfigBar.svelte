@@ -8,6 +8,14 @@
     setIrradiation,
     setCooling,
   } from "../stores/config.svelte";
+  import {
+    getSchedulerState,
+    getSimMode,
+    setSimMode,
+    forceRun,
+    type SimMode,
+  } from "../scheduler/sim-scheduler.svelte";
+  import { getStatus } from "../stores/results.svelte";
   import { parseTime } from "../utils/time-parse";
   import type { ProjectileType } from "../types";
 
@@ -21,6 +29,21 @@
 
   let beam = $derived(getBeam());
   let config = $derived(getConfig());
+  let simMode = $derived(getSimMode());
+  let schedulerState = $derived(getSchedulerState());
+  let simStatus = $derived(getStatus());
+
+  let isBusy = $derived(
+    schedulerState === "debouncing" ||
+    schedulerState === "loading_data" ||
+    schedulerState === "running" ||
+    simStatus === "loading" ||
+    simStatus === "running"
+  );
+
+  function toggleMode() {
+    setSimMode(simMode === "auto" ? "manual" : "auto");
+  }
 
   // Smart time inputs
   let irradText = $state("");
@@ -112,7 +135,7 @@
   <div class="field">
     <label>Energy</label>
     <div class="input-group">
-      <input type="text" inputmode="decimal" value={beam.energy_MeV} onchange={onEnergyChange} />
+      <input type="text" inputmode="decimal" value={beam.energy_MeV} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onEnergyChange} />
       <span class="unit">MeV</span>
     </div>
   </div>
@@ -120,7 +143,7 @@
   <div class="field">
     <label>Current</label>
     <div class="input-group">
-      <input type="text" inputmode="decimal" value={beam.current_mA * 1000} onchange={onCurrentChange} />
+      <input type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
       <span class="unit">µA</span>
     </div>
   </div>
@@ -128,7 +151,7 @@
   <div class="field">
     <label>Irradiation</label>
     <div class="input-with-feedback">
-      <input type="text" value={irradText} oninput={onIrradInput} onblur={commitIrrad} onkeydown={(e) => { if (e.key === 'Enter') { commitIrrad(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 24h" />
+      <input type="text" value={irradText} onfocus={(e) => (e.target as HTMLInputElement).select()} oninput={onIrradInput} onblur={commitIrrad} onkeydown={(e) => { if (e.key === 'Enter') { commitIrrad(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 24h" />
       {#if irradFeedback && irradFeedback !== "invalid"}
         <span class="feedback ok">{irradFeedback}</span>
       {:else if irradFeedback === "invalid"}
@@ -140,13 +163,23 @@
   <div class="field">
     <label>Cooling</label>
     <div class="input-with-feedback">
-      <input type="text" value={coolText} oninput={onCoolInput} onblur={commitCool} onkeydown={(e) => { if (e.key === 'Enter') { commitCool(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 1d" />
+      <input type="text" value={coolText} onfocus={(e) => (e.target as HTMLInputElement).select()} oninput={onCoolInput} onblur={commitCool} onkeydown={(e) => { if (e.key === 'Enter') { commitCool(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 1d" />
       {#if coolFeedback && coolFeedback !== "invalid"}
         <span class="feedback ok">{coolFeedback}</span>
       {:else if coolFeedback === "invalid"}
         <span class="feedback err">?</span>
       {/if}
     </div>
+  </div>
+
+  <div class="sim-controls">
+    <button class="mode-btn" class:auto={simMode === "auto"} onclick={toggleMode} title="Toggle auto/manual simulation">
+      {simMode === "auto" ? "Auto" : "Manual"}
+    </button>
+    {#if simMode === "manual"}
+      <button class="run-btn" onclick={() => forceRun()} title="Run simulation">Run</button>
+    {/if}
+    <span class="status-dot" class:busy={isBusy} class:ready={simStatus === "ready"} class:error={simStatus === "error"} title={schedulerState}></span>
   </div>
 </div>
 
@@ -241,6 +274,80 @@
 
   .feedback.err {
     color: var(--c-red);
+  }
+
+  /* ─── Sim controls ─── */
+  .sim-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-left: auto;
+    align-self: flex-end;
+  }
+
+  .mode-btn {
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    color: var(--c-text-muted);
+    font-size: 0.75rem;
+    padding: 0.3rem 0.5rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .mode-btn:hover {
+    border-color: var(--c-accent);
+    color: var(--c-text);
+  }
+
+  .mode-btn.auto {
+    border-color: var(--c-green);
+    color: var(--c-green-text);
+    background: var(--c-green-tint);
+  }
+
+  .run-btn {
+    background: var(--c-accent-tint);
+    border: 1px solid var(--c-accent);
+    border-radius: 4px;
+    color: var(--c-accent);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.3rem 0.6rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .run-btn:hover {
+    background: var(--c-accent);
+    color: var(--c-bg-default);
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--c-text-faint);
+    flex-shrink: 0;
+  }
+
+  .status-dot.busy {
+    background: var(--c-gold);
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  .status-dot.ready {
+    background: var(--c-green-bright);
+  }
+
+  .status-dot.error {
+    background: var(--c-red);
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
   }
 
   @media (max-width: 640px) {

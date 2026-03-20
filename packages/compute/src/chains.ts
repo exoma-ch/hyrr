@@ -3,6 +3,14 @@
  *
  * BFS chain discovery, topological sort, matrix exponential solution
  * for coupled decay+production equations, piecewise current profiles.
+ *
+ * Known limitation: The Padé [13/13] matrix exponential becomes numerically
+ * unstable for isotopes with extremely short half-lives (t½ < ~1 µs), where
+ * λ > 10⁶ s⁻¹ causes ‖A·dt‖ to exceed the stable range by many orders of
+ * magnitude. The scaling-and-squaring fallback introduces floating-point
+ * residuals in abundances that, multiplied by huge λ, produce phantom
+ * activity. Workaround: for t½ < 1 µs, the chain solver result is replaced
+ * with the analytical Bateman solution (see solveChain).
  */
 
 import { LN2 } from "./constants";
@@ -410,6 +418,23 @@ export function solveChain(
     chain, timeGrid, irradiationTimeS, nT,
     currentProfile, nominalCurrentMA,
   );
+
+  // --- Ultra-short half-life fix ---
+  // For isotopes with t½ < 1 µs, the matrix exponential produces numerical
+  // residuals that, multiplied by huge λ, create phantom activity post-EOB.
+  // Replace their chain-solver activity with the analytical Bateman result,
+  // which is exact: these isotopes reach secular equilibrium instantly during
+  // irradiation and decay to zero instantly after EOB.
+  const ULTRA_SHORT_THRESHOLD_S = 1e-6; // 1 µs
+  for (let i = 0; i < n; i++) {
+    if (chainIsotopeIsStable(chain[i])) continue;
+    if (chain[i].halfLifeS! > ULTRA_SHORT_THRESHOLD_S) continue;
+
+    // Use analytical direct component as the total activity
+    for (let t = 0; t < nT; t++) {
+      activities[i][t] = activitiesDirect[i][t];
+    }
+  }
 
   // Ingrowth = total - direct (clamp >= 0)
   const activitiesIngrowth: Float64Array[] = Array.from({ length: n }, (_, i) => {

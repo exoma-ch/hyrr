@@ -41,7 +41,7 @@ pub fn compute_stack(
     let irr_time = stack.irradiation_time_s;
     let cool_time = stack.cooling_time_s;
     let area = stack.area_cm2;
-    let projectile = beam.projectile;
+    let projectile = &beam.projectile;
     let current_ma = beam.current_ma;
     let particles_per_s = beam.particles_per_second();
     let projectile_z = projectile.z();
@@ -77,7 +77,7 @@ pub fn compute_stack(
 
 fn compute_layer(
     db: &dyn DatabaseProtocol,
-    projectile: ProjectileType,
+    projectile: &ProjectileType,
     current_ma: f64,
     particles_per_s: f64,
     projectile_z: u32,

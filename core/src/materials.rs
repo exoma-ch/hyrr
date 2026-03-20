@@ -467,7 +467,31 @@ pub fn resolve_material(
         };
     }
 
-    // Strip mass numbers
+    // Check for isotope notation: "Mo-100" → 100% enriched single isotope
+    if identifier.contains('-') {
+        let re_iso = regex::Regex::new(r"^([A-Z][a-z]?)-(\d+)$").unwrap();
+        if let Some(caps) = re_iso.captures(identifier) {
+            let sym = caps.get(1).unwrap().as_str();
+            let mass_num: u32 = caps.get(2).unwrap().as_str().parse().unwrap_or(0);
+            if SYMBOL_TO_Z_MAP.contains_key(sym) && mass_num > 0 {
+                // Build 100% enriched single isotope
+                let mut enrichment = HashMap::new();
+                enrichment.insert(mass_num, 1.0);
+                let element = resolve_element(db, sym, Some(&enrichment));
+                let density = ELEMENT_DENSITIES
+                    .get(sym)
+                    .copied()
+                    .unwrap_or(5.0);
+                return MaterialResolution {
+                    elements: vec![(element, 1.0)],
+                    density,
+                    molecular_weight: mass_num as f64,
+                };
+            }
+        }
+    }
+
+    // Strip mass numbers for compound notation (e.g., "H2O-18" → "H2O")
     let re = regex::Regex::new(r"-\d+").unwrap();
     let formula_clean = re.replace_all(identifier, "").to_string();
 

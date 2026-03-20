@@ -48,7 +48,8 @@ export function parseThickness(input: string): ParsedThickness | null {
   if (!trimmed) return null;
 
   // Number + unit pattern (µ/μ are non-ASCII so include them explicitly)
-  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*([a-zA-Zµμ]+)$/);
+  // Accepts: "25µm", ".5mm", "0.5mm", "1.2cm"
+  const match = trimmed.match(/^(\d*\.?\d+)\s*([a-zA-Zµμ]+)$/);
   if (match) {
     const value = parseFloat(match[1]);
     const unitKey = match[2].toLowerCase();

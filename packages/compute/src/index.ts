@@ -95,17 +95,24 @@ export {
   buildTargetStack,
   convertResult,
   getRequiredElements,
+  isGroup,
 } from "./config-bridge";
 export type {
   BeamConfig,
   IsotopeOverride,
   LayerConfig,
+  LayerGroup,
+  StackItem,
+  StackConfig,
   SimulationConfig,
   IsotopeResultData,
   DepthPointData,
   LayerResultData,
   SimulationResult,
 } from "./config-bridge";
+
+// --- Layer expansion ---
+export { expandLayers, expandedLayerCount } from "./expand-layers";
 
 // --- Formatting ---
 export {

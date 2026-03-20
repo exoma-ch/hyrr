@@ -31,9 +31,38 @@ export interface LayerConfig {
   is_monitor?: boolean;
 }
 
+export interface LayerGroup {
+  isGroup: true;
+  layers: LayerConfig[];
+  mode: "count" | "energy";
+  count?: number;           // for mode "count"
+  energyThreshold?: number; // for mode "energy" — stop when E_out < this (MeV)
+}
+
+/** A stack item is either a single layer or a group of layers. */
+export type StackItem = LayerConfig | LayerGroup;
+
+/**
+ * Check if a StackItem is a group.
+ */
+export function isGroup(item: StackItem): item is LayerGroup {
+  return (item as LayerGroup).isGroup === true;
+}
+
 export interface SimulationConfig {
   beam: BeamConfig;
   layers: LayerConfig[];
+  irradiation_s: number;
+  cooling_s: number;
+}
+
+/**
+ * Config that may contain layer groups (for UI expand-before-compute).
+ * Only used by expandLayers() — everywhere else uses SimulationConfig.
+ */
+export interface StackConfig {
+  beam: BeamConfig;
+  layers: StackItem[];
   irradiation_s: number;
   cooling_s: number;
 }

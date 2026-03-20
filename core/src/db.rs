@@ -1,10 +1,8 @@
 //! Database protocol trait and Parquet implementation.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
-use crate::types::{CrossSectionData, DecayData, DecayMode};
-use arrow::array::Array;
+use crate::types::{CrossSectionData, DecayData};
 
 /// Database protocol — all physics modules depend on this trait.
 pub trait DatabaseProtocol: Send + Sync {
@@ -33,6 +31,126 @@ pub trait DatabaseProtocol: Send + Sync {
     fn get_element_symbol(&self, z: u32) -> String;
     fn get_element_z(&self, symbol: &str) -> u32;
 }
+
+// ---------------------------------------------------------------------------
+// In-memory data store (no filesystem dependency, usable from WASM)
+// ---------------------------------------------------------------------------
+
+/// In-memory nuclear data store — accepts pre-loaded data from any source.
+/// Used by WASM and as a test helper.
+pub struct InMemoryDataStore {
+    pub library: String,
+    elements: HashMap<u32, String>,
+    symbol_to_z: HashMap<String, u32>,
+    abundances: HashMap<u32, Vec<(u32, f64, f64)>>,
+    decay_data: HashMap<String, DecayData>,
+    stopping_data: HashMap<String, (Vec<f64>, Vec<f64>)>,
+    dose_constants: HashMap<String, (f64, String)>,
+    xs_cache: HashMap<String, Vec<CrossSectionData>>,
+}
+
+impl InMemoryDataStore {
+    pub fn new(library: &str) -> Self {
+        Self {
+            library: library.to_string(),
+            elements: HashMap::new(),
+            symbol_to_z: HashMap::new(),
+            abundances: HashMap::new(),
+            decay_data: HashMap::new(),
+            stopping_data: HashMap::new(),
+            dose_constants: HashMap::new(),
+            xs_cache: HashMap::new(),
+        }
+    }
+
+    pub fn add_element(&mut self, z: u32, symbol: &str) {
+        self.elements.insert(z, symbol.to_string());
+        self.symbol_to_z.insert(symbol.to_string(), z);
+    }
+
+    pub fn add_abundance(&mut self, z: u32, a: u32, abundance: f64, atomic_mass: f64) {
+        self.abundances
+            .entry(z)
+            .or_default()
+            .push((a, abundance, atomic_mass));
+    }
+
+    pub fn add_decay_data(&mut self, data: DecayData) {
+        let key = format!("{}-{}-{}", data.z, data.a, data.state);
+        self.decay_data.insert(key, data);
+    }
+
+    pub fn add_stopping_data(&mut self, source: &str, target_z: u32, energies: Vec<f64>, dedx: Vec<f64>) {
+        let key = format!("{}_{}", source, target_z);
+        self.stopping_data.insert(key, (energies, dedx));
+    }
+
+    pub fn add_dose_constant(&mut self, z: u32, a: u32, state: &str, k: f64, source: &str) {
+        let key = format!("{}-{}-{}", z, a, state);
+        self.dose_constants.insert(key, (k, source.to_string()));
+    }
+
+    pub fn add_cross_sections(&mut self, projectile: &str, element_symbol: &str, xs_list: Vec<CrossSectionData>) {
+        let key = format!("{}_{}", projectile, element_symbol);
+        self.xs_cache.insert(key, xs_list);
+    }
+}
+
+impl DatabaseProtocol for InMemoryDataStore {
+    fn get_cross_sections(&self, projectile: &str, target_z: u32, target_a: u32) -> Vec<CrossSectionData> {
+        let symbol = self.elements.get(&target_z).cloned().unwrap_or_default();
+        let key = format!("{}_{}", projectile, symbol);
+        self.xs_cache
+            .get(&key)
+            .map(|xs| xs.iter().filter(|x| x.target_a == target_a).cloned().collect())
+            .unwrap_or_default()
+    }
+
+    fn get_stopping_power(&self, source: &str, target_z: u32) -> (Vec<f64>, Vec<f64>) {
+        let key = format!("{}_{}", source, target_z);
+        self.stopping_data.get(&key).cloned().unwrap_or_default()
+    }
+
+    fn get_natural_abundances(&self, z: u32) -> HashMap<u32, (f64, f64)> {
+        let mut result = HashMap::new();
+        if let Some(entries) = self.abundances.get(&z) {
+            for &(a, abundance, atomic_mass) in entries {
+                result.insert(a, (abundance, atomic_mass));
+            }
+        }
+        result
+    }
+
+    fn get_decay_data(&self, z: u32, a: u32, state: &str) -> Option<DecayData> {
+        let key = format!("{}-{}-{}", z, a, state);
+        self.decay_data.get(&key).cloned()
+    }
+
+    fn get_dose_constant(&self, z: u32, a: u32, state: &str) -> Option<(f64, String)> {
+        let key = format!("{}-{}-{}", z, a, state);
+        self.dose_constants.get(&key).cloned()
+    }
+
+    fn get_element_symbol(&self, z: u32) -> String {
+        self.elements.get(&z).cloned().unwrap_or_else(|| format!("Z{}", z))
+    }
+
+    fn get_element_z(&self, symbol: &str) -> u32 {
+        self.symbol_to_z.get(symbol).copied().unwrap_or(0)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parquet-backed implementation (requires filesystem, not available in WASM)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "parquet-store")]
+mod parquet_store {
+
+use super::*;
+use std::path::{Path, PathBuf};
+use arrow::array::Array;
+use crate::types::DecayMode;
 
 /// Parquet-backed nuclear data store.
 pub struct ParquetDataStore {
@@ -95,34 +213,14 @@ impl ParquetDataStore {
                 .column_by_name("symbol")
                 .expect("elements.parquet missing symbol column");
 
-            let z_arr = z_col
-                .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
-                .or_else(|| None);
-            let sym_arr = sym_col
-                .as_any()
-                .downcast_ref::<arrow::array::StringArray>()
-                .expect("symbol column is not StringArray");
+            let z_vals = get_i64_or_i32(&batch, "Z");
+            let sym_vals = get_string_values(sym_col, batch.num_rows());
 
-            if let Some(z_arr) = z_arr {
-                for i in 0..batch.num_rows() {
-                    let z = z_arr.value(i) as u32;
-                    let sym = sym_arr.value(i).to_string();
-                    self.elements.insert(z, sym.clone());
-                    self.symbol_to_z.insert(sym, z);
-                }
-            } else {
-                // Try Int32Array
-                let z_arr = z_col
-                    .as_any()
-                    .downcast_ref::<arrow::array::Int32Array>()
-                    .expect("Z column is not Int64Array or Int32Array");
-                for i in 0..batch.num_rows() {
-                    let z = z_arr.value(i) as u32;
-                    let sym = sym_arr.value(i).to_string();
-                    self.elements.insert(z, sym.clone());
-                    self.symbol_to_z.insert(sym, z);
-                }
+            for i in 0..batch.num_rows() {
+                let z = z_vals[i] as u32;
+                let sym = sym_vals[i].clone();
+                self.elements.insert(z, sym.clone());
+                self.symbol_to_z.insert(sym, z);
             }
         }
 
@@ -313,13 +411,12 @@ impl ParquetDataStore {
         let file = std::fs::File::open(&path)?;
         let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReader::try_new(file, 65536)?;
 
-        // Group by (target_Z, target_A, residual_Z, residual_A, state)
-        let mut raw: HashMap<String, (u32, u32, String, Vec<(f64, f64)>)> = HashMap::new();
+        // Group by (target_A, residual_Z, residual_A, state)
+        let mut raw: HashMap<String, (u32, u32, u32, String, Vec<(f64, f64)>)> = HashMap::new();
 
         for batch in reader {
             let batch = batch?;
             let n = batch.num_rows();
-            let tz_col = get_i64_or_i32(&batch, "target_Z");
             let ta_col = get_i64_or_i32(&batch, "target_A");
             let rz_col = get_i64_or_i32(&batch, "residual_Z");
             let ra_col = get_i64_or_i32(&batch, "residual_A");
@@ -329,25 +426,27 @@ impl ParquetDataStore {
 
             for i in 0..n {
                 let key = format!(
-                    "{}_{}_{}_{}_{}_{}",
-                    tz_col[i], ta_col[i], rz_col[i], ra_col[i], state_col[i], cache_key
+                    "{}_{}_{}_{}_{}",
+                    ta_col[i], rz_col[i], ra_col[i], state_col[i], cache_key
                 );
                 let entry = raw.entry(key).or_insert_with(|| {
                     (
+                        ta_col[i] as u32,
                         rz_col[i] as u32,
                         ra_col[i] as u32,
                         state_col[i].clone(),
                         Vec::new(),
                     )
                 });
-                entry.3.push((e_col[i], xs_col[i]));
+                entry.4.push((e_col[i], xs_col[i]));
             }
         }
 
         let mut xs_list = Vec::new();
-        for (_, (rz, ra, state, mut pairs)) in raw {
+        for (_, (ta, rz, ra, state, mut pairs)) in raw {
             pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
             xs_list.push(CrossSectionData {
+                target_a: ta,
                 residual_z: rz,
                 residual_a: ra,
                 state,
@@ -366,20 +465,15 @@ impl DatabaseProtocol for ParquetDataStore {
         &self,
         projectile: &str,
         target_z: u32,
-        _target_a: u32,
+        target_a: u32,
     ) -> Vec<CrossSectionData> {
-        let symbol = self.elements.get(&target_z).cloned().unwrap_or_default();
+        let symbol = self.get_element_symbol(target_z);
         let cache_key = format!("{}_{}", projectile, symbol);
 
-        // Try to load lazily (requires &mut self, but trait is &self)
-        // For now, return from cache or empty
         if let Some(all_xs) = self.xs_cache.get(&cache_key) {
             all_xs
                 .iter()
-                .filter(|_xs| {
-                    // Filter by target_A (the XS file groups by element)
-                    true // All XS in the file are for this element
-                })
+                .filter(|xs| xs.target_a == target_a)
                 .cloned()
                 .collect()
         } else {
@@ -416,11 +510,14 @@ impl DatabaseProtocol for ParquetDataStore {
         self.elements
             .get(&z)
             .cloned()
-            .unwrap_or_else(|| format!("Z{}", z))
+            .unwrap_or_else(|| panic!("Element Z={z} not in data store — elements.parquet incomplete"))
     }
 
     fn get_element_z(&self, symbol: &str) -> u32 {
-        self.symbol_to_z.get(symbol).copied().unwrap_or(0)
+        self.symbol_to_z
+            .get(symbol)
+            .copied()
+            .unwrap_or_else(|| panic!("Element '{symbol}' not in data store — elements.parquet incomplete"))
     }
 }
 
@@ -519,17 +616,29 @@ fn get_string_or_default(batch: &arrow::array::RecordBatch, name: &str) -> Vec<S
         Some(c) => c,
         None => return vec![String::new(); batch.num_rows()],
     };
+    get_string_values(col, batch.num_rows())
+}
+
+fn get_string_values(col: &dyn Array, n: usize) -> Vec<String> {
     if let Some(arr) = col.as_any().downcast_ref::<arrow::array::StringArray>() {
-        (0..batch.num_rows())
-            .map(|i| {
-                if arr.is_null(i) {
-                    String::new()
-                } else {
-                    arr.value(i).to_string()
-                }
-            })
+        (0..n)
+            .map(|i| if arr.is_null(i) { String::new() } else { arr.value(i).to_string() })
+            .collect()
+    } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::LargeStringArray>() {
+        (0..n)
+            .map(|i| if arr.is_null(i) { String::new() } else { arr.value(i).to_string() })
+            .collect()
+    } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::StringViewArray>() {
+        (0..n)
+            .map(|i| if arr.is_null(i) { String::new() } else { arr.value(i).to_string() })
             .collect()
     } else {
-        vec![String::new(); batch.num_rows()]
+        // Try casting to StringArray as last resort
+        vec![String::new(); n]
     }
 }
+
+} // mod parquet_store
+
+#[cfg(feature = "parquet-store")]
+pub use parquet_store::ParquetDataStore;

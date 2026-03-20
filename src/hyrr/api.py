@@ -290,6 +290,47 @@ def config_to_stack(
     )
 
 
+def _convert_rust_result(rust: dict, config: dict) -> dict:
+    """Convert Rust StackResult JSON to the Python API SimulationResult format.
+
+    Rust serde produces snake_case keys (layer_results, isotope_results, etc.).
+    The Python API uses a different shape (layers, isotopes as list, etc.).
+    """
+    layers_out = []
+    for i, lr in enumerate(rust.get("layer_results", [])):
+        isotopes_out = []
+        iso_data = lr.get("isotope_results", {})
+        for name, iso in iso_data.items():
+            isotopes_out.append({
+                "name": iso.get("name", name),
+                "Z": iso.get("z", 0),
+                "A": iso.get("a", 0),
+                "state": iso.get("state", ""),
+                "half_life_s": iso.get("half_life_s"),
+                "production_rate": iso.get("production_rate", 0),
+                "saturation_yield_Bq_uA": iso.get("saturation_yield_bq_ua", 0),
+                "activity_Bq": iso.get("activity_bq", 0),
+                "source": iso.get("source", "direct"),
+                "activity_direct_Bq": iso.get("activity_direct_bq", 0),
+                "activity_ingrowth_Bq": iso.get("activity_ingrowth_bq", 0),
+            })
+
+        layers_out.append({
+            "layer_index": i,
+            "energy_in": lr.get("energy_in", 0),
+            "energy_out": lr.get("energy_out", 0),
+            "delta_E_MeV": lr.get("delta_e_mev", 0),
+            "heat_kW": lr.get("heat_kw", 0),
+            "isotopes": isotopes_out,
+        })
+
+    return {
+        "config": config,
+        "layers": layers_out,
+        "timestamp": time.time(),
+    }
+
+
 def _safe_float(v: float) -> float | None:
     """Convert to JSON-safe float (NaN/Inf → None)."""
     if isinstance(v, (float, np.floating)):
@@ -355,6 +396,9 @@ def run_simulation_from_json(
 ) -> dict:
     """Run a full simulation from JSON config and a data directory path.
 
+    When the native Rust extension is available, routes through hyrr-core
+    for significantly faster compute. Falls back to pure-Python transparently.
+
     Args:
         config_json: JSON string of SimulationConfig
         data_dir: Path to the nucl-parquet data directory
@@ -363,10 +407,21 @@ def run_simulation_from_json(
     Returns:
         Dict matching frontend SimulationResult shape
     """
+    from hyrr._native_bridge import HAS_NATIVE
     from hyrr.db import DEFAULT_LIBRARY, DataStore
 
     config = json.loads(config_json)
     lib = library or config.get("library", DEFAULT_LIBRARY)
+
+    # Native Rust fast path
+    if HAS_NATIVE:
+        from hyrr._native_bridge import _native_compute_stack_json
+
+        result_json = _native_compute_stack_json(data_dir, lib, config_json)
+        rust_result = json.loads(result_json)
+        return _convert_rust_result(rust_result, config)
+
+    # Pure-Python fallback
     db = DataStore(data_dir, library=lib)
     stack = config_to_stack(db, config)
     result = compute_stack(db, stack)

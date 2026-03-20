@@ -57,9 +57,11 @@ from hyrr.serialization import (
     save_result,
     stack_to_config,
 )
+from hyrr._native_bridge import HAS_NATIVE
 from hyrr.sweep import sweep
 
 __all__ = [
+    "HAS_NATIVE",
     "Beam",
     "BeamProfile",
     "CrossSectionData",

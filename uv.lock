@@ -856,14 +856,14 @@ wheels = [
 
 [[package]]
 name = "hyrr"
-version = "0.1.1"
+version = "0.1.3"
 source = { editable = "." }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "polars" },
+    { name = "py-materials" },
     { name = "pycatima" },
-    { name = "pymat" },
     { name = "scipy" },
     { name = "tqdm" },
     { name = "xlsxwriter" },
@@ -955,8 +955,8 @@ requires-dist = [
     { name = "plotly", marker = "extra == 'plotting'", specifier = ">=5.17" },
     { name = "polars", specifier = ">=1.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6" },
+    { name = "py-materials", specifier = ">=2.0.5" },
     { name = "pycatima", specifier = ">=1.9" },
-    { name = "pymat", git = "https://github.com/MorePET/py-mat.git?rev=latest" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
@@ -2393,6 +2393,18 @@ wheels = [
 ]
 
 [[package]]
+name = "py-materials"
+version = "2.0.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pint" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4d/0b/1ffd18f05cefbb085d10ad1d8788c9b08b01706633ffd981a041fe3f1acc/py_materials-2.0.5.tar.gz", hash = "sha256:d1b3a590288dae03ab650d84f27cd671d6a7ed3b628dd1cac20da517dc718054", size = 44170, upload-time = "2026-03-16T14:32:20.103Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/01/a4a1418659b31fcfcb5e136fbe1950b744f3e33131970872c8c368a45d6e/py_materials-2.0.5-py3-none-any.whl", hash = "sha256:80e633437cf9e8d74e26e4da308e71d77ad1ecd960f0240434964de5ab24cae8", size = 38738, upload-time = "2026-03-16T14:32:18.886Z" },
+]
+
+[[package]]
 name = "pycatima"
 version = "1.981"
 source = { registry = "https://pypi.org/simple" }
@@ -2506,14 +2518,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887", size = 4968631, upload-time = "2025-06-21T13:39:12.283Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217, upload-time = "2025-06-21T13:39:07.939Z" },
-]
-
-[[package]]
-name = "pymat"
-version = "2.0.4"
-source = { git = "https://github.com/MorePET/py-mat.git?rev=latest#40c24fcc24f42262d17a8ab6baea80bbcaf6f097" }
-dependencies = [
-    { name = "pint" },
 ]
 
 [[package]]

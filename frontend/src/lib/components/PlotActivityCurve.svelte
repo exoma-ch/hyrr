@@ -5,6 +5,7 @@
   import { getResolvedTheme } from "../stores/theme.svelte";
   import { bestActivityUnit, bestTimeUnit, nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
+  import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -22,10 +23,9 @@
   let useEOBTime = $state(false);
   let rnpMode = $state(false);
   let rnpIsotope = $state("");
-  let activityFloor = $state(1); // Default 1 Bq floor to filter noise
-  let layerFilter = $state<Set<number>>(new Set());
 
   let selected = $derived(getSelectedIsotopes());
+  let sharedFilter = $derived(getIsotopeFilter());
 
   // Available isotopes for RNP selector
   let allIsotopes = $derived.by(() => {
@@ -46,12 +46,6 @@
     })),
   );
 
-  function toggleLayerFilter(idx: number) {
-    const next = new Set(layerFilter);
-    if (next.has(idx)) next.delete(idx);
-    else next.add(idx);
-    layerFilter = next;
-  }
 
   let legendListenersAttached = false;
 
@@ -116,8 +110,7 @@
     const _eob = useEOBTime;
     const _rnp = rnpMode;
     const _rnpIso = rnpIsotope;
-    const _floor = activityFloor;
-    const _filter = layerFilter;
+    const _filter = JSON.stringify(sharedFilter);
     const _theme = getResolvedTheme();
     if (p && div) render();
   });
@@ -136,14 +129,34 @@
       return;
     }
 
-    // Collect isotopes to plot
+    // Collect isotopes to plot — apply shared filter
     let isosToPlot: { iso: IsotopeResultData; layerIdx: number }[] = [];
 
     for (const layer of result.layers) {
-      if (layerFilter.size > 0 && !layerFilter.has(layer.layer_index)) continue;
+      if (sharedFilter.layers.size > 0 && !sharedFilter.layers.has(layer.layer_index)) continue;
       for (const iso of layer.isotopes) {
         if (!iso.time_grid_s || !iso.activity_vs_time_Bq) continue;
         if (iso.half_life_s === null || iso.activity_Bq <= 0) continue;
+
+        // Apply shared filter fields
+        if (sharedFilter.text && !iso.name.toLowerCase().includes(sharedFilter.text.toLowerCase())) continue;
+        const zMin = sharedFilter.zMin ? parseInt(sharedFilter.zMin, 10) : NaN;
+        const zMax = sharedFilter.zMax ? parseInt(sharedFilter.zMax, 10) : NaN;
+        if (!isNaN(zMin) && iso.Z < zMin) continue;
+        if (!isNaN(zMax) && iso.Z > zMax) continue;
+        const aMin = sharedFilter.aMin ? parseInt(sharedFilter.aMin, 10) : NaN;
+        const aMax = sharedFilter.aMax ? parseInt(sharedFilter.aMax, 10) : NaN;
+        if (!isNaN(aMin) && iso.A < aMin) continue;
+        if (!isNaN(aMax) && iso.A > aMax) continue;
+        const eobMin = sharedFilter.eobMin ? parseFloat(sharedFilter.eobMin) : NaN;
+        // EOB activity = first point after irradiation (approximate: use max)
+        const eobActivity = iso.activity_vs_time_Bq
+          ? Math.max(...iso.activity_vs_time_Bq)
+          : iso.activity_Bq;
+        if (!isNaN(eobMin) && eobActivity < eobMin) continue;
+        const eocMin = sharedFilter.eocMin ? parseFloat(sharedFilter.eocMin) : NaN;
+        if (!isNaN(eocMin) && iso.activity_Bq < eocMin) continue;
+
         isosToPlot.push({ iso, layerIdx: layer.layer_index });
       }
     }
@@ -154,11 +167,6 @@
     } else {
       isosToPlot.sort((a, b) => b.iso.activity_Bq - a.iso.activity_Bq);
       isosToPlot = isosToPlot.slice(0, 15);
-    }
-
-    // Apply activity floor
-    if (activityFloor > 0) {
-      isosToPlot = isosToPlot.filter(({ iso }) => iso.activity_Bq >= activityFloor);
     }
 
     // Determine units
@@ -241,7 +249,7 @@
     let totalActivity: number[] | null = null;
 
     for (const layer of result.layers) {
-      if (layerFilter.size > 0 && !layerFilter.has(layer.layer_index)) continue;
+      if (sharedFilter.layers.size > 0 && !sharedFilter.layers.has(layer.layer_index)) continue;
       for (const iso of layer.isotopes) {
         if (!iso.time_grid_s || !iso.activity_vs_time_Bq) continue;
         if (iso.name === rnpIsotope) {
@@ -256,7 +264,7 @@
     // Sum total activity at each time point
     totalActivity = new Array(selectedTimeGrid.length).fill(0);
     for (const layer of result.layers) {
-      if (layerFilter.size > 0 && !layerFilter.has(layer.layer_index)) continue;
+      if (sharedFilter.layers.size > 0 && !sharedFilter.layers.has(layer.layer_index)) continue;
       for (const iso of layer.isotopes) {
         if (!iso.time_grid_s || !iso.activity_vs_time_Bq) continue;
         for (let i = 0; i < iso.activity_vs_time_Bq.length && i < totalActivity!.length; i++) {
@@ -391,20 +399,6 @@
       </button>
     {/if}
   </div>
-
-  {#if layerLabels.length > 1}
-    <div class="layer-chips">
-      {#each layerLabels as ll}
-        <button
-          class="chip"
-          class:active={layerFilter.size === 0 || layerFilter.has(ll.index)}
-          onclick={() => toggleLayerFilter(ll.index)}
-        >
-          {ll.label}
-        </button>
-      {/each}
-    </div>
-  {/if}
 
   <div bind:this={plotDiv} class="plot"></div>
 </div>

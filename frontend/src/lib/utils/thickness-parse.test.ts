@@ -111,4 +111,34 @@ describe("parseThickness", () => {
       expect(r!.cm).toBe(0);
     });
   });
+
+  describe("leading-dot numbers", () => {
+    it("parses .2mm", () => {
+      const r = parseThickness(".2mm");
+      expect(r).not.toBeNull();
+      expect(r!.cm).toBeCloseTo(0.02);
+      expect(r!.display).toBe("0.2 mm");
+    });
+
+    it("parses .5 µm", () => {
+      const r = parseThickness(".5 µm");
+      expect(r).not.toBeNull();
+      expect(r!.cm).toBeCloseTo(0.00005);
+      expect(r!.display).toBe("0.5 µm");
+    });
+
+    it("parses .2 as bare number (< 1 → cm)", () => {
+      const r = parseThickness(".2");
+      expect(r).not.toBeNull();
+      expect(r!.cm).toBeCloseTo(0.2);
+      expect(r!.display).toBe("0.2 cm");
+    });
+
+    it("parses .025cm", () => {
+      const r = parseThickness(".025cm");
+      expect(r).not.toBeNull();
+      expect(r!.cm).toBeCloseTo(0.025);
+      expect(r!.display).toBe("0.025 cm");
+    });
+  });
 });

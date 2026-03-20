@@ -12,6 +12,7 @@
   let description = $state("");
   let screenshot = $state<Blob | null>(null);
   let screenshotPreview = $state<string | null>(null);
+  let reportType = $state<"bug" | "feature">("bug");
   let submitting = $state(false);
   let capturing = $state(false);
   let resultMsg = $state<{ ok: boolean; text: string } | null>(null);
@@ -185,7 +186,7 @@
 
     const sections: string[] = [];
 
-    sections.push(`## Bug Report`);
+    sections.push(reportType === "bug" ? `## Bug Report` : `## Feature Request`);
     sections.push(`**Reporter:** ${name || "Anonymous"}${email ? ` (${email})` : ""}`);
     sections.push(`## Description\n\n${description}`);
 
@@ -224,7 +225,8 @@
     // Get Turnstile token (renders widget on demand, waits for challenge)
     const token = await getTurnstileToken();
 
-    const title = `[Bug] ${description.slice(0, 70)}`;
+    const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
+    const title = `${prefix} ${description.slice(0, 70)}`;
 
     try {
       let screenshotUrl: string | undefined;
@@ -240,7 +242,7 @@
         body: JSON.stringify({
           title,
           body,
-          labels: ["bug"],
+          labels: [reportType === "bug" ? "bug" : "enhancement"],
           email,
           "cf-turnstile-response": token ?? "",
         }),
@@ -263,13 +265,14 @@
   /** Open on GitHub directly (user authenticates via their GH session). */
   function openOnGitHub() {
     if (!canOpenGitHub) return;
-    const title = `[Bug] ${description.slice(0, 70)}`;
+    const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
+    const title = `${prefix} ${description.slice(0, 70)}`;
     const body = buildBody();
 
     const url = `https://github.com/${REPO}/issues/new?` + new URLSearchParams({
       title,
       body,
-      labels: "bug",
+      labels: reportType === "bug" ? "bug" : "enhancement",
     }).toString();
 
     window.open(url, "_blank");
@@ -299,7 +302,8 @@
       if (!reportPath) { submitting = false; return; }
 
       const body = buildBody();
-      const title = `[Bug] ${description.slice(0, 70)}`;
+      const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
+      const title = `${prefix} ${description.slice(0, 70)}`;
       const content = `# ${title}\n\n${body}`;
       await writeTextFile(reportPath, content);
 
@@ -328,9 +332,9 @@
 </script>
 
 {#if open}
-  <div class="bug-panel" role="dialog" aria-label="Report a Bug">
+  <div class="bug-panel" role="dialog" aria-label={reportType === "bug" ? "Report a Bug" : "Request a Feature"}>
     <div class="panel-header">
-      <h3>Report a Bug</h3>
+      <h3>{reportType === "bug" ? "Report a Bug" : "Request a Feature"}</h3>
       <button class="close-btn" onclick={closeBugReport}>&times;</button>
     </div>
 
@@ -338,6 +342,19 @@
       <p class="tip">
         Tip: Keep the bug visible behind this panel before capturing.
       </p>
+
+      <div class="type-toggle">
+        <button
+          class="type-btn"
+          class:active={reportType === "bug"}
+          onclick={() => reportType = "bug"}
+        >Bug</button>
+        <button
+          class="type-btn"
+          class:active={reportType === "feature"}
+          onclick={() => reportType = "feature"}
+        >Feature</button>
+      </div>
 
       <div class="field">
         <label for="bug-name">Name <span class="optional">(optional)</span></label>
@@ -365,7 +382,7 @@
         <textarea
           id="bug-desc"
           bind:value={description}
-          placeholder="What happened? What did you expect?"
+          placeholder={reportType === "bug" ? "What happened? What did you expect?" : "What would you like to see?"}
           rows="3"
         ></textarea>
       </div>
@@ -525,6 +542,32 @@
     background: var(--c-gold-tint-faint);
     border-radius: 4px;
     border-left: 2px solid var(--c-gold);
+  }
+
+  .type-toggle {
+    display: flex;
+    gap: 0.2rem;
+  }
+
+  .type-btn {
+    flex: 1;
+    padding: 0.2rem;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    color: var(--c-text-muted);
+    font-size: 0.7rem;
+    cursor: pointer;
+  }
+
+  .type-btn:hover {
+    border-color: var(--c-accent);
+  }
+
+  .type-btn.active {
+    background: var(--c-bg-active);
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .field {

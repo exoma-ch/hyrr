@@ -12,9 +12,12 @@ export type {
   IsotopeResultData,
   DepthPointData,
   LayerResultData,
+  ProjectileType,
 } from "@hyrr/compute";
 
-export type { ProjectileType } from "@hyrr/compute";
+// Group types — only for UI layer (config store + stack components)
+export type { LayerGroup, StackItem, StackConfig } from "@hyrr/compute";
+export { isGroup } from "@hyrr/compute";
 
 export interface MaterialInfo {
   path: string;
