@@ -57,7 +57,10 @@ from hyrr.serialization import (
     save_result,
     stack_to_config,
 )
-from hyrr._native_bridge import HAS_NATIVE
+try:
+    from hyrr._native_bridge import HAS_NATIVE
+except ImportError:
+    HAS_NATIVE = False
 from hyrr.sweep import sweep
 
 __all__ = [
