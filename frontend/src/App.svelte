@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import "./lib/stores/theme.svelte"; // initialise theme (applies data-theme attribute)
   import { registerServiceWorker } from "./lib/sw-register";
-  import { decodeConfigFromHash, setConfigInHash } from "./lib/config-url";
+  import { decodeSerializableConfigFromHash, setConfigInHash } from "./lib/config-url";
   import {
     getConfig,
     setConfig,
@@ -12,6 +12,8 @@
     getGroup,
     undo,
     redo,
+    getSerializableConfig,
+    restoreSerializableConfig,
   } from "./lib/stores/config.svelte";
   import {
     getResult,
@@ -117,14 +119,14 @@
     }
 
     // Check URL for shared config — URL hash takes priority over session restore
-    const urlConfig = decodeConfigFromHash();
+    const urlConfig = decodeSerializableConfigFromHash();
 
     // Restore persisted session tabs from IndexedDB
     await restoreSessions();
 
     // Apply URL config AFTER session restore so it isn't overwritten (#29)
     if (urlConfig) {
-      setConfig(urlConfig);
+      restoreSerializableConfig(urlConfig);
     }
 
     // Load custom materials and register density lookup
@@ -146,14 +148,14 @@
     import("plotly.js-dist-min").catch(() => {});
   });
 
-  // Update URL hash when config changes (debounced)
+  // Update URL hash when config changes (debounced) — includes groups
   $effect(() => {
     const c = config;
     const _snapshot = JSON.stringify(c); // force deep dependency tracking
     if (!ready) return;
     const timer = setTimeout(() => {
       if (isConfigValid()) {
-        setConfigInHash(c);
+        setConfigInHash(getSerializableConfig());
       }
     }, 500);
     return () => clearTimeout(timer);

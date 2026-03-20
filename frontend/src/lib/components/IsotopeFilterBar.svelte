@@ -5,6 +5,8 @@
     setFilterField,
     toggleFilterLayer,
     clearFilterLayers,
+    toggleFilterReaction,
+    clearFilterReactions,
     resetFilter,
   } from "../stores/isotope-filter.svelte";
   import type { SimulationResult } from "../types";
@@ -24,13 +26,33 @@
     })),
   );
 
+  /** Collect all distinct reaction mechanisms from results. */
+  let availableMechanisms = $derived.by(() => {
+    const mechs = new Set<string>();
+    for (const layer of result.layers) {
+      for (const iso of layer.isotopes) {
+        if (iso.reactions) {
+          for (const r of iso.reactions) {
+            // Extract mechanism from reaction notation e.g. "p,n" from "nat-Cu(p,n)Zn-64"
+            const m = r.match(/\(([^)]+)\)/);
+            if (m) mechs.add(m[1]);
+          }
+        }
+      }
+    }
+    return [...mechs].sort();
+  });
+
   let activeCount = $derived(
     (filter.text ? 1 : 0) +
     (filter.layers.size > 0 ? 1 : 0) +
     (filter.zMin ? 1 : 0) + (filter.zMax ? 1 : 0) +
     (filter.aMin ? 1 : 0) + (filter.aMax ? 1 : 0) +
     (filter.eobMin && filter.eobMin !== "1" ? 1 : 0) +
-    (filter.eocMin && filter.eocMin !== "1" ? 1 : 0)
+    (filter.eocMin && filter.eocMin !== "1" ? 1 : 0) +
+    (filter.reactions.size > 0 ? 1 : 0) +
+    (filter.rnpEobMin ? 1 : 0) +
+    (filter.rnpEocMin ? 1 : 0)
   );
 </script>
 
@@ -56,21 +78,19 @@
 
   {#if expanded}
     <div class="filter-detail">
-      <div class="filter-group">
-        <span class="filter-label">Layers</span>
-        <div class="layer-chips">
-          {#each layerLabels as l}
-            <button
-              class="chip"
-              class:active={filter.layers.has(l.index)}
-              onclick={() => toggleFilterLayer(l.index)}
-            >{l.label}</button>
-          {/each}
-          {#if filter.layers.size > 0}
-            <button class="chip chip-clear" onclick={clearFilterLayers}>All</button>
-          {/if}
+      {#if layerLabels.length > 1}
+        <div class="filter-group filter-group-wide">
+          <span class="filter-label">Layers</span>
+          <div class="chip-group">
+            {#each layerLabels as l}
+              <button class="chip" class:active={filter.layers.has(l.index)} onclick={() => toggleFilterLayer(l.index)}>{l.label}</button>
+            {/each}
+            {#if filter.layers.size > 0}
+              <button class="chip chip-clear" onclick={clearFilterLayers}>All</button>
+            {/if}
+          </div>
         </div>
-      </div>
+      {/if}
 
       <div class="filter-group">
         <span class="filter-label">Z</span>
@@ -95,20 +115,46 @@
       </div>
 
       <div class="filter-group">
-        <span class="filter-label">EOB min</span>
-        <input type="text" inputmode="decimal" value={filter.eobMin}
+        <span class="filter-label">EOB</span>
+        <input type="text" inputmode="decimal" value={filter.eobMin} placeholder="min Bq"
           onchange={(e) => setFilterField("eobMin", (e.target as HTMLInputElement).value)}
           onfocus={(e) => (e.target as HTMLInputElement).select()} />
-        <span class="unit">Bq</span>
       </div>
 
       <div class="filter-group">
-        <span class="filter-label">EOC min</span>
-        <input type="text" inputmode="decimal" value={filter.eocMin}
+        <span class="filter-label">EOC</span>
+        <input type="text" inputmode="decimal" value={filter.eocMin} placeholder="min Bq"
           onchange={(e) => setFilterField("eocMin", (e.target as HTMLInputElement).value)}
           onfocus={(e) => (e.target as HTMLInputElement).select()} />
-        <span class="unit">Bq</span>
       </div>
+
+      <div class="filter-group">
+        <span class="filter-label">RNP% EOB</span>
+        <input type="text" inputmode="decimal" value={filter.rnpEobMin} placeholder="min %"
+          onchange={(e) => setFilterField("rnpEobMin", (e.target as HTMLInputElement).value)}
+          onfocus={(e) => (e.target as HTMLInputElement).select()} />
+      </div>
+
+      <div class="filter-group">
+        <span class="filter-label">RNP% EOC</span>
+        <input type="text" inputmode="decimal" value={filter.rnpEocMin} placeholder="min %"
+          onchange={(e) => setFilterField("rnpEocMin", (e.target as HTMLInputElement).value)}
+          onfocus={(e) => (e.target as HTMLInputElement).select()} />
+      </div>
+
+      {#if availableMechanisms.length > 0}
+        <div class="filter-group filter-group-wide">
+          <span class="filter-label">Reaction</span>
+          <div class="chip-group">
+            {#each availableMechanisms as mech}
+              <button class="chip" class:active={filter.reactions.has(mech)} onclick={() => toggleFilterReaction(mech)}>{mech}</button>
+            {/each}
+            {#if filter.reactions.size > 0}
+              <button class="chip chip-clear" onclick={clearFilterReactions}>All</button>
+            {/if}
+          </div>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -139,14 +185,8 @@
     font-size: 0.8rem;
   }
 
-  .search:focus {
-    outline: none;
-    border-color: var(--c-accent);
-  }
-
-  .search::placeholder {
-    color: var(--c-text-faint);
-  }
+  .search:focus { outline: none; border-color: var(--c-accent); }
+  .search::placeholder { color: var(--c-text-faint); }
 
   .toggle-btn, .reset-btn {
     background: var(--c-bg-default);
@@ -159,15 +199,8 @@
     white-space: nowrap;
   }
 
-  .toggle-btn:hover, .reset-btn:hover {
-    border-color: var(--c-accent);
-    color: var(--c-text);
-  }
-
-  .toggle-btn.active {
-    border-color: var(--c-accent);
-    color: var(--c-accent);
-  }
+  .toggle-btn:hover, .reset-btn:hover { border-color: var(--c-accent); color: var(--c-text); }
+  .toggle-btn.active { border-color: var(--c-accent); color: var(--c-accent); }
 
   .badge {
     display: inline-flex;
@@ -184,12 +217,7 @@
     padding: 0 0.2rem;
   }
 
-  .reset-btn {
-    color: var(--c-red);
-    border-color: var(--c-red);
-    font-size: 0.7rem;
-    padding: 0.25rem 0.4rem;
-  }
+  .reset-btn { color: var(--c-red); border-color: var(--c-red); font-size: 0.7rem; padding: 0.25rem 0.4rem; }
 
   .filter-detail {
     display: flex;
@@ -204,6 +232,10 @@
     display: flex;
     align-items: center;
     gap: 0.25rem;
+  }
+
+  .filter-group-wide {
+    flex-basis: 100%;
   }
 
   .filter-label {
@@ -225,22 +257,11 @@
     text-align: right;
   }
 
-  .filter-group input:focus {
-    outline: none;
-    border-color: var(--c-accent);
-  }
+  .filter-group input:focus { outline: none; border-color: var(--c-accent); }
 
-  .sep {
-    color: var(--c-text-faint);
-    font-size: 0.75rem;
-  }
+  .sep { color: var(--c-text-faint); font-size: 0.75rem; }
 
-  .unit {
-    font-size: 0.65rem;
-    color: var(--c-text-muted);
-  }
-
-  .layer-chips {
+  .chip-group {
     display: flex;
     gap: 0.2rem;
     flex-wrap: wrap;
@@ -256,25 +277,11 @@
     cursor: pointer;
   }
 
-  .chip:hover {
-    border-color: var(--c-accent);
-    color: var(--c-text);
-  }
-
-  .chip.active {
-    background: var(--c-accent-tint);
-    border-color: var(--c-accent);
-    color: var(--c-accent);
-  }
-
-  .chip-clear {
-    font-style: italic;
-    color: var(--c-text-faint);
-  }
+  .chip:hover { border-color: var(--c-accent); color: var(--c-text); }
+  .chip.active { background: var(--c-accent-tint); border-color: var(--c-accent); color: var(--c-accent); }
+  .chip-clear { font-style: italic; color: var(--c-text-faint); }
 
   @media (max-width: 640px) {
-    .search, .filter-group input {
-      font-size: 16px;
-    }
+    .search, .filter-group input { font-size: 16px; }
   }
 </style>

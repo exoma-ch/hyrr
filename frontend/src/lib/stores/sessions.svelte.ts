@@ -11,12 +11,18 @@ import {
   updateSessionActive,
   type SessionRecord,
 } from "../session-db";
-import { getConfig, setConfig } from "./config.svelte";
+import {
+  getConfig,
+  setConfig,
+  getSerializableConfig,
+  restoreSerializableConfig,
+  type SerializableConfig,
+} from "./config.svelte";
 
 export interface SessionTab {
   id: string;
   label: string;
-  config: SimulationConfig;
+  config: SerializableConfig;
 }
 
 let tabs = $state<SessionTab[]>([]);
@@ -24,10 +30,18 @@ let activeTabId = $state<string | null>(null);
 let initialized = $state(false);
 
 /** Generate a short label from a config. */
-function configLabel(config: SimulationConfig): string {
+function configLabel(config: SerializableConfig): string {
   const proj: Record<string, string> = { p: "p", d: "d", t: "t", h: "\u00B3He", a: "\u03B1" };
   const p = proj[config.beam.projectile] ?? config.beam.projectile;
-  const mats = config.layers.map((l) => l.material || "?").join("+");
+  const mats = config.items.map((item: any) => {
+    if (item._group || item.mode) {
+      // Group — show first material
+      const layers = item.layers ?? [];
+      const first = layers[0]?.material || "?";
+      return `[${first}...]`;
+    }
+    return item.material || "?";
+  }).join("+");
   return `${p} ${config.beam.energy_MeV} MeV \u2192 ${mats || "empty"}`;
 }
 
@@ -64,7 +78,7 @@ export async function restoreSessions(): Promise<void> {
     const records = await loadAllSessions();
     if (records.length === 0) {
       // Create an initial default tab from the current config
-      const config = JSON.parse(JSON.stringify(getConfig()));
+      const config = getSerializableConfig();
       const tab: SessionTab = {
         id: crypto.randomUUID(),
         label: configLabel(config),
@@ -94,7 +108,7 @@ export async function restoreSessions(): Promise<void> {
     // Restore the active tab's config
     const activeTab = tabs.find((t) => t.id === activeId);
     if (activeTab) {
-      setConfig(activeTab.config);
+      restoreSerializableConfig(activeTab.config);
     }
   } catch (err) {
     console.warn("Failed to restore sessions from IndexedDB:", err);
@@ -105,7 +119,7 @@ export async function restoreSessions(): Promise<void> {
 /** Save current config as a new tab and make it active. */
 export async function addSessionTab(): Promise<string | null> {
   try {
-    const config = JSON.parse(JSON.stringify(getConfig()));
+    const config = getSerializableConfig();
     const tab: SessionTab = {
       id: crypto.randomUUID(),
       label: configLabel(config),
@@ -138,7 +152,7 @@ export async function switchToTab(id: string): Promise<void> {
   if (activeTabId !== null && activeTabId !== id) {
     const currentTab = tabs.find((t) => t.id === activeTabId);
     if (currentTab) {
-      currentTab.config = JSON.parse(JSON.stringify(getConfig()));
+      currentTab.config = getSerializableConfig();
       currentTab.label = configLabel(currentTab.config);
       // Persist updated config and deactivate
       await saveSession(toRecord(currentTab, false));
@@ -146,7 +160,7 @@ export async function switchToTab(id: string): Promise<void> {
   }
 
   activeTabId = id;
-  setConfig(tab.config);
+  restoreSerializableConfig(tab.config);
 
   // Mark new tab active in IDB
   await updateSessionActive(id, true);
@@ -176,7 +190,7 @@ export async function syncActiveTab(): Promise<void> {
   if (activeTabId === null) return;
   const tab = tabs.find((t) => t.id === activeTabId);
   if (tab) {
-    tab.config = JSON.parse(JSON.stringify(getConfig()));
+    tab.config = getSerializableConfig();
     tab.label = configLabel(tab.config);
     await saveSession(toRecord(tab, true));
   }

@@ -5,29 +5,31 @@
  */
 
 import type { SimulationConfig } from "./types";
+import type { SerializableConfig } from "./stores/config.svelte";
 import {
   encodeConfigV2,
+  decodeSerializableFromHash,
   decodeConfigFromHashV2,
   setConfigInHashV2,
 } from "./config-url-v2";
 
-/** Encode a config into a URL hash string (uses v2 compression). */
-export function encodeConfigToHash(config: SimulationConfig): string {
-  return encodeConfigV2(config);
+/** Decode a config from the current URL hash — preserves groups. */
+export function decodeSerializableConfigFromHash(): SerializableConfig | null {
+  return decodeSerializableFromHash();
 }
 
-/** Decode a config from the current URL hash. Supports v1 and v2. */
+/** Decode a config from the current URL hash — flat (legacy). */
 export function decodeConfigFromHash(): SimulationConfig | null {
   return decodeConfigFromHashV2();
 }
 
-/** Update the URL hash with the given config (without triggering navigation). */
-export function setConfigInHash(config: SimulationConfig): void {
+/** Update the URL hash with the given serializable config (preserves groups). */
+export function setConfigInHash(config: SerializableConfig): void {
   setConfigInHashV2(config);
 }
 
 /** Generate a full shareable URL for a config. */
-export function getShareableUrl(config: SimulationConfig): string {
-  const hash = encodeConfigToHash(config);
+export function getShareableUrl(config: SerializableConfig): string {
+  const hash = encodeConfigV2(config);
   return `${window.location.origin}${window.location.pathname}${hash}`;
 }
