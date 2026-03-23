@@ -123,4 +123,48 @@ test.describe("WASM simulation — Tc-99m stack", () => {
     );
     expect(hasCuProducts, "No Cu-layer activation products found in activity table").toBe(true);
   });
+
+  test("all isotopes have a dose rate (dose_constants.parquet loaded)", async ({ page }) => {
+    // Column layout (0-indexed): L#(0), Isotope(1), Z(2), A(3), t½(4),
+    // Reaction(5), EOB(6), EOC(7), Direct(8), Daughter(9), Sat.Yield(10),
+    // RNP%EOB(11), RNP%EOC(12), Dose@1m(13)
+    // A missing dose constant renders as "—"; a valid entry has a numeric value with unit.
+    const rows = await page.evaluate(() => {
+      const result: { isotope: string; dose: string }[] = [];
+      document.querySelectorAll(".activity-table-enhanced tbody tr").forEach((row) => {
+        const cells = row.querySelectorAll("td");
+        const isotope = cells[1]?.textContent?.trim() ?? "";
+        const dose = cells[13]?.textContent?.trim() ?? "";
+        if (isotope) result.push({ isotope, dose });
+      });
+      return result;
+    });
+
+    expect(rows.length, "Activity table should have at least one row").toBeGreaterThan(0);
+
+    // No isotope should have a missing dose constant ("—")
+    const missing = rows.filter((r) => r.dose === "—" || r.dose === "");
+    expect(
+      missing,
+      `Isotopes missing dose rate (dose_constants.parquet not loaded?): ${missing.map((r) => r.isotope).join(", ")}`,
+    ).toHaveLength(0);
+
+    // At least one metastable isotope (name ending in "m") must have a dose rate
+    const metastables = rows.filter((r) => /m$/.test(r.isotope));
+    expect(metastables.length, "No metastable isotopes found in activity table").toBeGreaterThan(0);
+
+    for (const ms of metastables) {
+      expect(
+        ms.dose,
+        `Metastable isotope "${ms.isotope}" has missing dose rate`,
+      ).not.toBe("—");
+      expect(ms.dose, `Metastable isotope "${ms.isotope}" has empty dose rate`).not.toBe("");
+    }
+
+    // The main product Tc-99m (Z43-99m) must have a specific non-zero dose rate
+    const tc99m = rows.find((r) => r.isotope.includes("99m") && (r.isotope.includes("43") || r.isotope.includes("Tc")));
+    expect(tc99m, "Tc-99m (Z43-99m) not found in activity table").toBeTruthy();
+    expect(tc99m!.dose, "Tc-99m has missing dose rate").not.toBe("—");
+    expect(tc99m!.dose, "Tc-99m has empty dose rate").not.toBe("");
+  });
 });
