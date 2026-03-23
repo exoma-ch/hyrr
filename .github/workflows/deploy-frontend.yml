@@ -48,6 +48,17 @@ jobs:
           cp nucl-parquet/stopping/stopping.parquet frontend/public/data/parquet/stopping/
           cp nucl-parquet/tendl-2024/xs/*.parquet frontend/public/data/parquet/xs/
 
+      - name: Install Rust + wasm-pack
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM compute engine
+        run: wasm-pack build wasm/ --target web --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+
       - name: Install dependencies
         run: npm install
 
@@ -67,6 +78,7 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: frontend/dist
+          retention-days: 1
 
   deploy:
     environment:

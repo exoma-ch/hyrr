@@ -1,0 +1,17 @@
+{
+  "name": "hyrr-wasm",
+  "type": "module",
+  "description": "WASM bindings for hyrr-core — browser compute backend",
+  "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "hyrr_wasm_bg.wasm",
+    "hyrr_wasm.js",
+    "hyrr_wasm.d.ts"
+  ],
+  "main": "hyrr_wasm.js",
+  "types": "hyrr_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
