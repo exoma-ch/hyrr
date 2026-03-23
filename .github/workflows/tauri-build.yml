@@ -58,6 +58,8 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri -> target
+          cache-on-failure: false
+          save-if: ${{ github.ref_type == 'tag' }}
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
