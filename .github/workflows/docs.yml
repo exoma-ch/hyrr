@@ -3,11 +3,6 @@
 name: Validate docs
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docs/**"
-      - "mkdocs.yml"
   pull_request:
     paths:
       - "docs/**"
