@@ -183,49 +183,44 @@ async function transferDataToWasm(
 ): Promise<void> {
   onProgress?.("Transferring element data to WASM...", 0.8);
 
-  // Elements
-  if (tsStore.elements) {
-    const elements: { Z: number; symbol: string }[] = [];
-    for (const [z, sym] of tsStore.elements.entries()) {
-      elements.push({ Z: z as number, symbol: sym as string });
-    }
+  // Elements — DataStore uses private zToSymbol: Map<number, string>
+  const zToSymbol: Map<number, string> = tsStore.zToSymbol;
+  if (zToSymbol?.size > 0) {
+    const elements = Array.from(zToSymbol.entries()).map(([z, sym]) => ({
+      Z: z,
+      symbol: sym,
+    }));
     wasm.loadElements(JSON.stringify(elements));
   }
 
-  // Abundances
-  if (tsStore.abundances) {
-    const abundances: any[] = [];
-    for (const [z, isos] of tsStore.abundances.entries()) {
-      for (const [a, data] of isos.entries()) {
-        abundances.push({
-          Z: z,
-          A: a,
-          abundance: data.abundance ?? data[0],
-          atomic_mass: data.atomicMass ?? data[1],
-        });
-      }
-    }
+  // Abundances — DataStore uses private abundanceData: ParquetRow[]
+  // Each row: { Z, A, abundance, atomic_mass }
+  const abundanceData: any[] = tsStore.abundanceData;
+  if (abundanceData?.length > 0) {
+    const abundances = abundanceData.map((row: any) => ({
+      Z: Number(row.Z),
+      A: Number(row.A),
+      abundance: Number(row.abundance),
+      atomic_mass: Number(row.atomic_mass),
+    }));
     wasm.loadAbundances(JSON.stringify(abundances));
   }
 
-  // Decay data
-  if (tsStore.decayData) {
-    const decayRows: any[] = [];
-    for (const [, dd] of tsStore.decayData.entries()) {
-      for (const mode of dd.decayModes ?? []) {
-        decayRows.push({
-          Z: dd.Z ?? dd.z,
-          A: dd.A ?? dd.a,
-          state: dd.state ?? "",
-          half_life_s: dd.halfLifeS ?? dd.half_life_s ?? null,
-          decay_mode: mode.mode ?? "",
-          daughter_Z: mode.daughterZ ?? mode.daughter_z ?? null,
-          daughter_A: mode.daughterA ?? mode.daughter_a ?? null,
-          daughter_state: mode.daughterState ?? mode.daughter_state ?? "",
-          branching: mode.branching ?? 0,
-        });
-      }
-    }
+  // Decay data — DataStore uses private decayData: ParquetRow[]
+  // Each row is one decay mode: { Z, A, state, half_life_s, decay_mode, daughter_Z, daughter_A, daughter_state, branching }
+  const decayDataRows: any[] = tsStore.decayData;
+  if (decayDataRows?.length > 0) {
+    const decayRows = decayDataRows.map((row: any) => ({
+      Z: Number(row.Z),
+      A: Number(row.A),
+      state: String(row.state ?? ""),
+      half_life_s: row.half_life_s != null ? Number(row.half_life_s) : null,
+      decay_mode: String(row.decay_mode ?? ""),
+      daughter_Z: row.daughter_Z != null ? Number(row.daughter_Z) : null,
+      daughter_A: row.daughter_A != null ? Number(row.daughter_A) : null,
+      daughter_state: String(row.daughter_state ?? ""),
+      branching: Number(row.branching ?? 0),
+    }));
     wasm.loadDecayData(JSON.stringify(decayRows));
   }
 
