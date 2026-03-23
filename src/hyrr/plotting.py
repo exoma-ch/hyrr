@@ -422,7 +422,7 @@ def plot_xs_convolution(
     Returns:
         matplotlib Figure or plotly Figure.
     """
-    from hyrr.production import _gauss_hermite_convolved_xs
+    from hyrr._math_utils import _gauss_hermite_convolved_xs
 
     def xs_interp_fn(E: np.ndarray) -> np.ndarray:
         return np.interp(E, xs_energies_MeV, xs_mb, left=0.0, right=0.0)

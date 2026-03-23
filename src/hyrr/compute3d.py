@@ -1,9 +1,9 @@
 """3D compute orchestrator for HYRR.
 
 Runs pencil-beam transport through a TetrahedralMesh, computing
-production rates and activities per ray segment. Reuses the 1D
-physics from production.py and stopping.py with straggling from
-stopping.bohr_straggling_variance_per_cm.
+production rates and activities per ray segment. Uses Rust backend
+for stopping power and Bateman equations, with Python math helpers
+for per-segment integration and Bohr straggling.
 """
 
 from __future__ import annotations
@@ -18,8 +18,9 @@ import scipy.constants as const
 
 from hyrr.geometry import RaySegment, TetrahedralMesh, cast_pencil_beam
 from hyrr.models import Beam, IsotopeResult
-from hyrr.production import bateman_activity, compute_production_rate, saturation_yield
-from hyrr.stopping import bohr_straggling_variance_per_cm, dedx_MeV_per_cm
+from hyrr._math_utils import compute_production_rate
+from hyrr._native_bridge import bateman_activity, dedx_MeV_per_cm, saturation_yield
+from hyrr._straggling import bohr_straggling_variance_per_cm
 
 if TYPE_CHECKING:
     from hyrr.db import DatabaseProtocol

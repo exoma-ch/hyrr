@@ -13,7 +13,6 @@ from typing import Any
 
 import numpy as np
 
-from hyrr.compute import compute_stack
 from hyrr.db import DatabaseProtocol
 from hyrr.materials import (
     SYMBOL_TO_Z,
@@ -413,19 +412,17 @@ def run_simulation_from_json(
     config = json.loads(config_json)
     lib = library or config.get("library", DEFAULT_LIBRARY)
 
-    # Native Rust fast path
-    if HAS_NATIVE:
-        from hyrr._native_bridge import _native_compute_stack_json
+    from hyrr._native_bridge import _native_compute_stack_json
 
-        result_json = _native_compute_stack_json(data_dir, lib, config_json)
-        rust_result = json.loads(result_json)
-        return _convert_rust_result(rust_result, config)
+    if not HAS_NATIVE:
+        raise RuntimeError(
+            "hyrr._native extension not available. "
+            "Install with: maturin develop -m py/Cargo.toml"
+        )
 
-    # Pure-Python fallback
-    db = DataStore(data_dir, library=lib)
-    stack = config_to_stack(db, config)
-    result = compute_stack(db, stack)
-    return result_to_json(result, config)
+    result_json = _native_compute_stack_json(data_dir, lib, config_json)
+    rust_result = json.loads(result_json)
+    return _convert_rust_result(rust_result, config)
 
 
 def run_simulation(
@@ -434,6 +431,7 @@ def run_simulation(
 ) -> dict:
     """Run simulation with an existing database connection.
 
+    Routes through the Rust compute engine via JSON serialization.
     Used by the FastAPI server where the database is kept open.
 
     Args:
@@ -443,6 +441,9 @@ def run_simulation(
     Returns:
         Dict matching frontend SimulationResult shape
     """
-    stack = config_to_stack(db, config)
-    result = compute_stack(db, stack)
-    return result_to_json(result, config)
+    config_json = json.dumps(config)
+    return run_simulation_from_json(
+        config_json,
+        data_dir=str(db.data_dir),
+        library=db.library,
+    )

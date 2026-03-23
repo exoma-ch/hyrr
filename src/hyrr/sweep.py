@@ -7,6 +7,7 @@ into a Polars DataFrame for analysis.
 from __future__ import annotations
 
 import copy
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import replace
@@ -27,6 +28,8 @@ def sweep(
 ) -> pl.DataFrame:
     """Run compute_stack for each parameter value and collect results.
 
+    Routes through the Rust compute engine via JSON serialization.
+
     Args:
         db: Nuclear data provider.
         stack: Base target stack configuration.
@@ -41,28 +44,34 @@ def sweep(
     """
     import polars as pl
 
-    from hyrr.compute import compute_stack
+    from hyrr.api import run_simulation_from_json
+    from hyrr.serialization import stack_to_config
 
     rows: list[dict[str, object]] = []
 
     for val in values:
         modified = _set_param(stack, param, val)
-        result = compute_stack(db, modified)
+        config = stack_to_config(modified)
+        config_json = json.dumps(config)
+        result_dict = run_simulation_from_json(
+            config_json, str(db.data_dir), db.library
+        )
 
         row: dict[str, object] = {"param_value": val}
 
-        # Collect per-isotope activities
-        for lr in result.layer_results:
-            for name, iso in lr.isotope_results.items():
+        for lr in result_dict.get("layers", []):
+            for iso in lr.get("isotopes", []):
+                name = iso.get("name", "")
                 col = f"{name}_activity_Bq"
-                row[col] = float(row.get(col, 0.0)) + iso.activity_Bq
+                row[col] = float(row.get(col, 0.0)) + iso.get("activity_Bq", 0.0)
 
-        # Total heat
-        row["total_heat_kW"] = sum(lr.heat_kW for lr in result.layer_results)
+        row["total_heat_kW"] = sum(
+            lr.get("heat_kW", 0.0) for lr in result_dict.get("layers", [])
+        )
 
-        # Last layer energy out
-        if result.layer_results:
-            row["energy_out_MeV"] = result.layer_results[-1].energy_out
+        layers = result_dict.get("layers", [])
+        if layers:
+            row["energy_out_MeV"] = layers[-1].get("energy_out", 0.0)
 
         rows.append(row)
 

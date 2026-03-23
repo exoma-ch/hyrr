@@ -1,8 +1,15 @@
-/** Barrel export for @hyrr/compute package. */
+/** Barrel export for @hyrr/compute package.
+ *
+ * Physics compute (production, stopping, chains, interpolation, matrix-exp)
+ * has been removed — Rust (Tauri/WASM) is the single source of truth.
+ * This package retains: types, config-bridge, materials, formula, format,
+ * data-store, constants, and expand-layers.
+ */
 
-// --- Core compute ---
-export { computeStack, applyChainSolverByComponent } from "./compute";
+// --- Data store ---
 export { DataStore } from "./data-store";
+
+// --- Materials ---
 export {
   resolveElement,
   resolveIsotopics,
@@ -16,30 +23,6 @@ export {
   COMPOUND_DENSITIES,
 } from "./materials";
 export type { CatalogEntry } from "./materials";
-export {
-  computeProductionRate,
-  batemanActivity,
-  daughterIngrowth,
-  saturationYield,
-  generateDepthProfile,
-  computeDepthProductionRate,
-} from "./production";
-export {
-  elementalDedx,
-  compoundDedx,
-  dedxMeVPerCm,
-  computeEnergyOut,
-  computeThicknessFromEnergy,
-  clearStoppingCache,
-} from "./stopping";
-export { discoverChains, solveChain } from "./chains";
-export { matrixExp, matVecMul } from "./matrix-exp";
-export {
-  makeLogLogInterpolator,
-  trapezoid,
-  interp,
-  linspace,
-} from "./interpolation";
 
 // --- Types ---
 export type {
@@ -113,6 +96,9 @@ export type {
 
 // --- Layer expansion ---
 export { expandLayers, expandedLayerCount } from "./expand-layers";
+
+// --- Interpolation utility (for XS plotting) ---
+export { interp } from "./_interp";
 
 // --- Formatting ---
 export {

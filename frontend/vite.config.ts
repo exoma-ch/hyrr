@@ -11,7 +11,7 @@ export default defineConfig({
   resolve: {
     alias: process.env.TAURI_ENV_PLATFORM
       ? {}
-      : { "hyrr-wasm": "/src/lib/compute/hyrr-wasm-stub.ts" },
+      : { "hyrr-wasm": "/src/lib/compute/hyrr-wasm-pkg/hyrr_wasm.js" },
   },
   server: {
     fs: {
@@ -24,9 +24,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     target: "esnext",
-    rollupOptions: {
-      external: process.env.TAURI_ENV_PLATFORM ? [] : ["hyrr-wasm"],
-    },
+    rollupOptions: {},
   },
   test: {
     exclude: ["e2e/**", "**/node_modules/**"],

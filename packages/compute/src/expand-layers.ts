@@ -9,7 +9,7 @@ import type { StackConfig, LayerConfig, StackItem } from "./config-bridge";
 import { isGroup } from "./config-bridge";
 import type { DatabaseProtocol } from "./types";
 import { resolveMaterial } from "./materials";
-import { computeEnergyOut, computeThicknessFromEnergy } from "./stopping";
+import { computeEnergyOut } from "./_energy-loss";
 
 /**
  * Expand groups in a SimulationConfig into a flat layer array.

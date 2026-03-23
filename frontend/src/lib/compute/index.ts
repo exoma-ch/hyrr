@@ -1,6 +1,9 @@
-/** Barrel export for compute module. */
+/** Barrel export for frontend compute module.
+ *
+ * Physics computation is handled by the Rust backend (Tauri/WASM).
+ * This module retains: data-store, materials, types, constants.
+ */
 
-export { computeStack } from "./compute";
 export { DataStore } from "./data-store";
 export {
   resolveElement,
@@ -9,23 +12,6 @@ export {
   resolveMaterial,
   massToAtomFractions,
 } from "./materials";
-export {
-  computeProductionRate,
-  batemanActivity,
-  daughterIngrowth,
-  saturationYield,
-  generateDepthProfile,
-} from "./production";
-export {
-  elementalDedx,
-  compoundDedx,
-  dedxMeVPerCm,
-  computeEnergyOut,
-  computeThicknessFromEnergy,
-  clearStoppingCache,
-} from "./stopping";
-export { discoverChains, solveChain } from "./chains";
-export { matrixExp } from "./matrix-exp";
 export type {
   Beam,
   ChainIsotope,

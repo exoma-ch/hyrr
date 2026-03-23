@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use console_error_panic_hook::set_once as set_panic_hook;
 use hyrr_core::compute::compute_stack;
 use hyrr_core::db::{DatabaseProtocol, InMemoryDataStore};
 use hyrr_core::formula::parse_formula;
@@ -29,6 +30,7 @@ pub struct WasmDataStore {
 impl WasmDataStore {
     #[wasm_bindgen(constructor)]
     pub fn new(library: &str) -> Self {
+        set_panic_hook();
         Self {
             inner: InMemoryDataStore::new(library),
         }
@@ -158,7 +160,7 @@ impl WasmDataStore {
 
     /// Run full simulation. Input/output as JSON strings matching config-bridge.ts contract.
     #[wasm_bindgen(js_name = computeStack)]
-    pub fn compute_stack_js(&mut self, config_json: &str) -> Result<String, JsValue> {
+    pub fn compute_stack_js(&self, config_json: &str) -> Result<String, JsValue> {
         let config: SimulationConfig =
             serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
 

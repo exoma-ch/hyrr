@@ -33,7 +33,7 @@
         entry.path.toLowerCase(),
         entry.name.toLowerCase(),
         (entry.formula ?? "").toLowerCase(),
-        entry.category,
+        (entry.category ?? "").toLowerCase(),
       ];
       let score = 0;
       let allMatch = true;

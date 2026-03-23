@@ -6,10 +6,13 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use hyrr_core::bateman::bateman_activity as rust_bateman;
 use hyrr_core::compute::compute_stack;
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::formula::parse_formula;
 use hyrr_core::materials::resolve_material;
+use hyrr_core::production::saturation_yield as rust_sat_yield;
+use hyrr_core::stopping;
 use hyrr_core::types::*;
 use pyo3::prelude::*;
 
@@ -117,6 +120,105 @@ fn resolve_material_json(data_dir: &str, library: &str, identifier: &str) -> PyR
 }
 
 // ---------------------------------------------------------------------------
+// Low-level physics primitives (for compute3d.py, neutrons.py, etc.)
+// ---------------------------------------------------------------------------
+
+/// Bateman activity curve. Returns JSON {"time_grid": [...], "activity": [...]}.
+#[pyfunction]
+#[pyo3(signature = (rate, half_life, irr_time, cool_time, n_points=200))]
+fn py_bateman_activity(
+    rate: f64,
+    half_life: Option<f64>,
+    irr_time: f64,
+    cool_time: f64,
+    n_points: usize,
+) -> PyResult<String> {
+    let result = rust_bateman(rate, half_life, irr_time, cool_time, n_points);
+    let json = serde_json::json!({
+        "time_grid": result.time_grid,
+        "activity": result.activity,
+    });
+    serde_json::to_string(&json)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
+}
+
+/// Saturation yield [Bq/µA].
+#[pyfunction]
+fn py_saturation_yield(rate: f64, half_life: Option<f64>, current_ma: f64) -> f64 {
+    rust_sat_yield(rate, half_life, current_ma)
+}
+
+/// Linear stopping power dE/dx [MeV/cm] for a compound.
+///
+/// composition_json: JSON array of [Z, mass_fraction] pairs, e.g. [[42, 1.0]].
+/// Returns JSON array of dE/dx values.
+#[pyfunction]
+#[pyo3(signature = (data_dir, library, projectile, composition_json, density, energies))]
+fn py_dedx_mev_per_cm(
+    data_dir: &str,
+    library: &str,
+    projectile: &str,
+    composition_json: &str,
+    density: f64,
+    energies: Vec<f64>,
+) -> PyResult<Vec<f64>> {
+    let db = ParquetDataStore::new(data_dir, library)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+    let proj = ProjectileType::from_str(projectile).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!("Invalid projectile: {projectile}"))
+    })?;
+    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
+    Ok(stopping::dedx_mev_per_cm(&db, &proj, &composition, density, &energies))
+}
+
+/// Compute exit energy [MeV] after traversing a thickness.
+#[pyfunction]
+#[pyo3(signature = (data_dir, library, projectile, composition_json, density, e_in, thickness, n_points=1000))]
+fn py_compute_energy_out(
+    data_dir: &str,
+    library: &str,
+    projectile: &str,
+    composition_json: &str,
+    density: f64,
+    e_in: f64,
+    thickness: f64,
+    n_points: usize,
+) -> PyResult<f64> {
+    let db = ParquetDataStore::new(data_dir, library)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+    let proj = ProjectileType::from_str(projectile).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!("Invalid projectile: {projectile}"))
+    })?;
+    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
+    Ok(stopping::compute_energy_out(&db, &proj, &composition, density, e_in, thickness, n_points))
+}
+
+/// Compute target thickness [cm] from energy loss.
+#[pyfunction]
+#[pyo3(signature = (data_dir, library, projectile, composition_json, density, e_in, e_out, n_points=1000))]
+fn py_compute_thickness(
+    data_dir: &str,
+    library: &str,
+    projectile: &str,
+    composition_json: &str,
+    density: f64,
+    e_in: f64,
+    e_out: f64,
+    n_points: usize,
+) -> PyResult<f64> {
+    let db = ParquetDataStore::new(data_dir, library)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+    let proj = ProjectileType::from_str(projectile).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!("Invalid projectile: {projectile}"))
+    })?;
+    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
+    Ok(stopping::compute_thickness_from_energy(&db, &proj, &composition, density, e_in, e_out, n_points))
+}
+
+// ---------------------------------------------------------------------------
 // Internal types for JSON deserialization
 // ---------------------------------------------------------------------------
 
@@ -179,5 +281,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_stack_json, m)?)?;
     m.add_function(wrap_pyfunction!(py_parse_formula, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_material_json, m)?)?;
+    m.add_function(wrap_pyfunction!(py_bateman_activity, m)?)?;
+    m.add_function(wrap_pyfunction!(py_saturation_yield, m)?)?;
+    m.add_function(wrap_pyfunction!(py_dedx_mev_per_cm, m)?)?;
+    m.add_function(wrap_pyfunction!(py_compute_energy_out, m)?)?;
+    m.add_function(wrap_pyfunction!(py_compute_thickness, m)?)?;
     Ok(())
 }

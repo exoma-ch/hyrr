@@ -1,9 +1,10 @@
 /**
  * Compute backend abstraction — routes physics to the best available engine.
  *
- * Priority: Tauri (native Rust) → WASM (Rust compiled) → TS (pure TypeScript fallback)
+ * Priority: Tauri (native Rust) → WASM (Rust compiled).
+ * Rust is the single source of truth for all physics computation.
  *
- * All three backends consume/produce the same JSON contract:
+ * Both backends consume/produce the same JSON contract:
  * SimulationConfig → SimulationResult (from @hyrr/compute config-bridge).
  */
 
@@ -15,10 +16,11 @@ import type { DepthPreviewLayer } from "../stores/depth-preview.svelte";
 // Backend types
 // ---------------------------------------------------------------------------
 
-export type BackendKind = "tauri" | "wasm" | "ts";
+export type BackendKind = "tauri" | "wasm";
 
 let activeBackend: BackendKind | null = null;
 let wasmStore: any = null; // WasmDataStore instance (lazy-loaded)
+let wasmTsDataStore: any = null; // TS DataStore used for WASM XS loading
 
 export function getActiveBackend(): BackendKind | null {
   return activeBackend;
@@ -59,6 +61,10 @@ export async function initBackend(
   try {
     onProgress?.("Loading WASM compute engine...", 0.1);
     const wasm = await import("hyrr-wasm");
+    // Initialize the WASM binary (required for --target web builds)
+    if (typeof wasm.default === "function") {
+      await wasm.default();
+    }
     wasmStore = new wasm.WasmDataStore(library ?? "tendl-2024");
 
     // Feed data from existing TS DataStore (hyparquet)
@@ -71,6 +77,7 @@ export async function initBackend(
 
     // Transfer metadata to WASM store
     await transferDataToWasm(tsStore, wasmStore, onProgress);
+    wasmTsDataStore = tsStore;
 
     activeBackend = "wasm";
     return "wasm";
@@ -78,9 +85,10 @@ export async function initBackend(
     console.warn("[backend] WASM init failed, falling back to TS:", e);
   }
 
-  // 3. TS fallback
-  activeBackend = "ts";
-  return "ts";
+  // No TS fallback — Rust (Tauri or WASM) is required
+  throw new Error(
+    "No compute backend available. Tauri and WASM both failed to initialize.",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -108,16 +116,23 @@ export async function computeStackBackend(
     case "wasm": {
       if (!wasmStore) throw new Error("WASM store not initialized");
       // Ensure cross-sections are loaded for required elements
+      console.log("[wasm] Loading cross-sections...");
       await ensureWasmCrossSections(config);
-      const resultJson = wasmStore.computeStack(configJson);
-      const result = JSON.parse(resultJson);
-      result.timestamp = Date.now();
-      return result;
+      console.log("[wasm] Running computeStack...");
+      try {
+        const resultJson = wasmStore.computeStack(configJson);
+        console.log("[wasm] computeStack done, parsing result...");
+        const result = JSON.parse(resultJson);
+        result.timestamp = Date.now();
+        return result;
+      } catch (e: any) {
+        console.error("[wasm] computeStack failed:", e);
+        throw e;
+      }
     }
 
-    case "ts":
     default:
-      return computeStackTS(config);
+      throw new Error(`No compute backend active. Call initBackend() first.`);
   }
 }
 
@@ -148,45 +163,9 @@ export async function computeDepthPreviewBackend(
       return JSON.parse(resultJson);
     }
 
-    case "ts":
     default:
-      // TS depth preview is computed inline in the store — return empty
-      // (the depth-preview store will handle TS mode itself)
-      return [];
+      throw new Error(`No compute backend active. Call initBackend() first.`);
   }
-}
-
-// ---------------------------------------------------------------------------
-// TS fallback implementation
-// ---------------------------------------------------------------------------
-
-let tsDataStore: any = null;
-
-async function ensureTSDataStore(): Promise<any> {
-  if (tsDataStore?.isInitialized) return tsDataStore;
-  const { DataStore } = await import("@hyrr/compute");
-  tsDataStore = new DataStore("./data/parquet");
-  await tsDataStore.init();
-  return tsDataStore;
-}
-
-async function computeStackTS(
-  config: SimulationConfig,
-): Promise<SimulationResult> {
-  const {
-    computeStack,
-    buildTargetStack,
-    convertResult,
-    getRequiredElements,
-  } = await import("@hyrr/compute");
-  const ds = await ensureTSDataStore();
-
-  const elements = getRequiredElements(config);
-  await ds.ensureMultipleCrossSections(config.beam.projectile, elements);
-
-  const stack = buildTargetStack(config, ds);
-  const stackResult = computeStack(ds, stack);
-  return convertResult(config, stackResult);
 }
 
 // ---------------------------------------------------------------------------
@@ -250,20 +229,19 @@ async function transferDataToWasm(
     wasm.loadDecayData(JSON.stringify(decayRows));
   }
 
-  // Stopping power
-  if (tsStore.stoppingData) {
+  // Stopping power — use spIndex (Map<"source_Z", row[]>) or iterate raw rows
+  if (tsStore.spIndex) {
     const stoppingRows: any[] = [];
-    for (const [key, data] of tsStore.stoppingData.entries()) {
+    for (const [rawKey, rows] of tsStore.spIndex.entries()) {
+      const key = String(rawKey);
       const [source, zStr] = key.split("_");
       const targetZ = Number(zStr);
-      const energies: number[] = data.energies ?? data[0];
-      const dedx: number[] = data.dedx ?? data[1];
-      for (let i = 0; i < energies.length; i++) {
+      for (const row of rows as any[]) {
         stoppingRows.push({
           source,
           target_Z: targetZ,
-          energy_MeV: energies[i],
-          dedx: dedx[i],
+          energy_MeV: Number(row.energy_MeV),
+          dedx: Number(row.dedx),
         });
       }
     }
@@ -283,28 +261,26 @@ async function ensureWasmCrossSections(
   const elements = getRequiredElements(config);
   const projectile = config.beam.projectile;
 
-  // Use the TS DataStore to load XS, then transfer to WASM
-  const ds = await ensureTSDataStore();
+  // Use the TS DataStore (created during WASM init) to load XS, then transfer
+  if (!wasmTsDataStore) throw new Error("WASM TS DataStore not initialized");
+  const ds = wasmTsDataStore;
   await ds.ensureMultipleCrossSections(projectile, elements);
 
   for (const sym of elements) {
     const cacheKey = `${projectile}_${sym}`;
     if (ds.xsCache?.has(cacheKey)) {
-      const xsList = ds.xsCache.get(cacheKey);
-      if (!xsList) continue;
+      const rawRows = ds.xsCache.get(cacheKey);
+      if (!rawRows || rawRows.length === 0) continue;
 
-      const rows: any[] = [];
-      for (const xs of xsList) {
-        for (let i = 0; i < xs.energiesMeV.length; i++) {
-          rows.push({
-            residual_Z: xs.residualZ,
-            residual_A: xs.residualA,
-            state: xs.state ?? "",
-            energy_MeV: xs.energiesMeV[i],
-            xs_mb: xs.xsMb[i],
-          });
-        }
-      }
+      // Raw parquet rows have: target_A, residual_Z, residual_A, state, energy_MeV, xs_mb
+      const rows: any[] = rawRows.map((r: any) => ({
+        target_A: Number(r.target_A),
+        residual_Z: Number(r.residual_Z),
+        residual_A: Number(r.residual_A),
+        state: r.state ?? "",
+        energy_MeV: Number(r.energy_MeV),
+        xs_mb: Number(r.xs_mb),
+      }));
       wasmStore.loadCrossSections(projectile, sym, JSON.stringify(rows));
     }
   }

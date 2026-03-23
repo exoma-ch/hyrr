@@ -18,13 +18,7 @@ import {
   type SimStatus,
 } from "../stores/results.svelte";
 import { configHash } from "./config-hash";
-import {
-  DataStore,
-  computeStack,
-  buildTargetStack,
-  convertResult,
-  getRequiredElements,
-} from "@hyrr/compute";
+import { DataStore } from "@hyrr/compute";
 import type { SimulationConfig, SimulationResult } from "@hyrr/compute";
 import {
   initBackend,
@@ -118,8 +112,8 @@ export async function initDataStore(
   const backend = await initBackend(baseUrl, undefined, undefined, onProgress);
   backendReady = true;
 
-  // For TS and WASM fallback, also init the TS DataStore (used for data loading + TS compute)
-  if (backend === "ts" || !dataStore) {
+  // Init TS DataStore for data loading (used by WASM for XS transfer)
+  if (!dataStore) {
     dataStore = new DataStore(baseUrl);
     await dataStore.init(onProgress);
   }
@@ -139,61 +133,20 @@ async function runSimulation(hash: string): Promise<void> {
 
     const backend = getActiveBackend();
 
-    if (backend === "tauri" || backend === "wasm") {
-      // Rust backend — single call handles data + compute
-      state = "running";
-      setRunning("Running simulation (Rust)...");
+    // Rust backend (Tauri or WASM) — single call handles data + compute
+    state = "running";
+    setRunning("Running simulation (Rust)...");
 
-      const simResult = await computeStackBackend(config);
+    const simResult = await computeStackBackend(config);
 
-      if (cancelled) return;
+    if (cancelled) return;
 
-      const currentHash = configHash(getConfig());
-      if (currentHash !== hash) return;
+    const currentHash = configHash(getConfig());
+    if (currentHash !== hash) return;
 
-      lastHash = hash;
-      state = "ready";
-      setResult(simResult);
-    } else {
-      // TS fallback — existing pipeline
-      if (!dataStore?.isInitialized) {
-        state = "loading_data";
-        setLoading("Initializing data store...");
-        await initDataStore("./data/parquet");
-      }
-
-      // Phase 1: Load cross-section data
-      state = "loading_data";
-      setLoading("Loading nuclear data...");
-
-      const elements = getRequiredElements(config);
-
-      await dataStore!.ensureMultipleCrossSections(
-        config.beam.projectile,
-        elements,
-      );
-
-      if (cancelled) return;
-
-      // Phase 2: Build TargetStack and run simulation
-      state = "running";
-      setRunning("Running simulation...");
-
-      const stack = buildTargetStack(config, dataStore!);
-      const stackResult = computeStack(dataStore!, stack);
-
-      if (cancelled) return;
-
-      // Verify config hasn't changed during simulation
-      const currentHash = configHash(getConfig());
-      if (currentHash !== hash) return;
-
-      const simResult = convertResult(config, stackResult);
-
-      lastHash = hash;
-      state = "ready";
-      setResult(simResult);
-    }
+    lastHash = hash;
+    state = "ready";
+    setResult(simResult);
   } catch (e: unknown) {
     if (cancelled) return;
     state = "error";

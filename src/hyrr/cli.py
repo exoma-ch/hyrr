@@ -312,19 +312,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Convert TOML to the config dict format expected by config_to_stack
     config = _toml_to_config(toml_config)
 
-    # Open data store and run simulation
-    from hyrr.api import config_to_stack
-    from hyrr.compute import compute_stack
-    from hyrr.db import DEFAULT_LIBRARY, DataStore
-    from hyrr.output import result_summary, result_to_excel
+    # Run simulation through Rust backend
+    import json
+
+    from hyrr.api import run_simulation_from_json
+    from hyrr.db import DEFAULT_LIBRARY
 
     library = args.library or toml_config.get("library", DEFAULT_LIBRARY)
-    db = DataStore(data_dir, library=library)
-    stack = config_to_stack(db, config)
-    result = compute_stack(db, stack)
+    config["library"] = library
+    config_json = json.dumps(config)
+    result = run_simulation_from_json(config_json, str(data_dir), library)
 
     # Output results
-    summary = result_summary(result)
+    summary = _format_result_summary(result)
 
     if args.output_dir:
         args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -335,9 +335,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
             print(f"Summary written to {text_path}")
 
         if args.format in ("excel", "both"):
-            excel_path = args.output_dir / "results.xlsx"
-            result_to_excel(result, str(excel_path))
-            print(f"Excel written to {excel_path}")
+            json_path = args.output_dir / "results.json"
+            json_path.write_text(json.dumps(result, indent=2))
+            print(f"JSON results written to {json_path}")
 
         if args.format == "text":
             print(summary)
@@ -345,6 +345,33 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(summary)
 
     return 0
+
+
+def _format_result_summary(result: dict) -> str:
+    """Format a simulation result dict as a text summary."""
+    lines = ["HYRR Simulation Results", "=" * 50, ""]
+
+    for lr in result.get("layers", []):
+        idx = lr.get("layer_index", 0)
+        lines.append(f"Layer {idx}:")
+        lines.append(f"  Energy: {lr.get('energy_in', 0):.2f} → {lr.get('energy_out', 0):.2f} MeV")
+        lines.append(f"  ΔE: {lr.get('delta_E_MeV', 0):.2f} MeV")
+        lines.append(f"  Heat: {lr.get('heat_kW', 0):.6f} kW")
+        lines.append("")
+
+        isotopes = lr.get("isotopes", [])
+        if isotopes:
+            lines.append(f"  {'Isotope':<14} {'Rate [/s]':>14} {'Activity [Bq]':>14} {'Yield [Bq/µA]':>14}")
+            lines.append(f"  {'-' * 56}")
+            for iso in sorted(isotopes, key=lambda x: x.get("activity_Bq", 0), reverse=True):
+                name = iso.get("name", "")
+                rate = iso.get("production_rate", 0)
+                act = iso.get("activity_Bq", 0)
+                sat = iso.get("saturation_yield_Bq_uA", 0)
+                lines.append(f"  {name:<14} {rate:>14.4E} {act:>14.4E} {sat:>14.4E}")
+        lines.append("")
+
+    return "\n".join(lines)
 
 
 def _extract_isotopes(data: dict, layer_filter: int | None = None) -> dict[str, dict]:

@@ -87,19 +87,16 @@ def _find_data_dir() -> Path | None:
     return None
 
 
-# ── Python engine ─────────────────────────────────────────────────────
+# ── Python engine (via Rust backend) ──────────────────────────────────
 
 def run_python_engine(data_dir: Path, config: dict | None = None) -> dict:
-    """Run simulation through pure-Python compute_stack."""
-    from hyrr.api import config_to_stack, result_to_json
-    from hyrr.compute import compute_stack
-    from hyrr.db import DataStore
+    """Run simulation through Rust backend via Python API."""
+    import json
+
+    from hyrr.api import run_simulation_from_json
 
     sim_config = config or SIM_CONFIG
-    db = DataStore(data_dir)
-    stack = config_to_stack(db, sim_config)
-    result = compute_stack(db, stack)
-    return result_to_json(result, sim_config)
+    return run_simulation_from_json(json.dumps(sim_config), str(data_dir))
 
 
 # ── Rust engine (via PyO3) ────────────────────────────────────────────

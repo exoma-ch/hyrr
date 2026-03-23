@@ -65,17 +65,17 @@
                 {/if}
               </td>
               <td class="col-num" class:user-input={layer.userSpecified === "thickness"} class:computed={layer.userSpecified !== "thickness"}>
-                {layer.thickness_mm.toFixed(layer.thickness_mm < 1 ? 3 : 1)}
+                {(layer.thickness_mm ?? 0).toFixed((layer.thickness_mm ?? 0) < 1 ? 3 : 1)}
               </td>
               <td class="col-num" class:user-input={layer.userSpecified === "areal_density"} class:computed={layer.userSpecified !== "areal_density"}>
-                {layer.areal_density_g_cm2.toFixed(4)}
+                {(layer.areal_density_g_cm2 ?? 0).toFixed(4)}
               </td>
-              <td class="col-num computed">{layer.energy_in_MeV.toFixed(2)}</td>
+              <td class="col-num computed">{(layer.energy_in_MeV ?? 0).toFixed(2)}</td>
               <td class="col-num" class:user-input={layer.userSpecified === "energy_out"} class:computed={layer.userSpecified !== "energy_out"}>
-                {layer.energy_out_MeV.toFixed(2)}
+                {(layer.energy_out_MeV ?? 0).toFixed(2)}
               </td>
-              <td class="col-num computed">{layer.delta_E_MeV.toFixed(2)}</td>
-              <td class="col-num computed">{layer.heat_kW.toFixed(4)}</td>
+              <td class="col-num computed">{(layer.delta_E_MeV ?? 0).toFixed(2)}</td>
+              <td class="col-num computed">{(layer.heat_kW ?? 0).toFixed(4)}</td>
               <td class="col-num computed">{layerDose(i) !== null ? fmtDoseRate(layerDose(i)!) : "—"}</td>
             </tr>
           {/each}
@@ -84,12 +84,12 @@
           <tr class="total-row">
             <td></td>
             <td class="col-mat">Total</td>
-            <td class="col-num">{preview.reduce((s, l) => s + l.thickness_mm, 0).toFixed(1)}</td>
-            <td class="col-num">{preview.reduce((s, l) => s + l.areal_density_g_cm2, 0).toFixed(4)}</td>
-            <td class="col-num">{preview.length > 0 ? preview[0].energy_in_MeV.toFixed(2) : "—"}</td>
-            <td class="col-num">{preview.length > 0 ? preview[preview.length - 1].energy_out_MeV.toFixed(2) : "—"}</td>
-            <td class="col-num">{preview.reduce((s, l) => s + l.delta_E_MeV, 0).toFixed(2)}</td>
-            <td class="col-num">{preview.reduce((s, l) => s + l.heat_kW, 0).toFixed(4)}</td>
+            <td class="col-num">{preview.reduce((s, l) => s + (l.thickness_mm ?? 0), 0).toFixed(1)}</td>
+            <td class="col-num">{preview.reduce((s, l) => s + (l.areal_density_g_cm2 ?? 0), 0).toFixed(4)}</td>
+            <td class="col-num">{preview.length > 0 ? (preview[0].energy_in_MeV ?? 0).toFixed(2) : "—"}</td>
+            <td class="col-num">{preview.length > 0 ? (preview[preview.length - 1].energy_out_MeV ?? 0).toFixed(2) : "—"}</td>
+            <td class="col-num">{preview.reduce((s, l) => s + (l.delta_E_MeV ?? 0), 0).toFixed(2)}</td>
+            <td class="col-num">{preview.reduce((s, l) => s + (l.heat_kW ?? 0), 0).toFixed(4)}</td>
             <td class="col-num">{totalDose() > 0 ? fmtDoseRate(totalDose()) : "—"}</td>
           </tr>
         </tfoot>

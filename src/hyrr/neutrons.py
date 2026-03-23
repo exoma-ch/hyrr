@@ -26,11 +26,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from hyrr.production import (
-    AVOGADRO,
-    MILLIBARN_CM2,
-    bateman_activity,
-)
+from hyrr._math_utils import AVOGADRO, MILLIBARN_CM2
+from hyrr._native_bridge import bateman_activity
 
 if TYPE_CHECKING:
     from hyrr.db import DatabaseProtocol

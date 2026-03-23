@@ -66,7 +66,7 @@
       turnstileToken = null;
 
       return new Promise((resolve) => {
-        turnstileWidgetId = window.turnstile.render(turnstileEl, {
+        turnstileWidgetId = window.turnstile.render(turnstileEl!, {
           sitekey: TURNSTILE_SITE_KEY,
           size: "invisible",
           callback: (token: string) => { turnstileToken = token; resolve(token); },

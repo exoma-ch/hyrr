@@ -338,6 +338,11 @@ class DataStore:
     # -- internal helpers ----------------------------------------------------
 
     @property
+    def data_dir(self) -> Path:
+        """Path to the nucl-parquet data directory."""
+        return self._data_dir
+
+    @property
     def library(self) -> str:
         """The active cross-section library name."""
         return self._library

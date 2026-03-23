@@ -5,7 +5,6 @@
 __version__ = "0.1.0"
 
 from hyrr.api import run_simulation, run_simulation_from_json
-from hyrr.compute import compute_stack
 from hyrr.db import (
     DEFAULT_LIBRARY,
     CrossSectionData,
@@ -91,7 +90,6 @@ __all__ = [
     "WeisskopfFlux",
     "compute_neutron_activation",
     "compute_secondary_neutron_activation",
-    "compute_stack",
     "purity_at",
     "result_summary",
     "result_to_csv_bundle",
