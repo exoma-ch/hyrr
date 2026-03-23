@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import type { HistoryEntry } from "../types";
-  import { getAllRuns, deleteRun, updateLabel } from "../history-db";
+  import { getAllRuns, deleteRun, updateLabel, clearHistory } from "../history-db";
   import { setConfig } from "../stores/config.svelte";
 
   interface Props {
@@ -13,6 +13,7 @@
   let entries = $state<HistoryEntry[]>([]);
   let editingId = $state<number | null>(null);
   let editLabel = $state("");
+  let confirmClear = $state(false);
 
   async function refresh() {
     entries = await getAllRuns();
@@ -61,6 +62,16 @@
 <div class="history-panel">
   <div class="history-header">
     <button class="refresh-btn" onclick={refresh} title="Refresh">↻</button>
+    {#if entries.length > 0}
+      {#if confirmClear}
+        <span class="confirm-msg">Clear all?
+          <button class="confirm-yes" onclick={async () => { await clearHistory(); confirmClear = false; await refresh(); }}>Yes</button>
+          <button class="confirm-no" onclick={() => confirmClear = false}>No</button>
+        </span>
+      {:else}
+        <button class="clear-btn" onclick={() => confirmClear = true} title="Clear all history">Clear all</button>
+      {/if}
+    {/if}
   </div>
 
   {#if entries.length === 0}
@@ -123,6 +134,56 @@
 
   .refresh-btn:hover {
     color: var(--c-accent);
+  }
+
+  .clear-btn {
+    background: none;
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    color: var(--c-text-muted);
+    font-size: 0.7rem;
+    padding: 0.15rem 0.4rem;
+    cursor: pointer;
+  }
+
+  .clear-btn:hover {
+    color: var(--c-red);
+    border-color: var(--c-red);
+  }
+
+  .confirm-msg {
+    font-size: 0.75rem;
+    color: var(--c-red);
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .confirm-yes, .confirm-no {
+    background: none;
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.35rem;
+    cursor: pointer;
+  }
+
+  .confirm-yes {
+    color: var(--c-red);
+    border-color: var(--c-red);
+  }
+
+  .confirm-yes:hover {
+    background: var(--c-red-tint-subtle);
+  }
+
+  .confirm-no {
+    color: var(--c-text-muted);
+  }
+
+  .confirm-no:hover {
+    color: var(--c-text);
+    border-color: var(--c-text-faint);
   }
 
   .empty {

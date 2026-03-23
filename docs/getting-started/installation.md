@@ -6,9 +6,20 @@ The fastest way to use HYRR: **[exoma-ch.github.io/hyrr](https://exoma-ch.github
 
 Everything runs in your browser — no Python, no install, no data upload.
 
-## Python Package
+## Desktop App (offline)
 
-### From PyPI (when released)
+For air-gapped machines or offline use, download the native desktop app from **[GitHub Releases](https://github.com/exoma-ch/hyrr/releases)**:
+
+| Platform | Artifact |
+|---|---|
+| Windows 10+ | `.msi` installer or `.exe` (NSIS) |
+| macOS 10.15+ (Apple Silicon) | `.dmg` |
+| macOS 10.15+ (Intel) | `.dmg` |
+| Ubuntu 22.04+ | `.deb` or `.AppImage` |
+
+All nuclear data (~68 MB Parquet) is bundled — no internet connection required after install. Installer size ~15 MB.
+
+## Python Package
 
 ```bash
 uv add hyrr

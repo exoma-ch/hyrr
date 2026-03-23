@@ -8,6 +8,7 @@
     setConfig,
     isConfigValid,
     getLayers,
+    getInternalItems,
     updateLayer,
     getGroup,
     undo,
@@ -52,6 +53,7 @@
   import IsotopePopup from "./lib/components/IsotopePopup.svelte";
   import BugReportModal from "./lib/components/BugReportModal.svelte";
   import WelcomeScreen from "./lib/components/WelcomeScreen.svelte";
+  import DownloadLinks from "./lib/components/DownloadLinks.svelte";
 
   let loadingState = $state("Initializing...");
   let loadingProgress = $state(0);
@@ -189,9 +191,13 @@
   function openMaterialPopup(groupIndex: number | undefined, layerIndex: number) {
     materialPopupGroupIndex = groupIndex;
     materialPopupLayerIndex = layerIndex;
-    const mat = groupIndex !== undefined
-      ? getGroup(groupIndex)?.layers[layerIndex]?.material
-      : getLayers()[layerIndex]?.material;
+    let mat: string | undefined;
+    if (groupIndex !== undefined) {
+      mat = getGroup(groupIndex)?.layers[layerIndex]?.material;
+    } else {
+      const item = getInternalItems()[layerIndex];
+      mat = item && !('mode' in item) ? item.material : undefined;
+    }
     const cm = mat ? getCustomMaterials().find((m) => m.name === mat || m.formula === mat) : null;
     materialPopupEditId = cm?.id ?? null;
     materialPopupOpen = true;
@@ -207,10 +213,12 @@
         enrichment,
       }, materialPopupGroupIndex);
     } else {
-      const layers = getLayers();
-      if (materialPopupLayerIndex < layers.length) {
+      // Use internal items (not expanded layers) — index matches the items array
+      const items = getInternalItems();
+      const existing = items[materialPopupLayerIndex];
+      if (existing && !('mode' in existing)) {
         updateLayer(materialPopupLayerIndex, {
-          ...layers[materialPopupLayerIndex],
+          ...existing,
           material,
           enrichment,
         });
@@ -222,8 +230,15 @@
     elementPopupGroupIndex = groupIndex;
     elementPopupLayerIndex = layerIndex;
     elementPopupSymbol = element;
-    const layers = getLayers();
-    elementPopupEnrichment = layers[layerIndex]?.enrichment?.[element];
+    // Get enrichment from the correct source (group layer or standalone item)
+    let layer: import("./lib/types").LayerConfig | undefined;
+    if (groupIndex !== undefined) {
+      layer = getGroup(groupIndex)?.layers[layerIndex];
+    } else {
+      const item = getInternalItems()[layerIndex];
+      layer = item && !('mode' in item) ? item : undefined;
+    }
+    elementPopupEnrichment = layer?.enrichment?.[element];
     elementPopupOpen = true;
   }
 
@@ -324,7 +339,9 @@
       onclose={() => materialPopupOpen = false}
       onselect={onMaterialSelected}
       onenrichment={(el) => openElementPopup(materialPopupGroupIndex, materialPopupLayerIndex, el)}
-      currentEnrichment={getLayers()[materialPopupLayerIndex]?.enrichment}
+      currentEnrichment={materialPopupGroupIndex !== undefined
+        ? getGroup(materialPopupGroupIndex)?.layers[materialPopupLayerIndex]?.enrichment
+        : (() => { const item = getInternalItems()[materialPopupLayerIndex]; return item && !('mode' in item) ? item.enrichment : undefined; })()}
       materials={[]}
       editMaterialId={materialPopupEditId}
     />
@@ -361,6 +378,10 @@
       <span>v{__APP_VERSION__}</span>
       <span class="sep">&middot;</span>
       <a href="https://github.com/exoma-ch/hyrr" target="_blank" rel="noopener noreferrer">Source</a>
+      <span class="sep">&middot;</span>
+      <DownloadLinks variant="inline" />
+      <span class="sep">&middot;</span>
+      <a href="https://exoma-ch.github.io/hyrr/docs/" target="_blank" rel="noopener noreferrer">Docs</a>
       <span class="sep">&middot;</span>
       <span class="privacy">No personal data is collected. All computation runs locally in your browser.</span>
     </div>

@@ -29,6 +29,18 @@ let tabs = $state<SessionTab[]>([]);
 let activeTabId = $state<string | null>(null);
 let initialized = $state(false);
 
+/** Migrate legacy flat config (layers) to serializable format (items). */
+function migrateConfig(raw: any): SerializableConfig {
+  if (raw.items) return raw as SerializableConfig;
+  // Legacy: has `layers` instead of `items`
+  return {
+    beam: raw.beam,
+    items: raw.layers ?? [],
+    irradiation_s: raw.irradiation_s,
+    cooling_s: raw.cooling_s,
+  };
+}
+
 /** Generate a short label from a config. */
 function configLabel(config: SerializableConfig): string {
   const proj: Record<string, string> = { p: "p", d: "d", t: "t", h: "\u00B3He", a: "\u03B1" };
@@ -97,7 +109,7 @@ export async function restoreSessions(): Promise<void> {
     tabs = records.map((r) => ({
       id: r.id,
       label: r.label,
-      config: r.config,
+      config: migrateConfig(r.config),
     }));
 
     // Find the previously active tab (or fall back to last)

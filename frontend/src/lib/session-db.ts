@@ -5,8 +5,6 @@
  * one object store, no framework dependencies.
  */
 
-import type { SimulationConfig } from "./types";
-
 const DB_NAME = "hyrr-sessions";
 const DB_VERSION = 1;
 const STORE_NAME = "sessions";
@@ -14,7 +12,7 @@ const STORE_NAME = "sessions";
 export interface SessionRecord {
   id: string;
   label: string;
-  config: SimulationConfig;
+  config: any; // SerializableConfig or legacy SimulationConfig — handled by sessions store
   timestamp: number;
   isActive: boolean;
 }

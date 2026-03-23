@@ -1,5 +1,6 @@
 <script lang="ts">
   import Modal from "./Modal.svelte";
+  import DownloadLinks from "./DownloadLinks.svelte";
 
   interface Props {
     open: boolean;
@@ -22,6 +23,8 @@
         Inspired by <a href="https://github.com/arjankoning1/isotopia" target="_blank" rel="noopener noreferrer">ISOTOPIA</a>,
         the medical isotope production simulator by Arjan Koning (IAEA Nuclear Data Section).
       </p>
+      <p>Need offline access? All nuclear data bundled — works air-gapped.</p>
+      <DownloadLinks variant="panel" />
     </section>
 
     <section>
@@ -40,9 +43,10 @@
     <section>
       <h3>Layer configuration</h3>
       <ul>
-        <li><strong>Thickness vs. exit energy</strong> — Set one; the other is computed from stopping power.</li>
+        <li><strong>Thickness vs. exit energy</strong> — Set one; the other is computed from stopping power. Accepts leading decimals: <code>.2mm</code>, <code>.5µm</code>.</li>
         <li><strong>Enrichment</strong> — Click an element badge on a layer card to override natural isotopic abundances.</li>
         <li><strong>Custom materials</strong> — Enter any chemical formula (e.g. <code>CaO+Al</code>) as a layer material.</li>
+        <li><strong>Repeating groups</strong> — Click <kbd>⟳</kbd> to wrap layers into a group. Choose <strong>×N</strong> (repeat N times) or <strong>E&lt;</strong> (repeat until beam energy drops below threshold). Drag layers in or out of groups.</li>
       </ul>
     </section>
 
@@ -74,9 +78,20 @@
     </section>
 
     <section>
+      <h3>Simulation mode</h3>
+      <p>
+        The <strong>Auto/Manual</strong> toggle next to beam properties controls when simulations run.
+        In Auto mode results update live as you edit; in Manual mode click <kbd>Run</kbd> to trigger.
+        The status dot shows: grey = idle, gold = busy, green = ready, red = error.
+      </p>
+    </section>
+
+    <section>
       <h3>Keyboard shortcuts</h3>
       <div class="shortcuts">
         <div><kbd>Esc</kbd> Close any popup</div>
+        <div><kbd>Cmd Z</kbd> Undo</div>
+        <div><kbd>Cmd Shift Z</kbd> Redo</div>
       </div>
     </section>
   </div>

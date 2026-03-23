@@ -60,6 +60,19 @@ result.summary()
 
 The browser frontend (`frontend/`) is a standalone Svelte 5 + TypeScript app with a pure-TS physics engine (no Python/WASM). Nuclear data is lazy-loaded from Parquet files via hyparquet. All computation runs locally — no server, no data upload.
 
+The physics engine is also published as `@hyrr/compute` (npm workspace under `packages/compute/`) for use in Node.js tools and the MCP server.
+
+Key frontend features:
+- **Repeating layer groups** — wrap layers into groups repeated N times or until beam energy drops below a threshold
+- **Undo/redo** — Cmd+Z / Cmd+Shift+Z with 50-deep history
+- **Simulation mode** — Auto (live) or Manual (run on demand) with status indicator
+- **URL sharing + sessions** — full config (including groups) encoded in URL hash; session tabs persist across reloads
+- **Isotope filter** — shared filter bar above activity plots and activity table
+
+## MCP Server
+
+`mcp/` — agent-driven irradiation analysis via the Model Context Protocol. Tools: `simulate`, `list_materials`, `get_cross_sections`, `get_decay_data`, `compare_results`. Resources: `hyrr://libraries`, `hyrr://elements`.
+
 ## Desktop App
 
 **[Download](https://github.com/exoma-ch/hyrr/releases)** — available for Windows, macOS (Apple Silicon & Intel), and Linux.

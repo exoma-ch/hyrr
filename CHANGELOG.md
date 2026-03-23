@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-03-24
+
+### Added
+
+- **Repeating layer groups** — wrap any set of layers into a group and repeat them N times or until beam energy drops below a threshold; groups are first-class in the UI and persist across reloads
+- **Group persistence** — groups survive URL hash sharing and session tab restore (encoded as `{g:true, ...}` in compact config format v2)
+- **Shared isotope filter bar** — filter panel extracted above both the activity plots and the activity table; filter state is shared between both views
+- **Simulation mode toggle** — Auto/Manual button next to beam properties with live status dot (idle / busy / ready / error)
+- **Undo/redo** — Cmd+Z / Cmd+Shift+Z (50-deep snapshot stack); also accessible via keyboard while any text field is not focused
+- **Clear history** — "Clear all" button in the history panel with inline Yes/No confirmation
+- **Leading-decimal thickness** — thickness inputs now accept `.2mm`, `.5µm`, etc.
+
+### Fixed
+
+- **Li-5 phantom activity (#40)** — matrix exponential residuals for ultra-short half-lives (t½ < 1 µs) are replaced with analytical Bateman solution, eliminating spurious MBq readings
+- **Production depth plot zero-crossing (#41)** — isotopes that don't appear in a layer now produce a clean zero segment rather than a diagonal artifact
+- **Material picker / enrichment context (#42)** — popup handlers now use internal item indices (not expanded flat layer indices), so clicking enrichment on a CaO layer no longer defaults to Al
+- **GitHub Actions storage** — Rust build caches only saved on tag releases; Pages and dist artifacts have explicit retention limits; benchmark job scoped to `src/**` changes
+
 ## [0.5.0] — 2026-03-18
 
 ### Added

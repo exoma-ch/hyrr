@@ -4,17 +4,20 @@
 
 A pure Python package and browser app for predicting radio-isotope production in stacked target assemblies.
 
-**[Launch the web app](https://exoma-ch.github.io/hyrr/)** — runs entirely in the browser, no install needed.
+**[Launch the web app](https://exoma-ch.github.io/hyrr/)** — runs entirely in the browser, no install needed. | **[Desktop app](https://github.com/exoma-ch/hyrr/releases)** — Windows, macOS, Linux, works offline.
 
 ## Features
 
 - **Table-based stopping powers** — NIST PSTAR/ASTAR reference data instead of bare Bethe-Bloch
 - **Compound materials** — Bragg additivity for any material composition via py-mat
 - **Stacked layer geometries** — beam propagation through windows, targets, degraders, backings
+- **Repeating layer groups** — repeat a layer set N times or until beam energy drops below a threshold
 - **Depth profiles** — spatially resolved heat deposition and activity distributions
 - **Parquet data store** — fast columnar lookups via Polars, replaces 547,000 text files
 - **Pure Python** — no Fortran compiler, no container, `uv add hyrr`
 - **Browser frontend** — Svelte 5 + TypeScript with a pure-TS physics engine, zero backend
+- **Desktop app** — Tauri v2 native wrapper, all data bundled, fully offline-capable
+- **MCP server** — agent-driven analysis via the Model Context Protocol (`mcp/`)
 
 ## Performance
 
