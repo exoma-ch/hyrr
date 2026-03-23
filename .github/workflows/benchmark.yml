@@ -1,0 +1,35 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/test_performance.py"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/test_performance.py"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set meta stopping tendl-2024/xs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Run benchmarks
+        run: uv run pytest tests/test_performance.py -v --benchmark-only --benchmark-json=benchmark.json || true
