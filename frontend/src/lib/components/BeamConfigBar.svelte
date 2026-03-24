@@ -17,9 +17,9 @@
   } from "../scheduler/sim-scheduler.svelte";
   import { getStatus } from "../stores/results.svelte";
   import { parseTime } from "../utils/time-parse";
-  import type { ProjectileType } from "../types";
+  import { isHeavyIon, heavyIonA } from "../compute/types";
 
-  const PROJECTILES: { id: ProjectileType; label: string }[] = [
+  const LIGHT_PROJECTILES: { id: string; label: string }[] = [
     { id: "p", label: "p" },
     { id: "d", label: "d" },
     { id: "t", label: "t" },
@@ -27,8 +27,25 @@
     { id: "a", label: "\u03b1" },
   ];
 
+  const HEAVY_PROJECTILES: { id: string; label: string }[] = [
+    { id: "C-12",  label: "\u00b9\u00b2C" },
+    { id: "O-16",  label: "\u00b9\u2076O" },
+    { id: "Ne-20", label: "\u00b2\u2070Ne" },
+    { id: "Si-28", label: "\u00b2\u2078Si" },
+    { id: "Ar-40", label: "\u2074\u2070Ar" },
+    { id: "Fe-56", label: "\u2075\u2076Fe" },
+  ];
+
   let beam = $derived(getBeam());
   let config = $derived(getConfig());
+
+  /** True when the selected projectile is a heavy ion. */
+  let isHI = $derived(isHeavyIon(beam.projectile));
+
+  /** For heavy ions: MeV/u; for light ions: total MeV. */
+  let displayedEnergy = $derived(
+    isHI ? beam.energy_MeV / heavyIonA(beam.projectile) : beam.energy_MeV
+  );
   let simMode = $derived(getSimMode());
   let schedulerState = $derived(getSchedulerState());
   let simStatus = $derived(getStatus());
@@ -113,7 +130,9 @@
 
   function onEnergyChange(e: Event) {
     const v = parseFloat((e.target as HTMLInputElement).value);
-    if (!isNaN(v) && v > 0) setEnergy(v);
+    if (!isNaN(v) && v > 0) {
+      setEnergy(isHI ? v * heavyIonA(beam.projectile) : v);
+    }
   }
 
   function onCurrentChange(e: Event) {
@@ -125,18 +144,25 @@
 <div class="beam-bar">
   <div class="field">
     <label>Projectile</label>
-    <select value={beam.projectile} onchange={(e) => setProjectile((e.target as HTMLSelectElement).value as ProjectileType)}>
-      {#each PROJECTILES as p}
-        <option value={p.id}>{p.label}</option>
-      {/each}
+    <select value={beam.projectile} onchange={(e) => setProjectile((e.target as HTMLSelectElement).value)}>
+      <optgroup label="Light ions">
+        {#each LIGHT_PROJECTILES as p}
+          <option value={p.id}>{p.label}</option>
+        {/each}
+      </optgroup>
+      <optgroup label="Heavy ions">
+        {#each HEAVY_PROJECTILES as p}
+          <option value={p.id}>{p.label}</option>
+        {/each}
+      </optgroup>
     </select>
   </div>
 
   <div class="field">
     <label>Energy</label>
     <div class="input-group">
-      <input type="text" inputmode="decimal" value={beam.energy_MeV} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onEnergyChange} />
-      <span class="unit">MeV</span>
+      <input type="text" inputmode="decimal" value={displayedEnergy} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onEnergyChange} />
+      <span class="unit">{isHI ? "MeV/u" : "MeV"}</span>
     </div>
   </div>
 
@@ -220,7 +246,7 @@
   }
 
   .field select {
-    width: 70px;
+    width: 90px;
     cursor: pointer;
     -webkit-appearance: none;
     appearance: none;

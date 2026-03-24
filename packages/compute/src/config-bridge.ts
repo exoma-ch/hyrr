@@ -10,10 +10,11 @@ import { elementsFromIdentifier } from "./formula";
 
 // --- Config types (JSON-serializable) ---
 
-export type ProjectileType = "p" | "d" | "t" | "h" | "a";
+/** Light-ion shorthand or heavy-ion string like "C-12", "O-16". */
+export type ProjectileType = "p" | "d" | "t" | "h" | "a" | string;
 
 export interface BeamConfig {
-  projectile: ProjectileType;
+  projectile: string;
   energy_MeV: number;
   current_mA: number;
 }

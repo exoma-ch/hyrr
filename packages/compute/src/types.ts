@@ -2,17 +2,44 @@
  * Internal compute types — mirrors hyrr Python data model.
  */
 
-export type ProjectileType = "p" | "d" | "t" | "h" | "a";
+/** Light-ion projectile shorthand, or a heavy-ion string like "C-12", "O-16". */
+export type ProjectileType = "p" | "d" | "t" | "h" | "a" | string;
 
-/** Projectile mass numbers (needed for velocity scaling). */
-export const PROJECTILE_A: Record<ProjectileType, number> = {
+/** Projectile mass numbers for light ions (needed for velocity scaling). */
+export const PROJECTILE_A: Record<string, number> = {
   p: 1, d: 2, t: 3, h: 3, a: 4,
 };
 
-/** Projectile charge numbers. */
-export const PROJECTILE_Z: Record<ProjectileType, number> = {
+/** Projectile charge numbers for light ions. */
+export const PROJECTILE_Z: Record<string, number> = {
   p: 1, d: 1, t: 1, h: 2, a: 2,
 };
+
+/** Heavy-ion element symbol → proton number mapping. */
+const HEAVY_ION_Z: Record<string, number> = {
+  C: 6, O: 8, Ne: 10, Si: 14, Ar: 18, Fe: 26,
+};
+
+/**
+ * Returns true if the projectile string is a heavy ion (e.g. "C-12", "O-16").
+ * Heavy ions are encoded as "<Symbol>-<A>".
+ */
+export function isHeavyIon(p: string): boolean {
+  return /^[A-Z][a-z]?-\d+$/.test(p);
+}
+
+/** Mass number of a heavy-ion projectile string, e.g. "C-12" → 12. */
+export function heavyIonA(p: string): number {
+  return parseInt(p.split("-")[1], 10);
+}
+
+/** Proton number of a heavy-ion projectile string, e.g. "C-12" → 6. */
+export function heavyIonZ(p: string): number {
+  const sym = p.split("-")[0];
+  const z = HEAVY_ION_Z[sym];
+  if (z === undefined) throw new Error(`Unknown heavy-ion element: ${sym}`);
+  return z;
+}
 
 /** Database protocol — all physics modules depend on this interface. */
 export interface DatabaseProtocol {
@@ -66,18 +93,18 @@ export interface DecayData {
 }
 
 export interface Beam {
-  projectile: ProjectileType;
+  projectile: string;
   energyMeV: number;
   currentMA: number;
   particlesPerSecond: number;
 }
 
 export function createBeam(
-  projectile: ProjectileType,
+  projectile: string,
   energyMeV: number,
   currentMA: number,
 ): Beam {
-  const Z = PROJECTILE_Z[projectile];
+  const Z = isHeavyIon(projectile) ? heavyIonZ(projectile) : PROJECTILE_Z[projectile];
   const ELEMENTARY_CHARGE = 1.602176634e-19;
   return {
     projectile,

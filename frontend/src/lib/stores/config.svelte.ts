@@ -261,7 +261,7 @@ export function setBeam(beam: BeamConfig): void {
   state.beam = { ...beam };
 }
 
-export function setProjectile(p: ProjectileType): void {
+export function setProjectile(p: string): void {
   pushUndo();
   state.beam.projectile = p;
 }

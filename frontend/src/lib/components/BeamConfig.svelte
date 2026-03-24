@@ -15,14 +15,23 @@
     bestUnit,
     type TimeUnit,
   } from "../utils/time-convert";
-  import type { ProjectileType } from "../types";
+  import { isHeavyIon, heavyIonA } from "../compute/types";
 
-  const PROJECTILES: { id: ProjectileType; symbol: string; name: string }[] = [
+  const LIGHT_PROJECTILES: { id: string; symbol: string; name: string }[] = [
     { id: "p", symbol: "p", name: "Proton" },
     { id: "d", symbol: "d", name: "Deuteron" },
     { id: "t", symbol: "t", name: "Triton" },
     { id: "h", symbol: "\u00b3He", name: "Helion (\u00b3He\u00b2\u207a)" },
     { id: "a", symbol: "\u03b1", name: "Alpha (\u2074He\u00b2\u207a)" },
+  ];
+
+  const HEAVY_PROJECTILES: { id: string; symbol: string; name: string }[] = [
+    { id: "C-12",  symbol: "\u00b9\u00b2C\u2076\u207a",   name: "\u00b9\u00b2Carbon" },
+    { id: "O-16",  symbol: "\u00b9\u2076O\u2078\u207a",   name: "\u00b9\u2076Oxygen" },
+    { id: "Ne-20", symbol: "\u00b2\u2070Ne\u00b9\u2070\u207a", name: "\u00b2\u2070Neon" },
+    { id: "Si-28", symbol: "\u00b2\u2078Si\u00b9\u2074\u207a", name: "\u00b2\u2078Silicon" },
+    { id: "Ar-40", symbol: "\u2074\u2070Ar\u00b9\u2078\u207a", name: "\u2074\u2070Argon" },
+    { id: "Fe-56", symbol: "\u2075\u2076Fe\u00b2\u2076\u207a", name: "\u2075\u2076Iron" },
   ];
 
   const TIME_UNITS: { value: TimeUnit; label: string }[] = [
@@ -34,6 +43,23 @@
 
   let beam = $derived(getBeam());
   let config = $derived(getConfig());
+
+  /** True when the selected projectile is a heavy ion. */
+  let isHI = $derived(isHeavyIon(beam.projectile));
+
+  /** For heavy ions: displayed energy in MeV/u; for light ions: total MeV. */
+  let displayedEnergy = $derived(
+    isHI ? beam.energy_MeV / heavyIonA(beam.projectile) : beam.energy_MeV
+  );
+
+  /** Convert MeV/u input back to total MeV before storing. */
+  function onEnergyChange(v: number): void {
+    if (isHI) {
+      setEnergy(v * heavyIonA(beam.projectile));
+    } else {
+      setEnergy(v);
+    }
+  }
 
   let irradUnit = $state<TimeUnit>("d");
   let coolUnit = $state<TimeUnit>("d");
@@ -88,9 +114,24 @@
 
 <div class="beam-config">
   <div class="projectile-row">
-    {#each PROJECTILES as proj}
+    {#each LIGHT_PROJECTILES as proj}
       <button
         class="proj-btn"
+        class:active={beam.projectile === proj.id}
+        onclick={() => setProjectile(proj.id)}
+        title={proj.name}
+      >
+        {proj.symbol}
+      </button>
+    {/each}
+  </div>
+
+  <div class="projectile-section-label">Heavy ions</div>
+
+  <div class="projectile-row projectile-row--heavy">
+    {#each HEAVY_PROJECTILES as proj}
+      <button
+        class="proj-btn proj-btn--heavy"
         class:active={beam.projectile === proj.id}
         onclick={() => setProjectile(proj.id)}
         title={proj.name}
@@ -103,12 +144,12 @@
   <div class="field-grid">
     <NumberInput
       label="Energy"
-      unit="MeV"
-      value={beam.energy_MeV}
-      min={1}
-      max={100}
-      step={0.5}
-      onchange={setEnergy}
+      unit={isHI ? "MeV/u" : "MeV"}
+      value={displayedEnergy}
+      min={isHI ? 3 : 1}
+      max={isHI ? 1000 : 100}
+      step={isHI ? 1 : 0.5}
+      onchange={onEnergyChange}
     />
 
     <NumberInput
@@ -187,6 +228,24 @@
   .projectile-row {
     display: flex;
     gap: 0.35rem;
+  }
+
+  .projectile-row--heavy {
+    flex-wrap: wrap;
+  }
+
+  .projectile-section-label {
+    font-size: 0.65rem;
+    color: var(--c-text-subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.1rem;
+  }
+
+  .proj-btn--heavy {
+    font-size: 0.7rem;
+    flex: 1 1 calc(33% - 0.35rem);
+    min-width: 0;
   }
 
   .proj-btn {

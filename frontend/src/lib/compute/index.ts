@@ -30,4 +30,4 @@ export type {
   StackResult,
   TargetStack,
 } from "./types";
-export { createBeam, PROJECTILE_A, PROJECTILE_Z } from "./types";
+export { createBeam, PROJECTILE_A, PROJECTILE_Z, isHeavyIon, heavyIonA, heavyIonZ } from "./types";

@@ -118,7 +118,16 @@ export class DataStore implements DatabaseProtocol {
     }
 
     onProgress?.("Loading stopping power data...", 0.75);
-    this.stoppingData = await readParquetRows(`${this.baseUrl}/stopping/stopping.parquet`);
+    // Load per-source light-ion stopping files (PSTAR, ASTAR, dSTAR, tSTAR, He3STAR)
+    const lightIonSources = ["PSTAR", "ASTAR", "dSTAR", "tSTAR", "He3STAR"];
+    const stoppingFiles = await Promise.all(
+      lightIonSources.map((src) =>
+        readParquetRows(`${this.baseUrl}/stopping/${src}.parquet`).catch(() => [] as ParquetRow[]),
+      ),
+    );
+    for (const rows of stoppingFiles) {
+      this.stoppingData.push(...rows);
+    }
 
     // Pre-index stopping data by source+targetZ for fast lookup
     for (const row of this.stoppingData) {
