@@ -38,17 +38,19 @@ jobs:
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
-          git sparse-checkout set data/meta data/stopping data/tendl-2024/xs data/hi-xs-prod/xs
+          git sparse-checkout set data/meta data/stopping data/tendl-2024/xs data/hi-xs-prod/xs data/endfb-8.1/xs
 
       - name: Copy nuclear data for frontend
         run: |
-          mkdir -p frontend/public/data/parquet/{meta,stopping,xs,hi-xs-prod}
+          mkdir -p frontend/public/data/parquet/{meta,stopping,xs,hi-xs-prod,neutron-xs}
           cp nucl-parquet/data/meta/abundances.parquet nucl-parquet/data/meta/decay.parquet nucl-parquet/data/meta/elements.parquet frontend/public/data/parquet/meta/
           cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp -f nucl-parquet/data/meta/spectrum_xs.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp nucl-parquet/data/stopping/PSTAR.parquet nucl-parquet/data/stopping/ASTAR.parquet nucl-parquet/data/stopping/dSTAR.parquet nucl-parquet/data/stopping/tSTAR.parquet nucl-parquet/data/stopping/He3STAR.parquet frontend/public/data/parquet/stopping/
           cp nucl-parquet/data/stopping/catima_C12.parquet nucl-parquet/data/stopping/catima_O16.parquet nucl-parquet/data/stopping/catima_Ne20.parquet nucl-parquet/data/stopping/catima_Si28.parquet nucl-parquet/data/stopping/catima_Ar40.parquet nucl-parquet/data/stopping/catima_Fe56.parquet frontend/public/data/parquet/stopping/
           cp nucl-parquet/data/tendl-2024/xs/*.parquet frontend/public/data/parquet/xs/
           cp nucl-parquet/data/hi-xs-prod/xs/*.parquet frontend/public/data/parquet/hi-xs-prod/
+          cp nucl-parquet/data/endfb-8.1/xs/n_*.parquet frontend/public/data/parquet/neutron-xs/
 
       - name: Install Rust + wasm-pack
         uses: dtolnay/rust-toolchain@stable
