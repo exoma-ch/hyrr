@@ -148,7 +148,9 @@ impl DatabaseProtocol for InMemoryDataStore {
 mod parquet_store {
 
 use super::*;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use arrow::array::Array;
 use crate::types::DecayMode;
 
@@ -156,14 +158,16 @@ use crate::types::DecayMode;
 pub struct ParquetDataStore {
     data_dir: PathBuf,
     pub library: String,
-    // Cached data
+    // Eagerly loaded at startup
     elements: HashMap<u32, String>,
     symbol_to_z: HashMap<String, u32>,
     abundances: HashMap<u32, Vec<(u32, f64, f64)>>,
     decay_data: HashMap<String, DecayData>,
-    stopping_data: HashMap<String, (Vec<f64>, Vec<f64>)>,
     dose_constants: HashMap<String, (f64, String)>,
     xs_cache: HashMap<String, Vec<CrossSectionData>>,
+    // Lazily loaded on first use — each stopping/{source}.parquet loaded on demand.
+    // Single Mutex covers both fields to avoid any lock-ordering issues.
+    stopping: Mutex<(HashMap<String, (Vec<f64>, Vec<f64>)>, HashSet<String>)>,
 }
 
 impl ParquetDataStore {
@@ -181,18 +185,58 @@ impl ParquetDataStore {
             symbol_to_z: HashMap::new(),
             abundances: HashMap::new(),
             decay_data: HashMap::new(),
-            stopping_data: HashMap::new(),
             dose_constants: HashMap::new(),
             xs_cache: HashMap::new(),
+            stopping: Mutex::new((HashMap::new(), HashSet::new())),
         };
 
         store.load_elements()?;
         store.load_abundances()?;
         store.load_decay()?;
-        store.load_stopping()?;
         store.load_dose_constants()?;
 
         Ok(store)
+    }
+
+    /// Load all energy/dedx rows from stopping/{source}.parquet into the cache.
+    fn ensure_stopping_source(&self, source: &str) {
+        let mut guard = self.stopping.lock().expect("stopping mutex poisoned");
+        if guard.1.contains(source) {
+            return;
+        }
+        // Mark as attempted immediately so we don't retry on error
+        guard.1.insert(source.to_string());
+
+        let path = self.data_dir.join("stopping").join(format!("{}.parquet", source));
+        if !path.exists() {
+            return;
+        }
+        let file = match std::fs::File::open(&path) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let reader = match parquet::arrow::arrow_reader::ParquetRecordBatchReader::try_new(file, 65536) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        let mut raw: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
+        for batch in reader {
+            let Ok(batch) = batch else { continue };
+            let n = batch.num_rows();
+            let z_col = get_i64_or_i32(&batch, "target_Z");
+            let e_col = get_f64(&batch, "energy_MeV");
+            let d_col = get_f64(&batch, "dedx");
+            for i in 0..n {
+                let key = format!("{}_{}", source, z_col[i]);
+                raw.entry(key).or_default().push((e_col[i], d_col[i]));
+            }
+        }
+        for (key, mut pairs) in raw {
+            pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            let energies: Vec<f64> = pairs.iter().map(|p| p.0).collect();
+            let dedx: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+            guard.0.insert(key, (energies, dedx));
+        }
     }
 
     fn load_elements(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -321,41 +365,6 @@ impl ParquetDataStore {
         Ok(())
     }
 
-    fn load_stopping(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = self.data_dir.join("stopping").join("stopping.parquet");
-        if !path.exists() {
-            return Ok(());
-        }
-
-        let file = std::fs::File::open(&path)?;
-        let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReader::try_new(file, 65536)?;
-
-        // Accumulate by (source, target_Z)
-        let mut raw: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
-
-        for batch in reader {
-            let batch = batch?;
-            let n = batch.num_rows();
-            let source_col = get_string_or_default(&batch, "source");
-            let z_col = get_i64_or_i32(&batch, "target_Z");
-            let e_col = get_f64(&batch, "energy_MeV");
-            let d_col = get_f64(&batch, "dedx");
-
-            for i in 0..n {
-                let key = format!("{}_{}", source_col[i], z_col[i]);
-                raw.entry(key).or_default().push((e_col[i], d_col[i]));
-            }
-        }
-
-        for (key, mut pairs) in raw {
-            pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-            let energies: Vec<f64> = pairs.iter().map(|p| p.0).collect();
-            let dedx: Vec<f64> = pairs.iter().map(|p| p.1).collect();
-            self.stopping_data.insert(key, (energies, dedx));
-        }
-
-        Ok(())
-    }
 
     fn load_dose_constants(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let path = self.data_dir.join("meta").join("dose_constants.parquet");
@@ -482,8 +491,9 @@ impl DatabaseProtocol for ParquetDataStore {
     }
 
     fn get_stopping_power(&self, source: &str, target_z: u32) -> (Vec<f64>, Vec<f64>) {
+        self.ensure_stopping_source(source);
         let key = format!("{}_{}", source, target_z);
-        self.stopping_data.get(&key).cloned().unwrap_or_default()
+        self.stopping.lock().expect("stopping mutex poisoned").0.get(&key).cloned().unwrap_or_default()
     }
 
     fn get_natural_abundances(&self, z: u32) -> HashMap<u32, (f64, f64)> {
