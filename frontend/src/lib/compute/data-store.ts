@@ -79,6 +79,8 @@ export class DataStore implements DatabaseProtocol {
   private spCache = new Map<string, { energiesMeV: Float64Array; dedx: Float64Array }>();
   /** Pre-indexed stopping data: "source_targetZ" -> sorted rows */
   private spIndex = new Map<string, ParquetRow[]>();
+  /** Tracks which heavy-ion stopping files have been loaded: e.g. "catima_C12" */
+  private loadedHeavyIonStopping = new Set<string>();
 
   private initialized = false;
 
@@ -118,7 +120,16 @@ export class DataStore implements DatabaseProtocol {
     }
 
     onProgress?.("Loading stopping power data...", 0.75);
-    this.stoppingData = await readParquetRows(`${this.baseUrl}/stopping/stopping.parquet`);
+    // Load per-source light-ion stopping files (PSTAR, ASTAR, dSTAR, tSTAR, He3STAR)
+    const lightIonSources = ["PSTAR", "ASTAR", "dSTAR", "tSTAR", "He3STAR"];
+    const stoppingFiles = await Promise.all(
+      lightIonSources.map((src) =>
+        readParquetRows(`${this.baseUrl}/stopping/${src}.parquet`).catch(() => [] as ParquetRow[]),
+      ),
+    );
+    for (const rows of stoppingFiles) {
+      this.stoppingData.push(...rows);
+    }
 
     // Pre-index stopping data by source+targetZ for fast lookup
     for (const row of this.stoppingData) {
@@ -136,13 +147,41 @@ export class DataStore implements DatabaseProtocol {
     return this.initialized;
   }
 
+  /** Returns true for heavy-ion projectile strings like "C-12", "O-16", "Ne-20". */
+  isHeavyIon(projectile: string): boolean {
+    return /^[A-Z][a-z]?-\d+$/.test(projectile);
+  }
+
+  /**
+   * Parse a heavy-ion projectile string like "C-12" into { sym: "c12", Z, A }.
+   * Returns null if not a heavy-ion format.
+   */
+  private parseHeavyIon(projectile: string): { filePrefix: string; Z: number; A: number } | null {
+    const m = projectile.match(/^([A-Z][a-z]?)-(\d+)$/);
+    if (!m) return null;
+    const sym = m[1];
+    const A = Number(m[2]);
+    const Z = this.getElementZ(sym);
+    const filePrefix = sym.toLowerCase() + A; // e.g. "c12", "o16", "ne20"
+    return { filePrefix, Z, A };
+  }
+
   /** Ensure cross-section data is loaded for a projectile+element. */
   async ensureCrossSections(projectile: string, symbol: string): Promise<void> {
     const key = `${projectile}_${symbol}`;
     if (this.xsCache.has(key)) return;
 
     try {
-      const rows = await readParquetRows(`${this.baseUrl}/xs/${key}.parquet`);
+      let url: string;
+      if (this.isHeavyIon(projectile)) {
+        const hi = this.parseHeavyIon(projectile);
+        if (!hi) { this.xsCache.set(key, []); return; }
+        // hi-xs-prod files: e.g. hi-xs-prod/c12_Al.parquet
+        url = `${this.baseUrl}/hi-xs-prod/${hi.filePrefix}_${symbol}.parquet`;
+      } else {
+        url = `${this.baseUrl}/xs/${key}.parquet`;
+      }
+      const rows = await readParquetRows(url);
       this.xsCache.set(key, rows);
     } catch {
       // File doesn't exist — cache empty
@@ -157,6 +196,33 @@ export class DataStore implements DatabaseProtocol {
   ): Promise<void> {
     const promises = symbols.map((sym) => this.ensureCrossSections(projectile, sym));
     await Promise.all(promises);
+  }
+
+  /**
+   * Lazily load heavy-ion stopping data for a given projectile symbol.
+   * projSymbol is the catima file stem, e.g. "C12", "O16", "Ne20".
+   */
+  async ensureHeavyIonStopping(projSymbol: string): Promise<void> {
+    const fileKey = `catima_${projSymbol}`;
+    if (this.loadedHeavyIonStopping.has(fileKey)) return;
+    this.loadedHeavyIonStopping.add(fileKey); // mark before fetch to prevent double-load
+    try {
+      const rows = await readParquetRows(`${this.baseUrl}/stopping/${fileKey}.parquet`);
+      for (const row of rows) {
+        const key = `${row.source}_${row.target_Z}`;
+        let bucket = this.spIndex.get(key);
+        if (!bucket) { bucket = []; this.spIndex.set(key, bucket); }
+        bucket.push(row);
+      }
+      // Invalidate spCache entries for this source so they are recomputed
+      for (const cacheKey of this.spCache.keys()) {
+        if (cacheKey.startsWith(`${fileKey}_`)) {
+          this.spCache.delete(cacheKey);
+        }
+      }
+    } catch {
+      console.warn(`[DataStore] ${fileKey}.parquet not found`);
+    }
   }
 
   // --- DatabaseProtocol methods ---
@@ -186,7 +252,7 @@ export class DataStore implements DatabaseProtocol {
       return Number(a.energy_MeV) - Number(b.energy_MeV);
     });
 
-    // Group by (residual_Z, residual_A, state)
+    // Group by (residual_Z, residual_A, state) — state may be absent in hi-xs-prod
     const groups = new Map<string, ParquetRow[]>();
     for (const row of filtered) {
       const gkey = `${row.residual_Z}_${row.residual_A}_${row.state ?? ""}`;

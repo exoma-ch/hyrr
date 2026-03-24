@@ -224,13 +224,16 @@ async function transferDataToWasm(
     wasm.loadDecayData(JSON.stringify(decayRows));
   }
 
-  // Stopping power — use spIndex (Map<"source_Z", row[]>) or iterate raw rows
+  // Stopping power — use spIndex (Map<"source_targetZ", row[]>) or iterate raw rows
+  // Key format is "${source}_${targetZ}" where source may itself contain underscores
+  // (e.g. "catima_C12_6"), so split on the last underscore only.
   if (tsStore.spIndex) {
     const stoppingRows: any[] = [];
     for (const [rawKey, rows] of tsStore.spIndex.entries()) {
       const key = String(rawKey);
-      const [source, zStr] = key.split("_");
-      const targetZ = Number(zStr);
+      const lastUnderscore = key.lastIndexOf("_");
+      const source = key.slice(0, lastUnderscore);
+      const targetZ = Number(key.slice(lastUnderscore + 1));
       for (const row of rows as any[]) {
         stoppingRows.push({
           source,
@@ -267,7 +270,8 @@ async function ensureWasmCrossSections(
       const rawRows = ds.xsCache.get(cacheKey);
       if (!rawRows || rawRows.length === 0) continue;
 
-      // Raw parquet rows have: target_A, residual_Z, residual_A, state, energy_MeV, xs_mb
+      // Raw parquet rows have: target_A, residual_Z, residual_A, energy_MeV, xs_mb
+      // hi-xs-prod files omit the `state` column — fall back to ""
       const rows: any[] = rawRows.map((r: any) => ({
         target_A: Number(r.target_A),
         residual_Z: Number(r.residual_Z),
