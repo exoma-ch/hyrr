@@ -4,7 +4,7 @@ export default defineConfig({
   testDir: "./e2e",
   outputDir: "./e2e/results",
   use: {
-    baseURL: "http://localhost:4173",
+    baseURL: "http://localhost:4173/hyrr",
     browserName: "chromium",
   },
   webServer: {
