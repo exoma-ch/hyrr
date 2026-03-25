@@ -159,7 +159,9 @@
     loading = true;
     let cancelled = false;
 
-    setTimeout(() => {
+    (async () => {
+    // Yield to let the modal render before heavy work
+    await new Promise((r) => setTimeout(r, 0));
     if (cancelled) return;
     const config = getConfig();
     const proj = config.beam.projectile;
@@ -201,6 +203,21 @@
       }
     }
     parentDecays = parents;
+
+    // Ensure cross-section parquet files are loaded for all elements in the stack
+    const elementSymbols = new Set<string>();
+    for (const layer of config.layers) {
+      if (!layer.material) continue;
+      try {
+        const overrides = enrichmentToOverrides(layer.enrichment);
+        const mat = resolveMaterial(db, layer.material, overrides);
+        for (const [el] of mat.elements) {
+          elementSymbols.add(Z_TO_SYMBOL[el.Z] ?? `Z${el.Z}`);
+        }
+      } catch { /* skip */ }
+    }
+    await db.ensureMultipleCrossSections(proj, [...elementSymbols]);
+    if (cancelled) return;
 
     // Cross-section data: build channel arrays for ALL produced isotopes
     const allChanMap = new Map<string, XsChannel[]>();
@@ -273,7 +290,7 @@
     cachedAllChannels = allChanMap;
     allProducedIsotopes = produced.sort((a, b) => a.name.localeCompare(b.name));
     loading = false;
-    }, 0);
+    })();
 
     return () => { cancelled = true; };
   });
