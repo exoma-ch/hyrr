@@ -169,11 +169,17 @@ def _find_data_dir(data_dir_arg: Path | None) -> Path:
 
     # Git submodule (nucl-parquet/ within hyrr repo root)
     submodule = repo_root / "nucl-parquet"
+    submodule_data = submodule / "data"
+    if submodule_data.is_dir() and (submodule_data / "meta").is_dir():
+        return submodule_data
     if submodule.is_dir() and (submodule / "meta").is_dir():
         return submodule
 
     # Sibling nucl-parquet repo (../nucl-parquet relative to hyrr root)
     sibling = repo_root.parent / "nucl-parquet"
+    sibling_data = sibling / "data"
+    if sibling_data.is_dir() and (sibling_data / "meta").is_dir():
+        return sibling_data
     if sibling.is_dir() and (sibling / "meta").is_dir():
         return sibling
 
