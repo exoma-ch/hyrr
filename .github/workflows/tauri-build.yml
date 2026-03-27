@@ -75,6 +75,11 @@ jobs:
       - name: Install npm dependencies
         run: npm install
 
+      - name: Fix rollup native bindings (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        working-directory: frontend
+        run: npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
+
       - name: Build and release desktop app
         uses: tauri-apps/tauri-action@v0
         env:
