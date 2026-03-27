@@ -73,6 +73,7 @@ def bateman_activity(
     n_time_points: int = 200,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """Compute time-dependent activity via Bateman equations (Rust)."""
+    assert _native_bateman_activity is not None, "hyrr._native not available"
     result_json = _native_bateman_activity(
         production_rate,
         half_life_s,
@@ -90,6 +91,7 @@ def saturation_yield(
     beam_current_mA: float,
 ) -> float:
     """Compute saturation yield [Bq/µA] (Rust)."""
+    assert _native_saturation_yield is not None, "hyrr._native not available"
     return _native_saturation_yield(production_rate, half_life_s, beam_current_mA)
 
 
