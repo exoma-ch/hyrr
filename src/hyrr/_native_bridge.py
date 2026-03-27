@@ -18,13 +18,29 @@ logger = logging.getLogger(__name__)
 try:
     from hyrr._native import (  # type: ignore[import-not-found]
         PyDataStore as NativeDataStore,
+    )
+    from hyrr._native import (
         compute_stack_json as _native_compute_stack_json,
+    )
+    from hyrr._native import (
         py_bateman_activity as _native_bateman_activity,
+    )
+    from hyrr._native import (
         py_compute_energy_out as _native_compute_energy_out,
+    )
+    from hyrr._native import (
         py_compute_thickness as _native_compute_thickness,
+    )
+    from hyrr._native import (
         py_dedx_mev_per_cm as _native_dedx_mev_per_cm,
+    )
+    from hyrr._native import (
         py_parse_formula as native_parse_formula,
+    )
+    from hyrr._native import (
         py_saturation_yield as _native_saturation_yield,
+    )
+    from hyrr._native import (
         resolve_material_json as _native_resolve_material_json,
     )
 

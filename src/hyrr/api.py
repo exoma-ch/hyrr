@@ -407,7 +407,7 @@ def run_simulation_from_json(
         Dict matching frontend SimulationResult shape
     """
     from hyrr._native_bridge import HAS_NATIVE
-    from hyrr.db import DEFAULT_LIBRARY, DataStore
+    from hyrr.db import DEFAULT_LIBRARY
 
     config = json.loads(config_json)
     lib = library or config.get("library", DEFAULT_LIBRARY)

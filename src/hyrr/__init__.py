@@ -56,6 +56,7 @@ from hyrr.serialization import (
     save_result,
     stack_to_config,
 )
+
 try:
     from hyrr._native_bridge import HAS_NATIVE
 except ImportError:

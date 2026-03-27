@@ -16,11 +16,11 @@ import numpy as np
 import numpy.typing as npt
 import scipy.constants as const
 
-from hyrr.geometry import RaySegment, TetrahedralMesh, cast_pencil_beam
-from hyrr.models import Beam, IsotopeResult
 from hyrr._math_utils import compute_production_rate
 from hyrr._native_bridge import bateman_activity, dedx_MeV_per_cm, saturation_yield
 from hyrr._straggling import bohr_straggling_variance_per_cm
+from hyrr.geometry import RaySegment, TetrahedralMesh, cast_pencil_beam
+from hyrr.models import Beam, IsotopeResult
 
 if TYPE_CHECKING:
     from hyrr.db import DatabaseProtocol
