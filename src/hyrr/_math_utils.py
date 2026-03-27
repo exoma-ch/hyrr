@@ -102,7 +102,9 @@ def compute_production_rate(
             return np.interp(E, xs_energies_MeV, xs_mb, left=0.0, right=0.0)
 
         xs_interp = _gauss_hermite_convolved_xs(
-            xs_interp_fn, energies, sigma_E_arr,
+            xs_interp_fn,
+            energies,
+            sigma_E_arr,
         )
     else:
         xs_interp = np.interp(energies, xs_energies_MeV, xs_mb, left=0.0, right=0.0)

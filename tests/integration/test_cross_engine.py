@@ -73,11 +73,13 @@ def _find_data_dir() -> Path | None:
     if env_dir:
         candidates.append(Path(env_dir))
     repo_root = Path(__file__).parent.parent.parent
-    candidates.extend([
-        repo_root / "nucl-parquet",
-        repo_root / ".." / "nucl-parquet",
-        Path.home() / ".hyrr" / "nucl-parquet",
-    ])
+    candidates.extend(
+        [
+            repo_root / "nucl-parquet",
+            repo_root / ".." / "nucl-parquet",
+            Path.home() / ".hyrr" / "nucl-parquet",
+        ]
+    )
     for p in candidates:
         p = p.resolve()
         if p.is_dir() and (p / "meta").is_dir():
@@ -86,6 +88,7 @@ def _find_data_dir() -> Path | None:
 
 
 # ── Python engine (via Rust backend) ──────────────────────────────────
+
 
 def run_python_engine(data_dir: Path, config: dict | None = None) -> dict:
     """Run simulation through Rust backend via Python API."""
@@ -98,6 +101,7 @@ def run_python_engine(data_dir: Path, config: dict | None = None) -> dict:
 
 
 # ── Rust engine (via PyO3) ────────────────────────────────────────────
+
 
 def run_rust_engine(data_dir: Path, config: dict | None = None) -> dict | None:
     """Run simulation through Rust _native extension."""
@@ -161,7 +165,9 @@ def run_ts_engine(data_dir: Path, config: dict | None = None) -> dict | None:
     try:
         result = subprocess.run(
             [
-                "node", "--import", "tsx",
+                "node",
+                "--import",
+                "tsx",
                 str(runner_path),
                 json.dumps(sim_config),
                 str(data_dir),
@@ -181,6 +187,7 @@ def run_ts_engine(data_dir: Path, config: dict | None = None) -> dict | None:
 
 
 # ── Extraction helpers ────────────────────────────────────────────────
+
 
 def extract_key_values(result: dict, label: str) -> dict:
     """Extract comparable values from a SimulationResult dict.
@@ -245,7 +252,9 @@ def compare_engines(a: dict, b: dict, rtol: float = 0.02) -> list[str]:
     # Isotopes: compare all isotopes present in both
     common_iso = set(a["isotopes"].keys()) & set(b["isotopes"].keys())
     if not common_iso:
-        diffs.append(f"  No common isotopes! {la}: {list(a['isotopes'].keys())}, {lb}: {list(b['isotopes'].keys())}")
+        diffs.append(
+            f"  No common isotopes! {la}: {list(a['isotopes'].keys())}, {lb}: {list(b['isotopes'].keys())}"
+        )
         return diffs
 
     for name in sorted(common_iso):
@@ -267,6 +276,7 @@ def compare_engines(a: dict, b: dict, rtol: float = 0.02) -> list[str]:
 
 
 # ── Tests ─────────────────────────────────────────────────────────────
+
 
 @requires_db
 class TestCrossEngineValidation:
@@ -292,9 +302,9 @@ class TestCrossEngineValidation:
         rs_vals = extract_key_values(rs, "Rust")
 
         # Print detailed comparison for diagnostics
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("PYTHON vs RUST comparison")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         _print_comparison(py_vals, rs_vals)
 
         # Assert key physics values match tightly
@@ -322,9 +332,9 @@ class TestCrossEngineValidation:
 
         py_vals = extract_key_values(py, "Python")
 
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("Three-way comparison: p + Cu, 18 MeV, 0.5 mm")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
 
         engines = [("Python", py_vals)]
 
@@ -396,10 +406,12 @@ class TestCrossEngineValidation:
 
         diffs = compare_engines(py_vals, ts_vals, rtol=0.02)
         if diffs:
-            msg = "Python vs TypeScript discrepancies (>2% relative):\n" + "\n".join(diffs)
-            print(f"\n{'='*60}")
+            msg = "Python vs TypeScript discrepancies (>2% relative):\n" + "\n".join(
+                diffs
+            )
+            print(f"\n{'=' * 60}")
             print("PYTHON vs TYPESCRIPT comparison")
-            print(f"{'='*60}")
+            print(f"{'=' * 60}")
             _print_comparison(py_vals, ts_vals)
             pytest.fail(msg)
 
@@ -418,10 +430,12 @@ class TestCrossEngineValidation:
 
         diffs = compare_engines(rs_vals, ts_vals, rtol=0.02)
         if diffs:
-            msg = "Rust vs TypeScript discrepancies (>2% relative):\n" + "\n".join(diffs)
-            print(f"\n{'='*60}")
+            msg = "Rust vs TypeScript discrepancies (>2% relative):\n" + "\n".join(
+                diffs
+            )
+            print(f"\n{'=' * 60}")
             print("RUST vs TYPESCRIPT comparison")
-            print(f"{'='*60}")
+            print(f"{'=' * 60}")
             _print_comparison(rs_vals, ts_vals)
             pytest.fail(msg)
 
@@ -435,9 +449,9 @@ class TestCrossEngineValidation:
         ts_raw = run_ts_engine(self.data_dir)
         ts = extract_key_values(ts_raw, "TypeScript") if ts_raw else None
 
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("Cross-engine results vs ISOTOPIA reference (p + Mo-100 → Tc-99m)")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
 
         # Header
         engines = [("Python", py)]
@@ -446,15 +460,35 @@ class TestCrossEngineValidation:
         if ts:
             engines.append(("TypeScript", ts))
 
-        header = f"{'':>20}" + "".join(f"{name:>18}" for name, _ in engines) + f"{'ISOTOPIA':>18}"
+        header = (
+            f"{'':>20}"
+            + "".join(f"{name:>18}" for name, _ in engines)
+            + f"{'ISOTOPIA':>18}"
+        )
         print(header)
         print("-" * len(header))
 
         # Energy
-        print(f"{'energy_in [MeV]':>20}" + "".join(f"{e['energy_in']:>18.4f}" for _, e in engines) + f"{P_MO100_BEAM['energy_MeV']:>18.4f}")
-        print(f"{'energy_out [MeV]':>20}" + "".join(f"{e['energy_out']:>18.4f}" for _, e in engines) + f"{P_MO100_TARGET['energy_out_MeV']:>18.4f}")
-        print(f"{'delta_E [MeV]':>20}" + "".join(f"{e['delta_E_MeV']:>18.4f}" for _, e in engines) + f"{P_MO100_BEAM['energy_MeV'] - P_MO100_TARGET['energy_out_MeV']:>18.4f}")
-        print(f"{'heat [kW]':>20}" + "".join(f"{e['heat_kW']:>18.6f}" for _, e in engines) + f"{'~0.6':>18}")
+        print(
+            f"{'energy_in [MeV]':>20}"
+            + "".join(f"{e['energy_in']:>18.4f}" for _, e in engines)
+            + f"{P_MO100_BEAM['energy_MeV']:>18.4f}"
+        )
+        print(
+            f"{'energy_out [MeV]':>20}"
+            + "".join(f"{e['energy_out']:>18.4f}" for _, e in engines)
+            + f"{P_MO100_TARGET['energy_out_MeV']:>18.4f}"
+        )
+        print(
+            f"{'delta_E [MeV]':>20}"
+            + "".join(f"{e['delta_E_MeV']:>18.4f}" for _, e in engines)
+            + f"{P_MO100_BEAM['energy_MeV'] - P_MO100_TARGET['energy_out_MeV']:>18.4f}"
+        )
+        print(
+            f"{'heat [kW]':>20}"
+            + "".join(f"{e['heat_kW']:>18.6f}" for _, e in engines)
+            + f"{'~0.6':>18}"
+        )
         print()
 
         # Key isotopes
@@ -472,7 +506,11 @@ class TestCrossEngineValidation:
                 else:
                     rates.append(f"{'(missing)':>18}")
 
-            print(f"{name + ' rate [/s]':>20}" + "".join(rates) + f"{ref.production_rate:>18.6E}")
+            print(
+                f"{name + ' rate [/s]':>20}"
+                + "".join(rates)
+                + f"{ref.production_rate:>18.6E}"
+            )
 
             # Activity
             activities = []
@@ -483,9 +521,17 @@ class TestCrossEngineValidation:
                 else:
                     activities.append(f"{'(missing)':>18}")
 
-            ref_act = ref.activity_cooled_GBq if ref.activity_cooled_GBq else ref.activity_eoi_GBq
+            ref_act = (
+                ref.activity_cooled_GBq
+                if ref.activity_cooled_GBq
+                else ref.activity_eoi_GBq
+            )
             label = "cooled" if ref.activity_cooled_GBq else "EOI"
-            print(f"{name + f' act [{label}] GBq':>20}" + "".join(activities) + f"{ref_act:>18.4f}")
+            print(
+                f"{name + f' act [{label}] GBq':>20}"
+                + "".join(activities)
+                + f"{ref_act:>18.4f}"
+            )
             print()
 
         # Tolerance check against ISOTOPIA for Tc-99m
@@ -521,4 +567,6 @@ def _print_comparison(a: dict, b: dict) -> None:
             denom = max(abs(va), abs(vb), 1e-30)
             rel = abs(va - vb) / denom
             flag = " !" if rel > 0.02 else ""
-            print(f"{name + '.' + field:>35} {va:>18.6E} {vb:>18.6E} {rel:>10.4f}{flag}")
+            print(
+                f"{name + '.' + field:>35} {va:>18.6E} {vb:>18.6E} {rel:>10.4f}{flag}"
+            )

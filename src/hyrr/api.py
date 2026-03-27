@@ -300,28 +300,32 @@ def _convert_rust_result(rust: dict, config: dict) -> dict:
         isotopes_out = []
         iso_data = lr.get("isotope_results", {})
         for name, iso in iso_data.items():
-            isotopes_out.append({
-                "name": iso.get("name", name),
-                "Z": iso.get("z", 0),
-                "A": iso.get("a", 0),
-                "state": iso.get("state", ""),
-                "half_life_s": iso.get("half_life_s"),
-                "production_rate": iso.get("production_rate", 0),
-                "saturation_yield_Bq_uA": iso.get("saturation_yield_bq_ua", 0),
-                "activity_Bq": iso.get("activity_bq", 0),
-                "source": iso.get("source", "direct"),
-                "activity_direct_Bq": iso.get("activity_direct_bq", 0),
-                "activity_ingrowth_Bq": iso.get("activity_ingrowth_bq", 0),
-            })
+            isotopes_out.append(
+                {
+                    "name": iso.get("name", name),
+                    "Z": iso.get("z", 0),
+                    "A": iso.get("a", 0),
+                    "state": iso.get("state", ""),
+                    "half_life_s": iso.get("half_life_s"),
+                    "production_rate": iso.get("production_rate", 0),
+                    "saturation_yield_Bq_uA": iso.get("saturation_yield_bq_ua", 0),
+                    "activity_Bq": iso.get("activity_bq", 0),
+                    "source": iso.get("source", "direct"),
+                    "activity_direct_Bq": iso.get("activity_direct_bq", 0),
+                    "activity_ingrowth_Bq": iso.get("activity_ingrowth_bq", 0),
+                }
+            )
 
-        layers_out.append({
-            "layer_index": i,
-            "energy_in": lr.get("energy_in", 0),
-            "energy_out": lr.get("energy_out", 0),
-            "delta_E_MeV": lr.get("delta_e_mev", 0),
-            "heat_kW": lr.get("heat_kw", 0),
-            "isotopes": isotopes_out,
-        })
+        layers_out.append(
+            {
+                "layer_index": i,
+                "energy_in": lr.get("energy_in", 0),
+                "energy_out": lr.get("energy_out", 0),
+                "delta_E_MeV": lr.get("delta_e_mev", 0),
+                "heat_kW": lr.get("heat_kw", 0),
+                "isotopes": isotopes_out,
+            }
+        )
 
     return {
         "config": config,

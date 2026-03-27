@@ -360,16 +360,22 @@ def _format_result_summary(result: dict) -> str:
     for lr in result.get("layers", []):
         idx = lr.get("layer_index", 0)
         lines.append(f"Layer {idx}:")
-        lines.append(f"  Energy: {lr.get('energy_in', 0):.2f} → {lr.get('energy_out', 0):.2f} MeV")
+        lines.append(
+            f"  Energy: {lr.get('energy_in', 0):.2f} → {lr.get('energy_out', 0):.2f} MeV"
+        )
         lines.append(f"  ΔE: {lr.get('delta_E_MeV', 0):.2f} MeV")
         lines.append(f"  Heat: {lr.get('heat_kW', 0):.6f} kW")
         lines.append("")
 
         isotopes = lr.get("isotopes", [])
         if isotopes:
-            lines.append(f"  {'Isotope':<14} {'Rate [/s]':>14} {'Activity [Bq]':>14} {'Yield [Bq/µA]':>14}")
+            lines.append(
+                f"  {'Isotope':<14} {'Rate [/s]':>14} {'Activity [Bq]':>14} {'Yield [Bq/µA]':>14}"
+            )
             lines.append(f"  {'-' * 56}")
-            for iso in sorted(isotopes, key=lambda x: x.get("activity_Bq", 0), reverse=True):
+            for iso in sorted(
+                isotopes, key=lambda x: x.get("activity_Bq", 0), reverse=True
+            ):
                 name = iso.get("name", "")
                 rate = iso.get("production_rate", 0)
                 act = iso.get("activity_Bq", 0)
