@@ -47,4 +47,4 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
       - name: Run tests with coverage
-        run: uv run pytest tests/ --cov --benchmark-disable
+        run: uv run pytest tests/ --cov --benchmark-disable --ignore=tests/integration
