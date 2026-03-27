@@ -22,7 +22,6 @@ from tests.integration.reference_data import (
     P_MO100_PARAMS,
     P_MO100_PARTICLES_PER_S,
     P_MO100_TARGET,
-    P_MO100_THICKNESS_CM,
 )
 
 

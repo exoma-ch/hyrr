@@ -16,10 +16,8 @@ from __future__ import annotations
 
 import json
 import subprocess
-import tempfile
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from tests.integration.conftest import requires_db
@@ -468,7 +466,7 @@ class TestCrossEngineValidation:
 
             # Production rate
             rates = []
-            for ename, e in engines:
+            for _ename, e in engines:
                 if name in e["isotopes"]:
                     rates.append(f"{e['isotopes'][name]['production_rate']:>18.6E}")
                 else:
@@ -478,7 +476,7 @@ class TestCrossEngineValidation:
 
             # Activity
             activities = []
-            for ename, e in engines:
+            for _ename, e in engines:
                 if name in e["isotopes"]:
                     act_gbq = e["isotopes"][name]["activity_Bq"] * 1e-9
                     activities.append(f"{act_gbq:>18.4f}")
