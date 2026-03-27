@@ -11,7 +11,7 @@ export default defineConfig({
     command: "npm run build && npm run preview -- --port 4173",
     port: 4173,
     reuseExistingServer: true,
-    timeout: 60_000,
+    timeout: 120_000,
   },
   projects: [
     {

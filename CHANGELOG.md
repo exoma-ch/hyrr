@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-03-27
+
+### Changed
+
+- **nucl-parquet** bumped to v0.9.0 — isomeric state data (699 metastable nuclides), state-scoped radiation lines, updated dose constants covering isomeric pure-beta emitters
+
+### Added
+
+- **IsotopePopup: XS data loading** — cross-section parquet files are now lazily loaded when the popup opens, restoring XS plots, depth plots, theory/real toggle, and compare isotope dropdown
+- **IsotopePopup: Real depth production rates** — "Real" mode now computes σ(E(x)) × abundance × number density × beam flux in the frontend, independent of backend; shows actual production rate (atoms/s/cm) per layer with correct density and isotopic scaling
+- **Download links with OS detection** — Help modal shows an OS-aware "Download for macOS/Windows/Linux" button; footer shows "Desktop app (macOS)" etc.
+- **Playwright e2e tests** for isotope depth plot theory/real toggle (3 tests)
+
+### Fixed
+
+- **IsotopePopup blank on open** — `getCrossSections()` returned empty because the scheduler's DataStore never had XS parquet files loaded; fixed by calling `ensureMultipleCrossSections()` before reading
+- **Real mode depth plot was empty** — Rust WASM engine doesn't output `depth_production_rates`; replaced with frontend-computed rates using XS channels + depth preview + material composition
+- **Playwright webServer timeout** — increased from 60s to 120s (build alone takes ~35s)
+
 ## [0.6.1] — 2026-03-24
 
 ### Added
