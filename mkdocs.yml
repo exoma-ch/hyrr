@@ -77,8 +77,7 @@ nav:
   - API Reference:
     - Models: api/models.md
     - Database: api/db.md
-    - Stopping Power: api/stopping.md
-    - Production: api/production.md
+    - Native Bridge: api/native-bridge.md
     - Materials: api/materials.md
     - Plotting: api/plotting.md
     - Output: api/output.md
