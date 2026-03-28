@@ -73,9 +73,17 @@ jobs:
           cache: npm
 
       - name: Install npm dependencies
+        shell: bash
         run: |
           npm install
-          cd frontend && npm install
+          cd frontend
+          npm install
+          # npm optional dep bug: platform-specific rollup bindings may be missing
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            npm install @rollup/rollup-win32-x64-msvc --no-save 2>/dev/null || true
+          fi
 
       - name: Build and release desktop app
         uses: tauri-apps/tauri-action@v0
