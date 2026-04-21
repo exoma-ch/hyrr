@@ -537,112 +537,67 @@
   }
 
   /**
-   * Real mode: production rate vs depth computed from XS channels + depth preview.
-   * Rate = σ(E(x)) × abundance × number_density × flux [atoms/s/cm].
-   * Falls back to simulation result's depth_production_rates if available.
+   * Real mode: production rate vs depth consumed from LayerResult.depth_production_rates.
+   * The Rust engine emits rate = σ(E(x)) × abundance × number_density × flux [atoms/s/cm]
+   * per depth point; see core/src/production.rs::compute_depth_production_rate. The popup
+   * just concatenates per-layer rates onto a cumulative depth axis.
    */
   function renderDepthPlotReal(tc: ReturnType<typeof themeColors>) {
-    const preview = getDepthPreview();
-    if (preview.length === 0) return;
-    const config = getConfig();
-    const db = getDataStore();
+    const result = getResult();
+    if (!result) return;
+    const layers = result.layers;
 
-    // Build continuous depth + energy arrays
-    const allDepths: number[] = [];
-    const allEnergies: number[] = [];
-    let cumulativeDepth = 0;
-    const boundaries: { depth: number; label: string }[] = [];
-    // Track which layer each depth point belongs to (for per-layer material props)
-    const pointLayerIdx: number[] = [];
+    // Walk the simulation result layer-by-layer to build cumulative-depth arrays
+    // for a single isotope by name. Inserts (layerStart, 0) at every layer start
+    // so Plotly draws clean vertical steps at boundaries (foreign layers → 0).
+    function collectForName(isoName: string): { depths: number[]; rates: number[] } {
+      const depths: number[] = [];
+      const rates: number[] = [];
+      let cumulativeDepth = 0;
+      for (const layer of layers) {
+        const dp = layer.depth_profile;
+        if (!dp || dp.length === 0) continue;
+        const layerStart = cumulativeDepth;
+        const layerThickness = dp[dp.length - 1].depth_mm;
+        const dpr = layer.depth_production_rates?.[isoName];
 
-    for (let li = 0; li < preview.length; li++) {
-      const layer = preview[li];
-      boundaries.push({ depth: cumulativeDepth, label: layer.material });
-      for (const pt of layer.depthPoints) {
-        allDepths.push(cumulativeDepth + pt.depth_mm);
-        allEnergies.push(pt.energy_MeV);
-        pointLayerIdx.push(li);
-      }
-      cumulativeDepth += layer.thickness_mm;
-    }
-    if (allDepths.length < 2) return;
+        // Anchor at layerStart=0 so both directions of the boundary (drop-to-zero
+        // from prior layer, rise-from-zero in this layer) are visually vertical.
+        depths.push(layerStart);
+        rates.push(0);
 
-    // Build per-layer material info for number density calculation
-    interface LayerMatInfo {
-      density: number; // g/cm³
-      // per-channel abundance & number density contribution
-      channelWeight: Map<string, number>; // chanKey → atomFrac × isoAbundance × (N_A × density / molarMass)
-    }
-    const layerMats: LayerMatInfo[] = [];
-    const AVOGADRO = 6.02214076e23;
-    const MILLIBARN_CM2 = 1e-27;
-
-    for (let li = 0; li < config.layers.length && li < preview.length; li++) {
-      const lc = config.layers[li];
-      const channelWeight = new Map<string, number>();
-      let density = 0;
-      if (lc?.material && db) {
-        try {
-          const overrides = enrichmentToOverrides(lc.enrichment);
-          const mat = resolveMaterial(db, lc.material, overrides);
-          density = mat.density;
-          // Compute molar mass from A-weighted average (atomicMass not on Element interface)
-          let molarMass = mat.molecularWeight;
-          if (!molarMass || molarMass <= 0) {
-            molarMass = 0;
-            for (const [el, f] of mat.elements) {
-              let elMass = 0;
-              for (const [a, abund] of el.isotopes) elMass += a * abund;
-              molarMass += elMass * f;
-            }
+        if (dpr) {
+          for (let i = 0; i < Math.min(dp.length, dpr.length); i++) {
+            depths.push(layerStart + dp[i].depth_mm);
+            rates.push(dpr[i]);
           }
-          if (molarMass <= 0) continue;
-          const numDensity = AVOGADRO * density / molarMass; // atoms/cm³
-          for (const [el, atomFrac] of mat.elements) {
-            for (const [targetA, isoAbundance] of el.isotopes) {
-              // For each XS channel from this target isotope, compute weight
-              const xsList = db.getCrossSections(config.beam.projectile, el.Z, targetA);
-              for (const xs of xsList) {
-                const key = `${xs.residualZ}-${xs.residualA}-${xs.state || ""}`;
-                const w = atomFrac * isoAbundance * numDensity;
-                channelWeight.set(key, (channelWeight.get(key) ?? 0) + w);
-              }
-            }
-          }
-        } catch { /* skip */ }
-      }
-      layerMats.push({ density, channelWeight });
-    }
-
-    // beam current → particles/s, assume 1 cm² beam area for rate/cm
-    const currentA = (config.beam.current_mA ?? 1) * 1e-3; // mA → A
-    const charge = config.beam.projectile === "a" || config.beam.projectile === "3He" ? 2 : 1;
-    const ELEM_CHARGE = 1.602176634e-19;
-    const beamFlux = currentA / (charge * ELEM_CHARGE); // particles/s (per cm² with area=1)
-
-    // Compute production rate at each depth point for each channel group (by residual isotope key)
-    function computeRealRates(channels: XsChannel[]): { depths: number[]; rates: number[] } {
-      const rates = new Array(allDepths.length).fill(0);
-      for (const ch of channels) {
-        const key = `${ch.xs.residualZ}-${ch.xs.residualA}-${ch.xs.state || ""}`;
-        const xsAtDepth = interp(new Float64Array(allEnergies), ch.xs.energiesMeV, ch.xs.xsMb);
-        for (let i = 0; i < allDepths.length; i++) {
-          const li = pointLayerIdx[i];
-          const w = layerMats[li]?.channelWeight.get(key) ?? 0;
-          rates[i] += xsAtDepth[i] * w * beamFlux * MILLIBARN_CM2;
+        } else {
+          // Foreign layer for this isotope — span with zeros.
+          depths.push(layerStart + layerThickness);
+          rates.push(0);
         }
+        cumulativeDepth = layerStart + layerThickness;
       }
-      return { depths: [...allDepths], rates };
+      return { depths, rates };
+    }
+
+    const boundaries: { depth: number; label: string }[] = [];
+    let cumulativeDepth = 0;
+    for (const layer of result.layers) {
+      const mat = result.config.layers[layer.layer_index]?.material ?? "?";
+      boundaries.push({ depth: cumulativeDepth, label: mat });
+      const dp = layer.depth_profile;
+      if (dp && dp.length > 0) cumulativeDepth += dp[dp.length - 1].depth_mm;
     }
 
     const traces: any[] = [];
     let colorIdx = 0;
 
     // Main isotope
-    if (xsChannels.length > 0) {
-      const { depths, rates } = computeRealRates(xsChannels);
+    const main = collectForName(name);
+    if (main.rates.some((r) => r > 0)) {
       traces.push({
-        x: depths, y: rates,
+        x: main.depths, y: main.rates,
         name: nucLabel(name), type: "scatter", mode: "lines",
         fill: "tozeroy",
         fillcolor: TRACE_COLORS[0].replace(")", ", 0.15)").replace("rgb", "rgba"),
@@ -653,10 +608,10 @@
 
     // Compare isotopes
     for (const cmp of compareIsotopes) {
-      if (cmp.channels.length > 0) {
-        const { depths, rates } = computeRealRates(cmp.channels);
+      const cmpData = collectForName(cmp.name);
+      if (cmpData.rates.some((r) => r > 0)) {
         traces.push({
-          x: depths, y: rates,
+          x: cmpData.depths, y: cmpData.rates,
           name: nucLabel(cmp.name), type: "scatter", mode: "lines",
           line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
         });
