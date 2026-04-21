@@ -68,6 +68,8 @@ pub struct LayerResultData {
     pub heat_kW: f64,
     pub isotopes: Vec<IsotopeResultData>,
     pub depth_profile: Vec<DepthPointData>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub depth_production_rates: HashMap<String, Vec<f64>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -453,6 +455,7 @@ fn convert_stack_result(config_json: &str, result: &StackResult) -> SimulationRe
                 heat_kW: lr.heat_kw,
                 isotopes,
                 depth_profile,
+                depth_production_rates: lr.depth_production_rates.clone(),
             }
         })
         .collect();

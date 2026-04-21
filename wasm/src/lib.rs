@@ -468,6 +468,8 @@ struct LayerResultJson {
     heat_kw: f64,
     isotopes: Vec<IsotopeResultJson>,
     depth_profile: Vec<DepthPointJson>,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    depth_production_rates: std::collections::HashMap<String, Vec<f64>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -645,6 +647,7 @@ fn convert_stack_result(config_json: &str, result: &StackResult) -> SimulationRe
                 heat_kw: lr.heat_kw,
                 isotopes,
                 depth_profile,
+                depth_production_rates: lr.depth_production_rates.clone(),
             }
         })
         .collect();

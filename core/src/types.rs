@@ -280,6 +280,10 @@ pub struct LayerResult {
     pub depth_profile: Vec<DepthPoint>,
     pub isotope_results: HashMap<String, IsotopeResult>,
     pub stopping_power_sources: HashMap<u32, String>,
+    /// Per-isotope production rate at each depth_profile point [atoms/s/cm].
+    /// Keyed by the same isotope name as isotope_results. Summed across target channels.
+    #[serde(default)]
+    pub depth_production_rates: HashMap<String, Vec<f64>>,
 }
 
 /// Full result for all layers in a stack.
