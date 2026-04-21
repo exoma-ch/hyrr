@@ -22,6 +22,7 @@
   } from "@hyrr/compute";
   import type { DecayMode, CrossSectionData, ProjectileType } from "@hyrr/compute";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
+  import { tracesToCsv, triggerDownload, csvTimestampedName, type CsvTrace } from "../plotting/csv-export";
 
   interface Props {
     open: boolean;
@@ -38,6 +39,11 @@
   let xsPlotDiv = $state<HTMLDivElement | null>(null);
   let depthPlotDiv = $state<HTMLDivElement | null>(null);
   let actPlotDiv = $state<HTMLDivElement | null>(null);
+
+  // CSV export state — updated by each plot's render function.
+  let xsExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
+  let depthExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
+  let actExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
 
   /** Determine reaction notation, e.g. "(p,n)", "(p,γ)", "(p,2n)" */
   function reactionNotation(proj: string, targetZ: number, targetA: number, residualZ: number, residualA: number): string {
@@ -423,8 +429,22 @@
         annotations,
       });
 
+      xsExport = {
+        xLabel: "Energy (MeV)",
+        yLabel: "Cross-section (mb)",
+        traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+      };
       Plotly.react(xsPlotDiv, traces, layout, PLOTLY_CONFIG);
     });
+  }
+
+  function downloadXsCsv() {
+    if (!xsExport || xsExport.traces.length === 0) return;
+    const csv = tracesToCsv(xsExport.xLabel, xsExport.yLabel, xsExport.traces, [
+      `HYRR cross-section export for ${name}`,
+      `generated ${new Date().toISOString()}`,
+    ]);
+    triggerDownload(csvTimestampedName(`hyrr-xs-${name}`), csv);
   }
 
   // Compare: add an isotope with all its XS channels
@@ -533,6 +553,11 @@
       legend: { x: 1, xanchor: "right", y: 0.95, bgcolor: "rgba(0,0,0,0)" },
       shapes, annotations,
     });
+    depthExport = {
+      xLabel: "Depth (mm)",
+      yLabel: "σ (mb) | Energy (MeV)",
+      traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+    };
     Plotly.react(depthPlotDiv, traces, layout, PLOTLY_CONFIG);
   }
 
@@ -630,7 +655,21 @@
       legend: { x: 1, xanchor: "right", y: 0.95, bgcolor: "rgba(0,0,0,0)" },
       shapes, annotations,
     });
+    depthExport = {
+      xLabel: "Depth (mm)",
+      yLabel: "Production rate (atoms/s/cm)",
+      traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+    };
     Plotly.react(depthPlotDiv, traces, layout, PLOTLY_CONFIG);
+  }
+
+  function downloadDepthCsv() {
+    if (!depthExport || depthExport.traces.length === 0) return;
+    const csv = tracesToCsv(depthExport.xLabel, depthExport.yLabel, depthExport.traces, [
+      `HYRR depth plot export for ${name}`,
+      `generated ${new Date().toISOString()}`,
+    ]);
+    triggerDownload(csvTimestampedName(`hyrr-depth-${name}`), csv);
   }
 
   function layerMarkers(boundaries: { depth: number; label: string }[], tc: ReturnType<typeof themeColors>) {
@@ -798,6 +837,11 @@
         }],
       });
 
+      actExport = {
+        xLabel: `Time (${timeLabel})`,
+        yLabel: `Activity (${actLabel})`,
+        traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+      };
       Plotly.react(actPlotDiv, traces, layout, PLOTLY_CONFIG);
     } else {
       // Single isotope mode: simple activity curve
@@ -830,8 +874,22 @@
         }],
       });
 
+      actExport = {
+        xLabel: `Time (${timeLabel})`,
+        yLabel: `Activity (${actLabel})`,
+        traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+      };
       Plotly.react(actPlotDiv, traces, layout, PLOTLY_CONFIG);
     }
+  }
+
+  function downloadActCsv() {
+    if (!actExport || actExport.traces.length === 0) return;
+    const csv = tracesToCsv(actExport.xLabel, actExport.yLabel, actExport.traces, [
+      `HYRR activity export for ${name}`,
+      `generated ${new Date().toISOString()}`,
+    ]);
+    triggerDownload(csvTimestampedName(`hyrr-activity-${name}`), csv);
   }
 
   onDestroy(() => {
@@ -989,6 +1047,7 @@
               Scaled
             </button>
           {/if}
+          <button class="scale-toggle" onclick={downloadXsCsv} title="Download XS data as CSV">CSV</button>
         </div>
         <div bind:this={xsPlotDiv} class="xs-plot"></div>
       </div>
@@ -1002,6 +1061,7 @@
           <button class="scale-toggle" class:active={depthReal} onclick={() => { depthReal = !depthReal; }}>
             {depthReal ? "Real" : "Theory"}
           </button>
+          <button class="scale-toggle" onclick={downloadDepthCsv} title="Download depth data as CSV">CSV</button>
         </div>
         <div bind:this={depthPlotDiv} class="depth-plot"></div>
       </div>
@@ -1012,6 +1072,7 @@
       <div class="section">
         <div class="section-bar">
           <span class="section-label">Activity{showRnp ? " / RNP%" : ""}</span>
+          <button class="scale-toggle" onclick={downloadActCsv} title="Download activity data as CSV">CSV</button>
         </div>
         <div bind:this={actPlotDiv} class="act-plot"></div>
       </div>

@@ -6,6 +6,7 @@
   import { nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes } from "../stores/selection.svelte";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
+  import { tracesToCsv, triggerDownload, csvTimestampedName, type CsvTrace } from "../plotting/csv-export";
 
   interface Props {
     result: SimulationResult;
@@ -21,6 +22,8 @@
 
   let legendVisibility = new Map<string, boolean | "legendonly">();
   let legendListenersAttached = false;
+
+  let lastExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
 
   onMount(async () => {
     Plotly = await import("plotly.js-dist-min");
@@ -286,8 +289,22 @@
       margin: { t: 40, r: 20, b: 50, l: 80 },
     });
 
+    lastExport = {
+      xLabel: "Depth (mm)",
+      yLabel: "Production rate (atoms/s/cm)",
+      traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+    };
     Plotly.react(plotDiv, traces, layout, PLOTLY_CONFIG);
     attachLegendListeners();
+  }
+
+  function downloadCsv() {
+    if (!lastExport || lastExport.traces.length === 0) return;
+    const csv = tracesToCsv(lastExport.xLabel, lastExport.yLabel, lastExport.traces, [
+      `HYRR production-vs-depth export`,
+      `generated ${new Date().toISOString()}`,
+    ]);
+    triggerDownload(csvTimestampedName("hyrr-depth-production"), csv);
   }
 </script>
 
@@ -298,6 +315,7 @@
       <button class="ctrl-btn" class:active={logY} onclick={() => { logY = !logY; }}>
         log Y
       </button>
+      <button class="ctrl-btn" onclick={downloadCsv} title="Download plot data as CSV">CSV</button>
     </div>
     <div class="plot" bind:this={plotDiv}></div>
   </div>

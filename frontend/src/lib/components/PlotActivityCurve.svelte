@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import type { SimulationResult, IsotopeResultData } from "../types";
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
+  import { tracesToCsv, triggerDownload, csvTimestampedName, type CsvTrace } from "../plotting/csv-export";
   import { getResolvedTheme } from "../stores/theme.svelte";
   import { bestActivityUnit, bestTimeUnit, nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
@@ -23,6 +24,10 @@
   let logY = $state(false);
   let useEOBTime = $state(false);
   let rnpMode = $state(false);
+
+  // Populated by render() — captured for CSV export. Never read inside $derived
+  // to avoid reactivity loops; only read by the button's onclick handler.
+  let lastExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
   let rnpIsotope = $state("");
   // Default: one trace per isotope name (summed across layers).
   // When true, fall back to one trace per (layer, isotope) pair.
@@ -278,6 +283,11 @@
       showlegend: traces.length <= 20,
     });
 
+    lastExport = {
+      xLabel: `Time ${useEOBTime ? "from EOB" : ""} (${timeLabel})`,
+      yLabel: `Activity (${actLabel})`,
+      traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+    };
     Plotly.react(plotDiv, traces, layout, PLOTLY_CONFIG);
     attachLegendListeners();
   }
@@ -409,8 +419,22 @@
       annotations,
     });
 
+    lastExport = {
+      xLabel: `Time (${timeLabel})`,
+      yLabel: `RNP% — ${rnpIsotope}`,
+      traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+    };
     Plotly.react(plotDiv, traces, layout, PLOTLY_CONFIG);
     attachLegendListeners();
+  }
+
+  function downloadCsv() {
+    if (!lastExport || lastExport.traces.length === 0) return;
+    const csv = tracesToCsv(lastExport.xLabel, lastExport.yLabel, lastExport.traces, [
+      `HYRR activity plot export`,
+      `generated ${new Date().toISOString()}`,
+    ]);
+    triggerDownload(csvTimestampedName("hyrr-activity"), csv);
   }
 </script>
 
@@ -449,6 +473,7 @@
       </select>
     {/if}
 
+    <button class="ctrl-btn" onclick={downloadCsv} title="Download plot data as CSV">CSV</button>
     {#if selected.size > 0}
       <button class="ctrl-btn clear" onclick={clearSelection}>
         Clear ({selected.size})
