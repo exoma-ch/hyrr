@@ -24,6 +24,8 @@
 
   interface Row {
     layerIndex: number;
+    /** For aggregated rows: the full list of layer indices this row sums over. */
+    layerList?: number[];
     name: string;
     Z: number;
     A: number;
@@ -43,6 +45,9 @@
     decayNotations: string[];
     reactionMechanisms: string[];
   }
+
+  /** Default: one row per isotope across all layers. Toggle expands to per-layer rows. */
+  let groupByIsotope = $state<boolean>(true);
 
   function getEobActivity(iso: { time_grid_s?: number[]; activity_vs_time_Bq?: number[]; activity_Bq: number }, irrS: number): number {
     if (!iso.time_grid_s || !iso.activity_vs_time_Bq || iso.time_grid_s.length === 0) {
@@ -128,6 +133,57 @@
     [...new Set(allRows.flatMap((r) => r.reactionMechanisms))].sort(),
   );
 
+  /** Collapse per-layer rows into one row per isotope name. Activities sum
+   *  (allowed because hyrr-core emits a common time_grid_s per layer).
+   *  RNP% is recomputed against the stack-wide total. */
+  function aggregateByIsotope(input: Row[]): Row[] {
+    if (input.length === 0) return input;
+    // Stack-wide totals for RNP recompute
+    let stackTotalEoc = 0;
+    let stackTotalEob = 0;
+    for (const r of input) { stackTotalEoc += r.activity_Bq; stackTotalEob += r.activity_eob_Bq; }
+
+    const byName = new Map<string, Row>();
+    for (const r of input) {
+      const ex = byName.get(r.name);
+      if (!ex) {
+        byName.set(r.name, {
+          ...r,
+          layerIndex: -1,
+          layerList: [r.layerIndex],
+          reactions: [...r.reactions],
+          decayNotations: [...r.decayNotations],
+          reactionMechanisms: [...r.reactionMechanisms],
+        });
+      } else {
+        ex.activity_Bq += r.activity_Bq;
+        ex.activity_eob_Bq += r.activity_eob_Bq;
+        ex.activity_direct_Bq += r.activity_direct_Bq;
+        ex.activity_ingrowth_Bq += r.activity_ingrowth_Bq;
+        ex.saturation_yield_Bq_uA += r.saturation_yield_Bq_uA;
+        ex.layerList!.push(r.layerIndex);
+        // Source label: "direct" + "daughter" → "both"
+        if (ex.source !== r.source) ex.source = "both";
+        // Dedupe reactions / decay notations
+        for (const rxn of r.reactions) if (!ex.reactions.includes(rxn)) ex.reactions.push(rxn);
+        for (const d of r.decayNotations) if (!ex.decayNotations.includes(d)) ex.decayNotations.push(d);
+        for (const m of r.reactionMechanisms) if (!ex.reactionMechanisms.includes(m)) ex.reactionMechanisms.push(m);
+      }
+    }
+    // Recompute RNP% against stack totals, and dose from summed activity
+    const out: Row[] = [];
+    for (const row of byName.values()) {
+      row.rnp_pct = stackTotalEoc > 0 ? (row.activity_Bq / stackTotalEoc) * 100 : 0;
+      row.rnp_eob_pct = stackTotalEob > 0 ? (row.activity_eob_Bq / stackTotalEob) * 100 : 0;
+      const dose = getDoseConstant(row.name, row.activity_Bq, row.Z, row.A, row.state);
+      row.dose_uSv_h = dose?.doseRate ?? null;
+      row.dose_source = dose?.source ?? null;
+      row.layerList!.sort((a, b) => a - b);
+      out.push(row);
+    }
+    return out;
+  }
+
   let rows = $derived.by(() => {
     let filtered = allRows;
     // Shared filter
@@ -161,6 +217,9 @@
     const rnpEocMin = sharedFilter.rnpEocMin ? parseFloat(sharedFilter.rnpEocMin) : NaN;
     if (!isNaN(rnpEocMin)) filtered = filtered.filter((r) => r.rnp_pct >= rnpEocMin);
 
+    // Aggregate to one row per isotope if grouping is on.
+    if (groupByIsotope) filtered = aggregateByIsotope(filtered);
+
     return filtered.sort((a, b) => {
       let cmp = 0;
       switch (sortKey) {
@@ -193,8 +252,11 @@
       const reactionStr = reactionParts.length > 0
         ? reactionParts.join("; ")
         : (row.source === "daughter" ? "decay" : "");
+      const layerCell = row.layerList
+        ? row.layerList.map((i) => i + 1).join("+")
+        : String(row.layerIndex + 1);
       lines.push([
-        row.layerIndex + 1, `"${row.name}"`, row.Z, row.A,
+        `"${layerCell}"`, `"${row.name}"`, row.Z, row.A,
         `"${formatHalfLife(row.half_life_s)}"`,
         row.activity_direct_Bq.toExponential(4),
         row.activity_ingrowth_Bq.toExponential(4),
@@ -218,6 +280,12 @@
   <div class="toolbar">
     <span class="row-count">{rows.length}/{allRows.length} isotopes</span>
     <div class="toolbar-actions">
+      <button
+        class="action-btn"
+        class:active={groupByIsotope}
+        onclick={() => (groupByIsotope = !groupByIsotope)}
+        title="When on: one row per isotope, activities summed across layers. When off: per-layer rows."
+      >{groupByIsotope ? "Grouped" : "Per layer"}</button>
       {#if selected.size > 0}
         <button class="action-btn" onclick={clearSelection}>Clear sel. ({selected.size})</button>
       {/if}
@@ -252,7 +320,13 @@
             class:selected={isSelected(row.name)}
             onclick={() => toggleIsotope(row.name)}
           >
-            <td class="col-layer">{row.layerIndex + 1}</td>
+            <td class="col-layer" title={row.layerList ? `layers ${row.layerList.map(i => i + 1).join(", ")}` : ""}>
+              {#if row.layerList && row.layerList.length > 1}
+                L{row.layerList[0] + 1}–{row.layerList[row.layerList.length - 1] + 1}×{row.layerList.length}
+              {:else}
+                L{(row.layerList ? row.layerList[0] : row.layerIndex) + 1}
+              {/if}
+            </td>
             <td class="col-name">
               <button
                 class="isotope-link"
