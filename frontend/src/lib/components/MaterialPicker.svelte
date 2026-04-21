@@ -64,10 +64,17 @@
   }
 
   function select(entry: MaterialInfo) {
-    query = entry.formula ?? entry.path;
+    // Prefer the canonical path (e.g. "havar") over the expanded formula.
+    // For catalog alloys the formula is an exploded element list, which is
+    // lossy (name, density source, wt%-vs-stoichiometric) and also makes
+    // the layer label unreadable. resolve_material() in core/src/materials.rs
+    // tries the catalog by path/name first, so this stays backwards
+    // compatible with configs that still have an expanded formula saved.
+    const canonical = entry.path ?? entry.formula;
+    query = canonical;
     open = false;
     selectedEntry = entry;
-    onselect(entry.formula ?? entry.path);
+    onselect(canonical);
   }
 
   function onBlur() {
