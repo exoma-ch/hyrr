@@ -357,7 +357,7 @@
         <button
           class="action-btn save-btn"
           class:active={saveOpen}
-          onclick={() => (saveOpen = !saveOpen)}
+          onclick={(e: MouseEvent) => { e.stopPropagation(); saveOpen = !saveOpen; }}
           title="Save / download table"
           aria-haspopup="menu"
           aria-expanded={saveOpen}

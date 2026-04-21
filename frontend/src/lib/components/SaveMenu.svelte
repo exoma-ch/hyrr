@@ -65,7 +65,7 @@
   <button
     class="save-btn"
     class:active={open}
-    onclick={() => (open = !open)}
+    onclick={(e: MouseEvent) => { e.stopPropagation(); open = !open; }}
     {title}
     aria-haspopup="menu"
     aria-expanded={open}

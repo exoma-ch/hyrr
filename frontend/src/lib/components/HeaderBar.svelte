@@ -16,6 +16,11 @@
   let resolved = $derived(getResolvedTheme());
   let saveMenuOpen = $state(false);
 
+  function toggleSaveMenu(e: MouseEvent) {
+    e.stopPropagation();
+    saveMenuOpen = !saveMenuOpen;
+  }
+
   function feelingLucky() {
     const idx = Math.floor(Math.random() * PRESETS.length);
     setConfig({ ...PRESETS[idx].config });
@@ -83,7 +88,7 @@
     <div class="save-menu-wrap">
       <button
         class="icon-btn"
-        onclick={() => (saveMenuOpen = !saveMenuOpen)}
+        onclick={toggleSaveMenu}
         class:active={saveMenuOpen}
         title="Save / load session"
       >
@@ -142,7 +147,13 @@
 <HelpModal open={helpOpen} onclose={() => helpOpen = false} />
 
 <svelte:window onclick={(e: MouseEvent) => {
-  if (saveMenuOpen && !(e.target as HTMLElement)?.closest?.(".save-menu-wrap")) saveMenuOpen = false;
+  // Close on outside click. Defer via a microtask so the button's own
+  // onclick handler gets to flip state first — otherwise the window
+  // handler wins the race and the menu never opens.
+  if (!saveMenuOpen) return;
+  const target = e.target as HTMLElement | null;
+  if (target?.closest?.(".save-menu-wrap")) return;
+  saveMenuOpen = false;
 }} />
 
 <style>
