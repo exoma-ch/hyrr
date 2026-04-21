@@ -22,9 +22,11 @@
     materials: MaterialInfo[];
     /** If set, auto-open editor for this custom material ID when popup opens */
     editMaterialId?: string | null;
+    /** Current material identifier (catalog name, formula, or element) — drives the inspect panel. */
+    currentMaterial?: string;
   }
 
-  let { open, onclose, onselect, onenrichment, currentEnrichment, materials, editMaterialId = null }: Props = $props();
+  let { open, onclose, onselect, onenrichment, currentEnrichment, materials, editMaterialId = null, currentMaterial = "" }: Props = $props();
 
   let query = $state("");
   let searchInput: HTMLInputElement | undefined = $state();
@@ -332,7 +334,12 @@
       const cm = getCustomMaterials().find((m) => m.id === custom.customId);
       onselect(custom.name, cm?.enrichment);
     } else {
-      onselect(entry.formula ?? entry.path);
+      // Prefer canonical `path` (e.g. "havar", "H2O", "Mo") over the expanded
+      // formula — for catalog alloys the formula is an exploded element list,
+      // which is lossy and unreadable. `resolve_material` in core hits the
+      // catalog (by path) before falling back to formula parsing, so this
+      // stays backwards compatible with old URL-encoded configs.
+      onselect(entry.path ?? entry.formula);
     }
     onclose();
   }
@@ -372,6 +379,193 @@
     if (!q) return [];
     try { return Object.keys(parseFormula(q)); } catch { return []; }
   });
+
+  // -- Inspect panel for the layer's current material --
+
+  interface InspectRow {
+    symbol: string;
+    Z: number;
+    atomFraction: number;
+    weightPercent: number;
+  }
+
+  interface InspectInfo {
+    identifier: string;
+    displayName: string;
+    source: "catalog" | "custom" | "compound" | "element" | "formula";
+    density: number | null;
+    densitySource: string;
+    formula: string | null;
+    originalInput?: string;
+    rows: InspectRow[];
+    /** Mass fractions (0–1) — used to seed the clone-as-custom form. */
+    massFractions: Record<string, number>;
+    /** Pre-built "El 42%, ..." string for the clone form. */
+    wtPercentString: string;
+  }
+
+  function buildRowsFromMassFractions(
+    massFractions: Record<string, number>,
+  ): InspectRow[] {
+    // atom fraction n_i = (w_i / A_i) / Σ (w_j / A_j)
+    const moles: Record<string, number> = {};
+    let total = 0;
+    for (const [sym, w] of Object.entries(massFractions)) {
+      const A = STANDARD_ATOMIC_WEIGHT[sym];
+      if (!A || !(w > 0)) continue;
+      const m = w / A;
+      moles[sym] = m;
+      total += m;
+    }
+    const totalMass = Object.values(massFractions).reduce((s, v) => s + v, 0) || 1;
+    const rows: InspectRow[] = Object.entries(massFractions).map(([sym, w]) => ({
+      symbol: sym,
+      Z: SYMBOL_TO_Z[sym] ?? 0,
+      atomFraction: total > 0 ? (moles[sym] ?? 0) / total : 0,
+      weightPercent: (w / totalMass) * 100,
+    }));
+    rows.sort((a, b) => b.weightPercent - a.weightPercent);
+    return rows;
+  }
+
+  function buildRowsFromAtomFractions(
+    atomFractions: Record<string, number>,
+  ): InspectRow[] {
+    // w_i ∝ n_i * A_i
+    const weights: Record<string, number> = {};
+    let totalMass = 0;
+    for (const [sym, n] of Object.entries(atomFractions)) {
+      const A = STANDARD_ATOMIC_WEIGHT[sym];
+      if (!A || !(n > 0)) continue;
+      const m = n * A;
+      weights[sym] = m;
+      totalMass += m;
+    }
+    const totalAtom = Object.values(atomFractions).reduce((s, v) => s + v, 0) || 1;
+    const rows: InspectRow[] = Object.entries(atomFractions).map(([sym, n]) => ({
+      symbol: sym,
+      Z: SYMBOL_TO_Z[sym] ?? 0,
+      atomFraction: n / totalAtom,
+      weightPercent: totalMass > 0 ? ((weights[sym] ?? 0) / totalMass) * 100 : 0,
+    }));
+    rows.sort((a, b) => b.weightPercent - a.weightPercent);
+    return rows;
+  }
+
+  function massFractionsToWtString(
+    massFractions: Record<string, number>,
+  ): string {
+    const entries = Object.entries(massFractions).sort((a, b) => b[1] - a[1]);
+    return entries
+      .map(([sym, w]) => `${sym} ${(w * 100).toFixed(2)}%`)
+      .join(", ");
+  }
+
+  let inspectInfo = $derived.by<InspectInfo | null>(() => {
+    const id = currentMaterial.trim();
+    if (!id) return null;
+
+    // 1. Catalog (havar, etc.)
+    const catalogKey = id.toLowerCase();
+    const catalogEntry = MATERIAL_CATALOG[catalogKey];
+    if (catalogEntry) {
+      const rows = buildRowsFromMassFractions(catalogEntry.massFractions);
+      return {
+        identifier: id,
+        displayName: id,
+        source: "catalog",
+        density: catalogEntry.density,
+        densitySource: "catalog",
+        formula: Object.keys(catalogEntry.massFractions).join(", "),
+        rows,
+        massFractions: { ...catalogEntry.massFractions },
+        wtPercentString: massFractionsToWtString(catalogEntry.massFractions),
+      };
+    }
+
+    // 2. Custom material
+    const custom = getCustomMaterials().find((m) => m.name === id || m.formula === id);
+    if (custom) {
+      const rows = custom.massFractions
+        ? buildRowsFromMassFractions(custom.massFractions)
+        : (() => {
+            try {
+              const parsed = parseFormula(custom.formula);
+              return buildRowsFromAtomFractions(parsed);
+            } catch { return []; }
+          })();
+      return {
+        identifier: id,
+        displayName: custom.name,
+        source: "custom",
+        density: custom.density,
+        densitySource: "user-defined",
+        formula: custom.formula,
+        originalInput: custom.originalInput,
+        rows,
+        massFractions: custom.massFractions ?? {},
+        wtPercentString: custom.massFractions
+          ? massFractionsToWtString(custom.massFractions)
+          : custom.formula,
+      };
+    }
+
+    // 3. Known compound (COMPOUND_DENSITIES) or simple formula
+    try {
+      const atoms = parseFormula(id);
+      const symbols = Object.keys(atoms);
+      if (symbols.length === 0) return null;
+      for (const s of symbols) { if (!SYMBOL_TO_Z[s]) return null; }
+      const rows = buildRowsFromAtomFractions(atoms);
+
+      let density: number | null = null;
+      let densitySource = "estimated";
+      let source: InspectInfo["source"] = "formula";
+
+      if (symbols.length === 1) {
+        density = ELEMENT_DENSITIES[symbols[0]] ?? null;
+        densitySource = "element";
+        source = "element";
+      } else if (COMPOUND_DENSITIES[id]) {
+        density = COMPOUND_DENSITIES[id];
+        densitySource = "compound";
+        source = "compound";
+      }
+
+      return {
+        identifier: id,
+        displayName: id,
+        source,
+        density,
+        densitySource,
+        formula: id,
+        rows,
+        massFractions: {},
+        wtPercentString: id,
+      };
+    } catch {
+      return null;
+    }
+  });
+
+  function cloneAsCustom() {
+    if (!inspectInfo) return;
+    // Expand `defineOpen` and pre-fill the form with editable wt% string or formula.
+    defineOpen = true;
+    editingCustomId = null;
+    if (inspectInfo.source === "catalog" || inspectInfo.source === "custom") {
+      // Mass-ratio clone — use wt% string so user can edit percentages.
+      newFormula = inspectInfo.wtPercentString;
+    } else {
+      newFormula = inspectInfo.formula ?? inspectInfo.identifier;
+    }
+    newName = inspectInfo.displayName
+      ? `${inspectInfo.displayName}-custom`
+      : newFormula;
+    nameManuallySet = true;
+    newDensity = inspectInfo.density ?? null;
+    formulaError = null;
+  }
 </script>
 
 <Modal {open} {onclose} title="Select Material">
@@ -390,6 +584,79 @@
         <button class="use-btn" onclick={useQuery} title="Use as-is">Use</button>
       {/if}
     </div>
+
+    <!-- Inspect panel: composition & density source for the layer's current material -->
+    {#if inspectInfo}
+      <div class="inspect-panel">
+        <div class="inspect-header">
+          <div class="inspect-title">
+            <span class="inspect-name">{inspectInfo.displayName}</span>
+            <span class="inspect-badge inspect-badge-{inspectInfo.source}">{inspectInfo.source}</span>
+          </div>
+          <button
+            class="clone-btn"
+            title="Pre-fill the define form with these elements so you can tweak & save a variant"
+            onclick={cloneAsCustom}
+          >Clone as custom…</button>
+        </div>
+        <div class="inspect-meta">
+          {#if inspectInfo.density !== null}
+            <span class="meta-item">
+              <span class="meta-label">Density:</span>
+              <span class="meta-value">{inspectInfo.density.toFixed(3)} g/cm³</span>
+              <span class="meta-source">({inspectInfo.densitySource})</span>
+            </span>
+          {/if}
+          {#if inspectInfo.formula && inspectInfo.formula !== inspectInfo.displayName}
+            <span class="meta-item">
+              <span class="meta-label">Formula:</span>
+              <span class="meta-value mono">{inspectInfo.formula}</span>
+            </span>
+          {/if}
+          {#if inspectInfo.originalInput && inspectInfo.originalInput !== inspectInfo.formula}
+            <span class="meta-item">
+              <span class="meta-label">Input:</span>
+              <span class="meta-value mono">{inspectInfo.originalInput}</span>
+            </span>
+          {/if}
+        </div>
+        {#if inspectInfo.rows.length > 0}
+          <table class="inspect-table">
+            <thead>
+              <tr>
+                <th>El</th>
+                <th class="num">Z</th>
+                <th class="num">Atom frac</th>
+                <th class="num">wt %</th>
+                {#if onenrichment}<th></th>{/if}
+              </tr>
+            </thead>
+            <tbody>
+              {#each inspectInfo.rows as row}
+                <tr>
+                  <td>
+                    <span class="el-sym">{row.symbol}</span>
+                    {#if currentEnrichment?.[row.symbol]}<span class="enr-dot" title="Enrichment override"></span>{/if}
+                  </td>
+                  <td class="num">{row.Z}</td>
+                  <td class="num">{row.atomFraction.toFixed(4)}</td>
+                  <td class="num">{row.weightPercent.toFixed(2)}</td>
+                  {#if onenrichment}
+                    <td>
+                      <button
+                        class="enr-btn"
+                        title="Edit isotopic enrichment"
+                        onclick={() => onenrichment?.(row.symbol)}
+                      >⚛</button>
+                    </td>
+                  {/if}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {/if}
+      </div>
+    {/if}
 
     <!-- Enrichment quick-access for current query -->
     {#if queryElements.length > 0 && onenrichment}
@@ -813,4 +1080,123 @@
 
   .save-btn:hover:not(:disabled) { background: var(--c-green-emphasis); }
   .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* Inspect panel */
+  .inspect-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.5rem 0.6rem;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+  }
+
+  .inspect-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .inspect-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+
+  .inspect-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--c-text);
+  }
+
+  .inspect-badge {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    padding: 0.05rem 0.4rem;
+    border-radius: 3px;
+    font-weight: 500;
+    background: var(--c-bg-muted);
+    color: var(--c-text-muted);
+  }
+
+  .inspect-badge-catalog { color: var(--c-accent); background: var(--c-accent-tint-subtle); }
+  .inspect-badge-custom { color: var(--c-gold); background: var(--c-gold-tint-subtle); }
+  .inspect-badge-element { color: var(--c-green-text); background: var(--c-green-tint-subtle); }
+
+  .clone-btn {
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    color: var(--c-text);
+    padding: 0.25rem 0.6rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .clone-btn:hover { border-color: var(--c-accent); color: var(--c-accent); }
+
+  .inspect-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    font-size: 0.7rem;
+    color: var(--c-text-muted);
+  }
+
+  .meta-item {
+    display: inline-flex;
+    gap: 0.25rem;
+    align-items: baseline;
+  }
+
+  .meta-label { color: var(--c-text-subtle); }
+  .meta-value { color: var(--c-text); font-weight: 500; }
+  .meta-source { color: var(--c-text-faint); font-style: italic; }
+  .mono { font-family: monospace; }
+
+  .inspect-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .inspect-table th,
+  .inspect-table td {
+    padding: 0.15rem 0.35rem;
+    border-bottom: 1px solid var(--c-bg-hover);
+    text-align: left;
+  }
+
+  .inspect-table th {
+    color: var(--c-text-muted);
+    font-weight: 500;
+    font-size: 0.65rem;
+  }
+
+  .inspect-table .num {
+    text-align: right;
+  }
+
+  .el-sym {
+    font-weight: 600;
+    color: var(--c-text);
+  }
+
+  .enr-btn {
+    background: none;
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    color: var(--c-text-muted);
+    font-size: 0.75rem;
+    padding: 0.05rem 0.3rem;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  .enr-btn:hover { color: var(--c-accent); border-color: var(--c-accent); }
 </style>
