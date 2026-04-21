@@ -6,8 +6,11 @@ use crate::bateman::bateman_activity;
 use crate::chains::{discover_chains, solve_chain, split_components};
 use crate::constants::{ACTIVITY_CUTOFF_FRACTION, AVOGADRO, LN2, MAX_CHAIN_SIZE};
 use crate::db::DatabaseProtocol;
-use crate::interpolation::trapezoid;
-use crate::production::{compute_production_rate, generate_depth_profile, saturation_yield};
+use crate::interpolation::{linspace, trapezoid};
+use crate::production::{
+    compute_depth_production_rate, compute_production_rate, generate_depth_profile,
+    saturation_yield,
+};
 use crate::stopping::{
     compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm, get_stopping_sources,
 };
@@ -142,10 +145,22 @@ fn compute_layer(
     let volume = thickness * area;
     let avg_a = layer.average_atomic_mass();
     let n_atoms = (density * volume * AVOGADRO) / avg_a;
+    let number_density = density * AVOGADRO / avg_a;
+
+    // Pre-compute the layer's energy grid + stopping power once — shared across all
+    // target isotopes (neither depends on the target). Used for integrated production
+    // (inside compute_production_rate) and for the depth profile + per-isotope depth
+    // rates. Same linspace size (100) keeps both paths bit-identical.
+    let layer_e_low = energy_out.max(0.01);
+    let layer_energies = linspace(layer_e_low, energy_in, 100);
+    let layer_dedx = dedx_fn(&layer_energies);
+
+    // Generate depth profile once (index 0 = beam entry, highest E).
+    let depth_raw =
+        generate_depth_profile(&layer_energies, &layer_dedx, current_ma, area, projectile_z);
 
     let mut isotope_results: HashMap<String, IsotopeResult> = HashMap::new();
-    let mut first_energies: Option<Vec<f64>> = None;
-    let mut first_dedx: Option<Vec<f64>> = None;
+    let mut depth_production_rates: HashMap<String, Vec<f64>> = HashMap::new();
 
     for (elem, atom_frac) in &layer.elements {
         for (&a_target, &isotope_abundance) in &elem.isotopes {
@@ -168,11 +183,6 @@ fn compute_layer(
                     100,
                 );
 
-                if first_energies.is_none() {
-                    first_energies = Some(result.energies.clone());
-                    first_dedx = Some(result.dedx_values.clone());
-                }
-
                 let scaled_rate = result.production_rate * weight;
                 if scaled_rate <= 0.0 {
                     continue;
@@ -184,6 +194,29 @@ fn compute_layer(
                 let symbol = db.get_element_symbol(xs.residual_z);
                 let state_suffix = &xs.state;
                 let name = format!("{}-{}{}", symbol, xs.residual_a, state_suffix);
+
+                // Depth-resolved rate for this channel. Same integrand as
+                // compute_production_rate in different coordinates (dE → dx); verified
+                // by the trapezoid drift-guard test in core/tests/.
+                let channel_depth_rates = compute_depth_production_rate(
+                    &xs.energies_mev,
+                    &xs.xs_mb,
+                    &depth_raw.energies_ordered,
+                    number_density,
+                    particles_per_s,
+                    area,
+                    weight,
+                );
+                match depth_production_rates.get_mut(&name) {
+                    Some(existing) => {
+                        for (e, n) in existing.iter_mut().zip(channel_depth_rates.iter()) {
+                            *e += n;
+                        }
+                    }
+                    None => {
+                        depth_production_rates.insert(name.clone(), channel_depth_rates);
+                    }
+                }
 
                 let bateman = bateman_activity(scaled_rate, half_life, irr_time, cool_time, 200);
                 let sat_yield = saturation_yield(scaled_rate, half_life, current_ma);
@@ -276,19 +309,23 @@ fn compute_layer(
         }
     }
 
-    // Depth profile
-    let mut depth_profile = Vec::new();
-    if let (Some(energies), Some(dedx_vals)) = (&first_energies, &first_dedx) {
-        let dp = generate_depth_profile(energies, dedx_vals, current_ma, area, projectile_z);
-        for i in 0..dp.depths.len() {
-            depth_profile.push(DepthPoint {
-                depth_cm: dp.depths[i],
-                energy_mev: dp.energies_ordered[i],
-                dedx_mev_cm: dedx_vals[dedx_vals.len() - 1 - i].abs(),
-                heat_w_cm3: dp.heat_w_cm3[i],
-            });
-        }
+    // Materialize the pre-computed depth profile into DepthPoint records.
+    let mut depth_profile = Vec::with_capacity(depth_raw.depths.len());
+    for i in 0..depth_raw.depths.len() {
+        depth_profile.push(DepthPoint {
+            depth_cm: depth_raw.depths[i],
+            energy_mev: depth_raw.energies_ordered[i],
+            dedx_mev_cm: layer_dedx[layer_dedx.len() - 1 - i].abs(),
+            heat_w_cm3: depth_raw.heat_w_cm3[i],
+        });
     }
+
+    // After the chain solver, isotope_results may have gained ingrowth-only entries
+    // (daughters produced via decay, not directly). Depth rates only make sense for
+    // direct production, so drop any rate series whose isotope is no longer in
+    // isotope_results (can't happen today — chains only add — but we keep the set in
+    // sync to prevent future drift).
+    depth_production_rates.retain(|name, _| isotope_results.contains_key(name));
 
     let heat_kw = if depth_profile.len() >= 2 {
         integrate_heat(&depth_profile, area)
@@ -306,6 +343,7 @@ fn compute_layer(
         depth_profile,
         isotope_results,
         stopping_power_sources: sp_sources,
+        depth_production_rates,
     }
 }
 

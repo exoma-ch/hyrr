@@ -5,6 +5,7 @@
   import { getResolvedTheme } from "../stores/theme.svelte";
   import { nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes } from "../stores/selection.svelte";
+  import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -16,6 +17,7 @@
   let logY = $state(false);
 
   let selected = $derived(getSelectedIsotopes());
+  let sharedFilter = $derived(getIsotopeFilter());
 
   let legendVisibility = new Map<string, boolean | "legendonly">();
   let legendListenersAttached = false;
@@ -75,6 +77,7 @@
     const _result = result;
     const _sel = selected;
     const _log = logY;
+    const _filter = JSON.stringify(sharedFilter);
     const _theme = getResolvedTheme();
     if (p && div && hasData) render();
   });
@@ -116,12 +119,15 @@
             isoData.set(name, { depths: [], rates: [] });
           }
           const entry = isoData.get(name)!;
-          // Insert zero at layer start if this isotope had data in a prior layer
-          // (ensures drop to zero at material boundary)
-          if (entry.depths.length > 0) {
-            entry.depths.push(layerStart);
-            entry.rates.push(0);
-          }
+          // At every layer boundary where this isotope is present, anchor a
+          // zero at layerStart so Plotly draws a true vertical step from the
+          // prior layer's last value (which is either 0 if the isotope was
+          // absent there, or its real final rate) down to or up from 0. This
+          // handles both (a) isotope was in prior layer and goes to 0 here →
+          // vertical drop at boundary, and (b) isotope first appears in this
+          // layer N>0 → rises from 0 at boundary, not from ambient.
+          entry.depths.push(layerStart);
+          entry.rates.push(0);
           for (let i = 0; i < Math.min(dp.length, rates.length); i++) {
             entry.depths.push(layerStart + dp[i].depth_mm);
             entry.rates.push(rates[i]);
@@ -143,10 +149,52 @@
       cumulativeDepth = layerEnd;
     }
 
-    // Rank isotopes by total integrated production
+    // Lookup: isotope name → any IsotopeResultData that carries its Z/A/reactions.
+    // Filters below (Z, A, reactions) reference those fields.
+    const nameToIso = new Map<string, (typeof result.layers)[number]["isotopes"][number]>();
+    for (const layer of result.layers) {
+      for (const iso of layer.isotopes) {
+        if (!nameToIso.has(iso.name)) nameToIso.set(iso.name, iso);
+      }
+    }
+
+    const zMin = sharedFilter.zMin ? parseInt(sharedFilter.zMin, 10) : NaN;
+    const zMax = sharedFilter.zMax ? parseInt(sharedFilter.zMax, 10) : NaN;
+    const aMin = sharedFilter.aMin ? parseInt(sharedFilter.aMin, 10) : NaN;
+    const aMax = sharedFilter.aMax ? parseInt(sharedFilter.aMax, 10) : NaN;
+    const textLower = sharedFilter.text.toLowerCase();
+    const reactionSet = sharedFilter.reactions;
+    function passesFilter(name: string): boolean {
+      const iso = nameToIso.get(name);
+      if (textLower && !name.toLowerCase().includes(textLower)) return false;
+      if (!iso) return true; // name not in any layer's isotope list — keep
+      if (!isNaN(zMin) && iso.Z < zMin) return false;
+      if (!isNaN(zMax) && iso.Z > zMax) return false;
+      if (!isNaN(aMin) && iso.A < aMin) return false;
+      if (!isNaN(aMax) && iso.A > aMax) return false;
+      if (reactionSet.size > 0 && iso.reactions) {
+        const isoMechs = iso.reactions
+          .map((r) => {
+            const m = r.match(/\(([^)]+)\)/);
+            return m ? m[1] : "";
+          })
+          .filter(Boolean);
+        if (!isoMechs.some((m) => reactionSet.has(m))) return false;
+      }
+      return true;
+    }
+
+    // Rank isotopes by total production integrated over depth
+    // (trapezoid ∫ rate dx), not the bare sum of samples — a spiky rate in one
+    // thin layer should not out-rank a broadly-produced isotope just because
+    // depth sampling differs.
     const ranked = [...isoData.entries()]
+      .filter(([name]) => passesFilter(name))
       .map(([name, data]) => {
-        const total = data.rates.reduce((s, v) => s + v, 0);
+        let total = 0;
+        for (let i = 1; i < data.depths.length; i++) {
+          total += 0.5 * (data.rates[i - 1] + data.rates[i]) * (data.depths[i] - data.depths[i - 1]);
+        }
         return { name, data, total };
       })
       .filter((r) => r.total > 0)
@@ -165,14 +213,32 @@
       return;
     }
 
+    // Log-Y clamp: Plotly drops non-positive y values on log scale, which
+    // would erase the vertical drops at layer boundaries. Replace zeros with a
+    // floor of min-positive / 1000 so drops stay visible.
+    let logFloor = 0;
+    if (logY) {
+      let minPos = Infinity;
+      for (const { data } of toPlot) {
+        for (const r of data.rates) {
+          if (r > 0 && r < minPos) minPos = r;
+        }
+      }
+      logFloor = Number.isFinite(minPos) ? minPos / 1000 : 0;
+    }
+
     const traces: any[] = [];
     let colorIdx = 0;
 
     for (const { name, data } of toPlot) {
       const traceName = nucLabel(name);
+      const yValues = logY && logFloor > 0
+        ? data.rates.map((r) => (r > 0 ? r : logFloor))
+        : data.rates;
       traces.push({
+        uid: name, // stable identity across re-renders so Plotly reuses traces
         x: data.depths,
-        y: data.rates,
+        y: yValues,
         name: traceName,
         type: "scatter",
         mode: "lines",
