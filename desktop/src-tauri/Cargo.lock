@@ -1662,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "hyrr-desktop"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "hyrr-core",
  "serde",
