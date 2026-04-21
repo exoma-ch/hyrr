@@ -2,7 +2,8 @@
   import { onMount, onDestroy } from "svelte";
   import type { SimulationResult, IsotopeResultData } from "../types";
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
-  import { tracesToCsv, triggerDownload, csvTimestampedName, type CsvTrace } from "../plotting/csv-export";
+  import type { CsvTrace } from "../plotting/csv-export";
+  import SaveMenu from "./SaveMenu.svelte";
   import { getResolvedTheme } from "../stores/theme.svelte";
   import { bestActivityUnit, bestTimeUnit, nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
@@ -428,14 +429,6 @@
     attachLegendListeners();
   }
 
-  function downloadCsv() {
-    if (!lastExport || lastExport.traces.length === 0) return;
-    const csv = tracesToCsv(lastExport.xLabel, lastExport.yLabel, lastExport.traces, [
-      `HYRR activity plot export`,
-      `generated ${new Date().toISOString()}`,
-    ]);
-    triggerDownload(csvTimestampedName("hyrr-activity"), csv);
-  }
 </script>
 
 <div class="activity-curve">
@@ -473,7 +466,14 @@
       </select>
     {/if}
 
-    <button class="ctrl-btn" onclick={downloadCsv} title="Download plot data as CSV">CSV</button>
+    <SaveMenu
+      filenamePrefix="hyrr-activity"
+      xLabel={lastExport?.xLabel ?? "Time"}
+      yLabel={lastExport?.yLabel ?? "Activity"}
+      getTraces={() => lastExport?.traces ?? []}
+      notes={() => [`HYRR activity plot export`, `generated ${new Date().toISOString()}`]}
+      title="Save / download plot data"
+    />
     {#if selected.size > 0}
       <button class="ctrl-btn clear" onclick={clearSelection}>
         Clear ({selected.size})

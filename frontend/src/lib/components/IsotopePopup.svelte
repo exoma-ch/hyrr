@@ -22,7 +22,8 @@
   } from "@hyrr/compute";
   import type { DecayMode, CrossSectionData, ProjectileType } from "@hyrr/compute";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
-  import { tracesToCsv, triggerDownload, csvTimestampedName, type CsvTrace } from "../plotting/csv-export";
+  import type { CsvTrace } from "../plotting/csv-export";
+  import SaveMenu from "./SaveMenu.svelte";
 
   interface Props {
     open: boolean;
@@ -438,14 +439,6 @@
     });
   }
 
-  function downloadXsCsv() {
-    if (!xsExport || xsExport.traces.length === 0) return;
-    const csv = tracesToCsv(xsExport.xLabel, xsExport.yLabel, xsExport.traces, [
-      `HYRR cross-section export for ${name}`,
-      `generated ${new Date().toISOString()}`,
-    ]);
-    triggerDownload(csvTimestampedName(`hyrr-xs-${name}`), csv);
-  }
 
   // Compare: add an isotope with all its XS channels
   function addCompare(iso: { name: string; Z: number; A: number; state: string }) {
@@ -663,14 +656,6 @@
     Plotly.react(depthPlotDiv, traces, layout, PLOTLY_CONFIG);
   }
 
-  function downloadDepthCsv() {
-    if (!depthExport || depthExport.traces.length === 0) return;
-    const csv = tracesToCsv(depthExport.xLabel, depthExport.yLabel, depthExport.traces, [
-      `HYRR depth plot export for ${name}`,
-      `generated ${new Date().toISOString()}`,
-    ]);
-    triggerDownload(csvTimestampedName(`hyrr-depth-${name}`), csv);
-  }
 
   function layerMarkers(boundaries: { depth: number; label: string }[], tc: ReturnType<typeof themeColors>) {
     const shapes = boundaries.slice(1).map((b) => ({
@@ -883,14 +868,6 @@
     }
   }
 
-  function downloadActCsv() {
-    if (!actExport || actExport.traces.length === 0) return;
-    const csv = tracesToCsv(actExport.xLabel, actExport.yLabel, actExport.traces, [
-      `HYRR activity export for ${name}`,
-      `generated ${new Date().toISOString()}`,
-    ]);
-    triggerDownload(csvTimestampedName(`hyrr-activity-${name}`), csv);
-  }
 
   onDestroy(() => {
     if (Plotly) {
@@ -1047,7 +1024,14 @@
               Scaled
             </button>
           {/if}
-          <button class="scale-toggle" onclick={downloadXsCsv} title="Download XS data as CSV">CSV</button>
+          <SaveMenu
+            filenamePrefix={`hyrr-xs-${name}`}
+            xLabel={xsExport?.xLabel ?? "Energy (MeV)"}
+            yLabel={xsExport?.yLabel ?? "Cross-section (mb)"}
+            getTraces={() => xsExport?.traces ?? []}
+            notes={() => [`HYRR cross-section export for ${name}`, `generated ${new Date().toISOString()}`]}
+            title="Save / download XS data"
+          />
         </div>
         <div bind:this={xsPlotDiv} class="xs-plot"></div>
       </div>
@@ -1061,7 +1045,14 @@
           <button class="scale-toggle" class:active={depthReal} onclick={() => { depthReal = !depthReal; }}>
             {depthReal ? "Real" : "Theory"}
           </button>
-          <button class="scale-toggle" onclick={downloadDepthCsv} title="Download depth data as CSV">CSV</button>
+          <SaveMenu
+            filenamePrefix={`hyrr-depth-${name}`}
+            xLabel={depthExport?.xLabel ?? "Depth (mm)"}
+            yLabel={depthExport?.yLabel ?? "Production rate (atoms/s/cm)"}
+            getTraces={() => depthExport?.traces ?? []}
+            notes={() => [`HYRR depth plot export for ${name}`, `generated ${new Date().toISOString()}`]}
+            title="Save / download depth data"
+          />
         </div>
         <div bind:this={depthPlotDiv} class="depth-plot"></div>
       </div>
@@ -1072,7 +1063,14 @@
       <div class="section">
         <div class="section-bar">
           <span class="section-label">Activity{showRnp ? " / RNP%" : ""}</span>
-          <button class="scale-toggle" onclick={downloadActCsv} title="Download activity data as CSV">CSV</button>
+          <SaveMenu
+            filenamePrefix={`hyrr-activity-${name}`}
+            xLabel={actExport?.xLabel ?? "Time"}
+            yLabel={actExport?.yLabel ?? "Activity"}
+            getTraces={() => actExport?.traces ?? []}
+            notes={() => [`HYRR activity export for ${name}`, `generated ${new Date().toISOString()}`]}
+            title="Save / download activity data"
+          />
         </div>
         <div bind:this={actPlotDiv} class="act-plot"></div>
       </div>

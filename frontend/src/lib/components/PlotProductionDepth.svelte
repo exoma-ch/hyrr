@@ -6,7 +6,8 @@
   import { nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes } from "../stores/selection.svelte";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
-  import { tracesToCsv, triggerDownload, csvTimestampedName, type CsvTrace } from "../plotting/csv-export";
+  import type { CsvTrace } from "../plotting/csv-export";
+  import SaveMenu from "./SaveMenu.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -298,14 +299,6 @@
     attachLegendListeners();
   }
 
-  function downloadCsv() {
-    if (!lastExport || lastExport.traces.length === 0) return;
-    const csv = tracesToCsv(lastExport.xLabel, lastExport.yLabel, lastExport.traces, [
-      `HYRR production-vs-depth export`,
-      `generated ${new Date().toISOString()}`,
-    ]);
-    triggerDownload(csvTimestampedName("hyrr-depth-production"), csv);
-  }
 </script>
 
 {#if hasData}
@@ -315,7 +308,14 @@
       <button class="ctrl-btn" class:active={logY} onclick={() => { logY = !logY; }}>
         log Y
       </button>
-      <button class="ctrl-btn" onclick={downloadCsv} title="Download plot data as CSV">CSV</button>
+      <SaveMenu
+        filenamePrefix="hyrr-depth-production"
+        xLabel={lastExport?.xLabel ?? "Depth (mm)"}
+        yLabel={lastExport?.yLabel ?? "Production rate (atoms/s/cm)"}
+        getTraces={() => lastExport?.traces ?? []}
+        notes={() => [`HYRR production-vs-depth export`, `generated ${new Date().toISOString()}`]}
+        title="Save / download plot data"
+      />
     </div>
     <div class="plot" bind:this={plotDiv}></div>
   </div>

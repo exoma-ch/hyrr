@@ -46,8 +46,10 @@ test.describe("CSV exports", () => {
   });
 
   test("activity-table CSV: headers + ≥1 ¹⁵O row with TBq-scale activity", async ({ page }) => {
+    // Open the save menu first, then click the CSV option inside it.
+    await page.locator(".activity-table-enhanced .save-btn").click();
     const { filename, content } = await captureDownload(page, async () => {
-      await page.locator(".activity-table-enhanced .action-btn", { hasText: "CSV" }).click();
+      await page.locator(".activity-table-enhanced .save-menu .menu-item", { hasText: "CSV" }).click();
     });
     expect(filename).toMatch(/^hyrr[-_]activity.*\.csv$/);
     const { header, rows } = parseCsv(content);
@@ -66,8 +68,9 @@ test.describe("CSV exports", () => {
   });
 
   test("activity-plot CSV: wide-format with shared time axis", async ({ page }) => {
+    await page.locator(".activity-curve .controls .save-btn").click();
     const { filename, content } = await captureDownload(page, async () => {
-      await page.locator(".activity-curve .controls .ctrl-btn", { hasText: "CSV" }).click();
+      await page.locator(".activity-curve .controls .save-menu-wrap .menu .menu-item", { hasText: "CSV" }).click();
     });
     expect(filename).toMatch(/^hyrr-activity.*\.csv$/);
     const { header, rows, notes } = parseCsv(content);
@@ -98,8 +101,9 @@ test.describe("CSV exports", () => {
       },
       { timeout: 15_000 },
     );
+    await plot.locator(".save-menu-wrap .save-btn").click();
     const { filename, content } = await captureDownload(page, async () => {
-      await plot.locator(".ctrl-btn", { hasText: "CSV" }).click();
+      await plot.locator(".save-menu-wrap .menu .menu-item", { hasText: "CSV" }).click();
     });
     expect(filename).toMatch(/^hyrr-depth-production.*\.csv$/);
     const { header, rows } = parseCsv(content);
@@ -118,13 +122,17 @@ test.describe("CSV exports", () => {
   });
 
   test("activity plot in per-layer mode exports N traces for N layers", async ({ page }) => {
-    // Toggle expand-per-layer in the activity plot
+    // Toggle expand-per-layer in the activity plot (the toggle button is
+    // still a .ctrl-btn, separate from the save dropdown).
     await page
-      .locator(".activity-curve .controls .ctrl-btn", { hasText: /Expand per layer|Group by isotope/ })
+      .locator(".activity-curve .controls .ctrl-btn", {
+        hasText: /Expand per layer|Group by isotope/,
+      })
       .click();
     await page.waitForTimeout(300); // let re-render settle
+    await page.locator(".activity-curve .controls .save-btn").click();
     const { content } = await captureDownload(page, async () => {
-      await page.locator(".activity-curve .controls .ctrl-btn", { hasText: "CSV" }).click();
+      await page.locator(".activity-curve .controls .save-menu-wrap .menu .menu-item", { hasText: "CSV" }).click();
     });
     const { header } = parseCsv(content);
     // Per-layer mode labels traces as "¹⁵O (L2)" etc. — confirm we see the layer suffix.
