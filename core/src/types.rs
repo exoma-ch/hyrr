@@ -332,4 +332,10 @@ pub struct ChainSolution {
     pub activities: Vec<Vec<f64>>,
     pub activities_direct: Vec<Vec<f64>>,
     pub activities_ingrowth: Vec<Vec<f64>>,
+    /// For each isotope in `isotopes`, the list of parents that feed into it
+    /// via decay. Each entry is `(parent_key, branching_ratio, decay_mode)`
+    /// where `parent_key` has the form `"{Z}-{A}-{state}"` (same as
+    /// `ChainIsotope::key`) and `decay_mode` is the raw `DecayMode::mode`
+    /// string from the nuclear data (e.g. "β-", "EC", "IT").
+    pub parent_info: Vec<Vec<(String, f64, String)>>,
 }

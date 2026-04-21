@@ -309,6 +309,36 @@ fn compute_layer(
     }
 }
 
+/// Convert digits (and the metastable marker 'm') to unicode superscripts.
+/// Kept in sync with `packages/compute/src/format.ts::toSuperscript`.
+fn to_superscript(s: &str) -> String {
+    const SUP: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '0'..='9' => out.push(SUP[(ch as u8 - b'0') as usize]),
+            'm' => out.push('ᵐ'),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Format a nuclide as spectroscopy notation with unicode superscripts, e.g.
+/// "Mo-99" → "⁹⁹Mo", "Tc-99m" → "⁹⁹ᵐTc". Mirrors the TS `nucLabel` helper.
+fn nuc_label(symbol: &str, a: u32, state: &str) -> String {
+    format!("{}{}", to_superscript(&format!("{}{}", a, state)), symbol)
+}
+
+/// Canonical short decay-notation string, e.g. "⁹⁹Mo(β⁻)". The `mode` is the
+/// raw string from the nuclear-data file; empty/unknown modes fall back to a
+/// generic "decay" label so the parent nuclide still surfaces in the table.
+fn format_decay_notation(parent_symbol: &str, parent_a: u32, parent_state: &str, mode: &str) -> String {
+    let label = nuc_label(parent_symbol, parent_a, parent_state);
+    let mode_label = if mode.is_empty() { "decay" } else { mode };
+    format!("{}({})", label, mode_label)
+}
+
 fn apply_chain_solver_by_component(
     db: &dyn DatabaseProtocol,
     isotope_results: HashMap<String, IsotopeResult>,
@@ -341,7 +371,10 @@ fn apply_chain_solver_by_component(
 
     for component in &components {
         if component.len() > MAX_CHAIN_SIZE {
-            // Fallback to independent Bateman
+            // Fallback to independent Bateman.
+            // TODO(#56): annotate daughter decay_notations with parent info
+            // here too. Currently skipped because this branch treats every
+            // isotope as directly-produced and has no parent-graph context.
             for ciso in component {
                 let symbol = db.get_element_symbol(ciso.z);
                 let name = format!("{}-{}{}", symbol, ciso.a, ciso.state);
@@ -398,6 +431,35 @@ fn apply_chain_solver_by_component(
                 .unwrap_or(ciso.production_rate);
             let sat_yield = existing.map(|e| e.saturation_yield_bq_ua).unwrap_or(0.0);
 
+            // Build parent-decay notation strings for ingrowth isotopes. We
+            // resolve each parent's (Z, A, state) via the solver's parent_info
+            // and format as "⁹⁹Mo(β⁻)" so the frontend can display a real
+            // parent nuclide instead of the generic "decay" fallback.
+            let mut decay_notations: Vec<String> = Vec::new();
+            if has_ingrowth {
+                if let Some(parents) = solution.parent_info.get(i) {
+                    let mut seen: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    for (parent_key, _branching, mode) in parents {
+                        // parent_key is "Z-A-state" (see ChainIsotope::key).
+                        // Look up the parent ChainIsotope to recover the
+                        // symbol via the database — this keeps the formatting
+                        // consistent with the isotope `name` field.
+                        let parent = solution
+                            .isotopes
+                            .iter()
+                            .find(|p| &p.key() == parent_key);
+                        let Some(parent) = parent else { continue };
+                        let psym = db.get_element_symbol(parent.z);
+                        let notation =
+                            format_decay_notation(&psym, parent.a, &parent.state, mode);
+                        if seen.insert(notation.clone()) {
+                            decay_notations.push(notation);
+                        }
+                    }
+                }
+            }
+
             new_results.insert(
                 name.clone(),
                 IsotopeResult {
@@ -417,7 +479,7 @@ fn apply_chain_solver_by_component(
                     activity_direct_vs_time_bq: direct_activity.clone(),
                     activity_ingrowth_vs_time_bq: ingrowth_activity.clone(),
                     reactions: existing.map(|e| e.reactions.clone()).unwrap_or_default(),
-                    decay_notations: Vec::new(),
+                    decay_notations,
                 },
             );
         }
@@ -436,4 +498,152 @@ fn integrate_heat(profile: &[DepthPoint], area_cm2: f64) -> f64 {
 
     let power_w = area_cm2 * trapezoid(&heat, &depths);
     power_w * 1e-3 // W -> kW
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::InMemoryDataStore;
+    use std::collections::HashMap;
+
+    #[test]
+    fn superscript_and_nuc_label() {
+        assert_eq!(to_superscript("27"), "²⁷");
+        assert_eq!(to_superscript("99m"), "⁹⁹ᵐ");
+        assert_eq!(nuc_label("Mo", 99, ""), "⁹⁹Mo");
+        assert_eq!(nuc_label("Tc", 99, "m"), "⁹⁹ᵐTc");
+        assert_eq!(format_decay_notation("Mo", 99, "", "β-"), "⁹⁹Mo(β-)");
+    }
+
+    /// Build an `InMemoryDataStore` wired for a synthetic A → B → C chain
+    /// where only A is directly produced. Half-lives are chosen so the
+    /// ingrowth solver populates both B and C at EOI.
+    fn make_chain_db() -> InMemoryDataStore {
+        let mut db = InMemoryDataStore::new("test");
+        // Use invented Z values that won't collide with real elements.
+        db.add_element(101, "AAA");
+        db.add_element(102, "BBB");
+        db.add_element(103, "CCC");
+
+        // A(Z=101,A=100) —β⁻→ B(Z=102,A=100) —β⁻→ C(Z=103,A=100) [stable]
+        db.add_decay_data(DecayData {
+            z: 101,
+            a: 100,
+            state: String::new(),
+            half_life_s: Some(60.0),
+            decay_modes: vec![DecayMode {
+                mode: "β-".to_string(),
+                daughter_z: Some(102),
+                daughter_a: Some(100),
+                daughter_state: String::new(),
+                branching: 1.0,
+            }],
+        });
+        db.add_decay_data(DecayData {
+            z: 102,
+            a: 100,
+            state: String::new(),
+            half_life_s: Some(120.0),
+            decay_modes: vec![DecayMode {
+                mode: "β-".to_string(),
+                daughter_z: Some(103),
+                daughter_a: Some(100),
+                daughter_state: String::new(),
+                branching: 1.0,
+            }],
+        });
+        // C is radioactive with a long half-life so the ingrowth fraction is
+        // non-negligible at EOI (otherwise `has_ingrowth` would be false and
+        // decay_notations would not be populated). Decays to a stable dummy.
+        db.add_decay_data(DecayData {
+            z: 103,
+            a: 100,
+            state: String::new(),
+            half_life_s: Some(3600.0),
+            decay_modes: vec![DecayMode {
+                mode: "β-".to_string(),
+                daughter_z: Some(104),
+                daughter_a: Some(100),
+                daughter_state: String::new(),
+                branching: 1.0,
+            }],
+        });
+        db.add_decay_data(DecayData {
+            z: 104,
+            a: 100,
+            state: String::new(),
+            half_life_s: None,
+            decay_modes: vec![],
+        });
+        db
+    }
+
+    #[test]
+    fn daughter_decay_notations_mention_parent() {
+        let db = make_chain_db();
+
+        // Seed: A is directly produced at 1e6 atoms/s.
+        let mut direct: HashMap<String, IsotopeResult> = HashMap::new();
+        direct.insert(
+            "AAA-100".to_string(),
+            IsotopeResult {
+                name: "AAA-100".to_string(),
+                z: 101,
+                a: 100,
+                state: String::new(),
+                half_life_s: Some(60.0),
+                production_rate: 1.0e6,
+                saturation_yield_bq_ua: 0.0,
+                activity_bq: 0.0,
+                time_grid_s: vec![0.0, 600.0],
+                activity_vs_time_bq: vec![0.0, 0.0],
+                source: "direct".to_string(),
+                activity_direct_bq: 0.0,
+                activity_ingrowth_bq: 0.0,
+                activity_direct_vs_time_bq: Vec::new(),
+                activity_ingrowth_vs_time_bq: Vec::new(),
+                reactions: Vec::new(),
+                decay_notations: Vec::new(),
+            },
+        );
+
+        let results = apply_chain_solver_by_component(
+            &db, direct, 600.0, 0.0, 1.0e13, None, 1.0,
+        );
+
+        // B is a daughter-only isotope fed by A; its decay_notations must
+        // mention A via the parent nuclide format.
+        let b = results
+            .get("BBB-100")
+            .expect("daughter B should appear in chain solver output");
+        assert!(
+            b.decay_notations.iter().any(|s| s.contains("AAA")),
+            "B.decay_notations should reference parent A; got {:?}",
+            b.decay_notations
+        );
+        assert!(
+            b.decay_notations.iter().any(|s| s.contains("¹⁰⁰")),
+            "B.decay_notations should use unicode superscript mass number; got {:?}",
+            b.decay_notations
+        );
+
+        // C is fed by B → decay_notations should mention B.
+        let c = results
+            .get("CCC-100")
+            .expect("grand-daughter C should appear in chain solver output");
+        assert!(
+            c.decay_notations.iter().any(|s| s.contains("BBB")),
+            "C.decay_notations should reference parent B; got {:?}",
+            c.decay_notations
+        );
+
+        // And the direct isotope A should have no decay_notations — it's not
+        // an ingrowth isotope.
+        let a = results.get("AAA-100").expect("A must survive");
+        assert!(
+            a.decay_notations.is_empty(),
+            "direct-only isotope A should have empty decay_notations, got {:?}",
+            a.decay_notations
+        );
+    }
 }
