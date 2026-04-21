@@ -289,25 +289,8 @@ fn compute_layer(
         );
     }
 
-    // Clamp activities
-    for iso in isotope_results.values_mut() {
-        if let Some(hl) = iso.half_life_s {
-            if hl > 0.0 {
-                let lambda = LN2 / hl;
-                let max_activity = iso.production_rate * lambda * irr_time;
-                if max_activity > 0.0 {
-                    for a in iso.activity_vs_time_bq.iter_mut() {
-                        if *a > max_activity {
-                            *a = max_activity;
-                        }
-                    }
-                    if iso.activity_bq > max_activity {
-                        iso.activity_bq = max_activity;
-                    }
-                }
-            }
-        }
-    }
+    // Clamp activities to physical saturation R * (1 - exp(-λ t_irr)).
+    clamp_activities_to_saturation(&mut isotope_results, irr_time);
 
     // Materialize the pre-computed depth profile into DepthPoint records.
     let mut depth_profile = Vec::with_capacity(depth_raw.depths.len());
@@ -474,4 +457,197 @@ fn integrate_heat(profile: &[DepthPoint], area_cm2: f64) -> f64 {
 
     let power_w = area_cm2 * trapezoid(&heat, &depths);
     power_w * 1e-3 // W -> kW
+}
+
+/// Clamp each isotope's activity time-series and scalar activities to the
+/// physical saturation value `R * (1 - exp(-λ t_irr))`, where `R` is the
+/// isotope's production rate and `t_irr` is the irradiation time.
+///
+/// The previous implementation used the small-λt_irr approximation
+/// `R * λ * t_irr` as a universal upper bound, which for short-lived isotopes
+/// with long irradiations (e.g. ¹⁵O @ 2 h has λt_irr ≈ 40.7) could be dozens
+/// of times larger than the true saturation value. That loose bound let
+/// transient peaks from the chain solver's matrix-exponential leak into the
+/// reported `activity_vs_time_bq` series (see issue #55).
+///
+/// In the small-λt_irr limit `(1 - exp(-λt_irr)) → λt_irr`, so for stable or
+/// very long-lived isotopes this preserves the prior behaviour.
+fn clamp_activities_to_saturation(
+    isotope_results: &mut HashMap<String, IsotopeResult>,
+    irr_time: f64,
+) {
+    for iso in isotope_results.values_mut() {
+        let Some(hl) = iso.half_life_s else { continue };
+        if hl <= 0.0 {
+            continue;
+        }
+        let lambda = LN2 / hl;
+        let max_activity = iso.production_rate * (1.0 - (-lambda * irr_time).exp());
+        if !(max_activity > 0.0) {
+            continue;
+        }
+        for a in iso.activity_vs_time_bq.iter_mut() {
+            if *a > max_activity {
+                *a = max_activity;
+            }
+        }
+        for a in iso.activity_direct_vs_time_bq.iter_mut() {
+            if *a > max_activity {
+                *a = max_activity;
+            }
+        }
+        for a in iso.activity_ingrowth_vs_time_bq.iter_mut() {
+            if *a > max_activity {
+                *a = max_activity;
+            }
+        }
+        if iso.activity_bq > max_activity {
+            iso.activity_bq = max_activity;
+        }
+        if iso.activity_direct_bq > max_activity {
+            iso.activity_direct_bq = max_activity;
+        }
+        if iso.activity_ingrowth_bq > max_activity {
+            iso.activity_ingrowth_bq = max_activity;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal IsotopeResult for clamp tests.
+    fn iso_with(
+        name: &str,
+        half_life_s: f64,
+        production_rate: f64,
+        activity_vs_time: Vec<f64>,
+    ) -> IsotopeResult {
+        let n = activity_vs_time.len();
+        IsotopeResult {
+            name: name.to_string(),
+            z: 8,
+            a: 15,
+            state: String::new(),
+            half_life_s: Some(half_life_s),
+            production_rate,
+            saturation_yield_bq_ua: 0.0,
+            activity_bq: *activity_vs_time.last().unwrap_or(&0.0),
+            time_grid_s: (0..n).map(|i| i as f64).collect(),
+            activity_vs_time_bq: activity_vs_time.clone(),
+            source: "direct".to_string(),
+            activity_direct_bq: *activity_vs_time.last().unwrap_or(&0.0),
+            activity_ingrowth_bq: 0.0,
+            activity_direct_vs_time_bq: activity_vs_time.clone(),
+            activity_ingrowth_vs_time_bq: vec![0.0; n],
+            reactions: Vec::new(),
+            decay_notations: Vec::new(),
+        }
+    }
+
+    /// Regression test for issue #55.
+    ///
+    /// ¹⁵O-like parameters: t½ = 122 s, 2 h irradiation, R = 1.29e11 atoms/s.
+    /// Physical saturation is R * (1 - exp(-λ t_irr)) ≈ R (since λ t_irr ≈ 40.7).
+    /// Simulated a chain-solver transient peak at 40× R — the old clamp
+    /// (R * λ * t_irr) let it through, the new clamp must catch it.
+    #[test]
+    fn clamp_catches_short_lived_transient_peak() {
+        let half_life_s: f64 = 122.0;
+        let irr_time: f64 = 7200.0; // 2 h
+        let r: f64 = 1.29e11;
+
+        let lambda = LN2 / half_life_s;
+        let saturation = r * (1.0 - (-lambda * irr_time).exp());
+
+        // Synthetic activity trace with a spurious 40× R transient peak in the
+        // middle (mimics the matrix-exponential inflation described in #55).
+        let mut activity = vec![0.0; 21];
+        for (i, a) in activity.iter_mut().enumerate() {
+            let t = (i as f64) * (irr_time / 20.0);
+            // Physical Bateman build-up...
+            *a = r * (1.0 - (-lambda * t).exp());
+        }
+        // ...with a spurious transient 40× R peak at the 5th sample.
+        activity[5] = 40.0 * r;
+
+        let mut results = HashMap::new();
+        results.insert(
+            "O-15".to_string(),
+            iso_with("O-15", half_life_s, r, activity),
+        );
+
+        clamp_activities_to_saturation(&mut results, irr_time);
+
+        let clamped = &results["O-15"].activity_vs_time_bq;
+        let max_clamped = clamped.iter().cloned().fold(0.0_f64, f64::max);
+
+        // 5% margin for Bateman saturation approach.
+        assert!(
+            max_clamped <= 1.05 * r,
+            "max activity {max_clamped:.3e} exceeds 1.05 * R = {:.3e}",
+            1.05 * r
+        );
+        // And it must be at least the physical saturation (no over-clamp).
+        assert!(
+            (max_clamped - saturation).abs() / saturation < 1e-9,
+            "clamp should leave saturation untouched: got {max_clamped:.6e}, expected {saturation:.6e}"
+        );
+    }
+
+    /// Small-λt_irr limit: new clamp must match the old R*λ*t formula to
+    /// first order, so stable/long-lived isotopes are unchanged.
+    #[test]
+    fn clamp_matches_old_formula_in_small_lambda_t_limit() {
+        let half_life_s: f64 = 1.0e10; // effectively stable
+        let irr_time: f64 = 3600.0; // 1 h
+        let r: f64 = 1.0e9;
+
+        let lambda = LN2 / half_life_s;
+        let new_bound = r * (1.0 - (-lambda * irr_time).exp());
+        let old_bound = r * lambda * irr_time;
+
+        // Within 1e-6 relative — pure first-order Taylor limit.
+        assert!(
+            (new_bound - old_bound).abs() / old_bound < 1e-6,
+            "new_bound={new_bound:.6e}, old_bound={old_bound:.6e}"
+        );
+    }
+
+    /// Clamp must also apply to direct and ingrowth decomposition.
+    #[test]
+    fn clamp_applies_to_direct_and_ingrowth_series() {
+        let half_life_s: f64 = 122.0;
+        let irr_time: f64 = 7200.0;
+        let r: f64 = 1.0e11;
+        let lambda = LN2 / half_life_s;
+        let saturation = r * (1.0 - (-lambda * irr_time).exp());
+
+        let mut iso = iso_with("O-15", half_life_s, r, vec![0.5 * r, 1.5 * r, 50.0 * r]);
+        iso.activity_direct_vs_time_bq = vec![0.3 * r, 0.8 * r, 45.0 * r];
+        iso.activity_ingrowth_vs_time_bq = vec![0.1 * r, 0.3 * r, 10.0 * r];
+        iso.activity_direct_bq = 45.0 * r;
+        iso.activity_ingrowth_bq = 10.0 * r;
+        iso.activity_bq = 50.0 * r;
+
+        let mut results = HashMap::new();
+        results.insert("O-15".to_string(), iso);
+
+        clamp_activities_to_saturation(&mut results, irr_time);
+
+        let iso = &results["O-15"];
+        for a in iso.activity_vs_time_bq.iter() {
+            assert!(*a <= saturation * (1.0 + 1e-12));
+        }
+        for a in iso.activity_direct_vs_time_bq.iter() {
+            assert!(*a <= saturation * (1.0 + 1e-12));
+        }
+        for a in iso.activity_ingrowth_vs_time_bq.iter() {
+            assert!(*a <= saturation * (1.0 + 1e-12));
+        }
+        assert!(iso.activity_bq <= saturation * (1.0 + 1e-12));
+        assert!(iso.activity_direct_bq <= saturation * (1.0 + 1e-12));
+        assert!(iso.activity_ingrowth_bq <= saturation * (1.0 + 1e-12));
+    }
 }
