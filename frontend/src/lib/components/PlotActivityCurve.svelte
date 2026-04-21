@@ -6,6 +6,7 @@
   import { bestActivityUnit, bestTimeUnit, nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
+  import { aggregateByIsotopeName } from "../plotting/aggregate-isotopes";
 
   interface Props {
     result: SimulationResult;
@@ -23,6 +24,9 @@
   let useEOBTime = $state(false);
   let rnpMode = $state(false);
   let rnpIsotope = $state("");
+  // Default: one trace per isotope name (summed across layers).
+  // When true, fall back to one trace per (layer, isotope) pair.
+  let expandPerLayer = $state<boolean>(false);
 
   let selected = $derived(getSelectedIsotopes());
   let sharedFilter = $derived(getIsotopeFilter());
@@ -110,6 +114,7 @@
     const _eob = useEOBTime;
     const _rnp = rnpMode;
     const _rnpIso = rnpIsotope;
+    const _expand = expandPerLayer;
     const _filter = JSON.stringify(sharedFilter);
     const _theme = getResolvedTheme();
     if (p && div) render();
@@ -170,18 +175,50 @@
       }
     }
 
-    // Filter by selection or top 15
-    if (selected.size > 0) {
-      isosToPlot = isosToPlot.filter(({ iso }) => selected.has(iso.name));
+    // Build the series list — either one-per-(layer,isotope) (expanded) or
+    // one-per-isotope-name (default, summed across layers).
+    type Series = {
+      /** Isotope name used for selection matching & legendVisibility key. */
+      name: string;
+      /** Display label shown in the legend. */
+      label: string;
+      time_grid_s: number[];
+      activity_vs_time_Bq: number[];
+      /** End-of-cooling activity used for top-N ranking. */
+      activity_Bq: number;
+    };
+
+    let series: Series[];
+    if (expandPerLayer) {
+      series = isosToPlot.map(({ iso, layerIdx }) => ({
+        name: iso.name,
+        label: `${nucLabel(iso.name)} (L${layerIdx + 1})`,
+        time_grid_s: iso.time_grid_s!,
+        activity_vs_time_Bq: iso.activity_vs_time_Bq!,
+        activity_Bq: iso.activity_Bq,
+      }));
     } else {
-      isosToPlot.sort((a, b) => b.iso.activity_Bq - a.iso.activity_Bq);
-      isosToPlot = isosToPlot.slice(0, 15);
+      series = aggregateByIsotopeName(isosToPlot).map((agg) => ({
+        name: agg.name,
+        label: nucLabel(agg.name),
+        time_grid_s: agg.time_grid_s,
+        activity_vs_time_Bq: agg.activity_vs_time_Bq,
+        activity_Bq: agg.activity_Bq,
+      }));
+    }
+
+    // Filter by selection (match on isotope name, mode-agnostic) or top 15
+    if (selected.size > 0) {
+      series = series.filter((s) => selected.has(s.name));
+    } else {
+      series.sort((a, b) => b.activity_Bq - a.activity_Bq);
+      series = series.slice(0, 15);
     }
 
     // Determine units
     let globalMax = 0;
-    for (const { iso } of isosToPlot) {
-      for (const a of iso.activity_vs_time_Bq!) {
+    for (const s of series) {
+      for (const a of s.activity_vs_time_Bq) {
         if (a > globalMax) globalMax = a;
       }
     }
@@ -191,19 +228,18 @@
     const traces: any[] = [];
     let colorIdx = 0;
 
-    for (const { iso } of isosToPlot) {
-      const times = iso.time_grid_s!.map((t) => (t - timeOffset) / timeDiv);
-      const activities = iso.activity_vs_time_Bq!.map((a) => a / actDiv);
+    for (const s of series) {
+      const times = s.time_grid_s.map((t) => (t - timeOffset) / timeDiv);
+      const activities = s.activity_vs_time_Bq.map((a) => a / actDiv);
 
-      const traceName = nucLabel(iso.name);
       traces.push({
         x: times,
         y: activities,
-        name: traceName,
+        name: s.label,
         type: "scatter",
         mode: "lines",
         line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
-        visible: legendVisibility.get(traceName) ?? true,
+        visible: legendVisibility.get(s.label) ?? true,
       });
       colorIdx++;
     }
@@ -385,6 +421,17 @@
     </button>
     <button class="ctrl-btn" class:active={useEOBTime} onclick={() => { useEOBTime = !useEOBTime; }}>
       t from EOB
+    </button>
+
+    <div class="separator"></div>
+
+    <button
+      class="ctrl-btn"
+      class:active={expandPerLayer}
+      title={expandPerLayer ? "Group by isotope (sum across layers)" : "Expand per layer"}
+      onclick={() => { expandPerLayer = !expandPerLayer; }}
+    >
+      {expandPerLayer ? "Group by isotope" : "Expand per layer"}
     </button>
 
     <div class="separator"></div>
