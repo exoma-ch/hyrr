@@ -39,6 +39,27 @@
   );
   let canOpenGitHub = $derived((description.trim().length > 0 || screenshot !== null) && !submitting);
 
+  // Localhost / dev: the Cloudflare Turnstile widget doesn't validate and the
+  // worker rejects submissions, so the direct Submit path is dead. Fall
+  // back to Open-on-GitHub / Mailto. Detect common dev hosts.
+  let isLocalhost = $derived.by(() => {
+    if (typeof window === "undefined") return false;
+    const h = window.location.hostname;
+    return h === "localhost" || h === "127.0.0.1" || h === "" || h === "0.0.0.0" || h.endsWith(".local");
+  });
+
+  const MAILTO_TARGET: string = ((import.meta.env as Record<string, string | undefined>).VITE_BUG_REPORT_EMAIL) ?? "";
+
+  function openMailto() {
+    if (!canOpenGitHub) return;
+    const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
+    const subj = `${prefix} ${description.slice(0, 70)}`;
+    const body = buildBody();
+    const qs = new URLSearchParams({ subject: subj, body }).toString();
+    const to = MAILTO_TARGET;
+    window.location.href = `mailto:${to}?${qs}`;
+  }
+
   /** Wait for the Turnstile API to become available (loaded async). */
   function waitForTurnstile(timeout = 5000): Promise<boolean> {
     if (typeof window.turnstile !== "undefined") return Promise.resolve(true);
@@ -433,6 +454,13 @@
         </p>
       {/if}
 
+      {#if isLocalhost && !desktop}
+        <p class="hint">
+          Running locally — direct submit is disabled (Turnstile can't validate).
+          Use <strong>Open on GitHub</strong>{MAILTO_TARGET ? " or " : ""}{#if MAILTO_TARGET}<strong>Email</strong>{/if}.
+        </p>
+      {/if}
+
       <div class="actions">
         <button class="cancel-btn" onclick={closeBugReport}>Cancel</button>
         {#if desktop}
@@ -461,7 +489,17 @@
           >
             Open on GitHub
           </button>
-          {#if WORKER_URL}
+          {#if MAILTO_TARGET}
+            <button
+              class="gh-btn"
+              onclick={openMailto}
+              disabled={!canOpenGitHub}
+              title="Send via your email client"
+            >
+              Email
+            </button>
+          {/if}
+          {#if WORKER_URL && !isLocalhost}
             <button
               class="submit-btn"
               onclick={submitViaWorker}

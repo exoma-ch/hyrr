@@ -34,6 +34,11 @@
   import { saveRun } from "./lib/history-db";
   import { restoreSessions, syncActiveTab, getActiveTabId } from "./lib/stores/sessions.svelte";
   import { setCustomDensityLookup, setCustomCompositionLookup } from "./lib/compute/materials";
+  import {
+    setCustomDensityLookup as setPkgCustomDensityLookup,
+    setCustomCompositionLookup as setPkgCustomCompositionLookup,
+  } from "@hyrr/compute";
+  import { setCustomMaterialExpander } from "./lib/compute/backend";
   import { getCustomMaterials, loadCustomMaterials } from "./lib/stores/custom-materials.svelte";
 
   // New components
@@ -71,6 +76,7 @@
   let materialPopupOpen = $state(false);
   let materialPopupLayerIndex = $state(0);
   let materialPopupEditId = $state<string | null>(null);
+  let materialPopupCurrent = $state<string>("");
   let elementPopupOpen = $state(false);
   let elementPopupSymbol = $state("");
   let elementPopupEnrichment = $state<Record<number, number> | undefined>(undefined);
@@ -131,15 +137,30 @@
       restoreSerializableConfig(urlConfig);
     }
 
-    // Load custom materials and register density lookup
+    // Load custom materials and register density lookup in both material
+    // resolvers — `./lib/compute/materials` is the older local one,
+    // `@hyrr/compute` is the shared package that `resolveMaterial` in
+    // components (IsotopePopup, MaterialPopup inspect) actually calls.
+    // Registering only the local one silently drops custom lookups, which
+    // manifested as "No density for X-custom" warnings after saving
+    // clone-as-custom materials.
     await loadCustomMaterials();
-    setCustomDensityLookup((identifier) => {
+    const densityFn = (identifier: string): number | null => {
       const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
       return cm ? cm.density : null;
-    });
-    setCustomCompositionLookup((identifier) => {
+    };
+    const compositionFn = (identifier: string): Record<string, number> | null => {
       const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
       return cm?.massFractions ?? null;
+    };
+    setCustomDensityLookup(densityFn);
+    setCustomCompositionLookup(compositionFn);
+    setPkgCustomDensityLookup(densityFn);
+    setPkgCustomCompositionLookup(compositionFn);
+    // Rust/WASM engine doesn't know custom materials — expand to formula.
+    setCustomMaterialExpander((name) => {
+      const cm = getCustomMaterials().find((m) => m.name === name);
+      return cm ? cm.formula : null;
     });
 
     loadingState = "Ready";
@@ -200,6 +221,7 @@
     }
     const cm = mat ? getCustomMaterials().find((m) => m.name === mat || m.formula === mat) : null;
     materialPopupEditId = cm?.id ?? null;
+    materialPopupCurrent = mat ?? "";
     materialPopupOpen = true;
   }
 
@@ -344,6 +366,7 @@
         : (() => { const item = getInternalItems()[materialPopupLayerIndex]; return item && !('mode' in item) ? item.enrichment : undefined; })()}
       materials={[]}
       editMaterialId={materialPopupEditId}
+      currentMaterial={materialPopupCurrent}
     />
 
     <ElementPopup

@@ -217,6 +217,7 @@ pub fn solve_chain(
             activities: Vec::new(),
             activities_direct: Vec::new(),
             activities_ingrowth: Vec::new(),
+            parent_info: Vec::new(),
         };
     }
 
@@ -421,6 +422,25 @@ pub fn solve_chain(
         })
         .collect();
 
+    // Build parent-info: for each daughter index, record every parent in the
+    // chain that feeds into it via a decay mode, together with the branching
+    // ratio and the raw decay-mode label. Outer index matches `chain[i]`.
+    let mut parent_info: Vec<Vec<(String, f64, String)>> = vec![Vec::new(); n];
+    for parent in chain.iter() {
+        for mode in &parent.decay_modes {
+            let (Some(dz), Some(da)) = (mode.daughter_z, mode.daughter_a) else {
+                continue;
+            };
+            if mode.mode == "stable" {
+                continue;
+            }
+            let dkey = format!("{}-{}-{}", dz, da, mode.daughter_state);
+            if let Some(&di) = idx.get(&dkey) {
+                parent_info[di].push((parent.key(), mode.branching, mode.mode.clone()));
+            }
+        }
+    }
+
     ChainSolution {
         isotopes: chain.to_vec(),
         time_grid_s: time_grid,
@@ -428,6 +448,7 @@ pub fn solve_chain(
         activities,
         activities_direct,
         activities_ingrowth,
+        parent_info,
     }
 }
 
