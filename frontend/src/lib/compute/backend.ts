@@ -99,10 +99,33 @@ export async function initBackend(
  * Run a full stack simulation.
  * Routes to the active backend automatically.
  */
+/** Optional hook injected by the UI so the compute backend can expand custom
+ *  material names (e.g. "H2O-custom") into something the Rust resolver can
+ *  handle. Returns the formula to substitute, or null to leave unchanged. */
+let customMaterialExpander: ((name: string) => string | null) | null = null;
+export function setCustomMaterialExpander(fn: (name: string) => string | null): void {
+  customMaterialExpander = fn;
+}
+
+function expandCustomMaterials(config: SimulationConfig): SimulationConfig {
+  if (!customMaterialExpander) return config;
+  const expand = customMaterialExpander;
+  const layers = config.layers.map((layer) => {
+    const formula = expand(layer.material);
+    return formula && formula !== layer.material ? { ...layer, material: formula } : layer;
+  });
+  return { ...config, layers };
+}
+
 export async function computeStackBackend(
   config: SimulationConfig,
 ): Promise<SimulationResult> {
-  const configJson = JSON.stringify(config);
+  // Rust/WASM resolve_material doesn't know user-defined custom materials;
+  // expand them to their base formula first. Stoichiometric customs
+  // (e.g. H2O-custom → "H2O") resolve cleanly; wt%-based customs fall
+  // back to formula with element-density heuristic (not exact wt%).
+  const expanded = expandCustomMaterials(config);
+  const configJson = JSON.stringify(expanded);
 
   switch (activeBackend) {
     case "tauri": {

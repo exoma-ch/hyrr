@@ -217,8 +217,10 @@
       // Use name as layer identifier so resolveMaterial can look up stored composition
       onselect(nameVal, currentEnrichment);
       onclose();
-    } catch {
-      formulaError = "Failed to save";
+    } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      console.error("[material-popup] save failed", e);
+      formulaError = `Failed to save: ${msg}`;
     } finally {
       saving = false;
     }
