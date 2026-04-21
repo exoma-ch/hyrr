@@ -109,12 +109,12 @@
     position: absolute;
     top: calc(100% + 4px);
     right: 0;
-    min-width: 230px;
-    background: var(--c-bg-default, var(--c-bg));
+    min-width: 260px;
+    background: var(--c-bg-subtle);
     border: 1px solid var(--c-border);
     border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-    z-index: 200;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    z-index: 1000;
     padding: 4px;
     display: flex;
     flex-direction: column;
@@ -128,10 +128,11 @@
     color: var(--c-text);
     font-size: 0.8rem;
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    align-items: baseline;
     gap: 0.5rem;
+    width: 100%;
   }
   .menu-item:hover {
     background: var(--c-bg-muted);
@@ -139,5 +140,6 @@
   .hint {
     color: var(--c-text-muted);
     font-size: 0.7rem;
+    line-height: 1.2;
   }
 </style>

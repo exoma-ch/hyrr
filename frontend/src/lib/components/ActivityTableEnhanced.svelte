@@ -457,12 +457,12 @@
     position: absolute;
     top: calc(100% + 4px);
     right: 0;
-    min-width: 230px;
-    background: var(--c-bg-default, var(--c-bg));
+    min-width: 260px;
+    background: var(--c-bg-subtle);
     border: 1px solid var(--c-border);
     border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-    z-index: 200;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    z-index: 1000;
     padding: 4px;
     display: flex;
     flex-direction: column;
