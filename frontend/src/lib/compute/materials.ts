@@ -46,7 +46,9 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
       W: 0.028, Mo: 0.02, Mn: 0.016, C: 0.002,
     },
     role: "structural",
-    notes: "Cobalt-based alloy, common beam-window material",
+    notes:
+      "Cobalt-based alloy, common beam-window material. Co dust is an IARC" +
+      " 2A carcinogen — machining/grinding is controlled in many jurisdictions",
   },
 
   // ─── Monitor foils (natural composition) ───────────────────────────
@@ -96,30 +98,39 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
   "zn68-electrodeposit": {
     density: 7.13,
     massFractions: { Zn: 1.0 },
-    defaultEnrichment: { Zn: { 68: 0.98, 66: 0.015, 67: 0.003, 64: 0.002 } },
+    // Typical commercial 98% 68Zn remainder (Trace Sciences / Isoflex specs):
+    defaultEnrichment: { Zn: { 68: 0.982, 66: 0.01, 67: 0.004, 64: 0.003, 70: 0.001 } },
     role: "target",
     notes: "68Zn electrodeposit at 98% enrichment; 68Zn(p,n)68Ga",
   },
   "ni64-electrodeposit": {
     density: 8.91,
     massFractions: { Ni: 1.0 },
-    defaultEnrichment: { Ni: { 64: 0.95, 62: 0.03, 60: 0.015, 58: 0.005 } },
+    // Typical commercial 95% 64Ni remainder: 60Ni > 62Ni > 58Ni (per supplier specs).
+    defaultEnrichment: { Ni: { 64: 0.95, 60: 0.025, 62: 0.02, 58: 0.005 } },
     role: "target",
     notes: "64Ni electrodeposit at 95% enrichment; 64Ni(p,n)64Cu",
   },
   "mo100-pellet": {
-    density: 10.28,
+    // Sintered pressed-powder pellet typical bulk density 9.0–9.8 g/cm³
+    // (domain review: 70–85% of bulk Mo = 7.2–8.7 pre-sinter; 9.5+ sintered).
+    density: 9.5,
     massFractions: { Mo: 1.0 },
     defaultEnrichment: { Mo: { 100: 0.96, 98: 0.02, 97: 0.01, 96: 0.01 } },
     role: "target",
-    notes: "100Mo pressed pellet at 96% enrichment; 100Mo(p,2n)99mTc",
+    notes:
+      "100Mo sintered pressed-powder pellet at 96% enrichment; 100Mo(p,2n)99mTc." +
+      " Irradiated pellets accumulate long-lived 93mNb contaminants",
   },
-  "ca44-target": {
-    density: 1.55,
-    massFractions: { Ca: 1.0 },
+  "ca44-carbonate": {
+    // 44CaCO3 pressed pellet — the practical delivered form. Ca metal targets
+    // are not used in medical isotope practice (air-reactive, low m.p.).
+    // M(CaCO3) = 40.078 + 12.011 + 3*15.999 = 100.086
+    density: 2.80,
+    massFractions: { Ca: 0.40045, C: 0.12001, O: 0.47954 },
     defaultEnrichment: { Ca: { 44: 0.97, 40: 0.025, 42: 0.003, 48: 0.002 } },
     role: "target",
-    notes: "44Ca target at 97% enrichment; 44Ca(p,n)44Sc for PET",
+    notes: "44CaCO3 pressed pellet at 97% enrichment on Ca; 44Ca(p,n)44Sc for PET",
   },
   "ra226-target": {
     density: 5.50,
@@ -127,8 +138,9 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
     defaultEnrichment: { Ra: { 226: 1.0 } },
     role: "target",
     notes:
-      "226Ra target (monoisotopic); α-emitter precursor — licensing + handling" +
-      " restrictions apply (226Ra is a high-radiotoxicity source)",
+      "226Ra (bulk-metal density; practical form is RaCl2 or Ra(NO3)2 on a" +
+      " backing — override density for your actual form). α-emitter precursor;" +
+      " licensing + handling restrictions apply (high radiotoxicity)",
   },
   "th232-target": {
     density: 11.72,
@@ -142,11 +154,12 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
   "u238-target": {
     density: 19.05,
     massFractions: { U: 1.0 },
-    defaultEnrichment: { U: { 238: 0.9975, 235: 0.0025 } },
+    // Depleted U with trace 234U (commercial typical 5–10 ppm).
+    defaultEnrichment: { U: { 238: 0.99749, 235: 0.0025, 234: 0.00001 } },
     role: "target",
     notes:
-      "Depleted U target (~0.25% 235U); route to 99Mo via fission. Export +" +
-      " licensing controls apply",
+      "Depleted U target (~0.25% 235U, trace 234U); route to 99Mo via fission." +
+      " Export + licensing controls apply",
   },
   natu: {
     density: 19.05,
