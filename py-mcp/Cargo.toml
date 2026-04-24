@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "PyO3 wrapper around hyrr-core's MCP server for uvx distribution"
 license = "MIT"
+# Keep the nix-libiconv dev workaround out of published sdists.
+exclude = [".cargo/**", "python/hyrr_mcp/__pycache__/**"]
 
 [lib]
 name = "_native"
