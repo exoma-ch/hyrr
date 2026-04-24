@@ -409,15 +409,18 @@ fn tool_list_materials() -> Result<String, String> {
     output.push_str("# Available Materials\n\n");
 
     output.push_str("## Named Alloys\n\n");
-    for (name, entry) in MATERIAL_CATALOG.iter() {
+    let mut alloys: Vec<_> = MATERIAL_CATALOG.iter().collect();
+    alloys.sort_by_key(|(name, _)| *name);
+    for (name, entry) in alloys {
+        let mut fractions: Vec<_> = entry.mass_fractions.iter().collect();
+        fractions.sort_by_key(|(k, _)| *k);
         output.push_str(&format!(
             "- **{}** — density: {:.2} g/cm³, composition: {}\n",
             name,
             entry.density,
-            entry
-                .mass_fractions
+            fractions
                 .iter()
-                .map(|(k, v)| format!("{}: {:.1}%", k, v * 100.0))
+                .map(|(k, v)| format!("{}: {:.1}%", k, *v * 100.0))
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
