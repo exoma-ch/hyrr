@@ -1,5 +1,6 @@
 <script lang="ts">
   import Modal from "./Modal.svelte";
+  import InspectPanel from "./material/InspectPanel.svelte";
   import type { MaterialInfo } from "../types";
   import {
     getCustomMaterials,
@@ -366,12 +367,6 @@
     editingCustomId = entry.customId;
   }
 
-  /** Elements from current query for enrichment access. */
-  let queryElements = $derived.by(() => {
-    const q = query.trim();
-    if (!q) return [];
-    try { return Object.keys(parseFormula(q)); } catch { return []; }
-  });
 </script>
 
 <Modal {open} {onclose} title="Select Material">
@@ -392,18 +387,7 @@
     </div>
 
     <!-- Enrichment quick-access for current query -->
-    {#if queryElements.length > 0 && onenrichment}
-      <div class="enrichment-row">
-        <span class="enr-label">Isotopic enrichment:</span>
-        {#each queryElements as el}
-          <button
-            class="el-badge"
-            class:enriched={!!currentEnrichment?.[el]}
-            onclick={() => onenrichment?.(el)}
-          >{el}{#if currentEnrichment?.[el]}<span class="enr-dot"></span>{/if}</button>
-        {/each}
-      </div>
-    {/if}
+    <InspectPanel {query} {currentEnrichment} {onenrichment} />
 
     <!-- Results -->
     <ul class="results-list">
@@ -553,22 +537,6 @@
 
   .use-btn:hover { background: var(--c-green-emphasis); }
 
-  .enrichment-row {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    padding: 0.25rem 0.4rem;
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-  }
-
-  .enr-label {
-    font-size: 0.7rem;
-    color: var(--c-text-muted);
-    margin-right: 0.2rem;
-  }
-
   .el-badge {
     background: var(--c-bg-muted);
     border: 1px solid var(--c-border);
@@ -587,16 +555,6 @@
     border-color: var(--c-gold);
     color: var(--c-gold);
     background: var(--c-gold-tint-subtle);
-  }
-
-  .enr-dot {
-    display: inline-block;
-    width: 4px;
-    height: 4px;
-    background: var(--c-gold);
-    border-radius: 50%;
-    margin-left: 0.2rem;
-    vertical-align: middle;
   }
 
   .results-list {
