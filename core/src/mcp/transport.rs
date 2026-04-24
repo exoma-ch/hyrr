@@ -69,7 +69,7 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Run the MCP stdio server loop.
 pub fn run_mcp_server(data_dir: &str) {
-    let db = match hyrr_core::db::ParquetDataStore::new(data_dir, "tendl-2024") {
+    let db = match crate::db::ParquetDataStore::new(data_dir, "tendl-2024") {
         Ok(db) => db,
         Err(e) => {
             eprintln!("Failed to load nuclear data from {}: {}", data_dir, e);
@@ -109,7 +109,7 @@ pub fn run_mcp_server(data_dir: &str) {
 }
 
 fn handle_request(
-    db: &hyrr_core::db::ParquetDataStore,
+    db: &crate::db::ParquetDataStore,
     request: JsonRpcRequest,
 ) -> JsonRpcResponse {
     let id = request.id.clone();

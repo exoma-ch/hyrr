@@ -12,6 +12,8 @@ pub mod formula;
 pub mod interpolation;
 pub mod materials;
 pub mod math;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod matrix_exp;
 pub mod production;
 pub mod projectile;

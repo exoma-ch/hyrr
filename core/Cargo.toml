@@ -8,6 +8,7 @@ license = "MIT"
 [features]
 default = ["parquet-store"]
 parquet-store = ["dep:parquet", "dep:arrow"]
+mcp = ["parquet-store"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

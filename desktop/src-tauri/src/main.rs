@@ -3,7 +3,6 @@
 
 #[allow(non_snake_case)]
 mod commands;
-mod mcp;
 
 use std::sync::Mutex;
 
@@ -13,7 +12,7 @@ fn main() {
     if args.iter().any(|a| a == "--mcp") {
         // MCP mode: stdio JSON-RPC server, no GUI
         let data_dir = resolve_data_dir();
-        mcp::transport::run_mcp_server(&data_dir);
+        hyrr_core::mcp::transport::run_mcp_server(&data_dir);
         return;
     }
 

@@ -1,8 +1,8 @@
 //! MCP tool implementations for HYRR.
 
-use hyrr_core::db::DatabaseProtocol;
-use hyrr_core::materials::{resolve_material, ELEMENT_DENSITIES, MATERIAL_CATALOG};
-use hyrr_core::types::*;
+use crate::db::DatabaseProtocol;
+use crate::materials::{resolve_material, ELEMENT_DENSITIES, MATERIAL_CATALOG};
+use crate::types::*;
 use serde_json::Value;
 
 /// List all available MCP tools.
@@ -201,7 +201,7 @@ fn tool_simulate(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, Stri
         current_profile: None,
     };
 
-    let result = hyrr_core::compute::compute_stack(db, &mut stack, true);
+    let result = crate::compute::compute_stack(db, &mut stack, true);
 
     // Format as markdown
     let mut output = String::new();
