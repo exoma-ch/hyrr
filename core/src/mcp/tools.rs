@@ -88,6 +88,24 @@ pub fn list_tools() -> Vec<Value> {
             }
         }),
         serde_json::json!({
+            "name": "compare_simulations",
+            "description": "Run two simulations and compare first-layer isotope activities side-by-side. Useful for comparing beam energies, targets, or irradiation times.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "config_a": {
+                        "type": "object",
+                        "description": "First simulation config (same shape as simulate args, plus optional 'label')",
+                    },
+                    "config_b": {
+                        "type": "object",
+                        "description": "Second simulation config (same shape as simulate args, plus optional 'label')",
+                    }
+                },
+                "required": ["config_a", "config_b"]
+            }
+        }),
+        serde_json::json!({
             "name": "get_decay_data",
             "description": "Get decay data for a specific nuclide (half-life, decay modes, daughters).",
             "inputSchema": {
@@ -124,11 +142,19 @@ pub fn call_tool(
         "list_materials" => tool_list_materials(),
         "list_reaction_channels" => tool_list_reaction_channels(db, arguments),
         "get_decay_data" => tool_get_decay_data(db, arguments),
+        "compare_simulations" => tool_compare_simulations(db, arguments),
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
 
-fn tool_simulate(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+/// Parse a simulate-shaped args object and run compute_stack.
+///
+/// Shared by `simulate` and `compare_simulations` so their input
+/// schema stays a single definition site.
+fn build_and_run_sim(
+    db: &dyn DatabaseProtocol,
+    args: &Value,
+) -> Result<(TargetStack, crate::types::StackResult, String, f64, f64), String> {
     let projectile_str = args
         .get("projectile")
         .and_then(|v| v.as_str())
@@ -182,13 +208,12 @@ fn tool_simulate(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, Stri
         });
     }
 
-    // Default: first layer with thickness_cm or fallback
     if layers
         .iter()
         .all(|l| l.thickness_cm.is_none() && l.energy_out_mev.is_none())
     {
         if let Some(l) = layers.first_mut() {
-            l.thickness_cm = Some(0.1); // Default 1mm
+            l.thickness_cm = Some(0.1);
         }
     }
 
@@ -202,8 +227,14 @@ fn tool_simulate(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, Stri
     };
 
     let result = crate::compute::compute_stack(db, &mut stack, true);
+    Ok((stack, result, projectile_str.to_string(), energy_mev, current_ma))
+}
 
-    // Format as markdown
+fn tool_simulate(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+    let (stack, result, projectile_str, energy_mev, current_ma) = build_and_run_sim(db, args)?;
+    let irr_time = stack.irradiation_time_s;
+    let cool_time = stack.cooling_time_s;
+
     let mut output = String::new();
     output.push_str(&format!(
         "# HYRR Simulation Results\n\n**Beam:** {} at {:.1} MeV, {:.3} mA\n",
@@ -386,6 +417,74 @@ fn tool_get_decay_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String
             symbol, a, state
         )),
     }
+}
+
+fn tool_compare_simulations(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+    let config_a = args
+        .get("config_a")
+        .ok_or("Missing 'config_a'")?;
+    let config_b = args
+        .get("config_b")
+        .ok_or("Missing 'config_b'")?;
+
+    let label_a = config_a
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Config A")
+        .to_string();
+    let label_b = config_b
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Config B")
+        .to_string();
+
+    let (_stack_a, result_a, _, _, _) = build_and_run_sim(db, config_a)?;
+    let (_stack_b, result_b, _, _, _) = build_and_run_sim(db, config_b)?;
+
+    use std::collections::BTreeMap;
+    let mut iso_a: BTreeMap<String, f64> = BTreeMap::new();
+    let mut iso_b: BTreeMap<String, f64> = BTreeMap::new();
+
+    if let Some(lr) = result_a.layer_results.first() {
+        for (name, iso) in &lr.isotope_results {
+            iso_a.insert(name.clone(), iso.activity_bq);
+        }
+    }
+    if let Some(lr) = result_b.layer_results.first() {
+        for (name, iso) in &lr.isotope_results {
+            iso_b.insert(name.clone(), iso.activity_bq);
+        }
+    }
+
+    let mut all_names: Vec<String> = iso_a.keys().chain(iso_b.keys()).cloned().collect();
+    all_names.sort();
+    all_names.dedup();
+    all_names.sort_by(|a, b| {
+        let max_a = iso_a.get(a).copied().unwrap_or(0.0).max(iso_b.get(a).copied().unwrap_or(0.0));
+        let max_b = iso_a.get(b).copied().unwrap_or(0.0).max(iso_b.get(b).copied().unwrap_or(0.0));
+        max_b.partial_cmp(&max_a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut output = String::new();
+    output.push_str(&format!("# Comparison: {} vs {}\n\n", label_a, label_b));
+    output.push_str("First-layer isotope activities. Ratio column is B/A.\n\n");
+    output.push_str("| Isotope | Activity (A) [Bq] | Activity (B) [Bq] | Ratio B/A |\n");
+    output.push_str("|---------|-------------------|-------------------|-----------|\n");
+
+    for name in all_names.iter().take(30) {
+        let a = iso_a.get(name).copied().unwrap_or(0.0);
+        let b = iso_b.get(name).copied().unwrap_or(0.0);
+        let ratio = if a > 0.0 {
+            format!("{:.2}", b / a)
+        } else if b > 0.0 {
+            "∞".to_string()
+        } else {
+            "—".to_string()
+        };
+        output.push_str(&format!("| {} | {:.3e} | {:.3e} | {} |\n", name, a, b, ratio));
+    }
+
+    Ok(output)
 }
 
 fn format_halflife(seconds: f64) -> String {
