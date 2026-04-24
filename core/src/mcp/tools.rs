@@ -139,14 +139,36 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_isotope_production_curve",
-            "description": "Activity or depth profile for one named isotope from a simulation. `vs=time` returns buildup+cooling activity [Bq] vs time grid. `vs=cooling` returns the cooling tail only. `vs=depth` returns depth [cm] + local production rate [atoms/s/cm] for the first layer containing the isotope.",
+            "description": "Activity or depth profile for one named isotope from a simulation. `vs=time` returns buildup+cooling activity [Bq] vs time grid. `vs=cooling` returns the cooling tail only. `vs=depth` returns depth [cm] + local production rate [atoms/s/cm]. If multiple layers produce the same isotope, the curve is from the first such layer in beam order.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "energy_mev": { "type": "number" },
                     "current_ma": { "type": "number" },
-                    "layers": { "type": "array", "items": { "type": "object" } },
+                    "layers": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "material": { "type": "string" },
+                                "thickness_cm": { "type": "number" },
+                                "enrichment": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "element": { "type": "string" },
+                                            "A": { "type": "integer" },
+                                            "fraction": { "type": "number" }
+                                        },
+                                        "required": ["element", "A", "fraction"]
+                                    }
+                                }
+                            },
+                            "required": ["material"]
+                        }
+                    },
                     "irradiation_time_s": { "type": "number" },
                     "cooling_time_s": { "type": "number" },
                     "isotope": { "type": "string", "description": "Isotope name, e.g. 'Cu-64' or 'Mo-99'" },
