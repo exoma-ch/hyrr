@@ -88,6 +88,61 @@ pub fn list_tools() -> Vec<Value> {
             }
         }),
         serde_json::json!({
+            "name": "get_stack_energy_budget",
+            "description": "Per-layer energy degradation and heat deposition for a target stack. No activation/isotope math — use this to answer 'will this stack stop the beam?' or 'how much heat in layer N?' without running a full simulation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
+                    "energy_mev": { "type": "number" },
+                    "current_ma": { "type": "number" },
+                    "layers": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "material": { "type": "string" },
+                                "thickness_cm": { "type": "number" }
+                            },
+                            "required": ["material", "thickness_cm"]
+                        }
+                    }
+                },
+                "required": ["projectile", "energy_mev", "current_ma", "layers"]
+            }
+        }),
+        serde_json::json!({
+            "name": "get_stopping_power",
+            "description": "Material-level linear stopping power dE/dx [MeV/cm] at given energies, via Bragg additivity. Distinct from nucl-parquet-mcp's per-element PSTAR/ASTAR lookup.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
+                    "material": { "type": "string", "description": "Material name, formula, or alloy (e.g., 'Cu', 'MoO3', 'havar')" },
+                    "energies_mev": { "type": "array", "items": { "type": "number" } }
+                },
+                "required": ["projectile", "material", "energies_mev"]
+            }
+        }),
+        serde_json::json!({
+            "name": "get_isotope_production_curve",
+            "description": "Activity or depth profile for one named isotope from a simulation. `vs=time` returns buildup+cooling activity [Bq] vs time grid. `vs=cooling` returns the cooling tail only. `vs=depth` returns depth [cm] + local production rate [atoms/s/cm] for the first layer containing the isotope.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
+                    "energy_mev": { "type": "number" },
+                    "current_ma": { "type": "number" },
+                    "layers": { "type": "array", "items": { "type": "object" } },
+                    "irradiation_time_s": { "type": "number" },
+                    "cooling_time_s": { "type": "number" },
+                    "isotope": { "type": "string", "description": "Isotope name, e.g. 'Cu-64' or 'Mo-99'" },
+                    "vs": { "type": "string", "enum": ["time", "cooling", "depth"] }
+                },
+                "required": ["projectile", "energy_mev", "current_ma", "layers", "isotope", "vs"]
+            }
+        }),
+        serde_json::json!({
             "name": "compare_simulations",
             "description": "Run two simulations and compare first-layer isotope activities side-by-side. Useful for comparing beam energies, targets, or irradiation times.",
             "inputSchema": {
@@ -143,6 +198,9 @@ pub fn call_tool(
         "list_reaction_channels" => tool_list_reaction_channels(db, arguments),
         "get_decay_data" => tool_get_decay_data(db, arguments),
         "compare_simulations" => tool_compare_simulations(db, arguments),
+        "get_stack_energy_budget" => tool_get_stack_energy_budget(db, arguments),
+        "get_stopping_power" => tool_get_stopping_power(db, arguments),
+        "get_isotope_production_curve" => tool_get_isotope_production_curve(db, arguments),
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
@@ -482,6 +540,201 @@ fn tool_compare_simulations(db: &dyn DatabaseProtocol, args: &Value) -> Result<S
             "—".to_string()
         };
         output.push_str(&format!("| {} | {:.3e} | {:.3e} | {} |\n", name, a, b, ratio));
+    }
+
+    Ok(output)
+}
+
+fn tool_get_stack_energy_budget(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+    // Reuses the simulate shape but we only read energy/heat fields.
+    let (_stack, result, projectile_str, energy_mev, current_ma) = build_and_run_sim(db, args)?;
+
+    let mut output = String::new();
+    output.push_str(&format!(
+        "# Stack Energy Budget\n\n**Beam:** {} at {:.2} MeV, {:.3} mA\n\n",
+        projectile_str, energy_mev, current_ma
+    ));
+    output.push_str("| Layer | E_in [MeV] | E_out [MeV] | ΔE [MeV] | Heat [W] |\n");
+    output.push_str("|-------|------------|-------------|----------|----------|\n");
+
+    let mut total_heat_w = 0.0;
+    for (i, lr) in result.layer_results.iter().enumerate() {
+        let heat_w = lr.heat_kw * 1000.0;
+        total_heat_w += heat_w;
+        output.push_str(&format!(
+            "| {} | {:.3} | {:.3} | {:.3} | {:.2} |\n",
+            i + 1,
+            lr.energy_in,
+            lr.energy_out,
+            lr.delta_e_mev,
+            heat_w,
+        ));
+    }
+
+    let final_e = result
+        .layer_results
+        .last()
+        .map(|l| l.energy_out)
+        .unwrap_or(energy_mev);
+    output.push_str(&format!(
+        "\n**Total heat deposited:** {:.2} W  \n**Exit energy:** {:.3} MeV  \n**Beam fully stopped:** {}\n",
+        total_heat_w,
+        final_e,
+        if final_e < 0.01 { "yes" } else { "no" },
+    ));
+
+    Ok(output)
+}
+
+fn tool_get_stopping_power(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+    let projectile_str = args
+        .get("projectile")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'projectile'")?;
+    let projectile = ProjectileType::from_str(projectile_str).ok_or("Invalid projectile")?;
+    let material = args
+        .get("material")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'material'")?;
+    let energies: Vec<f64> = args
+        .get("energies_mev")
+        .and_then(|v| v.as_array())
+        .ok_or("Missing 'energies_mev'")?
+        .iter()
+        .filter_map(|v| v.as_f64())
+        .collect();
+
+    if energies.is_empty() {
+        return Err("'energies_mev' must be a non-empty array of numbers".to_string());
+    }
+
+    let resolution = resolve_material(db, material, None);
+    // Convert (Element, atom_fraction) → (Z, mass_fraction) for compound_dedx.
+    let composition: Vec<(u32, f64)> = {
+        let mut raw: Vec<(u32, f64)> = Vec::new();
+        for (elem, atom_frac) in &resolution.elements {
+            let mut avg_mass = 0.0;
+            for (&a, &ab) in &elem.isotopes {
+                avg_mass += a as f64 * ab;
+            }
+            raw.push((elem.z, atom_frac * avg_mass));
+        }
+        let total: f64 = raw.iter().map(|(_, w)| w).sum();
+        if total <= 0.0 {
+            return Err(format!("Material '{}' has zero mass", material));
+        }
+        raw.into_iter().map(|(z, w)| (z, w / total)).collect()
+    };
+
+    let mass_dedx = crate::stopping::compound_dedx(db, &projectile, &composition, &energies);
+    let lin_dedx: Vec<f64> = mass_dedx
+        .iter()
+        .map(|s| s * resolution.density)
+        .collect();
+
+    let mut output = String::new();
+    output.push_str(&format!(
+        "# Stopping Power\n\n**Projectile:** {}  \n**Material:** {} (ρ = {:.3} g/cm³)\n\n",
+        projectile_str, material, resolution.density
+    ));
+    output.push_str("| Energy [MeV] | Mass S [MeV·cm²/g] | Linear dE/dx [MeV/cm] |\n");
+    output.push_str("|--------------|---------------------|------------------------|\n");
+    for (i, &e) in energies.iter().enumerate() {
+        output.push_str(&format!(
+            "| {:.3} | {:.3e} | {:.3e} |\n",
+            e, mass_dedx[i], lin_dedx[i]
+        ));
+    }
+    Ok(output)
+}
+
+fn tool_get_isotope_production_curve(
+    db: &dyn DatabaseProtocol,
+    args: &Value,
+) -> Result<String, String> {
+    let isotope = args
+        .get("isotope")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'isotope'")?
+        .to_string();
+    let vs = args.get("vs").and_then(|v| v.as_str()).ok_or("Missing 'vs'")?;
+    if !["time", "cooling", "depth"].contains(&vs) {
+        return Err(format!("'vs' must be one of: time, cooling, depth (got '{}')", vs));
+    }
+
+    let (_stack, result, _, _, _) = build_and_run_sim(db, args)?;
+
+    // Find the first layer containing the named isotope.
+    let (layer_idx, lr, iso) = result
+        .layer_results
+        .iter()
+        .enumerate()
+        .find_map(|(i, lr)| lr.isotope_results.get(&isotope).map(|iso| (i, lr, iso)))
+        .ok_or_else(|| format!("Isotope '{}' not produced in any layer", isotope))?;
+
+    let mut output = String::new();
+    output.push_str(&format!(
+        "# {} production curve ({}) — layer {}\n\n",
+        isotope,
+        vs,
+        layer_idx + 1,
+    ));
+
+    match vs {
+        "time" => {
+            output.push_str(&format!(
+                "Activity [Bq] across full irradiation + cooling timeline. Final activity: {:.3e} Bq.\n\n",
+                iso.activity_bq,
+            ));
+            output.push_str("| t [s] | Activity [Bq] |\n|--------|----------------|\n");
+            for (t, a) in iso.time_grid_s.iter().zip(iso.activity_vs_time_bq.iter()) {
+                output.push_str(&format!("| {:.3e} | {:.3e} |\n", t, a));
+            }
+        }
+        "cooling" => {
+            let t_irr = result.irradiation_time_s;
+            let pts: Vec<_> = iso
+                .time_grid_s
+                .iter()
+                .zip(iso.activity_vs_time_bq.iter())
+                .filter(|(t, _)| **t >= t_irr)
+                .collect();
+            if pts.is_empty() {
+                output.push_str("No cooling-phase samples available — set cooling_time_s > 0.\n");
+            } else {
+                output.push_str(&format!(
+                    "Cooling tail (t ≥ {:.0} s). End-of-bombardment activity ≈ {:.3e} Bq.\n\n",
+                    t_irr, pts[0].1
+                ));
+                output.push_str("| t [s] | Activity [Bq] |\n|--------|----------------|\n");
+                for (t, a) in pts {
+                    output.push_str(&format!("| {:.3e} | {:.3e} |\n", t, a));
+                }
+            }
+        }
+        "depth" => {
+            let rates = lr
+                .depth_production_rates
+                .get(&isotope)
+                .ok_or_else(|| format!("No depth production rates for '{}' in layer {}", isotope, layer_idx + 1))?;
+            if lr.depth_profile.is_empty() || rates.is_empty() {
+                return Err("Layer has no depth profile (thickness not resolved)".to_string());
+            }
+            output.push_str(&format!(
+                "Local production rate [atoms/s/cm] along depth, layer {}. {} points.\n\n",
+                layer_idx + 1,
+                lr.depth_profile.len(),
+            ));
+            output.push_str("| Depth [cm] | Energy [MeV] | Production rate [atoms/s/cm] |\n");
+            output.push_str("|-------------|--------------|-------------------------------|\n");
+            for (dp, r) in lr.depth_profile.iter().zip(rates.iter()) {
+                output.push_str(&format!(
+                    "| {:.4e} | {:.3} | {:.3e} |\n",
+                    dp.depth_cm, dp.energy_mev, r
+                ));
+            }
+        }
+        _ => unreachable!(),
     }
 
     Ok(output)
