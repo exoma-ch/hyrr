@@ -48,6 +48,46 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
     role: "structural",
     notes: "Cobalt-based alloy, common beam-window material",
   },
+
+  // ─── Monitor foils (natural composition) ───────────────────────────
+  natcu: {
+    density: 8.96,
+    massFractions: { Cu: 1.0 },
+    role: "monitor",
+    notes: "Natural Cu monitor foil; IAEA-recommended (p,X) monitor reactions",
+  },
+  natti: {
+    density: 4.51,
+    massFractions: { Ti: 1.0 },
+    role: "monitor",
+    notes: "Natural Ti monitor foil; natTi(p,X)48V common monitor",
+  },
+  natni: {
+    density: 8.91,
+    massFractions: { Ni: 1.0 },
+    role: "monitor",
+    notes: "Natural Ni monitor foil",
+  },
+
+  // ─── Monoisotopic / simple natural targets ─────────────────────────
+  y89: {
+    density: 4.47,
+    massFractions: { Y: 1.0 },
+    role: "target",
+    notes: "89Y (monoisotopic natural); 89Y(p,n)89Zr for immunoPET",
+  },
+  graphite: {
+    density: 1.80,
+    massFractions: { C: 1.0 },
+    role: "window",
+    notes: "Reactor-grade graphite (degrader stock). Density varies 1.6–2.26",
+  },
+  "be-window": {
+    density: 1.85,
+    massFractions: { Be: 1.0 },
+    role: "window",
+    notes: "Beryllium cyclotron window. Be metal is toxic — handle per local SOP",
+  },
 };
 
 /**
