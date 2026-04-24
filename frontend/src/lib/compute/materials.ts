@@ -88,6 +88,73 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
     role: "window",
     notes: "Beryllium cyclotron window. Be metal is toxic — handle per local SOP",
   },
+
+  // ─── Enriched-isotope targets ──────────────────────────────────────
+  // Naming convention: `{A}{Symbol}-{role}` avoids collision with the
+  // `Element-Mass` free-text form (e.g. "Zn-68") that resolveMaterial
+  // strips at line ~188.
+  "zn68-electrodeposit": {
+    density: 7.13,
+    massFractions: { Zn: 1.0 },
+    defaultEnrichment: { Zn: { 68: 0.98, 66: 0.015, 67: 0.003, 64: 0.002 } },
+    role: "target",
+    notes: "68Zn electrodeposit at 98% enrichment; 68Zn(p,n)68Ga",
+  },
+  "ni64-electrodeposit": {
+    density: 8.91,
+    massFractions: { Ni: 1.0 },
+    defaultEnrichment: { Ni: { 64: 0.95, 62: 0.03, 60: 0.015, 58: 0.005 } },
+    role: "target",
+    notes: "64Ni electrodeposit at 95% enrichment; 64Ni(p,n)64Cu",
+  },
+  "mo100-pellet": {
+    density: 10.28,
+    massFractions: { Mo: 1.0 },
+    defaultEnrichment: { Mo: { 100: 0.96, 98: 0.02, 97: 0.01, 96: 0.01 } },
+    role: "target",
+    notes: "100Mo pressed pellet at 96% enrichment; 100Mo(p,2n)99mTc",
+  },
+  "ca44-target": {
+    density: 1.55,
+    massFractions: { Ca: 1.0 },
+    defaultEnrichment: { Ca: { 44: 0.97, 40: 0.025, 42: 0.003, 48: 0.002 } },
+    role: "target",
+    notes: "44Ca target at 97% enrichment; 44Ca(p,n)44Sc for PET",
+  },
+  "ra226-target": {
+    density: 5.50,
+    massFractions: { Ra: 1.0 },
+    defaultEnrichment: { Ra: { 226: 1.0 } },
+    role: "target",
+    notes:
+      "226Ra target (monoisotopic); α-emitter precursor — licensing + handling" +
+      " restrictions apply (226Ra is a high-radiotoxicity source)",
+  },
+  "th232-target": {
+    density: 11.72,
+    massFractions: { Th: 1.0 },
+    defaultEnrichment: { Th: { 232: 1.0 } },
+    role: "target",
+    notes:
+      "232Th target (monoisotopic natural); route to 225Ac, 99Mo, etc. — export" +
+      " controls apply",
+  },
+  "u238-target": {
+    density: 19.05,
+    massFractions: { U: 1.0 },
+    defaultEnrichment: { U: { 238: 0.9975, 235: 0.0025 } },
+    role: "target",
+    notes:
+      "Depleted U target (~0.25% 235U); route to 99Mo via fission. Export +" +
+      " licensing controls apply",
+  },
+  natu: {
+    density: 19.05,
+    massFractions: { U: 1.0 },
+    defaultEnrichment: { U: { 238: 0.992742, 235: 0.007204, 234: 0.000054 } },
+    role: "target",
+    notes: "Natural U (0.72% 235U). Licensing + export controls apply",
+  },
 };
 
 /**
