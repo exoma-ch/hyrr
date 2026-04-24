@@ -66,8 +66,8 @@ pub fn list_tools() -> Vec<Value> {
             }
         }),
         serde_json::json!({
-            "name": "get_cross_sections",
-            "description": "Get production cross-section data for a specific nuclear reaction.",
+            "name": "list_reaction_channels",
+            "description": "List all production channels (residual nuclei) for a given projectile on a target isotope, with peak cross-section and energy range per channel. Returns a summary — for full σ(E) curves, use nucl-parquet-mcp's get_cross_sections.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -122,7 +122,7 @@ pub fn call_tool(
     match name {
         "simulate" => tool_simulate(db, arguments),
         "list_materials" => tool_list_materials(),
-        "get_cross_sections" => tool_get_cross_sections(db, arguments),
+        "list_reaction_channels" => tool_list_reaction_channels(db, arguments),
         "get_decay_data" => tool_get_decay_data(db, arguments),
         _ => Err(format!("Unknown tool: {}", name)),
     }
@@ -288,7 +288,7 @@ fn tool_list_materials() -> Result<String, String> {
     Ok(output)
 }
 
-fn tool_get_cross_sections(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
     let projectile = args
         .get("projectile")
         .and_then(|v| v.as_str())
