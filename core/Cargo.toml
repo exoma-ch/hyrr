@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Rust physics core for HYRR — Hierarchical Yield and Radionuclide Rates"
 license = "MIT"
+# Keep nix-libiconv dev workaround out of sdists that bundle this crate as a
+# path-dep (notably the py-mcp maturin wheel).
+exclude = [".cargo/**"]
 
 [features]
 default = ["parquet-store"]
