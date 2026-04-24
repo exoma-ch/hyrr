@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_materials","arguments":{}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_stopping_power","arguments":{"projectile":"p","material":"Cu","energies_mev":[5,10,20,50]}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_stack_energy_budget","arguments":{"projectile":"p","energy_mev":20,"current_ma":0.1,"layers":[{"material":"Cu","thickness_cm":0.05},{"material":"Al","thickness_cm":0.02}]}}}

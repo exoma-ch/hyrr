@@ -1,0 +1,3 @@
+[env]
+# libiconv path for Nix-managed GCC on macOS
+LIBRARY_PATH = { value = "/nix/store/7h6icyvqv6lqd0bcx41c8h3615rjcqb2-libiconv-109.100.2/lib", force = false }

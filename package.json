@@ -2,8 +2,7 @@
   "private": true,
   "workspaces": [
     "packages/*",
-    "frontend",
-    "mcp"
+    "frontend"
   ],
   "devDependencies": {
     "@playwright/test": "^1.58.2",
