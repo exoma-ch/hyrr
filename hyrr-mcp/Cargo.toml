@@ -1,0 +1,19 @@
+[package]
+name = "hyrr-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "HYRR MCP server — stdio JSON-RPC for radio-isotope production queries"
+license = "MIT"
+
+[[bin]]
+name = "hyrr-mcp"
+path = "src/main.rs"
+
+[dependencies]
+hyrr-core = { path = "../core", features = ["mcp"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
