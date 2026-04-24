@@ -155,6 +155,87 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
     role: "target",
     notes: "Natural U (0.72% 235U). Licensing + export controls apply",
   },
+
+  // ─── Compounds ─────────────────────────────────────────────────────
+  // Natural abundance; mass fractions derived from formula weight.
+  baco3: {
+    density: 4.29,
+    // M = 137.33 + 12.01 + 3*16.00 = 197.34
+    massFractions: { Ba: 0.69591, C: 0.06086, O: 0.24323 },
+    role: "compound",
+    notes: "Barium carbonate; target matrix for enriched-Ba production routes",
+  },
+  zno: {
+    density: 5.61,
+    // M = 65.38 + 16.00 = 81.38
+    massFractions: { Zn: 0.80340, O: 0.19660 },
+    role: "compound",
+    notes: "Zinc oxide; compact target form",
+  },
+  moo3: {
+    density: 4.69,
+    // M = 95.96 + 3*16.00 = 143.96
+    massFractions: { Mo: 0.66657, O: 0.33343 },
+    role: "compound",
+    notes: "Molybdenum trioxide; pressed-pellet matrix for 100Mo production",
+  },
+  "h2o-18-enriched": {
+    density: 1.11,
+    // M = 2*1.008 + 17.999 = 20.015 (enriched water)
+    massFractions: { H: 0.10072, O: 0.89928 },
+    defaultEnrichment: { O: { 18: 0.97, 16: 0.025, 17: 0.005 } },
+    role: "compound",
+    notes:
+      "Enriched H2[18O] water at 97% 18O; 18O(p,n)18F. Separate key from the" +
+      " legacy `H2O-18` compound entry, which stays unenriched",
+  },
+
+  // ─── Structural / windows ──────────────────────────────────────────
+  "nb-1zr": {
+    density: 8.57,
+    massFractions: { Nb: 0.99, Zr: 0.01 },
+    role: "structural",
+    notes: "Niobium–1% zirconium; high-temperature target backing",
+  },
+  ss316l: {
+    density: 7.99,
+    massFractions: {
+      Fe: 0.654, Cr: 0.17, Ni: 0.12, Mo: 0.025, Mn: 0.02,
+      Si: 0.01, C: 0.001,
+    },
+    role: "structural",
+    notes:
+      "Austenitic stainless steel, low-carbon grade (midpoint-of-spec" +
+      " composition)",
+  },
+  "inconel-625": {
+    density: 8.44,
+    // Midpoint-of-range per ASM (pitfall 2); Ni adjusted so sum == 1.000.
+    massFractions: {
+      Ni: 0.585, Cr: 0.22, Mo: 0.09, Fe: 0.05, Nb: 0.035,
+      Al: 0.004, Ti: 0.004, Mn: 0.005, Si: 0.005, C: 0.002,
+    },
+    role: "structural",
+    notes: "Ni-based high-temperature superalloy (midpoint-of-spec composition)",
+  },
+  "al-6061": {
+    density: 2.70,
+    massFractions: {
+      Al: 0.979, Mg: 0.010, Si: 0.006, Cu: 0.003, Cr: 0.002,
+    },
+    role: "structural",
+    notes: "Aluminium wrought alloy; common target-holder material",
+  },
+  kapton: {
+    density: 1.42,
+    // C22H10N2O5 polyimide: M = 22*12.011 + 10*1.008 + 2*14.007 + 5*15.999
+    //                        = 264.242 + 10.080 + 28.014 + 79.995 = 382.331
+    massFractions: {
+      C: 0.69113, H: 0.02637, N: 0.07328, O: 0.20922,
+    },
+    role: "window",
+    notes: "Polyimide film (DuPont Kapton); common thin-window material",
+  },
 };
 
 /**
