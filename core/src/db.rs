@@ -30,6 +30,10 @@ pub trait DatabaseProtocol: Send + Sync {
 
     fn get_element_symbol(&self, z: u32) -> String;
     fn get_element_z(&self, symbol: &str) -> u32;
+
+    /// Nuclear data library identifier (e.g. "tendl-2024"). Used so MCP
+    /// tool responses can echo which library fed the calculation.
+    fn library(&self) -> &str;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,6 +141,10 @@ impl DatabaseProtocol for InMemoryDataStore {
 
     fn get_element_z(&self, symbol: &str) -> u32 {
         self.symbol_to_z.get(symbol).copied().unwrap_or(0)
+    }
+
+    fn library(&self) -> &str {
+        &self.library
     }
 }
 
@@ -528,6 +536,10 @@ impl DatabaseProtocol for ParquetDataStore {
             .get(symbol)
             .copied()
             .unwrap_or_else(|| panic!("Element '{symbol}' not in data store — elements.parquet incomplete"))
+    }
+
+    fn library(&self) -> &str {
+        &self.library
     }
 }
 

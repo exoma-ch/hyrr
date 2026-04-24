@@ -40,6 +40,19 @@ pub fn list_tools() -> Vec<Value> {
                                 "thickness_cm": {
                                     "type": "number",
                                     "description": "Layer thickness in cm"
+                                },
+                                "enrichment": {
+                                    "type": "array",
+                                    "description": "Isotopic enrichment overrides for this layer. Flat shape: [{element: 'Mo', A: 100, fraction: 0.95}].",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "element": { "type": "string" },
+                                            "A": { "type": "integer" },
+                                            "fraction": { "type": "number" }
+                                        },
+                                        "required": ["element", "A", "fraction"]
+                                    }
                                 }
                             },
                             "required": ["material"]
@@ -187,12 +200,16 @@ pub fn list_tools() -> Vec<Value> {
 }
 
 /// Call an MCP tool by name.
+///
+/// Every response is suffixed with `*Library: <id>*` so the agent can see
+/// which nuclear data library fed the calculation (rather than having to
+/// trust a hidden default).
 pub fn call_tool(
     db: &dyn DatabaseProtocol,
     name: &str,
     arguments: &Value,
 ) -> Result<String, String> {
-    match name {
+    let body = match name {
         "simulate" => tool_simulate(db, arguments),
         "list_materials" => tool_list_materials(),
         "list_reaction_channels" => tool_list_reaction_channels(db, arguments),
@@ -201,8 +218,45 @@ pub fn call_tool(
         "get_stack_energy_budget" => tool_get_stack_energy_budget(db, arguments),
         "get_stopping_power" => tool_get_stopping_power(db, arguments),
         "get_isotope_production_curve" => tool_get_isotope_production_curve(db, arguments),
-        _ => Err(format!("Unknown tool: {}", name)),
+        _ => return Err(format!("Unknown tool: {}", name)),
+    }?;
+    Ok(format!("{body}\n\n---\n*Library: {}*\n", db.library()))
+}
+
+/// Parse the flat enrichment array `[{element, A, fraction}]` into the
+/// nested `HashMap<String, HashMap<u32, f64>>` that resolve_material expects.
+/// Returns None when the input is absent or null; errors on malformed entries.
+fn parse_enrichment(
+    val: Option<&Value>,
+) -> Result<Option<std::collections::HashMap<String, std::collections::HashMap<u32, f64>>>, String> {
+    use std::collections::HashMap;
+    let Some(v) = val else { return Ok(None) };
+    if v.is_null() {
+        return Ok(None);
     }
+    let arr = v
+        .as_array()
+        .ok_or("'enrichment' must be an array of {element, A, fraction} records")?;
+    if arr.is_empty() {
+        return Ok(None);
+    }
+    let mut overrides: HashMap<String, HashMap<u32, f64>> = HashMap::new();
+    for entry in arr {
+        let elem = entry
+            .get("element")
+            .and_then(|v| v.as_str())
+            .ok_or("enrichment entry missing 'element'")?;
+        let a = entry
+            .get("A")
+            .and_then(|v| v.as_u64())
+            .ok_or("enrichment entry missing 'A'")? as u32;
+        let frac = entry
+            .get("fraction")
+            .and_then(|v| v.as_f64())
+            .ok_or("enrichment entry missing 'fraction'")?;
+        overrides.entry(elem.to_string()).or_default().insert(a, frac);
+    }
+    Ok(Some(overrides))
 }
 
 /// Parse a simulate-shaped args object and run compute_stack.
@@ -249,7 +303,9 @@ fn build_and_run_sim(
             .and_then(|v| v.as_str())
             .ok_or("Layer missing 'material'")?;
 
-        let resolution = resolve_material(db, material, None);
+        // enrichment: [{element, A, fraction}] — flat, array-of-records shape.
+        let overrides = parse_enrichment(layer_val.get("enrichment"))?;
+        let resolution = resolve_material(db, material, overrides.as_ref());
         let thickness_cm = layer_val.get("thickness_cm").and_then(|v| v.as_f64());
         let energy_out = layer_val.get("energy_out_mev").and_then(|v| v.as_f64());
 
