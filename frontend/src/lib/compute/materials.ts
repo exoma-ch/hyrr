@@ -123,14 +123,27 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
       " Irradiated pellets accumulate long-lived 93mNb contaminants",
   },
   "ca44-carbonate": {
-    // 44CaCO3 pressed pellet — the practical delivered form. Ca metal targets
-    // are not used in medical isotope practice (air-reactive, low m.p.).
+    // 44CaCO3 pressed pellet — the more common commercial delivery form
+    // (stable, non-hygroscopic). Ca metal targets are not used in practice
+    // (air-reactive, low m.p.).
     // M(CaCO3) = 40.078 + 12.011 + 3*15.999 = 100.086
     density: 2.80,
     massFractions: { Ca: 0.40045, C: 0.12001, O: 0.47954 },
     defaultEnrichment: { Ca: { 44: 0.97, 40: 0.025, 42: 0.003, 48: 0.002 } },
     role: "target",
     notes: "44CaCO3 pressed pellet at 97% enrichment on Ca; 44Ca(p,n)44Sc for PET",
+  },
+  "ca44-oxide": {
+    // 44CaO pressed pellet — higher Ca atomic density than the carbonate
+    // (~1.8× Ca per cm³), but hygroscopic and harder to store.
+    // M(CaO) = 40.078 + 15.999 = 56.077
+    density: 3.35,
+    massFractions: { Ca: 0.71469, O: 0.28531 },
+    defaultEnrichment: { Ca: { 44: 0.97, 40: 0.025, 42: 0.003, 48: 0.002 } },
+    role: "target",
+    notes:
+      "44CaO pressed pellet at 97% enrichment on Ca; higher Ca density than" +
+      " 44CaCO3 but hygroscopic (handle + store under inert atmosphere)",
   },
   "ra226-target": {
     density: 5.50,
