@@ -15,10 +15,27 @@ import type { DatabaseProtocol, Element } from "./types";
 
 export { parseFormula, formulaToMassFractions, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT };
 
-/** Known material definitions: density and mass fractions by element. */
+/** Catalog-entry role — drives category filtering + search ranking. */
+export type CatalogRole =
+  | "monitor"
+  | "target"
+  | "window"
+  | "structural"
+  | "compound"
+  | "gas";
+
+/**
+ * Known material definitions.
+ *
+ * `defaultEnrichment` is applied by `resolveMaterial` when no caller-provided
+ * `overrides` are given. Explicit overrides always take precedence, per-element.
+ */
 export interface CatalogEntry {
   density: number;
   massFractions: Record<string, number>;
+  defaultEnrichment?: Record<string, Record<number, number>>;
+  role?: CatalogRole;
+  notes?: string;
 }
 
 export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
@@ -28,8 +45,31 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
       Co: 0.42, Cr: 0.20, Ni: 0.13, Fe: 0.184,
       W: 0.028, Mo: 0.02, Mn: 0.016, C: 0.002,
     },
+    role: "structural",
+    notes: "Cobalt-based alloy, common beam-window material",
   },
 };
+
+/**
+ * Merge caller-provided overrides with a catalog entry's `defaultEnrichment`.
+ * Per-element: caller overrides win; otherwise fall back to the catalog default.
+ */
+function mergeEnrichmentWithDefaults(
+  defaults: Record<string, Record<number, number>> | undefined,
+  overrides: Record<string, Map<number, number>> | undefined,
+): Record<string, Map<number, number>> | undefined {
+  if (!defaults) return overrides;
+  const merged: Record<string, Map<number, number>> = {};
+  for (const [sym, abundances] of Object.entries(defaults)) {
+    const m = new Map<number, number>();
+    for (const [a, f] of Object.entries(abundances)) m.set(Number(a), f);
+    merged[sym] = m;
+  }
+  if (overrides) {
+    for (const [sym, m] of Object.entries(overrides)) merged[sym] = m;
+  }
+  return merged;
+}
 
 /** Convert mass fractions to atom fractions. */
 export function massToAtomFractions(
@@ -165,7 +205,8 @@ export function resolveMaterial(
   const lowerIdent = identifier.toLowerCase();
   const catalogEntry = MATERIAL_CATALOG[lowerIdent];
   if (catalogEntry) {
-    const elements = resolveIsotopics(db, catalogEntry.massFractions, false, overrides);
+    const effective = mergeEnrichmentWithDefaults(catalogEntry.defaultEnrichment, overrides);
+    const elements = resolveIsotopics(db, catalogEntry.massFractions, false, effective);
     return { elements, density: catalogEntry.density, molecularWeight: 0 };
   }
 
