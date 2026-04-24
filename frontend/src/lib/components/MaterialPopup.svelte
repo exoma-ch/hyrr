@@ -27,11 +27,15 @@
   let query = $state("");
   let searchView: { focus: () => void } | undefined = $state();
   let editInitial = $state<EditableMaterial | null>(null);
+  // Phase 2 will wire "table" to the PeriodicTable view. For now, only
+  // "search" is rendered; the state is here so Phase 2 is a pure addition.
+  let view = $state<"search" | "table">("search");
 
   $effect(() => {
     if (open) {
       query = "";
       editInitial = null;
+      view = "search";
       loadCustomMaterials().then(() => {
         if (editMaterialId) {
           const cm = getCustomMaterials().find((m) => m.id === editMaterialId);
@@ -69,19 +73,22 @@
 
 <Modal {open} {onclose} title="Select Material">
   <div class="material-popup">
-    <SearchView
-      bind:this={searchView}
-      {query}
-      onQueryChange={(q) => { query = q; }}
-      {materials}
-      {onselect}
-      {onclose}
-      oneditRequest={openEditor}
-    >
-      {#snippet betweenInputAndResults()}
-        <InspectPanel {query} {currentEnrichment} {onenrichment} />
-      {/snippet}
-    </SearchView>
+    {#if view === "search"}
+      <SearchView
+        bind:this={searchView}
+        {query}
+        onQueryChange={(q) => { query = q; }}
+        {materials}
+        {onselect}
+        {onclose}
+        oneditRequest={openEditor}
+      >
+        {#snippet betweenInputAndResults()}
+          <InspectPanel {query} {currentEnrichment} {onenrichment} />
+        {/snippet}
+      </SearchView>
+    {/if}
+    <!-- view === "table" is wired in Phase 2 (PeriodicTable). -->
 
     <DefineForm
       {editInitial}
