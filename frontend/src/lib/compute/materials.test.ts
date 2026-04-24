@@ -179,6 +179,24 @@ describe("resolveMaterial — defaultEnrichment", () => {
     }
   });
 
+  it("empty override Map keeps the catalog default (does not wipe isotopes)", () => {
+    const db = makeStubDb();
+    MATERIAL_CATALOG["__test-enriched-zn__"] = {
+      density: 7.13,
+      massFractions: { Zn: 1.0 },
+      defaultEnrichment: { Zn: { 68: 0.98, 66: 0.02 } },
+    };
+    try {
+      const explicit = { Zn: new Map<number, number>() }; // empty = "not provided"
+      const { elements } = resolveMaterial(db, "__test-enriched-zn__", explicit);
+      const zn = elements.find(([e]) => e.symbol === "Zn")?.[0];
+      expect(zn?.isotopes.get(68)).toBeCloseTo(0.98, 6);
+      expect(zn?.isotopes.get(66)).toBeCloseTo(0.02, 6);
+    } finally {
+      delete MATERIAL_CATALOG["__test-enriched-zn__"];
+    }
+  });
+
   it("override for one element falls back to default for another (multi-element)", () => {
     const db = makeStubDb();
     MATERIAL_CATALOG["__test-multi__"] = {

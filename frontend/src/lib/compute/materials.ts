@@ -267,7 +267,12 @@ function mergeEnrichmentWithDefaults(
     merged[sym] = m;
   }
   if (overrides) {
-    for (const [sym, m] of Object.entries(overrides)) merged[sym] = m;
+    for (const [sym, m] of Object.entries(overrides)) {
+      // Empty override Map is treated as "not provided" — keeps the catalog
+      // default rather than silently wiping the element to zero isotopes.
+      if (m.size === 0) continue;
+      merged[sym] = m;
+    }
   }
   return merged;
 }
