@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  ELEMENT_DENSITIES,
   MATERIAL_CATALOG,
   resolveMaterial,
   type CatalogEntry,
 } from "./materials";
+import { SYMBOL_TO_Z } from "../utils/formula";
 import type { DatabaseProtocol } from "./types";
 
 /**
@@ -52,6 +54,22 @@ describe("MATERIAL_CATALOG — schema invariants", () => {
         expect(Object.keys(entry.massFractions).length).toBeGreaterThan(0);
       });
 
+      it("each element in massFractions is a known symbol", () => {
+        for (const sym of Object.keys(entry.massFractions)) {
+          expect(SYMBOL_TO_Z).toHaveProperty(sym);
+        }
+      });
+
+      it("at least one element has a tabulated bulk density (sanity)", () => {
+        // Every catalog entry should contain at least one element we know the
+        // density of — otherwise the resolver has no natural fallback when the
+        // entry itself is missing a density (defensive invariant).
+        const has = Object.keys(entry.massFractions).some(
+          (s) => ELEMENT_DENSITIES[s] !== undefined,
+        );
+        expect(has).toBe(true);
+      });
+
       if (entry.defaultEnrichment) {
         it("each defaultEnrichment element appears in massFractions", () => {
           for (const el of Object.keys(entry.defaultEnrichment!)) {
@@ -65,7 +83,47 @@ describe("MATERIAL_CATALOG — schema invariants", () => {
             expect(sum).toBeCloseTo(1, 6);
           }
         });
+
+        it("each defaultEnrichment mass number is plausible (1 ≤ A ≤ 300)", () => {
+          for (const [, abundances] of Object.entries(entry.defaultEnrichment!)) {
+            for (const a of Object.keys(abundances)) {
+              const A = Number(a);
+              expect(A).toBeGreaterThanOrEqual(1);
+              expect(A).toBeLessThanOrEqual(300);
+            }
+          }
+        });
       }
+    });
+  }
+});
+
+describe("MATERIAL_CATALOG — naming collision safety (pitfall 7)", () => {
+  it("no catalog key collides with `Element-Mass` isotope form (e.g. 'zn-68')", () => {
+    // Free-text path in resolveMaterial strips `-\d+`; a catalog key matching
+    // `{1-2 letter symbol}-{1-3 digit mass number}` would silently reinterpret
+    // the user's isotope input as an enriched target. Alloy designations like
+    // `al-6061` (4-digit number, not a mass) and `inconel-625` (7+ char prefix)
+    // don't collide with this form.
+    const forbidden = /^[a-z]{1,2}-\d{1,3}$/;
+    for (const key of Object.keys(MATERIAL_CATALOG)) {
+      expect(key, `catalog key "${key}" collides with Element-Mass isotope input`).not.toMatch(forbidden);
+    }
+  });
+});
+
+describe("MATERIAL_CATALOG — key resolution via resolveMaterial", () => {
+  const db = makeStubDb();
+  for (const key of Object.keys(MATERIAL_CATALOG)) {
+    it(`"${key}" resolves to non-empty elements + positive density`, () => {
+      const { elements, density } = resolveMaterial(db, key);
+      expect(density).toBeGreaterThan(0);
+      expect(elements.length).toBeGreaterThan(0);
+    });
+
+    it(`"${key}" is case-insensitive on lookup`, () => {
+      const { density } = resolveMaterial(db, key.toUpperCase());
+      expect(density).toBeGreaterThan(0);
     });
   }
 });
