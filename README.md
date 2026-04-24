@@ -71,7 +71,20 @@ Key frontend features:
 
 ## MCP Server
 
-`mcp/` — agent-driven irradiation analysis via the Model Context Protocol. Tools: `simulate`, `list_materials`, `get_cross_sections`, `get_decay_data`, `compare_results`. Resources: `hyrr://libraries`, `hyrr://elements`.
+Agent-driven irradiation analysis via the Model Context Protocol. Two entry points share the same Rust codepath (`core/src/mcp/`):
+
+- **Standalone**: `hyrr-mcp` — thin binary (no Tauri). Install via `uvx hyrr-mcp` (PyPI wheel) or `cargo install hyrr-mcp` (dev).
+- **Desktop-bundled**: `hyrr --mcp` — the desktop binary in MCP mode, reusing its bundled Parquet data.
+
+Tools: `simulate`, `list_materials`, `list_reaction_channels`, `get_decay_data`, `compare_simulations`.
+
+Register with Claude Code:
+
+```bash
+claude mcp add hyrr -- uvx hyrr-mcp
+# or, if the desktop app is installed:
+claude mcp add hyrr -- /Applications/HYRR.app/Contents/MacOS/hyrr --mcp
+```
 
 ## Desktop App
 
