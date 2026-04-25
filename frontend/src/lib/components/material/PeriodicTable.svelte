@@ -12,40 +12,36 @@
     period: number;
     group: number | null;
   }
+
+  let tooltipIdCounter = 0;
 </script>
 
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { PERIODIC_TABLE } from "./periodic-table-data";
+  import { tick } from "svelte";
+  import { PERIODIC_TABLE, ELEMENT_BY_Z } from "./periodic-table-data";
 
   interface Props {
     onselect: (symbol: string) => void;
-    /** Symbol of the currently-selected element (renders with the
-     *  `.selected` highlight). */
+    /** Symbol of the currently-selected element. */
     selected?: string;
     /** Symbols whose cells should be greyed-out (e.g. no TENDL coverage
      *  for the active projectile). Disabled cells stay rendered and
-     *  keyboard-reachable; click is suppressed. Wired in later commits. */
+     *  keyboard-reachable; click is suppressed; the accessible name
+     *  carries the reason (", no TENDL data"). */
     disabled?: Set<string>;
-    /** Symbols that should pulse with a secondary highlight (e.g. rows
-     *  already present in the define-form). */
+    /** Symbols that should pulse with a secondary highlight. */
     highlighted?: Set<string>;
     /** Selection mode — "multi" is reserved for future work. */
     mode?: "single" | "multi";
-    /** When set, controls the "show Z>92" toggle externally. When unset,
-     *  the component owns the toggle internally (defaults to false —
-     *  i.e. transactinides hidden by default). The label "Z>92" is per
-     *  the domain-review correction: Th (Z=90) is a real production
-     *  target, not a transuranic. */
+    /** Controlled "show Z>92" toggle — when undefined the component
+     *  owns the toggle internally and renders the toggle button. */
     showTransuranics?: boolean;
-    /** Optional tooltip body. The PT owns positioning; the parent
-     *  renders content. (Not wired in this commit; landed in a later
-     *  Phase 1 commit alongside accessibility.) */
+    /** Optional tooltip body. Parent renders content; PT positions it
+     *  below the focused/hovered cell. */
     tooltip?: Snippet<[ElementInfo]>;
   }
 
-  // `tooltip` is declared in `Props` but bound only by the accessibility
-  // commit; not destructured here.
   let {
     onselect,
     selected,
@@ -53,6 +49,7 @@
     highlighted,
     mode = "single",
     showTransuranics,
+    tooltip,
   }: Props = $props();
 
   let showTransuranicsInternal = $state(false);
@@ -62,9 +59,135 @@
     effectiveShow ? PERIODIC_TABLE : PERIODIC_TABLE.filter((c) => c.Z <= 92),
   );
 
+  /** Visible cells grouped by data-row, sorted by column — the lookup
+   *  used for arrow-key navigation. */
+  let cellsByRow = $derived.by(() => {
+    const map = new Map<number, ElementCell[]>();
+    for (const cell of visibleCells) {
+      const arr = map.get(cell.row) ?? [];
+      arr.push(cell);
+      map.set(cell.row, arr);
+    }
+    for (const arr of map.values()) arr.sort((a, b) => a.col - b.col);
+    return map;
+  });
+
+  let visibleRows = $derived([...cellsByRow.keys()].sort((a, b) => a - b));
+
+  /** Roving-tabindex anchor — exactly one cell has tabindex=0 at a time. */
+  let focusedZ = $state(1);
+
+  /** Hover takes precedence over focus for tooltip target. */
+  let hoveredZ = $state<number | null>(null);
+
+  let activeZ = $derived(hoveredZ ?? focusedZ);
+  let activeCell = $derived(ELEMENT_BY_Z.get(activeZ) ?? null);
+
+  // Stable per-instance id for the tooltip element (used by aria-describedby).
+  let tooltipId = `pt-tooltip-${++tooltipIdCounter}`;
+
+  // If the focused cell becomes hidden (toggling Z>92 off while focused
+  // on a high-Z cell), fall back to H.
+  $effect(() => {
+    if (!visibleCells.some((c) => c.Z === focusedZ)) {
+      focusedZ = 1;
+    }
+  });
+
+  function gridRowFor(cell: ElementCell): number {
+    return cell.row >= 8 ? cell.row + 1 : cell.row;
+  }
+
+  function ariaLabelFor(cell: ElementCell): string {
+    const base = `${cell.name}, ${cell.Z}`;
+    return disabled?.has(cell.symbol) ? `${base}, no TENDL data` : base;
+  }
+
   function handleClick(cell: ElementCell): void {
+    focusedZ = cell.Z;
     if (disabled?.has(cell.symbol)) return;
     onselect(cell.symbol);
+  }
+
+  async function moveFocus(nextZ: number): Promise<void> {
+    if (nextZ === focusedZ) return;
+    focusedZ = nextZ;
+    await tick();
+    const el = document.querySelector<HTMLButtonElement>(
+      `[data-pt-tooltip-id="${tooltipId}"] [data-z="${nextZ}"]`,
+    );
+    el?.focus();
+  }
+
+  function neighbourSameRow(currentZ: number, dir: -1 | 1): number {
+    const cur = ELEMENT_BY_Z.get(currentZ);
+    if (!cur) return currentZ;
+    const row = cellsByRow.get(cur.row);
+    if (!row) return currentZ;
+    const idx = row.findIndex((c) => c.Z === currentZ);
+    const next = row[idx + dir];
+    return next?.Z ?? currentZ;
+  }
+
+  function neighbourCrossRow(currentZ: number, dir: -1 | 1): number {
+    const cur = ELEMENT_BY_Z.get(currentZ);
+    if (!cur) return currentZ;
+    // Walk visible rows in the requested direction, picking the first
+    // row that has any cell — this lets up/down skip over the spacer
+    // between row 7 and the lanthanide row.
+    const rows = visibleRows;
+    const idx = rows.indexOf(cur.row);
+    const targetRow = rows[idx + dir];
+    if (targetRow === undefined) return currentZ;
+    const candidates = cellsByRow.get(targetRow);
+    if (!candidates || candidates.length === 0) return currentZ;
+    let best = candidates[0];
+    let bestDelta = Math.abs(best.col - cur.col);
+    for (const c of candidates) {
+      const d = Math.abs(c.col - cur.col);
+      if (d < bestDelta) { best = c; bestDelta = d; }
+    }
+    return best.Z;
+  }
+
+  function handleKeydown(event: KeyboardEvent): void {
+    let nextZ: number | null = null;
+
+    switch (event.key) {
+      case "ArrowLeft":  nextZ = neighbourSameRow(focusedZ, -1); break;
+      case "ArrowRight": nextZ = neighbourSameRow(focusedZ, 1); break;
+      case "ArrowUp":    nextZ = neighbourCrossRow(focusedZ, -1); break;
+      case "ArrowDown":  nextZ = neighbourCrossRow(focusedZ, 1); break;
+      case "Home": {
+        if (event.ctrlKey || event.metaKey) {
+          nextZ = 1;
+        } else {
+          const cur = ELEMENT_BY_Z.get(focusedZ);
+          const row = cur ? cellsByRow.get(cur.row) : undefined;
+          nextZ = row?.[0]?.Z ?? null;
+        }
+        break;
+      }
+      case "End": {
+        const cur = ELEMENT_BY_Z.get(focusedZ);
+        const row = cur ? cellsByRow.get(cur.row) : undefined;
+        nextZ = row?.[row.length - 1]?.Z ?? null;
+        break;
+      }
+      case "Enter":
+      case " ": {
+        const cell = ELEMENT_BY_Z.get(focusedZ);
+        if (cell) handleClick(cell);
+        event.preventDefault();
+        return;
+      }
+      default: return;
+    }
+
+    if (nextZ !== null) {
+      event.preventDefault();
+      void moveFocus(nextZ);
+    }
   }
 
   function toggleHighZ(): void {
@@ -74,27 +197,61 @@
   }
 </script>
 
-<div class="pt-wrap">
-  <div class="pt-grid" data-mode={mode}>
-    {#each visibleCells as cell (cell.Z)}
-      <button
-        class="pt-cell"
-        data-block={cell.block}
-        data-z={cell.Z}
-        class:selected={selected === cell.symbol}
-        class:highlighted={highlighted?.has(cell.symbol)}
-        class:disabled={disabled?.has(cell.symbol)}
-        style:grid-row={cell.row >= 8 ? cell.row + 1 : cell.row}
-        style:grid-column={cell.col}
-        type="button"
-        onclick={() => handleClick(cell)}
-      >
-        <span class="cell-z">{cell.Z}</span>
-        <span class="cell-sym">{cell.symbol}</span>
-        <span class="cell-block" aria-hidden="true">{cell.block}</span>
-      </button>
+<div class="pt-wrap" data-pt-tooltip-id={tooltipId}>
+  <div
+    role="grid"
+    aria-label="Periodic table"
+    class="pt-grid"
+    data-mode={mode}
+    tabindex={-1}
+    onkeydown={handleKeydown}
+  >
+    {#each visibleRows as row (row)}
+      <div role="row" aria-rowindex={row} class="pt-row">
+        {#each cellsByRow.get(row) ?? [] as cell (cell.Z)}
+          <button
+            role="gridcell"
+            type="button"
+            class="pt-cell"
+            data-block={cell.block}
+            data-z={cell.Z}
+            class:selected={selected === cell.symbol}
+            class:highlighted={highlighted?.has(cell.symbol)}
+            class:disabled={disabled?.has(cell.symbol)}
+            style:grid-row={gridRowFor(cell)}
+            style:grid-column={cell.col}
+            tabindex={focusedZ === cell.Z ? 0 : -1}
+            aria-colindex={cell.col}
+            aria-rowindex={row}
+            aria-label={ariaLabelFor(cell)}
+            aria-describedby={tooltip ? tooltipId : undefined}
+            aria-selected={selected === cell.symbol ? true : undefined}
+            onclick={() => handleClick(cell)}
+            onfocus={() => { focusedZ = cell.Z; }}
+            onmouseenter={() => { hoveredZ = cell.Z; }}
+            onmouseleave={() => { hoveredZ = null; }}
+          >
+            <span class="cell-z">{cell.Z}</span>
+            <span class="cell-sym">{cell.symbol}</span>
+            <span class="cell-block" aria-hidden="true">{cell.block}</span>
+          </button>
+        {/each}
+      </div>
     {/each}
   </div>
+
+  {#if tooltip && activeCell}
+    <div role="tooltip" id={tooltipId} class="pt-tooltip">
+      {@render tooltip({
+        Z: activeCell.Z,
+        symbol: activeCell.symbol,
+        name: activeCell.name,
+        block: activeCell.block,
+        period: activeCell.period,
+        group: activeCell.group,
+      })}
+    </div>
+  {/if}
 
   {#if showTransuranics === undefined}
     <button
@@ -109,7 +266,7 @@
   .pt-wrap {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
     gap: 0.4rem;
   }
 
@@ -124,6 +281,10 @@
     border-radius: 4px;
     width: 100%;
   }
+
+  /* role="row" wrappers don't participate in CSS grid layout — cells
+     are direct grid items via display: contents on the row. */
+  .pt-row { display: contents; }
 
   .pt-cell {
     position: relative;
@@ -149,6 +310,15 @@
   .pt-cell[data-block="f"] { background: var(--c-block-f, #d8efe1); color: #14442a; }
 
   .pt-cell:hover { filter: brightness(1.06); }
+
+  /* Focus ring — wide black core with a white halo so the contrast
+     ratio stays ≥ 3:1 against every block colour (WCAG 2.4.13). */
+  .pt-cell:focus-visible {
+    outline: 2px solid #000;
+    outline-offset: 1px;
+    box-shadow: 0 0 0 4px #fff;
+    z-index: 2;
+  }
 
   .pt-cell.selected {
     outline: 2px solid var(--c-accent);
@@ -193,6 +363,15 @@
     letter-spacing: 0.02em;
   }
 
+  .pt-tooltip {
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.75rem;
+    color: var(--c-text);
+  }
+
   .pt-toggle {
     background: var(--c-bg-subtle);
     border: 1px solid var(--c-border);
@@ -206,4 +385,8 @@
 
   .pt-toggle:hover { border-color: var(--c-accent); color: var(--c-text); }
   .pt-toggle[aria-pressed="true"] { background: var(--c-accent-tint-subtle); color: var(--c-accent); border-color: var(--c-accent); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pt-cell { transition: none; }
+  }
 </style>
