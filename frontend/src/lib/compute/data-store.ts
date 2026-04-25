@@ -227,6 +227,13 @@ export class DataStore implements DatabaseProtocol {
 
   // --- DatabaseProtocol methods ---
 
+  hasCrossSections(projectile: string, Z: number): boolean {
+    const symbol = this.zToSymbol.get(Z) ?? ELEMENT_SYMBOLS[Z];
+    if (!symbol) return false;
+    const rows = this.xsCache.get(`${projectile}_${symbol}`);
+    return !!rows && rows.length > 0;
+  }
+
   getCrossSections(
     projectile: string,
     targetZ: number,
