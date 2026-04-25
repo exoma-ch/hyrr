@@ -32,6 +32,12 @@
     highlighted?: Set<string>;
     /** Selection mode — "multi" is reserved for future work. */
     mode?: "single" | "multi";
+    /** When set, controls the "show Z>92" toggle externally. When unset,
+     *  the component owns the toggle internally (defaults to false —
+     *  i.e. transactinides hidden by default). The label "Z>92" is per
+     *  the domain-review correction: Th (Z=90) is a real production
+     *  target, not a transuranic. */
+    showTransuranics?: boolean;
     /** Optional tooltip body. The PT owns positioning; the parent
      *  renders content. (Not wired in this commit; landed in a later
      *  Phase 1 commit alongside accessibility.) */
@@ -46,35 +52,67 @@
     disabled,
     highlighted,
     mode = "single",
+    showTransuranics,
   }: Props = $props();
+
+  let showTransuranicsInternal = $state(false);
+  let effectiveShow = $derived(showTransuranics ?? showTransuranicsInternal);
+
+  let visibleCells = $derived(
+    effectiveShow ? PERIODIC_TABLE : PERIODIC_TABLE.filter((c) => c.Z <= 92),
+  );
 
   function handleClick(cell: ElementCell): void {
     if (disabled?.has(cell.symbol)) return;
     onselect(cell.symbol);
   }
+
+  function toggleHighZ(): void {
+    if (showTransuranics === undefined) {
+      showTransuranicsInternal = !showTransuranicsInternal;
+    }
+  }
 </script>
 
-<div class="pt-grid" data-mode={mode}>
-  {#each PERIODIC_TABLE as cell (cell.Z)}
+<div class="pt-wrap">
+  <div class="pt-grid" data-mode={mode}>
+    {#each visibleCells as cell (cell.Z)}
+      <button
+        class="pt-cell"
+        data-block={cell.block}
+        data-z={cell.Z}
+        class:selected={selected === cell.symbol}
+        class:highlighted={highlighted?.has(cell.symbol)}
+        class:disabled={disabled?.has(cell.symbol)}
+        style:grid-row={cell.row >= 8 ? cell.row + 1 : cell.row}
+        style:grid-column={cell.col}
+        type="button"
+        onclick={() => handleClick(cell)}
+      >
+        <span class="cell-z">{cell.Z}</span>
+        <span class="cell-sym">{cell.symbol}</span>
+        <span class="cell-block" aria-hidden="true">{cell.block}</span>
+      </button>
+    {/each}
+  </div>
+
+  {#if showTransuranics === undefined}
     <button
-      class="pt-cell"
-      data-block={cell.block}
-      data-z={cell.Z}
-      class:selected={selected === cell.symbol}
-      class:highlighted={highlighted?.has(cell.symbol)}
-      class:disabled={disabled?.has(cell.symbol)}
-      style:grid-row={cell.row >= 8 ? cell.row + 1 : cell.row}
-      style:grid-column={cell.col}
-      type="button"
-      onclick={() => handleClick(cell)}
-    >
-      <span class="cell-z">{cell.Z}</span>
-      <span class="cell-sym">{cell.symbol}</span>
-    </button>
-  {/each}
+      class="pt-toggle"
+      onclick={toggleHighZ}
+      aria-pressed={effectiveShow}
+    >{effectiveShow ? "Hide Z>92" : "Show Z>92"}</button>
+  {/if}
 </div>
 
 <style>
+  .pt-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+  }
+
   .pt-grid {
     display: grid;
     grid-template-columns: repeat(18, minmax(1.4rem, 1fr));
@@ -84,6 +122,7 @@
     background: var(--c-bg-default);
     border: 1px solid var(--c-border);
     border-radius: 4px;
+    width: 100%;
   }
 
   .pt-cell {
@@ -127,8 +166,10 @@
   }
 
   .cell-z {
+    position: absolute;
+    top: 0.15rem;
+    left: 0.2rem;
     font-size: 0.55rem;
-    align-self: flex-start;
     color: inherit;
     opacity: 0.7;
   }
@@ -137,4 +178,32 @@
     font-size: 0.85rem;
     font-weight: 600;
   }
+
+  /* Block glyph at bottom-left — non-colour channel for the s/p/d/f
+     classification (pitfall 12: don't rely on colour alone). */
+  .cell-block {
+    position: absolute;
+    bottom: 0.15rem;
+    left: 0.2rem;
+    font-size: 0.5rem;
+    font-weight: 700;
+    color: inherit;
+    opacity: 0.55;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
+  .pt-toggle {
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    color: var(--c-text-muted);
+    padding: 0.25rem 0.6rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    align-self: flex-start;
+  }
+
+  .pt-toggle:hover { border-color: var(--c-accent); color: var(--c-text); }
+  .pt-toggle[aria-pressed="true"] { background: var(--c-accent-tint-subtle); color: var(--c-accent); border-color: var(--c-accent); }
 </style>
