@@ -78,25 +78,51 @@
     return map;
   });
 
-  let visibleRows = $derived([...cellsByRow.keys()].sort((a, b) => a - b));
+  /**
+   * Row traversal order for ArrowUp / ArrowDown. The visible PT
+   * organises detached lanthanide (data-row 8, period 6) and actinide
+   * (data-row 9, period 7) rows BELOW the main grid for layout
+   * reasons, but semantically (and for screen-reader logical order)
+   * row 8 sits between periods 6 and 7, and row 9 sits after period 7.
+   * Stepping from Ce (row 8) up should land on Hf/La (row 6), not
+   * Rf (row 7) — and Hf down should drop into Ce.
+   */
+  const ROW_ORDER = [1, 2, 3, 4, 5, 6, 8, 7, 9];
 
-  /** Roving-tabindex anchor — exactly one cell has tabindex=0 at a time. */
+  let visibleRows = $derived(ROW_ORDER.filter((r) => cellsByRow.has(r)));
+
+  /** Roving-tabindex anchor — exactly one cell has tabindex=0 at a time.
+   *  Also drives the tooltip target so screen readers reading the focused
+   *  cell never hear a description that belongs to a different cell. */
   let focusedZ = $state(1);
 
-  /** Hover takes precedence over focus for tooltip target. */
-  let hoveredZ = $state<number | null>(null);
-
-  let activeZ = $derived(hoveredZ ?? focusedZ);
-  let activeCell = $derived(ELEMENT_BY_Z.get(activeZ) ?? null);
+  let activeCell = $derived(ELEMENT_BY_Z.get(focusedZ) ?? null);
 
   // Stable per-instance id for the tooltip element (used by aria-describedby).
   let tooltipId = `pt-tooltip-${++tooltipIdCounter}`;
 
   // If the focused cell becomes hidden (toggling Z>92 off while focused
-  // on a high-Z cell), fall back to H.
+  // on a high-Z cell), fall back to the highest still-visible Z so the
+  // user keeps roughly their place — and re-focus the DOM since the old
+  // button has unmounted.
   $effect(() => {
     if (!visibleCells.some((c) => c.Z === focusedZ)) {
-      focusedZ = 1;
+      const fallback = visibleCells.reduce(
+        (best, c) => (c.Z > best ? c.Z : best),
+        1,
+      );
+      focusedZ = fallback;
+      void tick().then(() => {
+        const el = document.querySelector<HTMLButtonElement>(
+          `[data-pt-tooltip-id="${tooltipId}"] [data-z="${fallback}"]`,
+        );
+        // Only steal focus if focus was inside the grid before the
+        // current cell unmounted, otherwise we'd grab focus from
+        // unrelated UI on first mount.
+        if (el && document.activeElement && document.activeElement.closest(`[data-pt-tooltip-id="${tooltipId}"]`)) {
+          el.focus();
+        }
+      });
     }
   });
 
@@ -106,8 +132,13 @@
 
   function ariaLabelFor(cell: ElementCell): string {
     const parts = [cell.name, String(cell.Z)];
-    if (disabled?.has(cell.symbol)) parts.push("no TENDL data");
-    if (enrichableSet?.has(cell.symbol)) parts.push("enrichable");
+    if (disabled?.has(cell.symbol)) {
+      // When the cell is disabled the "enrichable" hint is misleading
+      // (you can't enrich a target with no TENDL coverage). Skip it.
+      parts.push("no TENDL data");
+    } else if (enrichableSet?.has(cell.symbol)) {
+      parts.push("enrichable");
+    }
     return parts.join(", ");
   }
 
@@ -230,14 +261,11 @@
             style:grid-column={cell.col}
             tabindex={focusedZ === cell.Z ? 0 : -1}
             aria-colindex={cell.col}
-            aria-rowindex={row}
             aria-label={ariaLabelFor(cell)}
-            aria-describedby={tooltip ? tooltipId : undefined}
+            aria-describedby={tooltip && focusedZ === cell.Z ? tooltipId : undefined}
             aria-selected={selected === cell.symbol ? true : undefined}
             onclick={() => handleClick(cell)}
             onfocus={() => { focusedZ = cell.Z; }}
-            onmouseenter={() => { hoveredZ = cell.Z; }}
-            onmouseleave={() => { hoveredZ = null; }}
           >
             <span class="cell-z">{cell.Z}</span>
             <span class="cell-sym">{cell.symbol}</span>
@@ -412,12 +440,18 @@
 
   /* Compact rendering on narrow viewports — at this width the parent
      should hide the PT behind a toggle (Phase 2), but if it's shown
-     anyway the cells stay legible by dropping the Z and block-glyph
-     overlays. */
+     anyway the cells stay legible by dropping the Z + corner overlays.
+     Block classification is then conveyed via border-style instead of
+     the (hidden) glyph so we don't fall back to a colour-only signal
+     (WCAG 1.4.1). */
   @media (max-width: 600px) {
     .pt-grid { gap: 1px; padding: 0.25rem; }
     .pt-cell { padding: 0.05rem; }
     .cell-z, .cell-block, .cell-enrich { display: none; }
     .cell-sym { font-size: 0.7rem; }
+    .pt-cell[data-block="s"] { border-style: solid; }
+    .pt-cell[data-block="p"] { border-style: dashed; }
+    .pt-cell[data-block="d"] { border-style: dotted; }
+    .pt-cell[data-block="f"] { border-style: double; border-width: 3px; }
   }
 </style>
