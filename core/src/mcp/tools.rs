@@ -358,6 +358,80 @@ fn build_and_run_sim(
     Ok((stack, result, projectile_str.to_string(), energy_mev, current_ma))
 }
 
+/// Stopping-only variant of [`build_and_run_sim`] for tools that only need
+/// energy / heat fields (notably `get_stack_energy_budget`). Same parser,
+/// different compute path — skips activation entirely.
+fn build_and_run_stopping_only(
+    db: &dyn DatabaseProtocol,
+    args: &Value,
+) -> Result<(crate::types::StackResult, String, f64, f64), String> {
+    let projectile_str = args
+        .get("projectile")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'projectile'")?;
+    let projectile = ProjectileType::from_str(projectile_str).ok_or("Invalid projectile type")?;
+    let energy_mev = args
+        .get("energy_mev")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'energy_mev'")?;
+    let current_ma = args
+        .get("current_ma")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'current_ma'")?;
+
+    let layer_arr = args
+        .get("layers")
+        .and_then(|v| v.as_array())
+        .ok_or("Missing 'layers'")?;
+
+    let beam = Beam::new(projectile, energy_mev, current_ma);
+
+    let mut layers = Vec::new();
+    for layer_val in layer_arr {
+        let material = layer_val
+            .get("material")
+            .and_then(|v| v.as_str())
+            .ok_or("Layer missing 'material'")?;
+        let overrides = parse_enrichment(layer_val.get("enrichment"))?;
+        let resolution = resolve_material(db, material, overrides.as_ref());
+        let thickness_cm = layer_val.get("thickness_cm").and_then(|v| v.as_f64());
+        let energy_out = layer_val.get("energy_out_mev").and_then(|v| v.as_f64());
+
+        layers.push(Layer {
+            density_g_cm3: resolution.density,
+            elements: resolution.elements,
+            thickness_cm,
+            areal_density_g_cm2: None,
+            energy_out_mev: energy_out,
+            is_monitor: false,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        });
+    }
+
+    if layers
+        .iter()
+        .all(|l| l.thickness_cm.is_none() && l.energy_out_mev.is_none())
+    {
+        if let Some(l) = layers.first_mut() {
+            l.thickness_cm = Some(0.1);
+        }
+    }
+
+    let mut stack = TargetStack {
+        beam,
+        layers,
+        irradiation_time_s: 0.0,
+        cooling_time_s: 0.0,
+        area_cm2: 1.0,
+        current_profile: None,
+    };
+
+    let result = crate::compute::compute_stack_stopping_only(db, &mut stack);
+    Ok((result, projectile_str.to_string(), energy_mev, current_ma))
+}
+
 fn tool_simulate(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
     let (stack, result, projectile_str, energy_mev, current_ma) = build_and_run_sim(db, args)?;
     let irr_time = stack.irradiation_time_s;
@@ -625,8 +699,11 @@ fn tool_compare_simulations(db: &dyn DatabaseProtocol, args: &Value) -> Result<S
 }
 
 fn tool_get_stack_energy_budget(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
-    // Reuses the simulate shape but we only read energy/heat fields.
-    let (_stack, result, projectile_str, energy_mev, current_ma) = build_and_run_sim(db, args)?;
+    // Stopping-only fast path — skips the activation pipeline that
+    // build_and_run_sim would invoke. Identical energy/heat numbers, much
+    // less work for stacks with many cross-section channels.
+    let (result, projectile_str, energy_mev, current_ma) =
+        build_and_run_stopping_only(db, args)?;
 
     let mut output = String::new();
     output.push_str(&format!(
