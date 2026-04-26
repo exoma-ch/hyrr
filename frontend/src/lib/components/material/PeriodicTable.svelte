@@ -32,6 +32,11 @@
     disabled?: Set<string>;
     /** Symbols that should pulse with a secondary highlight. */
     highlighted?: Set<string>;
+    /** Symbols whose isotopic composition can be enriched (i.e. have
+     *  ≥ 1 stable isotope on the supplier circuit). Rendered as a
+     *  small corner glyph on the cell. The follow-up "use enriched…"
+     *  shortcut lives in the parent's inspect panel. */
+    enrichableSet?: Set<string>;
     /** Selection mode — "multi" is reserved for future work. */
     mode?: "single" | "multi";
     /** Controlled "show Z>92" toggle — when undefined the component
@@ -47,6 +52,7 @@
     selected,
     disabled,
     highlighted,
+    enrichableSet,
     mode = "single",
     showTransuranics,
     tooltip,
@@ -99,8 +105,10 @@
   }
 
   function ariaLabelFor(cell: ElementCell): string {
-    const base = `${cell.name}, ${cell.Z}`;
-    return disabled?.has(cell.symbol) ? `${base}, no TENDL data` : base;
+    const parts = [cell.name, String(cell.Z)];
+    if (disabled?.has(cell.symbol)) parts.push("no TENDL data");
+    if (enrichableSet?.has(cell.symbol)) parts.push("enrichable");
+    return parts.join(", ");
   }
 
   function handleClick(cell: ElementCell): void {
@@ -234,6 +242,9 @@
             <span class="cell-z">{cell.Z}</span>
             <span class="cell-sym">{cell.symbol}</span>
             <span class="cell-block" aria-hidden="true">{cell.block}</span>
+            {#if enrichableSet?.has(cell.symbol)}
+              <span class="cell-enrich" aria-hidden="true">★</span>
+            {/if}
           </button>
         {/each}
       </div>
@@ -347,6 +358,15 @@
   .cell-sym {
     font-size: 0.85rem;
     font-weight: 600;
+  }
+
+  .cell-enrich {
+    position: absolute;
+    top: 0.1rem;
+    right: 0.2rem;
+    font-size: 0.55rem;
+    color: var(--c-gold);
+    line-height: 1;
   }
 
   /* Block glyph at bottom-left — non-colour channel for the s/p/d/f
