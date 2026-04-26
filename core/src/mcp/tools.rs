@@ -598,10 +598,16 @@ fn tool_compare_simulations(db: &dyn DatabaseProtocol, args: &Value) -> Result<S
     let mut all_names: Vec<String> = iso_a.keys().chain(iso_b.keys()).cloned().collect();
     all_names.sort();
     all_names.dedup();
-    all_names.sort_by(|a, b| {
-        let max_a = iso_a.get(a).copied().unwrap_or(0.0).max(iso_b.get(a).copied().unwrap_or(0.0));
-        let max_b = iso_a.get(b).copied().unwrap_or(0.0).max(iso_b.get(b).copied().unwrap_or(0.0));
-        max_b.partial_cmp(&max_a).unwrap_or(std::cmp::Ordering::Equal)
+    // Sort isotopes by their peak activity across both configs (descending),
+    // so the most-produced ones appear first regardless of which side
+    // dominates. `peak_lhs` / `peak_rhs` are the cross-config peaks for
+    // the left and right entries being compared, NOT for configs A and B.
+    all_names.sort_by(|lhs, rhs| {
+        let peak_lhs = iso_a.get(lhs).copied().unwrap_or(0.0)
+            .max(iso_b.get(lhs).copied().unwrap_or(0.0));
+        let peak_rhs = iso_a.get(rhs).copied().unwrap_or(0.0)
+            .max(iso_b.get(rhs).copied().unwrap_or(0.0));
+        peak_rhs.partial_cmp(&peak_lhs).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut output = String::new();
@@ -801,6 +807,16 @@ fn tool_get_isotope_production_curve(
             if lr.depth_profile.is_empty() || rates.is_empty() {
                 return Err("Layer has no depth profile (thickness not resolved)".to_string());
             }
+            // Invariant: depth_profile and per-isotope production rates are
+            // sibling arrays sized off depth_raw.depths in compute.rs, so
+            // length parity must hold. Guard so a future regression can't
+            // silently truncate the table via zip.
+            assert_eq!(
+                lr.depth_profile.len(),
+                rates.len(),
+                "depth_profile / depth_production_rates length mismatch — \
+                 compute_stack invariant broken",
+            );
             output.push_str(&format!(
                 "Local production rate [atoms/s/cm] along depth, layer {}. {} points.\n\n",
                 layer_idx + 1,
