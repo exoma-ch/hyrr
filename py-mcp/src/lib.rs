@@ -4,10 +4,16 @@
 
 use pyo3::prelude::*;
 
-/// Enter the MCP stdio loop. Blocks until stdin closes.
+/// Enter the MCP stdio loop pinned to the given nuclear data library.
+///
+/// Blocks until stdin closes.
 #[pyfunction]
-fn run(data_dir: String) -> PyResult<()> {
-    hyrr_core::mcp::transport::run_mcp_server(&data_dir);
+#[pyo3(signature = (data_dir, library=None))]
+fn run(data_dir: String, library: Option<String>) -> PyResult<()> {
+    let lib = library.unwrap_or_else(|| {
+        hyrr_core::mcp::transport::DEFAULT_LIBRARY.to_string()
+    });
+    hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &lib);
     Ok(())
 }
 
@@ -18,10 +24,17 @@ fn resolve_data_dir() -> String {
     hyrr_core::data_dir::resolve()
 }
 
+/// Default nuclear data library identifier (e.g. "tendl-2024").
+#[pyfunction]
+fn default_library() -> &'static str {
+    hyrr_core::mcp::transport::DEFAULT_LIBRARY
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_data_dir, m)?)?;
+    m.add_function(wrap_pyfunction!(default_library, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
