@@ -409,4 +409,15 @@
   @media (prefers-reduced-motion: reduce) {
     .pt-cell { transition: none; }
   }
+
+  /* Compact rendering on narrow viewports — at this width the parent
+     should hide the PT behind a toggle (Phase 2), but if it's shown
+     anyway the cells stay legible by dropping the Z and block-glyph
+     overlays. */
+  @media (max-width: 600px) {
+    .pt-grid { gap: 1px; padding: 0.25rem; }
+    .pt-cell { padding: 0.05rem; }
+    .cell-z, .cell-block, .cell-enrich { display: none; }
+    .cell-sym { font-size: 0.7rem; }
+  }
 </style>
