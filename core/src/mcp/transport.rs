@@ -69,10 +69,30 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Run the MCP stdio server loop.
 pub fn run_mcp_server(data_dir: &str) {
+    // Pre-flight: verify the data directory actually contains a nucl-parquet
+    // tree. ParquetDataStore::new only loads the eager metadata files; many
+    // tools fault later when they reach for cross-sections / abundances /
+    // decay data, which manifests as a mid-conversation panic from inside
+    // an MCP call. Catch the missing-data case here with one actionable
+    // line so the user can fix `HYRR_DATA` before Claude Code loses the
+    // server connection.
+    let meta_dir = std::path::Path::new(data_dir).join("meta");
+    if !meta_dir.is_dir() {
+        eprintln!(
+            "hyrr-mcp: no nucl-parquet data found at {data_dir}\n\
+             \n\
+             Expected `{}` to exist. Set HYRR_DATA or pass --data-dir to point at a\n\
+             nucl-parquet checkout, or clone\n\
+             https://github.com/exoma-ch/nucl-parquet into ~/.hyrr/nucl-parquet.\n",
+            meta_dir.display(),
+        );
+        std::process::exit(2);
+    }
+
     let db = match crate::db::ParquetDataStore::new(data_dir, "tendl-2024") {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("Failed to load nuclear data from {}: {}", data_dir, e);
+            eprintln!("hyrr-mcp: failed to load nuclear data from {data_dir}: {e}");
             std::process::exit(1);
         }
     };
