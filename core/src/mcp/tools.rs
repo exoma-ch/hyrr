@@ -5,6 +5,50 @@ use crate::materials::{resolve_material, ELEMENT_DENSITIES, MATERIAL_CATALOG};
 use crate::types::*;
 use serde_json::Value;
 
+/// JSON Schema for a single target layer. Shared by every tool that takes
+/// `layers`. `require_thickness` toggles whether `thickness_cm` is required —
+/// `simulate` and `get_isotope_production_curve` accept thickness-OR-energy
+/// (an exit-energy degrader is also valid), while `get_stack_energy_budget`
+/// always wants explicit thickness.
+fn layer_schema(require_thickness: bool) -> Value {
+    let required: Vec<&'static str> = if require_thickness {
+        vec!["material", "thickness_cm"]
+    } else {
+        vec!["material"]
+    };
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "material": {
+                "type": "string",
+                "description": "Material name or formula (e.g., 'Cu', 'MoO3', 'havar')"
+            },
+            "thickness_cm": {
+                "type": "number",
+                "description": "Layer thickness in cm"
+            },
+            "energy_out_mev": {
+                "type": "number",
+                "description": "Target exit energy in MeV. Used as a degrader spec when thickness_cm is omitted."
+            },
+            "enrichment": {
+                "type": "array",
+                "description": "Isotopic enrichment overrides for this layer. Flat shape: [{element: 'Mo', A: 100, fraction: 0.95}].",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "element": { "type": "string" },
+                        "A": { "type": "integer" },
+                        "fraction": { "type": "number" }
+                    },
+                    "required": ["element", "A", "fraction"]
+                }
+            }
+        },
+        "required": required,
+    })
+}
+
 /// List all available MCP tools.
 pub fn list_tools() -> Vec<Value> {
     vec![
@@ -30,33 +74,7 @@ pub fn list_tools() -> Vec<Value> {
                     "layers": {
                         "type": "array",
                         "description": "Target layers (beam traversal order)",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "material": {
-                                    "type": "string",
-                                    "description": "Material name or formula (e.g., 'Cu', 'MoO3', 'havar')"
-                                },
-                                "thickness_cm": {
-                                    "type": "number",
-                                    "description": "Layer thickness in cm"
-                                },
-                                "enrichment": {
-                                    "type": "array",
-                                    "description": "Isotopic enrichment overrides for this layer. Flat shape: [{element: 'Mo', A: 100, fraction: 0.95}].",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "element": { "type": "string" },
-                                            "A": { "type": "integer" },
-                                            "fraction": { "type": "number" }
-                                        },
-                                        "required": ["element", "A", "fraction"]
-                                    }
-                                }
-                            },
-                            "required": ["material"]
-                        }
+                        "items": layer_schema(false)
                     },
                     "irradiation_time_s": {
                         "type": "number",
@@ -111,14 +129,7 @@ pub fn list_tools() -> Vec<Value> {
                     "current_ma": { "type": "number" },
                     "layers": {
                         "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "material": { "type": "string" },
-                                "thickness_cm": { "type": "number" }
-                            },
-                            "required": ["material", "thickness_cm"]
-                        }
+                        "items": layer_schema(true)
                     }
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
@@ -148,26 +159,7 @@ pub fn list_tools() -> Vec<Value> {
                     "current_ma": { "type": "number" },
                     "layers": {
                         "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "material": { "type": "string" },
-                                "thickness_cm": { "type": "number" },
-                                "enrichment": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "element": { "type": "string" },
-                                            "A": { "type": "integer" },
-                                            "fraction": { "type": "number" }
-                                        },
-                                        "required": ["element", "A", "fraction"]
-                                    }
-                                }
-                            },
-                            "required": ["material"]
-                        }
+                        "items": layer_schema(false)
                     },
                     "irradiation_time_s": { "type": "number" },
                     "cooling_time_s": { "type": "number" },
