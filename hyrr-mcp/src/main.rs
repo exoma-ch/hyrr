@@ -16,7 +16,26 @@ fn main() {
     }
 
     let data_dir = hyrr_core::data_dir::resolve();
-    hyrr_core::mcp::transport::run_mcp_server(&data_dir);
+    let library = resolve_library(&args);
+    hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library);
+}
+
+/// Resolve the nuclear data library: `--library <id>` arg → `HYRR_LIBRARY`
+/// env → `tendl-2024` (DEFAULT_LIBRARY).
+fn resolve_library(args: &[String]) -> String {
+    if args.len() >= 2 {
+        for i in 0..args.len() - 1 {
+            if args[i] == "--library" {
+                return args[i + 1].clone();
+            }
+        }
+    }
+    if let Ok(id) = std::env::var("HYRR_LIBRARY") {
+        if !id.is_empty() {
+            return id;
+        }
+    }
+    hyrr_core::mcp::transport::DEFAULT_LIBRARY.to_string()
 }
 
 fn print_help() {
@@ -26,15 +45,17 @@ fn print_help() {
          Stdio MCP server exposing HYRR radio-isotope production tools.\n\
          \n\
          USAGE:\n    \
-             hyrr-mcp [--data-dir <PATH>]\n\
+             hyrr-mcp [--data-dir <PATH>] [--library <ID>]\n\
          \n\
          OPTIONS:\n    \
              --data-dir <PATH>  Override nucl-parquet data directory\n    \
+             --library <ID>     Nuclear data library, e.g. tendl-2024 (default), endfb-8.1\n    \
              --version, -V      Print version and exit\n    \
              --help, -h         Print this help and exit\n\
          \n\
          ENVIRONMENT:\n    \
-             HYRR_DATA          Nucl-parquet data directory (if --data-dir not set)\n\
+             HYRR_DATA          Nucl-parquet data directory (if --data-dir not set)\n    \
+             HYRR_LIBRARY       Nuclear data library (if --library not set)\n\
          \n\
          Data resolution priority:\n    \
              1. --data-dir argument\n    \
