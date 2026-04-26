@@ -1,0 +1,175 @@
+name: Release hyrr-mcp
+
+# Builds ABI3 wheels for hyrr-mcp on a 5-target matrix and publishes to PyPI
+# via OIDC trusted publishing. Triggered by tags matching `hyrr-mcp-v*`.
+#
+# To cut a release:
+#   1. Bump py-mcp/Cargo.toml + py-mcp/pyproject.toml version (must match).
+#   2. Tag: git tag hyrr-mcp-v0.1.0 && git push --tags
+#   3. This workflow builds the matrix and publishes via OIDC. No tokens.
+#
+# PyPI trusted publisher must be pre-configured under the project `hyrr-mcp`
+# with workflow `release-hyrr-mcp.yml` and environment `pypi`.
+
+on:
+  push:
+    tags:
+      - "hyrr-mcp-v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to PyPI (requires the trigger to be a tag too)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.target.name }})
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { name: linux-x86_64,  runner: ubuntu-latest,  rust-target: x86_64-unknown-linux-gnu,    maturin-target: x86_64,  manylinux: "auto" }
+          - { name: linux-aarch64, runner: ubuntu-latest,  rust-target: aarch64-unknown-linux-gnu,   maturin-target: aarch64, manylinux: "auto" }
+          - { name: macos-x86_64,  runner: macos-13,       rust-target: x86_64-apple-darwin,         maturin-target: x86_64,  manylinux: "" }
+          - { name: macos-arm64,   runner: macos-14,       rust-target: aarch64-apple-darwin,        maturin-target: aarch64, manylinux: "" }
+          - { name: windows-x86_64, runner: windows-latest, rust-target: x86_64-pc-windows-msvc,     maturin-target: x64,     manylinux: "" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.rust-target }}
+
+      - name: Build wheel (linux)
+        if: startsWith(matrix.target.runner, 'ubuntu')
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: py-mcp
+          target: ${{ matrix.target.maturin-target }}
+          manylinux: ${{ matrix.target.manylinux }}
+          args: --release --out dist
+
+      - name: Build wheel (macos / windows)
+        if: ${{ !startsWith(matrix.target.runner, 'ubuntu') }}
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: py-mcp
+          target: ${{ matrix.target.maturin-target }}
+          args: --release --out dist
+
+      - name: Inspect wheel
+        shell: bash
+        run: |
+          ls -la py-mcp/dist
+          for w in py-mcp/dist/*.whl; do
+            echo "== $w =="
+            python -m zipfile -l "$w" | head -25
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target.name }}
+          path: py-mcp/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: py-mcp
+          command: sdist
+          args: --out dist
+      - name: Verify sdist is clean (no .cargo/, no __pycache__)
+        run: |
+          set -e
+          for f in py-mcp/dist/*.tar.gz; do
+            echo "== $f =="
+            if tar tzf "$f" | grep -E '\.cargo/|__pycache__'; then
+              echo "::error::sdist contains forbidden paths"
+              exit 1
+            fi
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: py-mcp/dist/*.tar.gz
+          if-no-files-found: error
+
+  parity-test:
+    name: parity (linux)
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build hyrr-mcp (Rust standalone) + desktop --mcp
+        run: |
+          (cd hyrr-mcp && cargo build --release)
+          (cd desktop/src-tauri && cargo build)
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+      - name: Install the freshly-built wheel
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          pip install dist/*.whl
+          which hyrr-mcp
+          hyrr-mcp --version
+      - name: Run cross-entry-point parity test
+        env:
+          HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
+          HYRR_MCP_BIN: ${{ github.workspace }}/hyrr-mcp/target/release/hyrr-mcp
+          HYRR_DESKTOP_BIN: ${{ github.workspace }}/desktop/src-tauri/target/debug/hyrr-desktop
+          HYRR_MCP_PYTHON: ${{ github.workspace }}/.venv/bin/python
+        run: scripts/mcp_parity_test.sh
+
+  publish:
+    name: publish to PyPI
+    needs: [build, sdist, parity-test]
+    if: startsWith(github.ref, 'refs/tags/hyrr-mcp-v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC trusted-publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Flatten artifact directory
+        run: |
+          mkdir -p upload
+          find dist -name '*.whl' -exec mv {} upload/ \;
+          find dist -name '*.tar.gz' -exec mv {} upload/ \;
+          ls -la upload
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: upload
+          # Trusted-publishing: no `password` field — OIDC handles auth via
+          # the configured publisher on https://pypi.org/manage/project/hyrr-mcp/.
