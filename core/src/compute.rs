@@ -464,6 +464,126 @@ fn apply_chain_solver_by_component(
     new_results
 }
 
+/// Stopping-only fast path: energy degradation, depth profile, heat.
+///
+/// Mirrors [`compute_stack`] but skips the entire activation pipeline
+/// (cross-section integration, Bateman, chain solver). Use when you only
+/// need beam-stop / heat-budget questions answered — the
+/// `get_stack_energy_budget` MCP tool is the canonical caller. Returns a
+/// `StackResult` with empty `isotope_results` and `depth_production_rates`
+/// per layer; everything else is identical to the equivalent
+/// `compute_stack` call.
+pub fn compute_stack_stopping_only(
+    db: &dyn DatabaseProtocol,
+    stack: &mut TargetStack,
+) -> StackResult {
+    let beam = &stack.beam;
+    let area = stack.area_cm2;
+    let projectile = &beam.projectile;
+    let current_ma = beam.current_ma;
+    let projectile_z = projectile.z();
+
+    let mut energy_in = beam.energy_mev;
+    let mut layer_results = Vec::new();
+
+    for layer in &mut stack.layers {
+        let lr = compute_layer_stopping_only(
+            db,
+            projectile,
+            current_ma,
+            projectile_z,
+            layer,
+            energy_in,
+            area,
+        );
+        energy_in = lr.energy_out;
+        layer_results.push(lr);
+    }
+
+    StackResult {
+        layer_results,
+        irradiation_time_s: stack.irradiation_time_s,
+        cooling_time_s: stack.cooling_time_s,
+    }
+}
+
+/// Per-layer stopping-only computation — the prefix of [`compute_layer`]
+/// up through heat integration, with the activation loop and chain solver
+/// stripped out. Returns a [`LayerResult`] whose `isotope_results` and
+/// `depth_production_rates` are empty.
+fn compute_layer_stopping_only(
+    db: &dyn DatabaseProtocol,
+    projectile: &ProjectileType,
+    current_ma: f64,
+    projectile_z: u32,
+    layer: &mut Layer,
+    energy_in: f64,
+    area: f64,
+) -> LayerResult {
+    let composition = layer_composition(layer);
+    let density = layer.density_g_cm3;
+
+    let (thickness, energy_out) = if let Some(e_out) = layer.energy_out_mev {
+        let thick = compute_thickness_from_energy(
+            db, projectile, &composition, density, energy_in, e_out, 1000,
+        );
+        (thick, e_out)
+    } else if let Some(thick) = layer.thickness_cm {
+        let e_out = compute_energy_out(
+            db, projectile, &composition, density, energy_in, thick, 1000,
+        );
+        (thick, e_out)
+    } else {
+        let thick = layer.areal_density_g_cm2.unwrap() / density;
+        let e_out = compute_energy_out(
+            db, projectile, &composition, density, energy_in, thick, 1000,
+        );
+        (thick, e_out)
+    };
+
+    layer.computed_energy_in = energy_in;
+    layer.computed_energy_out = energy_out;
+    layer.computed_thickness = thickness;
+
+    let sp_sources = get_stopping_sources(db, projectile, &composition);
+
+    // Same energy grid + dE/dx the full path uses, so heat values are
+    // bit-identical to the activation path's output.
+    let layer_e_low = energy_out.max(0.01);
+    let layer_energies = linspace(layer_e_low, energy_in, 100);
+    let layer_dedx = dedx_mev_per_cm(db, projectile, &composition, density, &layer_energies);
+
+    let depth_raw =
+        generate_depth_profile(&layer_energies, &layer_dedx, current_ma, area, projectile_z);
+
+    let mut depth_profile = Vec::with_capacity(depth_raw.depths.len());
+    for i in 0..depth_raw.depths.len() {
+        depth_profile.push(DepthPoint {
+            depth_cm: depth_raw.depths[i],
+            energy_mev: depth_raw.energies_ordered[i],
+            dedx_mev_cm: layer_dedx[layer_dedx.len() - 1 - i].abs(),
+            heat_w_cm3: depth_raw.heat_w_cm3[i],
+        });
+    }
+
+    let heat_kw = if depth_profile.len() >= 2 {
+        integrate_heat(&depth_profile, area)
+    } else {
+        0.0
+    };
+
+    LayerResult {
+        energy_in,
+        energy_out,
+        delta_e_mev: energy_in - energy_out,
+        heat_kw,
+        depth_profile,
+        isotope_results: HashMap::new(),
+        stopping_power_sources: sp_sources,
+        depth_production_rates: HashMap::new(),
+    }
+}
+
 fn integrate_heat(profile: &[DepthPoint], area_cm2: f64) -> f64 {
     if profile.len() < 2 {
         return 0.0;
