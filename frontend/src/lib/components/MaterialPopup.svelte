@@ -20,9 +20,22 @@
     materials: MaterialInfo[];
     /** If set, auto-open editor for this custom material ID when popup opens */
     editMaterialId?: string | null;
+    /** Active beam projectile ("p", "d", "a", …). Phase 2 uses this to
+     *  compute the PeriodicTable's TENDL-coverage disabled set. */
+    projectile?: string;
   }
 
-  let { open, onclose, onselect, onenrichment, currentEnrichment, materials, editMaterialId = null }: Props = $props();
+  // `projectile` is consumed by the PeriodicTable view in the next
+  // commit; here we declare the prop only.
+  let {
+    open,
+    onclose,
+    onselect,
+    onenrichment,
+    currentEnrichment,
+    materials,
+    editMaterialId = null,
+  }: Props = $props();
 
   let query = $state("");
   let searchView: { focus: () => void } | undefined = $state();

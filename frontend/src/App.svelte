@@ -62,6 +62,7 @@
 
   let config = $derived(getConfig());
   let layers = $derived(getLayers());
+  let projectile = $derived(config.beam.projectile);
   let hasLayers = $derived(layers.length > 0);
   let status = $derived(getStatus());
   let result = $derived(getResult());
@@ -344,6 +345,7 @@
         : (() => { const item = getInternalItems()[materialPopupLayerIndex]; return item && !('mode' in item) ? item.enrichment : undefined; })()}
       materials={[]}
       editMaterialId={materialPopupEditId}
+      {projectile}
     />
 
     <ElementPopup
