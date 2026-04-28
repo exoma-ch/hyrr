@@ -59,6 +59,11 @@
   const formulaPreview = $derived(
     previewParse && "ok" in previewParse ? previewParse.ok : null,
   );
+  /** What the paste input displays — user's draft when dirty, otherwise the
+   *  canonical serialisation of the current rows (so edits to rows propagate
+   *  back into the text field). */
+  const displayText = $derived(textDirty ? textDraft : serialised);
+  let pasteError = $state<string | null>(null);
 
   const autoName = $derived(formulaPreview?.autoName ?? "");
   const autoDensity = $derived(formulaPreview?.density ?? null);
@@ -156,6 +161,44 @@
     });
   }
 
+  function onPasteInput(e: Event) {
+    textDraft = (e.target as HTMLInputElement).value;
+    textDirty = true;
+    pasteError = null;
+  }
+
+  function commitPastedText() {
+    if (!textDirty) return;
+    const trimmed = textDraft.trim();
+    if (!trimmed) {
+      // User cleared the field → clear rows.
+      rows = [];
+      textDirty = false;
+      pasteError = null;
+      return;
+    }
+    const parsed = parseMaterialInput(textDraft);
+    if (parsed && "ok" in parsed) {
+      rows = toRows(parsed.ok);
+      textDirty = false;
+      pasteError = null;
+    } else if (parsed && "error" in parsed) {
+      // Keep rows untouched; surface the error inline. textDirty stays true
+      // so the user's draft remains visible while they correct it.
+      pasteError = parsed.error;
+    } else {
+      // null result (whitespace-only after trim handled above; shouldn't reach)
+      pasteError = null;
+    }
+  }
+
+  function onPasteKeydown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      commitPastedText();
+    }
+  }
+
   // Focus the first focusable inside the modal when it opens.
   $effect(() => {
     if (!elementPickerOpen) return;
@@ -183,6 +226,7 @@
       textDraft = "";
       textDirty = false;
       formError = null;
+      pasteError = null;
     } else {
       rows = [];
       defineOpen = false;
@@ -194,6 +238,7 @@
       textDraft = "";
       textDirty = false;
       formError = null;
+      pasteError = null;
     }
   });
 
@@ -272,6 +317,23 @@
           bind:this={addBtnRef}
           onclick={openPicker}
         >+ element</button>
+
+        <label class="field-label paste-field">
+          Or paste formula
+          <input
+            type="text"
+            class="field-input"
+            placeholder="Al2O3  or  Al 80%, Cu 5%, Zn %"
+            value={displayText}
+            oninput={onPasteInput}
+            onblur={commitPastedText}
+            onkeydown={onPasteKeydown}
+          />
+          <span class="field-hint">Stoichiometric formula or mass ratios. Cmd/Ctrl-Enter or blur to apply.</span>
+          {#if pasteError}
+            <span class="paste-error">{pasteError}</span>
+          {/if}
+        </label>
 
         {#if formulaPreview}
           <div class="preview">
@@ -506,6 +568,13 @@
     font-size: 0.6rem;
     color: var(--c-text-subtle);
     font-style: italic;
+  }
+
+  .paste-field { margin-top: 0.4rem; }
+
+  .paste-error {
+    color: var(--c-red);
+    font-size: 0.7rem;
   }
 
   .preview {
