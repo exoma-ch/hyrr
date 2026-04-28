@@ -26,6 +26,7 @@ function makeStubDb(): DatabaseProtocol {
   };
   return {
     getCrossSections: () => [],
+    hasCrossSections: () => false,
     getStoppingPower: () => ({ energiesMeV: new Float64Array(), dedx: new Float64Array() }),
     getNaturalAbundances: (Z) => naturalAbundances[Z] ?? new Map(),
     getDecayData: () => null,
