@@ -17,8 +17,10 @@
     serialise,
     toRows,
     validate,
+    type Issue,
     type Row,
   } from "./define-form-rows";
+  import DefineFormRow from "./DefineFormRow.svelte";
 
   interface Props {
     /** Set (reactively) to open the form in edit mode with these values.
@@ -63,6 +65,40 @@
 
   const validationErrors = $derived(validation.filter((i) => i.level === "error"));
   const canCommit = $derived(rows.length > 0 && validationErrors.length === 0 && !!formulaPreview);
+  const formIssues = $derived(validation.filter((i) => !i.rowId));
+  const issuesByRow = $derived.by(() => {
+    const byRow = new Map<string, Issue[]>();
+    for (const i of validation) {
+      if (i.rowId) {
+        const arr = byRow.get(i.rowId) ?? [];
+        arr.push(i);
+        byRow.set(i.rowId, arr);
+      }
+    }
+    return byRow;
+  });
+
+  /** Stable radiogroup name so the browser enforces single-balance selection. */
+  const balanceRadioName = `define-balance-${Math.random().toString(36).slice(2, 10)}`;
+
+  /** Splice a row immutably with a partial patch. When isBalance flips on,
+   *  also clear it from every other row so only one survives. */
+  function patchRow(id: string, patch: Partial<Row>) {
+    rows = rows.map((r) => {
+      if (r.id === id) {
+        return { ...r, ...patch };
+      }
+      // Force-clear other rows' isBalance when the patch turns one on.
+      if (patch.isBalance === true && r.isBalance) {
+        return { ...r, isBalance: false };
+      }
+      return r;
+    });
+  }
+
+  function removeRow(id: string) {
+    rows = rows.filter((r) => r.id !== id);
+  }
 
   // Seed/reset from the editInitial prop. This effect watches the prop, not
   // rows/textDraft, so it does not violate the "no $effect on rows or
@@ -147,20 +183,20 @@
 
   {#if defineOpen}
     <div class="define-form">
-      <div class="rows-section">
+      <div class="rows-section" role="grid" aria-label="Material composition rows">
         <span class="rows-heading">Composition</span>
         {#if rows.length === 0}
           <p class="empty-hint">No elements yet — paste a formula or pick from the periodic table (coming soon).</p>
         {:else}
-          <ul class="rows-list">
-            {#each rows as r (r.id)}
-              <li class="row-item">
-                <span class="row-symbol">{r.symbol}</span>
-                <span class="row-value">{r.isBalance ? "balance" : (r.value ?? "—")}</span>
-                <span class="row-unit">{r.unit}</span>
-              </li>
-            {/each}
-          </ul>
+          {#each rows as r (r.id)}
+            <DefineFormRow
+              row={r}
+              radioName={balanceRadioName}
+              issues={issuesByRow.get(r.id) ?? []}
+              onchange={(patch) => patchRow(r.id, patch)}
+              onremove={() => removeRow(r.id)}
+            />
+          {/each}
         {/if}
 
         {#if formulaPreview}
@@ -211,7 +247,7 @@
       {#if formError}
         <p class="form-error">{formError}</p>
       {/if}
-      {#each validation as issue}
+      {#each formIssues as issue}
         <p class="form-{issue.level}">{issue.message}</p>
       {/each}
 
@@ -280,30 +316,6 @@
     margin: 0;
     font-style: italic;
   }
-
-  .rows-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-
-  .row-item {
-    display: flex;
-    gap: 0.5rem;
-    align-items: baseline;
-    padding: 0.2rem 0.4rem;
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    font-size: 0.75rem;
-  }
-
-  .row-symbol { font-weight: 500; min-width: 2rem; color: var(--c-text); }
-  .row-value { color: var(--c-text-muted); }
-  .row-unit { color: var(--c-text-subtle); font-size: 0.65rem; text-transform: uppercase; }
 
   .field-label {
     display: flex;
