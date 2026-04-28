@@ -13,6 +13,7 @@
     updateCustomMaterial,
   } from "../../stores/custom-materials.svelte";
   import {
+    generateRowId,
     parseMaterialInput,
     serialise,
     toRows,
@@ -21,6 +22,7 @@
     type Row,
   } from "./define-form-rows";
   import DefineFormRow from "./DefineFormRow.svelte";
+  import PeriodicTable from "./PeriodicTable.svelte";
 
   interface Props {
     /** Set (reactively) to open the form in edit mode with these values.
@@ -99,6 +101,71 @@
   function removeRow(id: string) {
     rows = rows.filter((r) => r.id !== id);
   }
+
+  // --- "+ element" picker (PT in a focus-trapped modal) ---
+  let elementPickerOpen = $state(false);
+  let addBtnRef = $state<HTMLButtonElement | null>(null);
+  let modalRef = $state<HTMLDivElement | null>(null);
+
+  function openPicker() {
+    elementPickerOpen = true;
+  }
+
+  function closePicker() {
+    if (!elementPickerOpen) return;
+    elementPickerOpen = false;
+    // Return focus to the trigger after the modal unmounts.
+    requestAnimationFrame(() => addBtnRef?.focus());
+  }
+
+  function onPickerKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closePicker();
+      return;
+    }
+    if (e.key !== "Tab" || !modalRef) return;
+    const focusables = Array.from(
+      modalRef.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), [tabindex="0"]',
+      ),
+    ).filter((el) => !el.hasAttribute("hidden"));
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  function handlePtSelect(symbol: string) {
+    const id = generateRowId();
+    rows = [...rows, { id, symbol, value: null, unit: "wt%", isBalance: false }];
+    closePicker();
+    // After the row mounts, focus its number input.
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLInputElement>(
+        `[data-row-id="${id}"] .value-input`,
+      );
+      el?.focus();
+    });
+  }
+
+  // Focus the first focusable inside the modal when it opens.
+  $effect(() => {
+    if (!elementPickerOpen) return;
+    requestAnimationFrame(() => {
+      const first = modalRef?.querySelector<HTMLElement>(
+        'button:not([disabled]), [tabindex="0"]',
+      );
+      first?.focus();
+    });
+  });
 
   // Seed/reset from the editInitial prop. This effect watches the prop, not
   // rows/textDraft, so it does not violate the "no $effect on rows or
@@ -186,7 +253,7 @@
       <div class="rows-section" role="grid" aria-label="Material composition rows">
         <span class="rows-heading">Composition</span>
         {#if rows.length === 0}
-          <p class="empty-hint">No elements yet — paste a formula or pick from the periodic table (coming soon).</p>
+          <p class="empty-hint">No elements yet — add one below.</p>
         {:else}
           {#each rows as r (r.id)}
             <DefineFormRow
@@ -198,6 +265,13 @@
             />
           {/each}
         {/if}
+
+        <button
+          type="button"
+          class="add-row-btn"
+          bind:this={addBtnRef}
+          onclick={openPicker}
+        >+ element</button>
 
         {#if formulaPreview}
           <div class="preview">
@@ -267,6 +341,29 @@
   {/if}
 </div>
 
+{#if elementPickerOpen}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div class="picker-overlay" onclick={(e) => { if (e.target === e.currentTarget) closePicker(); }}>
+    <div
+      class="picker-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Pick an element"
+      tabindex="-1"
+      bind:this={modalRef}
+      onkeydown={onPickerKeydown}
+    >
+      <div class="picker-header">
+        <h3>Pick an element</h3>
+        <button class="picker-close" aria-label="Close" onclick={closePicker}>×</button>
+      </div>
+      <div class="picker-body">
+        <PeriodicTable onselect={handlePtSelect} />
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .define-section {
     border-top: 1px solid var(--c-border);
@@ -315,6 +412,75 @@
     color: var(--c-text-subtle);
     margin: 0;
     font-style: italic;
+  }
+
+  .add-row-btn {
+    align-self: flex-start;
+    background: var(--c-bg-muted);
+    border: 1px dashed var(--c-border);
+    border-radius: 4px;
+    color: var(--c-text-muted);
+    padding: 0.25rem 0.6rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    margin-top: 0.2rem;
+  }
+
+  .add-row-btn:hover { color: var(--c-accent); border-color: var(--c-accent); }
+  .add-row-btn:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
+
+  .picker-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--c-overlay-heavy);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100;
+    padding: 1rem;
+  }
+
+  .picker-modal {
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 8px;
+    max-width: 900px;
+    max-height: 90vh;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .picker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 0.9rem;
+    border-bottom: 1px solid var(--c-border);
+  }
+
+  .picker-header h3 { margin: 0; font-size: 0.95rem; color: var(--c-text); }
+
+  .picker-close {
+    background: none;
+    border: none;
+    color: var(--c-text-muted);
+    font-size: 1.3rem;
+    cursor: pointer;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    line-height: 1;
+  }
+
+  .picker-close:hover { color: var(--c-text); background: var(--c-bg-muted); }
+  .picker-close:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
+
+  .picker-body {
+    padding: 0.75rem;
+    overflow: auto;
+    flex: 1;
+    min-height: 0;
   }
 
   .field-label {
