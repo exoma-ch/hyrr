@@ -116,11 +116,19 @@
     elementPickerOpen = true;
   }
 
-  function closePicker() {
+  /** Close the picker. `returnFocus` defaults to true (Escape, ×, click-out
+   *  all want focus on the trigger). PT.onselect passes false because it
+   *  immediately focuses the new row's value input — keeping both branches
+   *  in this single function avoids a double-rAF race where the trigger
+   *  refocus would fight the row-input refocus for the next frame. */
+  function closePicker(returnFocus = true) {
     if (!elementPickerOpen) return;
     elementPickerOpen = false;
-    // Return focus to the trigger after the modal unmounts.
-    requestAnimationFrame(() => addBtnRef?.focus());
+    if (returnFocus) {
+      // addBtnRef may be null if the form was collapsed mid-flight; falling
+      // back to <body> is fine.
+      requestAnimationFrame(() => addBtnRef?.focus());
+    }
   }
 
   function onPickerKeydown(e: KeyboardEvent) {
@@ -151,8 +159,9 @@
   function handlePtSelect(symbol: string) {
     const id = generateRowId();
     rows = [...rows, { id, symbol, value: null, unit: "wt%", isBalance: false }];
-    closePicker();
-    // After the row mounts, focus its number input.
+    // closePicker(false) suppresses the trigger-refocus rAF; we focus the
+    // new row's number input instead.
+    closePicker(false);
     requestAnimationFrame(() => {
       const el = document.querySelector<HTMLInputElement>(
         `[data-row-id="${id}"] .value-input`,
@@ -210,9 +219,10 @@
     });
   });
 
-  // Seed/reset from the editInitial prop. This effect watches the prop, not
-  // rows/textDraft, so it does not violate the "no $effect on rows or
-  // textDraft" rule.
+  // Seed/reset from the editInitial prop. Svelte 5 read-tracking is per-rune
+  // *read*, not write — assigning to rows / textDraft inside this block does
+  // NOT add them to the effect's deps. The only tracked read is `editInitial`,
+  // so this respects the §3.1 "no $effect on rows or textDraft" rule.
   $effect(() => {
     if (editInitial) {
       const parsed = parseMaterialInput(editInitial.formula);
@@ -417,7 +427,7 @@
     >
       <div class="picker-header">
         <h3>Pick an element</h3>
-        <button class="picker-close" aria-label="Close" onclick={closePicker}>×</button>
+        <button class="picker-close" aria-label="Close" onclick={() => closePicker()}>×</button>
       </div>
       <div class="picker-body">
         <PeriodicTable onselect={handlePtSelect} />

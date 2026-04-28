@@ -31,7 +31,12 @@ test.describe("DefineForm — rows-based UI (Phase 3 of #64)", () => {
     await page.locator('[data-z="26"]').click();
     await expect(page.getByRole("dialog", { name: "Pick an element" })).toBeHidden();
 
-    // The new row's value input should be focused; type 50.
+    // §3.4 contract: focus lands on the new row's value input.
+    const feValueInput = page
+      .locator('[role="row"][data-row-id]')
+      .filter({ hasText: "Fe" })
+      .locator(".value-input");
+    await expect(feValueInput).toBeFocused();
     await page.keyboard.type("50");
 
     // Second "+ element" → PT modal → pick Cu (Z=29).
