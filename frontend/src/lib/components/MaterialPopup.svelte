@@ -3,6 +3,7 @@
   import InspectPanel from "./material/InspectPanel.svelte";
   import SearchView from "./material/SearchView.svelte";
   import DefineForm, { type EditableMaterial } from "./material/DefineForm.svelte";
+  import PeriodicTable from "./material/PeriodicTable.svelte";
   import type { MaterialInfo } from "../types";
   import {
     getCustomMaterials,
@@ -20,13 +21,11 @@
     materials: MaterialInfo[];
     /** If set, auto-open editor for this custom material ID when popup opens */
     editMaterialId?: string | null;
-    /** Active beam projectile ("p", "d", "a", …). Phase 2 uses this to
-     *  compute the PeriodicTable's TENDL-coverage disabled set. */
+    /** Active beam projectile ("p", "d", "a", …). Used to compute the
+     *  PeriodicTable's TENDL-coverage disabled set in a later commit. */
     projectile?: string;
   }
 
-  // `projectile` is consumed by the PeriodicTable view in the next
-  // commit; here we declare the prop only.
   let {
     open,
     onclose,
@@ -40,8 +39,6 @@
   let query = $state("");
   let searchView: { focus: () => void } | undefined = $state();
   let editInitial = $state<EditableMaterial | null>(null);
-  // Phase 2 will wire "table" to the PeriodicTable view. For now, only
-  // "search" is rendered; the state is here so Phase 2 is a pure addition.
   let view = $state<"search" | "table">("search");
 
   $effect(() => {
@@ -63,7 +60,9 @@
         }
       });
       // Auto-focus search input so user can type immediately
-      requestAnimationFrame(() => searchView?.focus());
+      requestAnimationFrame(() => {
+        if (view === "search") searchView?.focus();
+      });
     }
   });
 
@@ -82,10 +81,35 @@
     onselect(material, enrichment);
     onclose();
   }
+
+  function handlePtSelect(symbol: string) {
+    // Same code path as clicking a search result with that symbol — the
+    // symbol is treated as a formula and the popup closes immediately.
+    handleCommit(symbol);
+  }
 </script>
 
 <Modal {open} {onclose} title="Select Material">
   <div class="material-popup">
+    <div class="view-toggle" role="tablist" aria-label="Material picker view">
+      <button
+        type="button"
+        role="tab"
+        class="view-toggle-btn"
+        class:active={view === "search"}
+        aria-selected={view === "search"}
+        onclick={() => { view = "search"; requestAnimationFrame(() => searchView?.focus()); }}
+      >Search</button>
+      <button
+        type="button"
+        role="tab"
+        class="view-toggle-btn"
+        class:active={view === "table"}
+        aria-selected={view === "table"}
+        onclick={() => { view = "table"; }}
+      >Periodic table</button>
+    </div>
+
     {#if view === "search"}
       <SearchView
         bind:this={searchView}
@@ -100,8 +124,9 @@
           <InspectPanel {query} {currentEnrichment} {onenrichment} />
         {/snippet}
       </SearchView>
+    {:else}
+      <PeriodicTable onselect={handlePtSelect} />
     {/if}
-    <!-- view === "table" is wired in Phase 2 (PeriodicTable). -->
 
     <DefineForm
       {editInitial}
@@ -117,5 +142,32 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+  }
+
+  .view-toggle {
+    display: inline-flex;
+    align-self: flex-start;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    padding: 2px;
+    gap: 2px;
+  }
+
+  .view-toggle-btn {
+    background: transparent;
+    border: none;
+    color: var(--c-text-muted);
+    padding: 0.25rem 0.6rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    border-radius: 3px;
+  }
+
+  .view-toggle-btn:hover { color: var(--c-text); }
+
+  .view-toggle-btn.active {
+    background: var(--c-bg-subtle);
+    color: var(--c-accent);
   }
 </style>
