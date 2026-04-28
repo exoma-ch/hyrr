@@ -16,6 +16,7 @@ import type { DatabaseProtocol, DecayData, CrossSectionData } from "./types";
 function mockDb(): DatabaseProtocol {
   return {
     getCrossSections: () => [],
+    hasCrossSections: () => false,
     getStoppingPower: () => ({
       energiesMeV: new Float64Array(0),
       dedx: new Float64Array(0),
