@@ -12,7 +12,13 @@
     saveCustomMaterial,
     updateCustomMaterial,
   } from "../../stores/custom-materials.svelte";
-  import { ELEMENT_DENSITIES, COMPOUND_DENSITIES, parseFormula, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT } from "@hyrr/compute";
+  import {
+    parseMaterialInput,
+    serialise,
+    toRows,
+    validate,
+    type Row,
+  } from "./define-form-rows";
 
   interface Props {
     /** Set (reactively) to open the form in edit mode with these values.
@@ -26,185 +32,110 @@
 
   let { editInitial, currentEnrichment, onenrichment, oncommit }: Props = $props();
 
+  // --- Source-of-truth state per #64 §3.1 ---
+  let rows = $state<Row[]>([]);
+  let textDraft = $state("");
+  let textDirty = $state(false);
+
+  // Display-side state (not part of the rows↔text round-trip).
   let defineOpen = $state(false);
-  let newFormula = $state("");
-  let newName = $state("");
+  let nameDraft = $state("");
   let nameManuallySet = $state(false);
-  let newDensity = $state<number | null>(null);
-  let formulaError = $state<string | null>(null);
+  let densityDraft = $state<number | null>(null);
+  let densityManuallySet = $state(false);
+  let formError = $state<string | null>(null);
   let saving = $state(false);
   let editingCustomId = $state<string | null>(null);
 
-  // React to editInitial changes: seed + open when set, reset + collapse when null.
+  // Pure derivations off rows. NOTE: no $effect watches rows or textDraft —
+  // round-trips run inside event handlers (commitPastedText) only. (#64 §3.1)
+  const serialised = $derived(serialise(rows));
+  const validation = $derived(validate(rows));
+  const previewParse = $derived(parseMaterialInput(serialised));
+  const formulaPreview = $derived(
+    previewParse && "ok" in previewParse ? previewParse.ok : null,
+  );
+
+  const autoName = $derived(formulaPreview?.autoName ?? "");
+  const autoDensity = $derived(formulaPreview?.density ?? null);
+  const effectiveName = $derived(nameManuallySet ? nameDraft : autoName);
+  const effectiveDensity = $derived(densityManuallySet ? densityDraft : autoDensity);
+
+  const validationErrors = $derived(validation.filter((i) => i.level === "error"));
+  const canCommit = $derived(rows.length > 0 && validationErrors.length === 0 && !!formulaPreview);
+
+  // Seed/reset from the editInitial prop. This effect watches the prop, not
+  // rows/textDraft, so it does not violate the "no $effect on rows or
+  // textDraft" rule.
   $effect(() => {
     if (editInitial) {
+      const parsed = parseMaterialInput(editInitial.formula);
+      rows = parsed && "ok" in parsed ? toRows(parsed.ok) : [];
       defineOpen = true;
-      newFormula = editInitial.formula;
-      newName = editInitial.name;
+      nameDraft = editInitial.name;
       nameManuallySet = true;
-      newDensity = editInitial.density;
+      densityDraft = editInitial.density;
+      densityManuallySet = true;
       editingCustomId = editInitial.editingCustomId;
-      formulaError = null;
+      textDraft = "";
+      textDirty = false;
+      formError = null;
     } else {
+      rows = [];
       defineOpen = false;
-      newFormula = "";
-      newName = "";
+      nameDraft = "";
       nameManuallySet = false;
-      newDensity = null;
-      formulaError = null;
+      densityDraft = null;
+      densityManuallySet = false;
       editingCustomId = null;
-    }
-  });
-
-  interface ParsedMaterial {
-    type: "stoichiometric" | "mass-ratio";
-    formula: string;
-    elements: string[];
-    density: number | null;
-    autoName: string;
-    massFractions?: Record<string, number>;
-  }
-
-  type ParseResult = { ok: ParsedMaterial } | { error: string } | null;
-
-  function parseMaterialInput(input: string): ParseResult {
-    const trimmed = input.trim();
-    if (!trimmed) return null;
-
-    if (trimmed.includes("%")) {
-      return parseMassRatio(trimmed);
-    }
-
-    try {
-      const parsed = parseFormula(trimmed);
-      const elements = Object.keys(parsed);
-      if (elements.length === 0) return { error: "No elements found in formula" };
-      for (const el of elements) {
-        if (!SYMBOL_TO_Z[el]) return { error: `Unknown element: ${el}` };
-      }
-      let density: number | null = null;
-      if (COMPOUND_DENSITIES[trimmed]) {
-        density = COMPOUND_DENSITIES[trimmed];
-      } else if (elements.length === 1 && ELEMENT_DENSITIES[elements[0]]) {
-        density = ELEMENT_DENSITIES[elements[0]];
-      }
-      return { ok: { type: "stoichiometric", formula: trimmed, elements, density, autoName: trimmed } };
-    } catch {
-      return { error: "Invalid formula" };
-    }
-  }
-
-  function parseMassRatio(input: string): ParseResult {
-    const parts = input.split(",").map((s) => s.trim()).filter(Boolean);
-    const entries: { symbol: string; pct: number | null }[] = [];
-
-    for (const part of parts) {
-      const m = part.match(/^([A-Z][a-z]?)\s*(\d+(?:\.\d+)?)?\s*%$/);
-      if (!m) return { error: `Invalid: "${part}". Use "Al 80%, Cu 5%, Zn %"` };
-      const sym = m[1];
-      if (!SYMBOL_TO_Z[sym]) return { error: `Unknown element: ${sym}` };
-      entries.push({ symbol: sym, pct: m[2] ? parseFloat(m[2]) : null });
-    }
-
-    const specified = entries.filter((e) => e.pct !== null);
-    const remainder = entries.filter((e) => e.pct === null);
-    const specifiedSum = specified.reduce((s, e) => s + (e.pct ?? 0), 0);
-
-    if (remainder.length > 1) return { error: "Only one element can have unspecified %" };
-    if (remainder.length === 0 && Math.abs(specifiedSum - 100) > 0.5) {
-      return { error: `Sum is ${specifiedSum.toFixed(1)}%, needs 100%` };
-    }
-    if (remainder.length === 1) {
-      const rest = 100 - specifiedSum;
-      if (rest < 0) return { error: `Sum exceeds 100% (${specifiedSum.toFixed(1)}%)` };
-      remainder[0].pct = rest;
-    }
-
-    const massFractions: Record<string, number> = {};
-    const moles: Record<string, number> = {};
-    let totalMoles = 0;
-    let density = 0;
-    const nameParts: string[] = [];
-
-    for (const e of entries) {
-      const wt = (e.pct ?? 0) / 100;
-      massFractions[e.symbol] = wt;
-      const atomicWeight = STANDARD_ATOMIC_WEIGHT[e.symbol] ?? 1;
-      const mol = wt / atomicWeight;
-      moles[e.symbol] = mol;
-      totalMoles += mol;
-      density += wt * (ELEMENT_DENSITIES[e.symbol] ?? 5);
-      nameParts.push(`${e.symbol}${Math.round(e.pct ?? 0)}`);
-    }
-
-    const atomFracs = entries.map((e) => ({ symbol: e.symbol, frac: moles[e.symbol] / totalMoles }));
-    const minFrac = Math.min(...atomFracs.map((a) => a.frac));
-    const formula = atomFracs
-      .map((a) => {
-        const ratio = a.frac / minFrac;
-        const rounded = Math.round(ratio * 100) / 100;
-        return rounded === 1 ? a.symbol : `${a.symbol}${rounded}`;
-      })
-      .join("");
-
-    return { ok: { type: "mass-ratio", formula, elements: entries.map((e) => e.symbol), density, autoName: nameParts.join("-"), massFractions } };
-  }
-
-  let parseResult = $derived.by((): ParseResult => {
-    if (!newFormula.trim()) return null;
-    return parseMaterialInput(newFormula);
-  });
-
-  let formulaPreview = $derived<ParsedMaterial | null>(
-    parseResult && "ok" in parseResult ? parseResult.ok : null,
-  );
-
-  let parsedError = $derived<string | null>(
-    parseResult && "error" in parseResult ? parseResult.error : null,
-  );
-
-  $effect(() => {
-    const result = formulaPreview;
-    if (result && !nameManuallySet) {
-      newName = result.autoName;
-    }
-    if (result?.density && newDensity === null) {
-      newDensity = result.density;
+      textDraft = "";
+      textDirty = false;
+      formError = null;
     }
   });
 
   async function handleSave() {
-    const preview = formulaPreview;
-    if (!preview) return;
-
-    const nameVal = newName.trim() || preview.autoName;
-    const densityVal = newDensity;
-
+    if (!formulaPreview) return;
+    const nameVal = (effectiveName.trim() || formulaPreview.autoName);
+    const densityVal = effectiveDensity;
     if (densityVal === null || densityVal <= 0) {
-      formulaError = "Enter density (g/cm³)";
+      formError = "Enter density (g/cm³)";
       return;
     }
-
     saving = true;
-    formulaError = null;
+    formError = null;
     try {
       if (editingCustomId) {
-        await updateCustomMaterial(editingCustomId, nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim(), currentEnrichment);
+        await updateCustomMaterial(
+          editingCustomId,
+          nameVal,
+          formulaPreview.formula,
+          densityVal,
+          formulaPreview.massFractions,
+          serialised,
+          currentEnrichment,
+        );
       } else {
-        await saveCustomMaterial(nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim(), currentEnrichment);
+        await saveCustomMaterial(
+          nameVal,
+          formulaPreview.formula,
+          densityVal,
+          formulaPreview.massFractions,
+          serialised,
+          currentEnrichment,
+        );
       }
       oncommit(nameVal, currentEnrichment);
     } catch {
-      formulaError = "Failed to save";
+      formError = "Failed to save";
     } finally {
       saving = false;
     }
   }
 
   function useFormula() {
-    const preview = formulaPreview;
-    if (!preview) return;
-    oncommit(preview.formula);
+    if (!formulaPreview) return;
+    oncommit(formulaPreview.formula);
   }
 </script>
 
@@ -216,42 +147,47 @@
 
   {#if defineOpen}
     <div class="define-form">
-      <label class="field-label">
-        Composition
-        <input
-          type="text"
-          class="field-input"
-          placeholder="Al2O3  or  Al 80%, Cu 5%, Zn %"
-          bind:value={newFormula}
-          oninput={() => { formulaError = null; if (!editingCustomId) nameManuallySet = false; }}
-        />
-      </label>
-      <p class="hint">Stoichiometric formula or mass ratios (comma-separated with %)</p>
+      <div class="rows-section">
+        <span class="rows-heading">Composition</span>
+        {#if rows.length === 0}
+          <p class="empty-hint">No elements yet — paste a formula or pick from the periodic table (coming soon).</p>
+        {:else}
+          <ul class="rows-list">
+            {#each rows as r (r.id)}
+              <li class="row-item">
+                <span class="row-symbol">{r.symbol}</span>
+                <span class="row-value">{r.isBalance ? "balance" : (r.value ?? "—")}</span>
+                <span class="row-unit">{r.unit}</span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
 
-      {#if formulaPreview}
-        <div class="preview">
-          <span class="preview-type">{formulaPreview.type}</span>
-          {#if formulaPreview.type === "mass-ratio"}
-            <span class="preview-formula">{formulaPreview.formula}</span>
-          {/if}
-          {#each formulaPreview.elements as el}
-            <button
-              class="el-badge"
-              class:enriched={!!currentEnrichment?.[el]}
-              onclick={() => onenrichment?.(el)}
-            >{el}</button>
-          {/each}
-        </div>
-      {/if}
+        {#if formulaPreview}
+          <div class="preview">
+            <span class="preview-type">{formulaPreview.type}</span>
+            {#if formulaPreview.type === "mass-ratio"}
+              <span class="preview-formula">{formulaPreview.formula}</span>
+            {/if}
+            {#each formulaPreview.elements as el}
+              <button
+                class="el-badge"
+                class:enriched={!!currentEnrichment?.[el]}
+                onclick={() => onenrichment?.(el)}
+              >{el}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
 
       <label class="field-label">
         Name
         <input
           type="text"
           class="field-input"
-          placeholder={formulaPreview?.autoName ?? "auto-filled from composition"}
-          bind:value={newName}
-          oninput={() => { nameManuallySet = true; }}
+          placeholder={autoName || "auto-filled from composition"}
+          value={effectiveName}
+          oninput={(e) => { nameDraft = (e.target as HTMLInputElement).value; nameManuallySet = true; }}
         />
         <span class="field-hint">Auto-filled — edit to override</span>
       </label>
@@ -262,25 +198,32 @@
           type="text"
           inputmode="decimal"
           class="field-input"
-          placeholder={formulaPreview?.density?.toFixed(2) ?? "e.g. 2.70"}
-          value={newDensity !== null ? String(newDensity) : ""}
-          oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value); newDensity = Number.isFinite(v) ? v : null; }}
+          placeholder={autoDensity !== null ? autoDensity.toFixed(2) : "e.g. 2.70"}
+          value={effectiveDensity !== null ? String(effectiveDensity) : ""}
+          oninput={(e) => {
+            const v = parseFloat((e.target as HTMLInputElement).value);
+            densityDraft = Number.isFinite(v) ? v : null;
+            densityManuallySet = true;
+          }}
         />
       </label>
 
-      {#if parsedError || formulaError}
-        <p class="form-error">{parsedError ?? formulaError}</p>
+      {#if formError}
+        <p class="form-error">{formError}</p>
       {/if}
+      {#each validation as issue}
+        <p class="form-{issue.level}">{issue.message}</p>
+      {/each}
 
       <div class="form-actions">
         <button
           class="use-formula-btn"
-          disabled={!formulaPreview}
+          disabled={!canCommit}
           onclick={useFormula}
         >Use without saving</button>
         <button
           class="save-btn"
-          disabled={saving || !formulaPreview || newDensity === null || (newDensity ?? 0) <= 0}
+          disabled={saving || !canCommit || effectiveDensity === null || (effectiveDensity ?? 0) <= 0}
           onclick={handleSave}
         >{saving ? "Saving..." : editingCustomId ? "Update & Use" : "Save & Use"}</button>
       </div>
@@ -320,6 +263,48 @@
     border-radius: 4px;
   }
 
+  .rows-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .rows-heading {
+    font-size: 0.75rem;
+    color: var(--c-text-muted);
+  }
+
+  .empty-hint {
+    font-size: 0.7rem;
+    color: var(--c-text-subtle);
+    margin: 0;
+    font-style: italic;
+  }
+
+  .rows-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .row-item {
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+    padding: 0.2rem 0.4rem;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    font-size: 0.75rem;
+  }
+
+  .row-symbol { font-weight: 500; min-width: 2rem; color: var(--c-text); }
+  .row-value { color: var(--c-text-muted); }
+  .row-unit { color: var(--c-text-subtle); font-size: 0.65rem; text-transform: uppercase; }
+
   .field-label {
     display: flex;
     flex-direction: column;
@@ -342,13 +327,6 @@
   .field-hint {
     font-size: 0.6rem;
     color: var(--c-text-subtle);
-    font-style: italic;
-  }
-
-  .hint {
-    font-size: 0.65rem;
-    color: var(--c-text-subtle);
-    margin: 0;
     font-style: italic;
   }
 
@@ -400,6 +378,12 @@
   .form-error {
     color: var(--c-red);
     font-size: 0.75rem;
+    margin: 0;
+  }
+
+  .form-warning {
+    color: var(--c-yellow, var(--c-text-muted));
+    font-size: 0.7rem;
     margin: 0;
   }
 
