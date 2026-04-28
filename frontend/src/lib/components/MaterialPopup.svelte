@@ -4,6 +4,8 @@
   import SearchView from "./material/SearchView.svelte";
   import DefineForm, { type EditableMaterial } from "./material/DefineForm.svelte";
   import PeriodicTable from "./material/PeriodicTable.svelte";
+  import { PERIODIC_TABLE } from "./material/periodic-table-data";
+  import { getDataStore } from "../scheduler/sim-scheduler.svelte";
   import type { MaterialInfo } from "../types";
   import {
     getCustomMaterials,
@@ -34,12 +36,47 @@
     currentEnrichment,
     materials,
     editMaterialId = null,
+    projectile,
   }: Props = $props();
 
   let query = $state("");
   let searchView: { focus: () => void } | undefined = $state();
   let editInitial = $state<EditableMaterial | null>(null);
   let view = $state<"search" | "table">("search");
+
+  /** TENDL coverage disabled-set per projectile. Computed lazily when
+   *  the user opens the table view; cached so flipping back-and-forth
+   *  doesn't refetch. */
+  const disabledCache = new Map<string, Set<string>>();
+  let disabledSet = $state<Set<string> | undefined>(undefined);
+
+  // List of element symbols to probe for TENDL coverage. We probe Z 1..92
+  // — the visible range when the PT's "Show Z>92" toggle is off. Cells
+  // with Z > 92 are auto-disabled by the absence of data.
+  const COVERAGE_PROBE_SYMBOLS = PERIODIC_TABLE
+    .filter((c) => c.Z <= 92)
+    .map((c) => c.symbol);
+
+  $effect(() => {
+    if (!open || view !== "table" || !projectile) return;
+    const cached = disabledCache.get(projectile);
+    if (cached) {
+      disabledSet = cached;
+      return;
+    }
+    const db = getDataStore();
+    if (!db) return;
+    const proj = projectile;
+    db.ensureMultipleCrossSections(proj, COVERAGE_PROBE_SYMBOLS).then(() => {
+      const disabled = new Set<string>();
+      for (const cell of PERIODIC_TABLE) {
+        if (!db.hasCrossSections(proj, cell.Z)) disabled.add(cell.symbol);
+      }
+      disabledCache.set(proj, disabled);
+      // Only apply if the user hasn't switched away while we were loading.
+      if (view === "table" && projectile === proj) disabledSet = disabled;
+    });
+  });
 
   $effect(() => {
     if (open) {
@@ -125,7 +162,7 @@
         {/snippet}
       </SearchView>
     {:else}
-      <PeriodicTable onselect={handlePtSelect} />
+      <PeriodicTable onselect={handlePtSelect} disabled={disabledSet} />
     {/if}
 
     <DefineForm
