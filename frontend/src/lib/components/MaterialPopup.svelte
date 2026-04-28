@@ -55,12 +55,14 @@
    *  element). Computed once when the data store is ready. */
   let enrichableSet = $state<Set<string> | undefined>(undefined);
 
-  // List of element symbols to probe for TENDL coverage. We probe Z 1..92
-  // — the visible range when the PT's "Show Z>92" toggle is off. Cells
-  // with Z > 92 are auto-disabled by the absence of data.
-  const COVERAGE_PROBE_SYMBOLS = PERIODIC_TABLE
-    .filter((c) => c.Z <= 92)
-    .map((c) => c.symbol);
+  // Probe every element on the table — when the user toggles "Show
+  // Z>92" the transuranics need to be in `disabledSet` too, otherwise
+  // a click on Og falls through to onselect() and commits a symbol
+  // the simulator has no cross-section data for. Most Z>92 fetches
+  // 404 silently and the cache stores an empty result, so this only
+  // costs 26 extra cold-cache requests per (projectile) and is free
+  // afterwards.
+  const COVERAGE_PROBE_SYMBOLS = PERIODIC_TABLE.map((c) => c.symbol);
 
   $effect(() => {
     if (!open || view !== "table" || !projectile) return;
@@ -99,6 +101,9 @@
       query = "";
       editInitial = null;
       view = "search";
+      // Force a clean state so a stale disabledSet from a previous
+      // popup-open with a different projectile doesn't flash through.
+      disabledSet = undefined;
       loadCustomMaterials().then(() => {
         if (editMaterialId) {
           const cm = getCustomMaterials().find((m) => m.id === editMaterialId);
