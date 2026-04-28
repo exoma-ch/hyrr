@@ -50,6 +50,11 @@
   const disabledCache = new Map<string, Set<string>>();
   let disabledSet = $state<Set<string> | undefined>(undefined);
 
+  /** Symbols of elements with ≥ 2 stable natural isotopes — a proxy
+   *  for "enrichable" (you can't separate isotopes of a mono-isotopic
+   *  element). Computed once when the data store is ready. */
+  let enrichableSet = $state<Set<string> | undefined>(undefined);
+
   // List of element symbols to probe for TENDL coverage. We probe Z 1..92
   // — the visible range when the PT's "Show Z>92" toggle is off. Cells
   // with Z > 92 are auto-disabled by the absence of data.
@@ -76,6 +81,17 @@
       // Only apply if the user hasn't switched away while we were loading.
       if (view === "table" && projectile === proj) disabledSet = disabled;
     });
+  });
+
+  $effect(() => {
+    if (!open || view !== "table" || enrichableSet) return;
+    const db = getDataStore();
+    if (!db) return;
+    const set = new Set<string>();
+    for (const cell of PERIODIC_TABLE) {
+      if (db.getNaturalAbundances(cell.Z).size >= 2) set.add(cell.symbol);
+    }
+    enrichableSet = set;
   });
 
   $effect(() => {
@@ -162,7 +178,11 @@
         {/snippet}
       </SearchView>
     {:else}
-      <PeriodicTable onselect={handlePtSelect} disabled={disabledSet} />
+      <PeriodicTable
+        onselect={handlePtSelect}
+        disabled={disabledSet}
+        {enrichableSet}
+      />
     {/if}
 
     <DefineForm
