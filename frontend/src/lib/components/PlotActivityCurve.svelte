@@ -25,6 +25,7 @@
   let rnpIsotopes = $state<Set<string>>(new Set());
   let rnpPickerOpen = $state(false);
   let rnpPickerRef = $state<HTMLDivElement | null>(null);
+  let rnpQuery = $state("");
 
   function toggleRnpIso(name: string) {
     const next = new Set(rnpIsotopes);
@@ -38,8 +39,19 @@
 
   function onWindowClick(e: MouseEvent) {
     if (!rnpPickerOpen || !rnpPickerRef) return;
-    if (!rnpPickerRef.contains(e.target as Node)) rnpPickerOpen = false;
+    if (!rnpPickerRef.contains(e.target as Node)) {
+      rnpPickerOpen = false;
+      rnpQuery = "";
+    }
   }
+
+  // Focus the search input when the picker opens.
+  $effect(() => {
+    if (!rnpPickerOpen || !rnpPickerRef) return;
+    requestAnimationFrame(() => {
+      rnpPickerRef?.querySelector<HTMLInputElement>(".rnp-search")?.focus();
+    });
+  });
 
   let selected = $derived(getSelectedIsotopes());
   let sharedFilter = $derived(getIsotopeFilter());
@@ -53,6 +65,21 @@
       }
     }
     return [...names].sort();
+  });
+
+  /** Picker list: selected first (sticky, regardless of search), then any
+   *  unselected names that match the query. Case-insensitive substring on
+   *  both the raw name (e.g. "Tc-99m") and the rendered nuclide label. */
+  let rnpPickerList = $derived.by(() => {
+    const q = rnpQuery.trim().toLowerCase();
+    const selectedFirst = allIsotopes.filter((n) => rnpIsotopes.has(n));
+    const restAll = allIsotopes.filter((n) => !rnpIsotopes.has(n));
+    const restFiltered = q
+      ? restAll.filter((n) =>
+          n.toLowerCase().includes(q) || nucLabel(n).toLowerCase().includes(q),
+        )
+      : restAll;
+    return { selected: selectedFirst, rest: restFiltered };
   });
 
   // Available layers
@@ -314,16 +341,7 @@
     );
     const restRnp = selectedRnp.map((p) => 100 - p);
 
-    // Peak of the selected aggregate (post-EOB).
-    let peakIdx = 0;
-    let peakVal = 0;
-    for (let i = 0; i < selectedRnp.length; i++) {
-      if (timeGrid[i] < irrTime) continue;
-      if (selectedRnp[i] > peakVal) {
-        peakVal = selectedRnp[i];
-        peakIdx = i;
-      }
-    }
+    // (peak computation moved below — see peakPostEOB helper)
 
     const { label: actLabel, divisor: actDiv } = bestActivityUnit(
       totalActivity!.reduce((m, v) => Math.max(m, v), 0),
@@ -331,8 +349,25 @@
 
     const traces: any[] = [];
 
-    // Per-isotope thin lines, color cycling
+    /** Find the post-EOB peak of a series and return {idx, val}. */
+    const peakPostEOB = (series: number[]) => {
+      let pIdx = 0;
+      let pVal = 0;
+      for (let i = 0; i < series.length; i++) {
+        if (timeGrid![i] < irrTime) continue;
+        if (series[i] > pVal) {
+          pVal = series[i];
+          pIdx = i;
+        }
+      }
+      return { idx: pIdx, val: pVal };
+    };
+
+    // Per-isotope thin lines + a small marker at each curve's max so the
+    // user can read peak purity per isotope without hovering.
+    const perIsoPeaks: { name: string; color: string; idx: number; val: number }[] = [];
     perIsoRnp.forEach(({ name, rnp }, idx) => {
+      const color = TRACE_COLORS[idx % TRACE_COLORS.length];
       const traceName = `RNP% (${nucLabel(name)})`;
       traces.push({
         x: times,
@@ -340,9 +375,14 @@
         name: traceName,
         type: "scatter",
         mode: "lines",
-        line: { color: TRACE_COLORS[idx % TRACE_COLORS.length], width: 1.5 },
+        line: { color, width: 1.5 },
         visible: legendVisibility.get(traceName) ?? true,
       });
+      const { idx: pIdx, val: pVal } = peakPostEOB(rnp);
+      // Suppress markers below 0.5%: a peak of e.g. 0.01% would render as
+      // "0.0%" via toFixed(1) and reads as a stuck-at-zero label, not a
+      // useful peak. Larger peaks get a smaller decimal under 1%.
+      if (pVal >= 0.5) perIsoPeaks.push({ name, color, idx: pIdx, val: pVal });
     });
 
     // Aggregate traces — bold dashed so they read as summary rather than
@@ -394,15 +434,52 @@
       },
     ];
 
-    if (peakVal > 0) {
+    // Per-isotope peak markers (small, color-matched arrow + value).
+    for (const { name, color, idx: pIdx, val: pVal } of perIsoPeaks) {
       annotations.push({
-        x: times[peakIdx],
-        y: peakVal,
-        text: `Peak Σ: ${peakVal.toFixed(1)}%`,
+        x: times[pIdx],
+        y: pVal,
+        text: `${nucLabel(name)} ${pVal < 1 ? pVal.toFixed(2) : pVal.toFixed(1)}%`,
+        showarrow: true,
+        arrowcolor: color,
+        ax: 0,
+        ay: -16,
+        font: { color, size: 9 },
+      });
+    }
+
+    // Σ-selected peak (the headline "purity" annotation).
+    const sumPeak = peakPostEOB(selectedRnp);
+    if (sumPeak.val > 0) {
+      annotations.push({
+        x: times[sumPeak.idx],
+        y: sumPeak.val,
+        text: `Peak Σ: ${sumPeak.val.toFixed(1)}%`,
         showarrow: true,
         arrowcolor: tc.greenText,
+        ax: 0,
+        ay: -22,
         font: { color: tc.greenText, size: 10 },
       });
+    }
+    // Σ-rest peak — only annotate when the rest trace is actually visible
+    // (it's legendonly by default, so the annotation would otherwise be a
+    // floating number with no curve to anchor it to).
+    const restVisible = legendVisibility.get(`Σ rest`) === true;
+    if (restVisible) {
+      const restPeak = peakPostEOB(restRnp);
+      if (restPeak.val > 0) {
+        annotations.push({
+          x: times[restPeak.idx],
+          y: restPeak.val,
+          text: `Peak Σ rest: ${restPeak.val.toFixed(1)}%`,
+          showarrow: true,
+          arrowcolor: tc.orange,
+          ax: 0,
+          ay: -16,
+          font: { color: tc.orange, size: 9 },
+        });
+      }
     }
 
     const layout = darkLayout({
@@ -466,19 +543,44 @@
         </button>
         {#if rnpPickerOpen}
           <div class="rnp-popover" role="listbox" aria-multiselectable="true">
+            <input
+              type="text"
+              class="rnp-search"
+              placeholder="Search isotopes…"
+              bind:value={rnpQuery}
+              autocomplete="off"
+            />
             {#if allIsotopes.length === 0}
               <p class="rnp-empty">No isotopes with activity.</p>
             {:else}
-              {#each allIsotopes as name}
-                <label class="rnp-option">
-                  <input
-                    type="checkbox"
-                    checked={rnpIsotopes.has(name)}
-                    onchange={() => toggleRnpIso(name)}
-                  />
-                  <span>{nucLabel(name)}</span>
-                </label>
-              {/each}
+              {#if rnpPickerList.selected.length > 0}
+                <div class="rnp-section-label">Selected</div>
+                {#each rnpPickerList.selected as name (name)}
+                  <label class="rnp-option">
+                    <input
+                      type="checkbox"
+                      checked
+                      onchange={() => toggleRnpIso(name)}
+                    />
+                    <span>{nucLabel(name)}</span>
+                  </label>
+                {/each}
+                <div class="rnp-divider"></div>
+              {/if}
+              {#if rnpPickerList.rest.length === 0}
+                <p class="rnp-empty">No matches.</p>
+              {:else}
+                {#each rnpPickerList.rest as name (name)}
+                  <label class="rnp-option">
+                    <input
+                      type="checkbox"
+                      checked={false}
+                      onchange={() => toggleRnpIso(name)}
+                    />
+                    <span>{nucLabel(name)}</span>
+                  </label>
+                {/each}
+              {/if}
             {/if}
             {#if rnpIsotopes.size > 0}
               <button class="rnp-clear" type="button" onclick={clearRnpIsos}>Clear all</button>
@@ -601,6 +703,35 @@
     color: var(--c-text-subtle);
     font-size: 0.7rem;
     font-style: italic;
+  }
+
+  .rnp-search {
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    color: var(--c-text);
+    padding: 0.25rem 0.4rem;
+    font-size: 0.7rem;
+    margin-bottom: 0.2rem;
+  }
+
+  .rnp-search:focus {
+    outline: none;
+    border-color: var(--c-accent);
+  }
+
+  .rnp-section-label {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    color: var(--c-text-subtle);
+    padding: 0.2rem 0.3rem 0.05rem;
+    letter-spacing: 0.05em;
+  }
+
+  .rnp-divider {
+    height: 1px;
+    background: var(--c-border);
+    margin: 0.2rem 0;
   }
 
   .rnp-clear {
