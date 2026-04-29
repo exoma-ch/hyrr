@@ -22,7 +22,24 @@
   let logY = $state(false);
   let useEOBTime = $state(false);
   let rnpMode = $state(false);
-  let rnpIsotope = $state("");
+  let rnpIsotopes = $state<Set<string>>(new Set());
+  let rnpPickerOpen = $state(false);
+  let rnpPickerRef = $state<HTMLDivElement | null>(null);
+
+  function toggleRnpIso(name: string) {
+    const next = new Set(rnpIsotopes);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    rnpIsotopes = next;
+  }
+
+  function clearRnpIsos() {
+    rnpIsotopes = new Set();
+  }
+
+  function onWindowClick(e: MouseEvent) {
+    if (!rnpPickerOpen || !rnpPickerRef) return;
+    if (!rnpPickerRef.contains(e.target as Node)) rnpPickerOpen = false;
+  }
 
   let selected = $derived(getSelectedIsotopes());
   let sharedFilter = $derived(getIsotopeFilter());
@@ -109,7 +126,7 @@
     const _log = logY;
     const _eob = useEOBTime;
     const _rnp = rnpMode;
-    const _rnpIso = rnpIsotope;
+    const _rnpIsos = rnpIsotopes;
     const _filter = JSON.stringify(sharedFilter);
     const _theme = getResolvedTheme();
     if (p && div) render();
@@ -124,7 +141,7 @@
     const totalTime = irrTime + coolTime;
     const timeOffset = useEOBTime ? irrTime : 0;
 
-    if (rnpMode && rnpIsotope) {
+    if (rnpMode && rnpIsotopes.size > 0) {
       renderRNP(irrTime, coolTime, totalTime, timeOffset);
       return;
     }
@@ -247,55 +264,63 @@
   }
 
   function renderRNP(irrTime: number, coolTime: number, totalTime: number, timeOffset: number) {
-    if (!Plotly || !plotDiv || !rnpIsotope) return;
+    if (!Plotly || !plotDiv || rnpIsotopes.size === 0) return;
     const tc = themeColors();
 
     const { label: timeLabel, divisor: timeDiv } = bestTimeUnit(totalTime);
 
-    // Find the selected isotope and total activity at each time point
-    let selectedTimeGrid: number[] | null = null;
-    let selectedActivity: number[] | null = null;
+    // Walk every isotope in the (filtered) result once: collect activity
+    // series for the selected ones, and accumulate total activity at each
+    // time index. All isotopes share the same time grid by construction.
+    let timeGrid: number[] | null = null;
+    const selectedSeries: { name: string; activity: number[] }[] = [];
     let totalActivity: number[] | null = null;
 
     for (const layer of result.layers) {
       if (sharedFilter.layers.size > 0 && !sharedFilter.layers.has(layer.layer_index)) continue;
       for (const iso of layer.isotopes) {
         if (!iso.time_grid_s || !iso.activity_vs_time_Bq) continue;
-        if (iso.name === rnpIsotope) {
-          selectedTimeGrid = [...iso.time_grid_s];
-          selectedActivity = [...iso.activity_vs_time_Bq];
+        if (!timeGrid) {
+          timeGrid = [...iso.time_grid_s];
+          totalActivity = new Array(timeGrid.length).fill(0);
         }
-      }
-    }
-
-    if (!selectedTimeGrid || !selectedActivity) return;
-
-    // Sum total activity at each time point
-    totalActivity = new Array(selectedTimeGrid.length).fill(0);
-    for (const layer of result.layers) {
-      if (sharedFilter.layers.size > 0 && !sharedFilter.layers.has(layer.layer_index)) continue;
-      for (const iso of layer.isotopes) {
-        if (!iso.time_grid_s || !iso.activity_vs_time_Bq) continue;
         for (let i = 0; i < iso.activity_vs_time_Bq.length && i < totalActivity!.length; i++) {
           totalActivity![i] += iso.activity_vs_time_Bq[i];
         }
+        if (rnpIsotopes.has(iso.name)) {
+          selectedSeries.push({ name: iso.name, activity: [...iso.activity_vs_time_Bq] });
+        }
       }
     }
 
-    // RNP% = selected / total * 100
-    const rnpPercent = selectedActivity.map((a, i) =>
-      totalActivity![i] > 0 ? (a / totalActivity![i]) * 100 : 0,
+    if (!timeGrid || !totalActivity || selectedSeries.length === 0) return;
+
+    const N = timeGrid.length;
+    const times = timeGrid.map((t) => (t - timeOffset) / timeDiv);
+
+    // Per-isotope RNP%: activity_i / total * 100
+    const perIsoRnp = selectedSeries.map(({ name, activity }) => ({
+      name,
+      rnp: activity.map((a, i) => (totalActivity![i] > 0 ? (a / totalActivity![i]) * 100 : 0)),
+    }));
+
+    // Aggregate Σ(selected) and Σ(rest) as fractions of total.
+    const selectedSum = new Array<number>(N).fill(0);
+    for (const { activity } of selectedSeries) {
+      for (let i = 0; i < activity.length && i < N; i++) selectedSum[i] += activity[i];
+    }
+    const selectedRnp = selectedSum.map((s, i) =>
+      totalActivity![i] > 0 ? (s / totalActivity![i]) * 100 : 0,
     );
+    const restRnp = selectedRnp.map((p) => 100 - p);
 
-    const times = selectedTimeGrid.map((t) => (t - timeOffset) / timeDiv);
-
-    // Find peak purity (only after EOB)
+    // Peak of the selected aggregate (post-EOB).
     let peakIdx = 0;
     let peakVal = 0;
-    for (let i = 0; i < rnpPercent.length; i++) {
-      if (selectedTimeGrid[i] < irrTime) continue; // skip pre-EOB
-      if (rnpPercent[i] > peakVal) {
-        peakVal = rnpPercent[i];
+    for (let i = 0; i < selectedRnp.length; i++) {
+      if (timeGrid[i] < irrTime) continue;
+      if (selectedRnp[i] > peakVal) {
+        peakVal = selectedRnp[i];
         peakIdx = i;
       }
     }
@@ -304,29 +329,59 @@
       totalActivity!.reduce((m, v) => Math.max(m, v), 0),
     );
 
-    const rnpTraceName = `RNP% (${nucLabel(rnpIsotope)})`;
+    const traces: any[] = [];
+
+    // Per-isotope thin lines, color cycling
+    perIsoRnp.forEach(({ name, rnp }, idx) => {
+      const traceName = `RNP% (${nucLabel(name)})`;
+      traces.push({
+        x: times,
+        y: rnp,
+        name: traceName,
+        type: "scatter",
+        mode: "lines",
+        line: { color: TRACE_COLORS[idx % TRACE_COLORS.length], width: 1.5 },
+        visible: legendVisibility.get(traceName) ?? true,
+      });
+    });
+
+    // Aggregate traces — bold dashed so they read as summary rather than
+    // another sample. Selected vs rest sums to 100 by definition; both shown
+    // so the user can read either side directly.
+    const selectedTraceName = `Σ selected`;
+    const restTraceName = `Σ rest`;
+    traces.push(
+      {
+        x: times,
+        y: selectedRnp,
+        name: selectedTraceName,
+        type: "scatter",
+        mode: "lines",
+        line: { color: tc.greenText, width: 2.5, dash: "dash" },
+        visible: legendVisibility.get(selectedTraceName) ?? true,
+      },
+      {
+        x: times,
+        y: restRnp,
+        name: restTraceName,
+        type: "scatter",
+        mode: "lines",
+        line: { color: tc.orange, width: 2.5, dash: "dash" },
+        visible: legendVisibility.get(restTraceName) ?? "legendonly",
+      },
+    );
+
     const totalTraceName = `Total activity`;
-    const traces: any[] = [
-      {
-        x: times,
-        y: rnpPercent,
-        name: rnpTraceName,
-        type: "scatter",
-        mode: "lines",
-        line: { color: TRACE_COLORS[0], width: 2 },
-        visible: legendVisibility.get(rnpTraceName) ?? true,
-      },
-      {
-        x: times,
-        y: totalActivity!.map((a) => a / actDiv),
-        name: totalTraceName,
-        type: "scatter",
-        mode: "lines",
-        line: { color: TRACE_COLORS[2], width: 1, dash: "dot" },
-        yaxis: "y2",
-        visible: legendVisibility.get(totalTraceName) ?? true,
-      },
-    ];
+    traces.push({
+      x: times,
+      y: totalActivity!.map((a) => a / actDiv),
+      name: totalTraceName,
+      type: "scatter",
+      mode: "lines",
+      line: { color: tc.border, width: 1, dash: "dot" },
+      yaxis: "y2",
+      visible: legendVisibility.get(totalTraceName) ?? "legendonly",
+    });
 
     const eobX = (irrTime - timeOffset) / timeDiv;
 
@@ -343,7 +398,7 @@
       annotations.push({
         x: times[peakIdx],
         y: peakVal,
-        text: `Peak: ${peakVal.toFixed(1)}%`,
+        text: `Peak Σ: ${peakVal.toFixed(1)}%`,
         showarrow: true,
         arrowcolor: tc.greenText,
         font: { color: tc.greenText, size: 10 },
@@ -378,6 +433,8 @@
   }
 </script>
 
+<svelte:window onclick={onWindowClick} />
+
 <div class="activity-curve">
   <div class="controls">
     <button class="ctrl-btn" class:active={logY} onclick={() => { logY = !logY; }}>
@@ -394,12 +451,41 @@
     </button>
 
     {#if rnpMode}
-      <select class="rnp-select" bind:value={rnpIsotope}>
-        <option value="">select isotope...</option>
-        {#each allIsotopes as name}
-          <option value={name}>{name}</option>
-        {/each}
-      </select>
+      <div class="rnp-picker" bind:this={rnpPickerRef}>
+        <button
+          type="button"
+          class="ctrl-btn"
+          aria-haspopup="true"
+          aria-expanded={rnpPickerOpen}
+          onclick={() => { rnpPickerOpen = !rnpPickerOpen; }}
+        >
+          {rnpIsotopes.size === 0
+            ? "select isotopes…"
+            : `${rnpIsotopes.size} selected`}
+          <span class="caret">▾</span>
+        </button>
+        {#if rnpPickerOpen}
+          <div class="rnp-popover" role="listbox" aria-multiselectable="true">
+            {#if allIsotopes.length === 0}
+              <p class="rnp-empty">No isotopes with activity.</p>
+            {:else}
+              {#each allIsotopes as name}
+                <label class="rnp-option">
+                  <input
+                    type="checkbox"
+                    checked={rnpIsotopes.has(name)}
+                    onchange={() => toggleRnpIso(name)}
+                  />
+                  <span>{nucLabel(name)}</span>
+                </label>
+              {/each}
+            {/if}
+            {#if rnpIsotopes.size > 0}
+              <button class="rnp-clear" type="button" onclick={clearRnpIsos}>Clear all</button>
+            {/if}
+          </div>
+        {/if}
+      </div>
     {/if}
 
     {#if selected.size > 0}
@@ -460,14 +546,75 @@
     border-color: var(--c-red);
   }
 
-  .rnp-select {
+  .rnp-picker {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .rnp-picker .caret {
+    margin-left: 0.3rem;
+    font-size: 0.6rem;
+  }
+
+  .rnp-popover {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 50;
+    min-width: 9rem;
+    max-height: 16rem;
+    overflow-y: auto;
     background: var(--c-bg-default);
     border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: var(--c-text);
-    padding: 0.2rem 0.3rem;
+    padding: 0.3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .rnp-option {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.25rem;
+    border-radius: 3px;
+    cursor: pointer;
+    color: var(--c-text-muted);
     font-size: 0.7rem;
   }
+
+  .rnp-option:hover {
+    background: var(--c-bg-subtle);
+    color: var(--c-text);
+  }
+
+  .rnp-option input[type="checkbox"] {
+    accent-color: var(--c-accent);
+    cursor: pointer;
+  }
+
+  .rnp-empty {
+    margin: 0;
+    padding: 0.3rem;
+    color: var(--c-text-subtle);
+    font-size: 0.7rem;
+    font-style: italic;
+  }
+
+  .rnp-clear {
+    margin-top: 0.2rem;
+    background: transparent;
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    color: var(--c-text-muted);
+    padding: 0.15rem 0.4rem;
+    font-size: 0.65rem;
+    cursor: pointer;
+  }
+
+  .rnp-clear:hover { color: var(--c-red); border-color: var(--c-red); }
 
   .layer-chips {
     display: flex;
