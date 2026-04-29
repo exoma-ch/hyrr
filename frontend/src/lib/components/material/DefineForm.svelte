@@ -12,7 +12,17 @@
     saveCustomMaterial,
     updateCustomMaterial,
   } from "../../stores/custom-materials.svelte";
-  import { ELEMENT_DENSITIES, COMPOUND_DENSITIES, parseFormula, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT } from "@hyrr/compute";
+  import {
+    generateRowId,
+    parseMaterialInput,
+    serialise,
+    toRows,
+    validate,
+    type Issue,
+    type Row,
+  } from "./define-form-rows";
+  import DefineFormRow from "./DefineFormRow.svelte";
+  import PeriodicTable from "./PeriodicTable.svelte";
 
   interface Props {
     /** Set (reactively) to open the form in edit mode with these values.
@@ -26,185 +36,264 @@
 
   let { editInitial, currentEnrichment, onenrichment, oncommit }: Props = $props();
 
+  // --- Source-of-truth state per #64 §3.1 ---
+  let rows = $state<Row[]>([]);
+  let textDraft = $state("");
+  let textDirty = $state(false);
+
+  // Display-side state (not part of the rows↔text round-trip).
   let defineOpen = $state(false);
-  let newFormula = $state("");
-  let newName = $state("");
+  let nameDraft = $state("");
   let nameManuallySet = $state(false);
-  let newDensity = $state<number | null>(null);
-  let formulaError = $state<string | null>(null);
+  let densityDraft = $state<number | null>(null);
+  let densityManuallySet = $state(false);
+  let formError = $state<string | null>(null);
   let saving = $state(false);
   let editingCustomId = $state<string | null>(null);
 
-  // React to editInitial changes: seed + open when set, reset + collapse when null.
+  // Pure derivations off rows. NOTE: no $effect watches rows or textDraft —
+  // round-trips run inside event handlers (commitPastedText) only. (#64 §3.1)
+  const serialised = $derived(serialise(rows));
+  const validation = $derived(validate(rows));
+  const previewParse = $derived(parseMaterialInput(serialised));
+  const formulaPreview = $derived(
+    previewParse && "ok" in previewParse ? previewParse.ok : null,
+  );
+  /** What the paste input displays — user's draft when dirty, otherwise the
+   *  canonical serialisation of the current rows (so edits to rows propagate
+   *  back into the text field). */
+  const displayText = $derived(textDirty ? textDraft : serialised);
+  let pasteError = $state<string | null>(null);
+
+  const autoName = $derived(formulaPreview?.autoName ?? "");
+  const autoDensity = $derived(formulaPreview?.density ?? null);
+  const effectiveName = $derived(nameManuallySet ? nameDraft : autoName);
+  const effectiveDensity = $derived(densityManuallySet ? densityDraft : autoDensity);
+
+  const validationErrors = $derived(validation.filter((i) => i.level === "error"));
+  const canCommit = $derived(rows.length > 0 && validationErrors.length === 0 && !!formulaPreview);
+  const formIssues = $derived(validation.filter((i) => !i.rowId));
+  const issuesByRow = $derived.by(() => {
+    const byRow = new Map<string, Issue[]>();
+    for (const i of validation) {
+      if (i.rowId) {
+        const arr = byRow.get(i.rowId) ?? [];
+        arr.push(i);
+        byRow.set(i.rowId, arr);
+      }
+    }
+    return byRow;
+  });
+
+  /** Stable radiogroup name so the browser enforces single-balance selection. */
+  const balanceRadioName = `define-balance-${Math.random().toString(36).slice(2, 10)}`;
+
+  /** Splice a row immutably with a partial patch. When isBalance flips on,
+   *  also clear it from every other row so only one survives. */
+  function patchRow(id: string, patch: Partial<Row>) {
+    rows = rows.map((r) => {
+      if (r.id === id) {
+        return { ...r, ...patch };
+      }
+      // Force-clear other rows' isBalance when the patch turns one on.
+      if (patch.isBalance === true && r.isBalance) {
+        return { ...r, isBalance: false };
+      }
+      return r;
+    });
+  }
+
+  function removeRow(id: string) {
+    rows = rows.filter((r) => r.id !== id);
+  }
+
+  // --- "+ element" picker (PT in a focus-trapped modal) ---
+  let elementPickerOpen = $state(false);
+  let addBtnRef = $state<HTMLButtonElement | null>(null);
+  let modalRef = $state<HTMLDivElement | null>(null);
+
+  function openPicker() {
+    elementPickerOpen = true;
+  }
+
+  /** Close the picker. `returnFocus` defaults to true (Escape, ×, click-out
+   *  all want focus on the trigger). PT.onselect passes false because it
+   *  immediately focuses the new row's value input — keeping both branches
+   *  in this single function avoids a double-rAF race where the trigger
+   *  refocus would fight the row-input refocus for the next frame. */
+  function closePicker(returnFocus = true) {
+    if (!elementPickerOpen) return;
+    elementPickerOpen = false;
+    if (returnFocus) {
+      // addBtnRef may be null if the form was collapsed mid-flight; falling
+      // back to <body> is fine.
+      requestAnimationFrame(() => addBtnRef?.focus());
+    }
+  }
+
+  function onPickerKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closePicker();
+      return;
+    }
+    if (e.key !== "Tab" || !modalRef) return;
+    const focusables = Array.from(
+      modalRef.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), [tabindex="0"]',
+      ),
+    ).filter((el) => !el.hasAttribute("hidden"));
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  function handlePtSelect(symbol: string) {
+    const id = generateRowId();
+    rows = [...rows, { id, symbol, value: null, unit: "wt%", isBalance: false }];
+    // closePicker(false) suppresses the trigger-refocus rAF; we focus the
+    // new row's number input instead.
+    closePicker(false);
+    requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLInputElement>(
+        `[data-row-id="${id}"] .value-input`,
+      );
+      el?.focus();
+    });
+  }
+
+  function onPasteInput(e: Event) {
+    textDraft = (e.target as HTMLInputElement).value;
+    textDirty = true;
+    pasteError = null;
+  }
+
+  function commitPastedText() {
+    if (!textDirty) return;
+    const trimmed = textDraft.trim();
+    if (!trimmed) {
+      // User cleared the field → clear rows.
+      rows = [];
+      textDirty = false;
+      pasteError = null;
+      return;
+    }
+    const parsed = parseMaterialInput(textDraft);
+    if (parsed && "ok" in parsed) {
+      rows = toRows(parsed.ok);
+      textDirty = false;
+      pasteError = null;
+    } else if (parsed && "error" in parsed) {
+      // Keep rows untouched; surface the error inline. textDirty stays true
+      // so the user's draft remains visible while they correct it.
+      pasteError = parsed.error;
+    } else {
+      // null result (whitespace-only after trim handled above; shouldn't reach)
+      pasteError = null;
+    }
+  }
+
+  function onPasteKeydown(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      commitPastedText();
+    }
+  }
+
+  // Focus the first focusable inside the modal when it opens.
+  $effect(() => {
+    if (!elementPickerOpen) return;
+    requestAnimationFrame(() => {
+      const first = modalRef?.querySelector<HTMLElement>(
+        'button:not([disabled]), [tabindex="0"]',
+      );
+      first?.focus();
+    });
+  });
+
+  // Seed/reset from the editInitial prop. Svelte 5 read-tracking is per-rune
+  // *read*, not write — assigning to rows / textDraft inside this block does
+  // NOT add them to the effect's deps. The only tracked read is `editInitial`,
+  // so this respects the §3.1 "no $effect on rows or textDraft" rule.
   $effect(() => {
     if (editInitial) {
+      const parsed = parseMaterialInput(editInitial.formula);
+      rows = parsed && "ok" in parsed ? toRows(parsed.ok) : [];
       defineOpen = true;
-      newFormula = editInitial.formula;
-      newName = editInitial.name;
+      nameDraft = editInitial.name;
       nameManuallySet = true;
-      newDensity = editInitial.density;
+      densityDraft = editInitial.density;
+      densityManuallySet = true;
       editingCustomId = editInitial.editingCustomId;
-      formulaError = null;
+      textDraft = "";
+      textDirty = false;
+      formError = null;
+      pasteError = null;
     } else {
+      rows = [];
       defineOpen = false;
-      newFormula = "";
-      newName = "";
+      nameDraft = "";
       nameManuallySet = false;
-      newDensity = null;
-      formulaError = null;
+      densityDraft = null;
+      densityManuallySet = false;
       editingCustomId = null;
-    }
-  });
-
-  interface ParsedMaterial {
-    type: "stoichiometric" | "mass-ratio";
-    formula: string;
-    elements: string[];
-    density: number | null;
-    autoName: string;
-    massFractions?: Record<string, number>;
-  }
-
-  type ParseResult = { ok: ParsedMaterial } | { error: string } | null;
-
-  function parseMaterialInput(input: string): ParseResult {
-    const trimmed = input.trim();
-    if (!trimmed) return null;
-
-    if (trimmed.includes("%")) {
-      return parseMassRatio(trimmed);
-    }
-
-    try {
-      const parsed = parseFormula(trimmed);
-      const elements = Object.keys(parsed);
-      if (elements.length === 0) return { error: "No elements found in formula" };
-      for (const el of elements) {
-        if (!SYMBOL_TO_Z[el]) return { error: `Unknown element: ${el}` };
-      }
-      let density: number | null = null;
-      if (COMPOUND_DENSITIES[trimmed]) {
-        density = COMPOUND_DENSITIES[trimmed];
-      } else if (elements.length === 1 && ELEMENT_DENSITIES[elements[0]]) {
-        density = ELEMENT_DENSITIES[elements[0]];
-      }
-      return { ok: { type: "stoichiometric", formula: trimmed, elements, density, autoName: trimmed } };
-    } catch {
-      return { error: "Invalid formula" };
-    }
-  }
-
-  function parseMassRatio(input: string): ParseResult {
-    const parts = input.split(",").map((s) => s.trim()).filter(Boolean);
-    const entries: { symbol: string; pct: number | null }[] = [];
-
-    for (const part of parts) {
-      const m = part.match(/^([A-Z][a-z]?)\s*(\d+(?:\.\d+)?)?\s*%$/);
-      if (!m) return { error: `Invalid: "${part}". Use "Al 80%, Cu 5%, Zn %"` };
-      const sym = m[1];
-      if (!SYMBOL_TO_Z[sym]) return { error: `Unknown element: ${sym}` };
-      entries.push({ symbol: sym, pct: m[2] ? parseFloat(m[2]) : null });
-    }
-
-    const specified = entries.filter((e) => e.pct !== null);
-    const remainder = entries.filter((e) => e.pct === null);
-    const specifiedSum = specified.reduce((s, e) => s + (e.pct ?? 0), 0);
-
-    if (remainder.length > 1) return { error: "Only one element can have unspecified %" };
-    if (remainder.length === 0 && Math.abs(specifiedSum - 100) > 0.5) {
-      return { error: `Sum is ${specifiedSum.toFixed(1)}%, needs 100%` };
-    }
-    if (remainder.length === 1) {
-      const rest = 100 - specifiedSum;
-      if (rest < 0) return { error: `Sum exceeds 100% (${specifiedSum.toFixed(1)}%)` };
-      remainder[0].pct = rest;
-    }
-
-    const massFractions: Record<string, number> = {};
-    const moles: Record<string, number> = {};
-    let totalMoles = 0;
-    let density = 0;
-    const nameParts: string[] = [];
-
-    for (const e of entries) {
-      const wt = (e.pct ?? 0) / 100;
-      massFractions[e.symbol] = wt;
-      const atomicWeight = STANDARD_ATOMIC_WEIGHT[e.symbol] ?? 1;
-      const mol = wt / atomicWeight;
-      moles[e.symbol] = mol;
-      totalMoles += mol;
-      density += wt * (ELEMENT_DENSITIES[e.symbol] ?? 5);
-      nameParts.push(`${e.symbol}${Math.round(e.pct ?? 0)}`);
-    }
-
-    const atomFracs = entries.map((e) => ({ symbol: e.symbol, frac: moles[e.symbol] / totalMoles }));
-    const minFrac = Math.min(...atomFracs.map((a) => a.frac));
-    const formula = atomFracs
-      .map((a) => {
-        const ratio = a.frac / minFrac;
-        const rounded = Math.round(ratio * 100) / 100;
-        return rounded === 1 ? a.symbol : `${a.symbol}${rounded}`;
-      })
-      .join("");
-
-    return { ok: { type: "mass-ratio", formula, elements: entries.map((e) => e.symbol), density, autoName: nameParts.join("-"), massFractions } };
-  }
-
-  let parseResult = $derived.by((): ParseResult => {
-    if (!newFormula.trim()) return null;
-    return parseMaterialInput(newFormula);
-  });
-
-  let formulaPreview = $derived<ParsedMaterial | null>(
-    parseResult && "ok" in parseResult ? parseResult.ok : null,
-  );
-
-  let parsedError = $derived<string | null>(
-    parseResult && "error" in parseResult ? parseResult.error : null,
-  );
-
-  $effect(() => {
-    const result = formulaPreview;
-    if (result && !nameManuallySet) {
-      newName = result.autoName;
-    }
-    if (result?.density && newDensity === null) {
-      newDensity = result.density;
+      textDraft = "";
+      textDirty = false;
+      formError = null;
+      pasteError = null;
     }
   });
 
   async function handleSave() {
-    const preview = formulaPreview;
-    if (!preview) return;
-
-    const nameVal = newName.trim() || preview.autoName;
-    const densityVal = newDensity;
-
+    if (!formulaPreview) return;
+    const nameVal = (effectiveName.trim() || formulaPreview.autoName);
+    const densityVal = effectiveDensity;
     if (densityVal === null || densityVal <= 0) {
-      formulaError = "Enter density (g/cm³)";
+      formError = "Enter density (g/cm³)";
       return;
     }
-
     saving = true;
-    formulaError = null;
+    formError = null;
     try {
       if (editingCustomId) {
-        await updateCustomMaterial(editingCustomId, nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim(), currentEnrichment);
+        await updateCustomMaterial(
+          editingCustomId,
+          nameVal,
+          formulaPreview.formula,
+          densityVal,
+          formulaPreview.massFractions,
+          serialised,
+          currentEnrichment,
+        );
       } else {
-        await saveCustomMaterial(nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim(), currentEnrichment);
+        await saveCustomMaterial(
+          nameVal,
+          formulaPreview.formula,
+          densityVal,
+          formulaPreview.massFractions,
+          serialised,
+          currentEnrichment,
+        );
       }
       oncommit(nameVal, currentEnrichment);
     } catch {
-      formulaError = "Failed to save";
+      formError = "Failed to save";
     } finally {
       saving = false;
     }
   }
 
   function useFormula() {
-    const preview = formulaPreview;
-    if (!preview) return;
-    oncommit(preview.formula);
+    if (!formulaPreview) return;
+    oncommit(formulaPreview.formula);
   }
 </script>
 
@@ -216,42 +305,71 @@
 
   {#if defineOpen}
     <div class="define-form">
-      <label class="field-label">
-        Composition
-        <input
-          type="text"
-          class="field-input"
-          placeholder="Al2O3  or  Al 80%, Cu 5%, Zn %"
-          bind:value={newFormula}
-          oninput={() => { formulaError = null; if (!editingCustomId) nameManuallySet = false; }}
-        />
-      </label>
-      <p class="hint">Stoichiometric formula or mass ratios (comma-separated with %)</p>
-
-      {#if formulaPreview}
-        <div class="preview">
-          <span class="preview-type">{formulaPreview.type}</span>
-          {#if formulaPreview.type === "mass-ratio"}
-            <span class="preview-formula">{formulaPreview.formula}</span>
-          {/if}
-          {#each formulaPreview.elements as el}
-            <button
-              class="el-badge"
-              class:enriched={!!currentEnrichment?.[el]}
-              onclick={() => onenrichment?.(el)}
-            >{el}</button>
+      <div class="rows-section" role="grid" aria-label="Material composition rows">
+        <span class="rows-heading">Composition</span>
+        {#if rows.length === 0}
+          <p class="empty-hint">No elements yet — add one below.</p>
+        {:else}
+          {#each rows as r (r.id)}
+            <DefineFormRow
+              row={r}
+              radioName={balanceRadioName}
+              issues={issuesByRow.get(r.id) ?? []}
+              onchange={(patch) => patchRow(r.id, patch)}
+              onremove={() => removeRow(r.id)}
+            />
           {/each}
-        </div>
-      {/if}
+        {/if}
+
+        <button
+          type="button"
+          class="add-row-btn"
+          bind:this={addBtnRef}
+          onclick={openPicker}
+        >+ element</button>
+
+        <label class="field-label paste-field">
+          Or paste formula
+          <input
+            type="text"
+            class="field-input"
+            placeholder="Al2O3  or  Al 80%, Cu 5%, Zn %"
+            value={displayText}
+            oninput={onPasteInput}
+            onblur={commitPastedText}
+            onkeydown={onPasteKeydown}
+          />
+          <span class="field-hint">Stoichiometric formula or mass ratios. Cmd/Ctrl-Enter or blur to apply.</span>
+          {#if pasteError}
+            <span class="paste-error">{pasteError}</span>
+          {/if}
+        </label>
+
+        {#if formulaPreview}
+          <div class="preview">
+            <span class="preview-type">{formulaPreview.type}</span>
+            {#if formulaPreview.type === "mass-ratio"}
+              <span class="preview-formula">{formulaPreview.formula}</span>
+            {/if}
+            {#each formulaPreview.elements as el}
+              <button
+                class="el-badge"
+                class:enriched={!!currentEnrichment?.[el]}
+                onclick={() => onenrichment?.(el)}
+              >{el}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
 
       <label class="field-label">
         Name
         <input
           type="text"
           class="field-input"
-          placeholder={formulaPreview?.autoName ?? "auto-filled from composition"}
-          bind:value={newName}
-          oninput={() => { nameManuallySet = true; }}
+          placeholder={autoName || "auto-filled from composition"}
+          value={effectiveName}
+          oninput={(e) => { nameDraft = (e.target as HTMLInputElement).value; nameManuallySet = true; }}
         />
         <span class="field-hint">Auto-filled — edit to override</span>
       </label>
@@ -262,31 +380,61 @@
           type="text"
           inputmode="decimal"
           class="field-input"
-          placeholder={formulaPreview?.density?.toFixed(2) ?? "e.g. 2.70"}
-          value={newDensity !== null ? String(newDensity) : ""}
-          oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value); newDensity = Number.isFinite(v) ? v : null; }}
+          placeholder={autoDensity !== null ? autoDensity.toFixed(2) : "e.g. 2.70"}
+          value={effectiveDensity !== null ? String(effectiveDensity) : ""}
+          oninput={(e) => {
+            const v = parseFloat((e.target as HTMLInputElement).value);
+            densityDraft = Number.isFinite(v) ? v : null;
+            densityManuallySet = true;
+          }}
         />
       </label>
 
-      {#if parsedError || formulaError}
-        <p class="form-error">{parsedError ?? formulaError}</p>
+      {#if formError}
+        <p class="form-error">{formError}</p>
       {/if}
+      {#each formIssues as issue}
+        <p class="form-{issue.level}">{issue.message}</p>
+      {/each}
 
       <div class="form-actions">
         <button
           class="use-formula-btn"
-          disabled={!formulaPreview}
+          disabled={!canCommit}
           onclick={useFormula}
         >Use without saving</button>
         <button
           class="save-btn"
-          disabled={saving || !formulaPreview || newDensity === null || (newDensity ?? 0) <= 0}
+          disabled={saving || !canCommit || effectiveDensity === null || (effectiveDensity ?? 0) <= 0}
           onclick={handleSave}
         >{saving ? "Saving..." : editingCustomId ? "Update & Use" : "Save & Use"}</button>
       </div>
     </div>
   {/if}
 </div>
+
+{#if elementPickerOpen}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div class="picker-overlay" onclick={(e) => { if (e.target === e.currentTarget) closePicker(); }}>
+    <div
+      class="picker-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Pick an element"
+      tabindex="-1"
+      bind:this={modalRef}
+      onkeydown={onPickerKeydown}
+    >
+      <div class="picker-header">
+        <h3>Pick an element</h3>
+        <button class="picker-close" aria-label="Close" onclick={() => closePicker()}>×</button>
+      </div>
+      <div class="picker-body">
+        <PeriodicTable onselect={handlePtSelect} />
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .define-section {
@@ -320,6 +468,93 @@
     border-radius: 4px;
   }
 
+  .rows-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .rows-heading {
+    font-size: 0.75rem;
+    color: var(--c-text-muted);
+  }
+
+  .empty-hint {
+    font-size: 0.7rem;
+    color: var(--c-text-subtle);
+    margin: 0;
+    font-style: italic;
+  }
+
+  .add-row-btn {
+    align-self: flex-start;
+    background: var(--c-bg-muted);
+    border: 1px dashed var(--c-border);
+    border-radius: 4px;
+    color: var(--c-text-muted);
+    padding: 0.25rem 0.6rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    margin-top: 0.2rem;
+  }
+
+  .add-row-btn:hover { color: var(--c-accent); border-color: var(--c-accent); }
+  .add-row-btn:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
+
+  .picker-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--c-overlay-heavy);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100;
+    padding: 1rem;
+  }
+
+  .picker-modal {
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 8px;
+    max-width: 900px;
+    max-height: 90vh;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .picker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 0.9rem;
+    border-bottom: 1px solid var(--c-border);
+  }
+
+  .picker-header h3 { margin: 0; font-size: 0.95rem; color: var(--c-text); }
+
+  .picker-close {
+    background: none;
+    border: none;
+    color: var(--c-text-muted);
+    font-size: 1.3rem;
+    cursor: pointer;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    line-height: 1;
+  }
+
+  .picker-close:hover { color: var(--c-text); background: var(--c-bg-muted); }
+  .picker-close:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
+
+  .picker-body {
+    padding: 0.75rem;
+    overflow: auto;
+    flex: 1;
+    min-height: 0;
+  }
+
   .field-label {
     display: flex;
     flex-direction: column;
@@ -345,11 +580,11 @@
     font-style: italic;
   }
 
-  .hint {
-    font-size: 0.65rem;
-    color: var(--c-text-subtle);
-    margin: 0;
-    font-style: italic;
+  .paste-field { margin-top: 0.4rem; }
+
+  .paste-error {
+    color: var(--c-red);
+    font-size: 0.7rem;
   }
 
   .preview {
@@ -400,6 +635,12 @@
   .form-error {
     color: var(--c-red);
     font-size: 0.75rem;
+    margin: 0;
+  }
+
+  .form-warning {
+    color: var(--c-yellow, var(--c-text-muted));
+    font-size: 0.7rem;
     margin: 0;
   }
 
