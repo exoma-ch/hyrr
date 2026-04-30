@@ -39,9 +39,17 @@
 
   // --- Source-of-truth state per #92 ---
   let mode = $state<Mode>("single");
+  let modeUserOverride = $state(false);
   let rows = $state<Row[]>([]);
   let textDraft = $state("");
   let textDirty = $state(false);
+  /** Confidence in the most recent inference. "low" → render the chip in
+   *  amber with a question mark + first-time subhead. */
+  let inferenceConfidence = $state<"high" | "low">("high");
+  let inferenceNudge = $state<string | null>(null);
+  /** First-time guidance for the chip; suppressed in localStorage after the
+   *  first successful save. */
+  let modeFirstTimeShown = $state(false);
 
   // Display-side state (not part of the rows↔text round-trip).
   let defineOpen = $state(false);
@@ -127,6 +135,21 @@
   /** Stable radiogroup name so the browser enforces single-balance selection. */
   const balanceRadioName = `define-balance-${Math.random().toString(36).slice(2, 10)}`;
 
+  // First-time guidance: read flag once on init.
+  try {
+    if (typeof localStorage !== "undefined" && localStorage.getItem("hyrr.defineform.modeChipSeen") === "1") {
+      modeFirstTimeShown = true;
+    }
+  } catch { /* no-op */ }
+
+  const MODE_LABEL: Record<Mode, string> = {
+    single: "Single formula",
+    mass: "Mass mixture",
+    atom: "Atom mixture",
+  };
+
+  let modeMenuOpen = $state(false);
+
   /** Splice a row immutably with a partial patch. When isBalance flips on,
    *  also clear it from every other row so only one survives. */
   function patchRow(id: string, patch: Partial<Row>) {
@@ -144,6 +167,21 @@
 
   function removeRow(id: string) {
     rows = rows.filter((r) => r.id !== id);
+  }
+
+  /** Mode-switch path. MUST be event-driven, not $effect-driven (#92 §3.1
+   *  hard rule — runes-review-predicted footgun). Non-destructive: rows
+   *  are kept; only mode changes. Mass→Single is a no-op on rows but the
+   *  Single-mode UI will only show the first row. */
+  function setMode(next: Mode) {
+    if (next === mode) return;
+    mode = next;
+    modeUserOverride = true;
+  }
+
+  function dismissModeFirstTime() {
+    modeFirstTimeShown = true;
+    try { localStorage.setItem("hyrr.defineform.modeChipSeen", "1"); } catch { /* no-op */ }
   }
 
   // --- "+ element" picker (PT in a focus-trapped modal) ---
@@ -230,8 +268,10 @@
     }
     const parsed = parseMaterialInput(textDraft);
     if (parsed && "ok" in parsed) {
-      mode = parsed.ok.mode;
+      if (!modeUserOverride) mode = parsed.ok.mode;
       rows = parsed.ok.rows;
+      inferenceConfidence = parsed.ok.confidence;
+      inferenceNudge = parsed.ok.nudge ?? null;
       textDirty = false;
       pasteError = null;
     } else if (parsed && "error" in parsed) {
@@ -356,6 +396,41 @@
 
   {#if defineOpen}
     <div class="define-form">
+      <div class="mode-chip-row">
+        <span class="mode-chip-wrap">
+          <button
+            type="button"
+            class="mode-chip"
+            class:low-conf={inferenceConfidence === "low"}
+            aria-haspopup="true"
+            aria-expanded={modeMenuOpen}
+            onclick={() => { modeMenuOpen = !modeMenuOpen; dismissModeFirstTime(); }}
+          >
+            {inferenceConfidence === "low" ? `${MODE_LABEL[mode]}?` : MODE_LABEL[mode]}
+            <span class="caret">▾</span>
+          </button>
+          {#if modeMenuOpen}
+            <div class="mode-menu" role="menu">
+              {#each ["single","mass","atom"] as const as m}
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="mode-option"
+                  class:active={mode === m}
+                  onclick={() => { setMode(m); modeMenuOpen = false; }}
+                >{MODE_LABEL[m]}</button>
+              {/each}
+            </div>
+          {/if}
+        </span>
+        {#if inferenceNudge}
+          <span class="mode-nudge">{inferenceNudge}</span>
+        {/if}
+        {#if !modeFirstTimeShown && rows.length === 0}
+          <span class="mode-firsttime">Inferred from your input — click to change.</span>
+        {/if}
+      </div>
+
       <div class="rows-section" role="grid" aria-label="Material composition rows">
         <span class="rows-heading">Composition</span>
         {#if rows.length === 0}
@@ -534,6 +609,83 @@
     font-size: 0.7rem;
     color: var(--c-text-subtle);
     margin: 0;
+    font-style: italic;
+  }
+
+  .mode-chip-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .mode-chip-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .mode-chip {
+    background: var(--c-bg-active);
+    border: 1px solid var(--c-accent);
+    border-radius: 12px;
+    color: var(--c-accent);
+    padding: 0.15rem 0.55rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .mode-chip.low-conf {
+    border-color: var(--c-yellow, #d4a017);
+    color: var(--c-yellow, #d4a017);
+    background: var(--c-yellow-tint-subtle, transparent);
+  }
+
+  .mode-chip:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
+
+  .mode-chip .caret { font-size: 0.55rem; }
+
+  .mode-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 50;
+    min-width: 9rem;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    padding: 0.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+
+  .mode-option {
+    background: transparent;
+    border: none;
+    color: var(--c-text-muted);
+    text-align: left;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+    border-radius: 3px;
+  }
+
+  .mode-option:hover { background: var(--c-bg-subtle); color: var(--c-text); }
+  .mode-option.active { color: var(--c-accent); font-weight: 500; }
+
+  .mode-nudge {
+    font-size: 0.7rem;
+    color: var(--c-yellow, var(--c-text-muted));
+    font-style: italic;
+  }
+
+  .mode-firsttime {
+    font-size: 0.65rem;
+    color: var(--c-text-subtle);
     font-style: italic;
   }
 
