@@ -16,11 +16,12 @@
     generateRowId,
     parseMaterialInput,
     serialise,
-    toRows,
     validate,
     type Issue,
+    type Mode,
     type Row,
   } from "./define-form-rows";
+  import { formulaToMassFractions, parseFormula } from "@hyrr/compute";
   import DefineFormRow from "./DefineFormRow.svelte";
   import PeriodicTable from "./PeriodicTable.svelte";
 
@@ -36,7 +37,8 @@
 
   let { editInitial, currentEnrichment, onenrichment, oncommit }: Props = $props();
 
-  // --- Source-of-truth state per #64 §3.1 ---
+  // --- Source-of-truth state per #92 ---
+  let mode = $state<Mode>("single");
   let rows = $state<Row[]>([]);
   let textDraft = $state("");
   let textDirty = $state(false);
@@ -51,27 +53,64 @@
   let saving = $state(false);
   let editingCustomId = $state<string | null>(null);
 
-  // Pure derivations off rows. NOTE: no $effect watches rows or textDraft —
-  // round-trips run inside event handlers (commitPastedText) only. (#64 §3.1)
-  const serialised = $derived(serialise(rows));
-  const validation = $derived(validate(rows));
+  // Pure derivations off rows. NOTE: no $effect watches rows, mode, or textDraft —
+  // round-trips run inside event handlers (commitPastedText) only. (#92)
+  const serialised = $derived(serialise(mode, rows));
+  const validation = $derived(validate(mode, rows));
   const previewParse = $derived(parseMaterialInput(serialised));
   const formulaPreview = $derived(
     previewParse && "ok" in previewParse ? previewParse.ok : null,
   );
+  /** Display formula — joined formulas across rows for preview / save. For
+   *  Single mode, equals the single rendered formula; for mixtures, falls
+   *  back to a name-friendly "Sym{count}" join. */
+  const displayFormula = $derived.by(() => {
+    if (rows.length === 0) return "";
+    if (mode === "single") return serialised;
+    return rows.map((r) => r.isBalance ? r.formula : `${r.formula}${Math.round(r.value ?? 0)}`).join("-");
+  });
+  /** Distinct element symbols across all rows (used for the enrichment-badge row). */
+  const previewElements = $derived.by(() => {
+    const seen = new Set<string>();
+    for (const r of rows) {
+      try {
+        const counts = parseFormula(r.formula);
+        for (const k of Object.keys(counts)) seen.add(k);
+      } catch { /* ignore */ }
+    }
+    return [...seen];
+  });
+
+  /** Mass fractions per element — derived for save. Folds compound rows
+   *  through formulaToMassFractions and weights by row.value. Only valid in
+   *  mass mode; null otherwise. */
+  const massFractions = $derived.by((): Record<string, number> | undefined => {
+    if (mode !== "mass" || rows.length === 0) return undefined;
+    const out: Record<string, number> = {};
+    let specifiedSum = 0;
+    for (const r of rows) if (!r.isBalance) specifiedSum += r.value ?? 0;
+    for (const r of rows) {
+      const wt = r.isBalance ? Math.max(0, 100 - specifiedSum) : (r.value ?? 0);
+      const elFracs = formulaToMassFractions(r.formula);
+      for (const [el, f] of Object.entries(elFracs)) {
+        out[el] = (out[el] ?? 0) + (wt / 100) * f;
+      }
+    }
+    return out;
+  });
   /** What the paste input displays — user's draft when dirty, otherwise the
    *  canonical serialisation of the current rows (so edits to rows propagate
    *  back into the text field). */
   const displayText = $derived(textDirty ? textDraft : serialised);
   let pasteError = $state<string | null>(null);
 
-  const autoName = $derived(formulaPreview?.autoName ?? "");
+  const autoName = $derived(formulaPreview?.autoName ?? displayFormula);
   const autoDensity = $derived(formulaPreview?.density ?? null);
   const effectiveName = $derived(nameManuallySet ? nameDraft : autoName);
   const effectiveDensity = $derived(densityManuallySet ? densityDraft : autoDensity);
 
   const validationErrors = $derived(validation.filter((i) => i.level === "error"));
-  const canCommit = $derived(rows.length > 0 && validationErrors.length === 0 && !!formulaPreview);
+  const canCommit = $derived(rows.length > 0 && validationErrors.length === 0);
   const formIssues = $derived(validation.filter((i) => !i.rowId));
   const issuesByRow = $derived.by(() => {
     const byRow = new Map<string, Issue[]>();
@@ -158,7 +197,10 @@
 
   function handlePtSelect(symbol: string) {
     const id = generateRowId();
-    rows = [...rows, { id, symbol, value: null, unit: "wt%", isBalance: false }];
+    // Picking from PT in single mode is meaningless; switch to mass mode if
+    // we're not already in a mixture. Proper mode-chip UX lands in C3+.
+    if (mode === "single") mode = "mass";
+    rows = [...rows, { id, formula: symbol, value: null, isBalance: false }];
     // closePicker(false) suppresses the trigger-refocus rAF; we focus the
     // new row's number input instead.
     closePicker(false);
@@ -188,7 +230,8 @@
     }
     const parsed = parseMaterialInput(textDraft);
     if (parsed && "ok" in parsed) {
-      rows = toRows(parsed.ok);
+      mode = parsed.ok.mode;
+      rows = parsed.ok.rows;
       textDirty = false;
       pasteError = null;
     } else if (parsed && "error" in parsed) {
@@ -226,7 +269,13 @@
   $effect(() => {
     if (editInitial) {
       const parsed = parseMaterialInput(editInitial.formula);
-      rows = parsed && "ok" in parsed ? toRows(parsed.ok) : [];
+      if (parsed && "ok" in parsed) {
+        mode = parsed.ok.mode;
+        rows = parsed.ok.rows;
+      } else {
+        mode = "single";
+        rows = [];
+      }
       defineOpen = true;
       nameDraft = editInitial.name;
       nameManuallySet = true;
@@ -238,6 +287,7 @@
       formError = null;
       pasteError = null;
     } else {
+      mode = "single";
       rows = [];
       defineOpen = false;
       nameDraft = "";
@@ -253,8 +303,9 @@
   });
 
   async function handleSave() {
-    if (!formulaPreview) return;
-    const nameVal = (effectiveName.trim() || formulaPreview.autoName);
+    if (rows.length === 0) return;
+    const formulaForSave = mode === "single" ? serialised : displayFormula;
+    const nameVal = effectiveName.trim() || autoName || formulaForSave;
     const densityVal = effectiveDensity;
     if (densityVal === null || densityVal <= 0) {
       formError = "Enter density (g/cm³)";
@@ -267,18 +318,18 @@
         await updateCustomMaterial(
           editingCustomId,
           nameVal,
-          formulaPreview.formula,
+          formulaForSave,
           densityVal,
-          formulaPreview.massFractions,
+          massFractions,
           serialised,
           currentEnrichment,
         );
       } else {
         await saveCustomMaterial(
           nameVal,
-          formulaPreview.formula,
+          formulaForSave,
           densityVal,
-          formulaPreview.massFractions,
+          massFractions,
           serialised,
           currentEnrichment,
         );
@@ -292,8 +343,8 @@
   }
 
   function useFormula() {
-    if (!formulaPreview) return;
-    oncommit(formulaPreview.formula);
+    if (rows.length === 0) return;
+    oncommit(mode === "single" ? serialised : displayFormula);
   }
 </script>
 
@@ -345,13 +396,13 @@
           {/if}
         </label>
 
-        {#if formulaPreview}
+        {#if rows.length > 0}
           <div class="preview">
-            <span class="preview-type">{formulaPreview.type}</span>
-            {#if formulaPreview.type === "mass-ratio"}
-              <span class="preview-formula">{formulaPreview.formula}</span>
+            <span class="preview-type">{mode}</span>
+            {#if mode !== "single"}
+              <span class="preview-formula">{displayFormula}</span>
             {/if}
-            {#each formulaPreview.elements as el}
+            {#each previewElements as el}
               <button
                 class="el-badge"
                 class:enriched={!!currentEnrichment?.[el]}

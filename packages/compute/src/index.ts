@@ -69,12 +69,14 @@ export {
 // --- Formula parsing ---
 export {
   parseFormula,
+  parseIsotopicFormula,
   formulaToMassFractions,
   elementsFromIdentifier,
   SYMBOL_TO_Z,
   STANDARD_ATOMIC_WEIGHT,
   Z_TO_SYMBOL,
 } from "./formula";
+export type { IsotopicFormula } from "./formula";
 
 // --- Config bridge ---
 export {

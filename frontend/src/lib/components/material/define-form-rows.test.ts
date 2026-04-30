@@ -1,365 +1,391 @@
 import { describe, expect, it } from "vitest";
 import {
   generateRowId,
+  inferMode,
+  isTabulatedDensity,
   parseMaterialInput,
+  rowAverageAtomicMass,
   serialise,
-  toRows,
   validate,
+  validateAtom,
+  validateMass,
+  validateSingle,
   type Row,
 } from "./define-form-rows";
+import { parseIsotopicFormula } from "@hyrr/compute";
 
 function row(partial: Partial<Row> = {}): Row {
   return {
     id: partial.id ?? generateRowId(),
-    symbol: partial.symbol ?? "Cu",
+    formula: partial.formula ?? "Cu",
     value: "value" in partial ? (partial.value ?? null) : 100,
-    unit: partial.unit ?? "wt%",
     isBalance: partial.isBalance ?? false,
+    enrichment: partial.enrichment,
   };
 }
 
-describe("parseMaterialInput", () => {
-  it("returns null for empty input", () => {
-    expect(parseMaterialInput("")).toBeNull();
-    expect(parseMaterialInput("   ")).toBeNull();
+describe("parseIsotopicFormula", () => {
+  it("returns natural formula + empty enrichment for plain inputs", () => {
+    const r = parseIsotopicFormula("H2O");
+    expect(r).not.toBeNull();
+    expect(r!.formula).toBe("H2O");
+    expect(Object.keys(r!.enrichment).length).toBe(0);
   });
 
-  it("parses a simple stoichiometric formula", () => {
-    const result = parseMaterialInput("Al2O3");
-    expect(result).toBeTruthy();
-    expect(result).toHaveProperty("ok");
-    if (result && "ok" in result) {
-      expect(result.ok.type).toBe("stoichiometric");
-      expect(result.ok.elements).toEqual(["Al", "O"]);
-      expect(result.ok.stoichCounts).toEqual({ Al: 2, O: 3 });
-    }
+  it("expands ³He via Unicode superscript prefix", () => {
+    const r = parseIsotopicFormula("³He");
+    expect(r!.formula).toBe("He");
+    expect(r!.enrichment.He[3]).toBeCloseTo(1.0);
   });
 
-  it("parses water with compound density", () => {
-    const result = parseMaterialInput("H2O");
-    if (result && "ok" in result) {
-      expect(result.ok.density).toBe(1.0);
-    } else {
-      throw new Error("expected ok");
-    }
+  it("expands D2O — deuterium maps to H mass=2", () => {
+    const r = parseIsotopicFormula("D2O");
+    expect(r!.formula).toBe("H2O");
+    expect(r!.enrichment.H[2]).toBeCloseTo(1.0);
+    expect(r!.enrichment.O).toBeUndefined();
   });
 
-  it("parses mass-ratio with explicit balance", () => {
-    const result = parseMaterialInput("Al 80%, Cu 5%, Zn %");
-    if (!result || !("ok" in result)) throw new Error("expected ok");
-    expect(result.ok.type).toBe("mass-ratio");
-    expect(result.ok.balanceSymbol).toBe("Zn");
-    expect(result.ok.massFractions).toBeDefined();
-    expect(result.ok.massFractions!.Zn).toBeCloseTo(0.15, 4);
+  it("expands H₂¹⁸O — only O is enriched, H stays natural", () => {
+    const r = parseIsotopicFormula("H₂¹⁸O");
+    expect(r!.formula).toBe("H2O");
+    expect(r!.enrichment.O[18]).toBeCloseTo(1.0);
+    expect(r!.enrichment.H).toBeUndefined();
   });
 
-  it("parses mass-ratio with all percentages explicit", () => {
-    const result = parseMaterialInput("Al 90%, Cu 10%");
-    if (!result || !("ok" in result)) throw new Error("expected ok");
-    expect(result.ok.balanceSymbol).toBeUndefined();
-    expect(result.ok.massFractions!.Al).toBeCloseTo(0.9);
+  it("expands ¹³CO₂", () => {
+    const r = parseIsotopicFormula("¹³CO₂");
+    expect(r!.formula).toBe("CO2");
+    expect(r!.enrichment.C[13]).toBeCloseTo(1.0);
   });
 
-  it("rejects unknown element in formula", () => {
-    const result = parseMaterialInput("Xx2O3");
-    expect(result).toEqual({ error: expect.stringMatching(/Unknown element/) });
+  it("expands ASCII isotope-prefix like 13C", () => {
+    const r = parseIsotopicFormula("13C");
+    expect(r!.formula).toBe("C");
+    expect(r!.enrichment.C[13]).toBeCloseTo(1.0);
   });
 
-  it("rejects unknown element in mass-ratio", () => {
-    const result = parseMaterialInput("Xx 50%, Cu 50%");
-    expect(result).toEqual({ error: expect.stringMatching(/Unknown element: Xx/) });
+  it("expands hyphen suffix like He-3 → 3He", () => {
+    const r = parseIsotopicFormula("He-3");
+    expect(r!.formula).toBe("He");
+    expect(r!.enrichment.He[3]).toBeCloseTo(1.0);
   });
 
-  it("rejects mass-ratio with >1 balance", () => {
-    const result = parseMaterialInput("Al %, Cu %, Zn 50%");
-    expect(result).toEqual({ error: expect.stringMatching(/unspecified/) });
+  it("normalises mixed-isotope shares (¹⁸O¹⁶O → 50/50)", () => {
+    const r = parseIsotopicFormula("¹⁸O¹⁶O");
+    // Formula is the literal concatenation of element tokens; parseFormula
+    // accepts both "OO" and "O2" identically. The contract is round-trippable
+    // through parseFormula, not minimal.
+    expect(r!.formula).toBe("OO");
+    expect(r!.enrichment.O[18]).toBeCloseTo(0.5);
+    expect(r!.enrichment.O[16]).toBeCloseTo(0.5);
   });
 
-  it("rejects mass-ratio with sum >100 + no balance", () => {
-    const result = parseMaterialInput("Al 70%, Cu 70%");
-    expect(result).toEqual({ error: expect.stringMatching(/100%/) });
+  it("rejects dangling isotope number with no symbol", () => {
+    expect(parseIsotopicFormula("13")).toBeNull();
   });
 
-  it("rejects mass-ratio with sum exceeding 100 even with balance", () => {
-    const result = parseMaterialInput("Al 60%, Cu 60%, Zn %");
-    expect(result).toEqual({ error: expect.stringMatching(/Sum exceeds/) });
+  it("rejects unknown element symbols", () => {
+    expect(parseIsotopicFormula("Xx2O3")).toBeNull();
   });
 
-  it("rejects malformed mass-ratio token", () => {
-    const result = parseMaterialInput("Al 80%, garbage, Cu 20%");
-    expect(result).toEqual({ error: expect.stringMatching(/Invalid/) });
+  it("rejects ambiguous isotope prefix on D", () => {
+    expect(parseIsotopicFormula("³D")).toBeNull();
+  });
+
+  it("Mo-100 expands cleanly", () => {
+    const r = parseIsotopicFormula("Mo-100");
+    expect(r!.formula).toBe("Mo");
+    expect(r!.enrichment.Mo[100]).toBeCloseTo(1.0);
   });
 });
 
-describe("toRows", () => {
-  it("converts a stoichiometric parse to stoich rows", () => {
-    const parsed = parseMaterialInput("Al2O3");
-    if (!parsed || !("ok" in parsed)) throw new Error("expected ok");
-    const rows = toRows(parsed.ok);
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ symbol: "Al", unit: "stoich", value: 2, isBalance: false });
-    expect(rows[1]).toMatchObject({ symbol: "O", unit: "stoich", value: 3, isBalance: false });
+describe("parseMaterialInput — mode inference", () => {
+  it("returns null for empty input", () => {
+    expect(parseMaterialInput("")).toBeNull();
+    expect(parseMaterialInput("  ")).toBeNull();
   });
 
-  it("converts a single-element stoichiometric parse", () => {
-    const parsed = parseMaterialInput("Cu");
-    if (!parsed || !("ok" in parsed)) throw new Error("expected ok");
-    const rows = toRows(parsed.ok);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ symbol: "Cu", unit: "stoich", value: 1, isBalance: false });
+  it("infers 'single' for a bareword formula", () => {
+    const r = parseMaterialInput("Al2O3");
+    if (!r || "error" in r) throw new Error("expected ok");
+    expect(r.ok.mode).toBe("single");
+    expect(r.ok.confidence).toBe("high");
   });
 
-  it("converts a mass-ratio parse to wt% rows with balance flag", () => {
-    const parsed = parseMaterialInput("Al 80%, Cu 5%, Zn %");
-    if (!parsed || !("ok" in parsed)) throw new Error("expected ok");
-    const rows = toRows(parsed.ok);
-    expect(rows.map((r) => r.symbol)).toEqual(["Al", "Cu", "Zn"]);
-    expect(rows.map((r) => r.unit)).toEqual(["wt%", "wt%", "wt%"]);
-    expect(rows.map((r) => r.isBalance)).toEqual([false, false, true]);
-    expect(rows[0].value).toBeCloseTo(80, 4);
-    expect(rows[1].value).toBeCloseTo(5, 4);
-    expect(rows[2].value).toBeCloseTo(15, 4);
+  it("infers 'mass' from comma + percent", () => {
+    const r = parseMaterialInput("Al 80%, Cu 5%, Zn bal");
+    if (!r || "error" in r) throw new Error("expected ok");
+    expect(r.ok.mode).toBe("mass");
   });
 
-  it("assigns unique row IDs", () => {
-    const parsed = parseMaterialInput("FeCrNi");
-    if (!parsed || !("ok" in parsed)) throw new Error("expected ok");
-    const rows = toRows(parsed.ok);
-    const ids = new Set(rows.map((r) => r.id));
-    expect(ids.size).toBe(3);
+  it("infers 'atom' from comma + decimal fraction", () => {
+    const r = parseMaterialInput("Fe 0.7, Cr 0.18, Ni 0.12");
+    if (!r || "error" in r) throw new Error("expected ok");
+    expect(r.ok.mode).toBe("atom");
+  });
+
+  it("flags glassy mass mixture as low-confidence with mol% nudge", () => {
+    const r = parseMaterialInput("SiO2 75%, Na2O 14%, CaO 11%");
+    if (!r || "error" in r) throw new Error("expected ok");
+    expect(r.ok.mode).toBe("mass");
+    expect(r.ok.confidence).toBe("low");
+    expect(r.ok.nudge).toMatch(/mol%/);
+  });
+
+  it("non-glassy mass mixture stays high-confidence", () => {
+    const r = parseMaterialInput("Al 80%, Cu 20%");
+    if (!r || "error" in r) throw new Error("expected ok");
+    expect(r.ok.confidence).toBe("high");
+    expect(r.ok.nudge).toBeUndefined();
+  });
+});
+
+describe("parseMaterialInput — single mode", () => {
+  it("populates rows as stoich counts", () => {
+    const r = parseMaterialInput("Al2O3");
+    if (!r || "error" in r) throw new Error();
+    expect(r.ok.rows.length).toBe(2);
+    const al = r.ok.rows.find((x) => x.formula === "Al");
+    const o = r.ok.rows.find((x) => x.formula === "O");
+    expect(al!.value).toBe(2);
+    expect(o!.value).toBe(3);
+  });
+
+  it("propagates row enrichment for isotope-prefixed formulas", () => {
+    const r = parseMaterialInput("D2O");
+    if (!r || "error" in r) throw new Error();
+    const h = r.ok.rows.find((x) => x.formula === "H");
+    expect(h!.enrichment).toBeDefined();
+    expect(h!.enrichment!.H[2]).toBeCloseTo(1.0);
+  });
+
+  it("density auto-populates for tabulated compounds", () => {
+    const r = parseMaterialInput("H2O");
+    if (!r || "error" in r) throw new Error();
+    expect(r.ok.density).toBe(1.0);
+  });
+});
+
+describe("parseMaterialInput — mass mode", () => {
+  it("parses with explicit balance", () => {
+    const r = parseMaterialInput("Al 80%, Cu 5%, Zn bal");
+    if (!r || "error" in r) throw new Error();
+    expect(r.ok.rows.map((x) => x.formula)).toEqual(["Al", "Cu", "Zn"]);
+    expect(r.ok.rows.map((x) => x.isBalance)).toEqual([false, false, true]);
+    expect(r.ok.rows[2].value).toBeNull();
+  });
+
+  it("accepts compound rows", () => {
+    const r = parseMaterialInput("SiO2 80%, H2O 20%");
+    if (!r || "error" in r) throw new Error();
+    expect(r.ok.rows.map((x) => x.formula)).toEqual(["SiO2", "H2O"]);
+  });
+
+  it("rejects mass sum != 100 without balance", () => {
+    const r = parseMaterialInput("Al 80%, Cu 10%");
+    expect(r).toEqual({ error: expect.stringMatching(/100%/) });
+  });
+
+  it("rejects sum > 100 with balance", () => {
+    const r = parseMaterialInput("Al 60%, Cu 60%, Zn bal");
+    expect(r).toEqual({ error: expect.stringMatching(/exceed/i) });
+  });
+
+  it("rejects two balance rows", () => {
+    const r = parseMaterialInput("Al bal, Cu bal");
+    expect(r).toEqual({ error: expect.stringMatching(/one row/i) });
+  });
+});
+
+describe("parseMaterialInput — atom mode", () => {
+  it("parses fractional input summing to 1", () => {
+    const r = parseMaterialInput("Fe 0.7, Cr 0.18, Ni 0.12");
+    if (!r || "error" in r) throw new Error();
+    expect(r.ok.mode).toBe("atom");
+    expect(r.ok.rows.length).toBe(3);
+  });
+
+  it("parses balance with single row", () => {
+    const r = parseMaterialInput("Si 0.75, Na 0.14, Ca bal");
+    if (!r || "error" in r) throw new Error();
+    expect(r.ok.rows[2].isBalance).toBe(true);
+  });
+
+  it("rejects sum != 1 without balance", () => {
+    const r = parseMaterialInput("Fe 0.5, Cr 0.2");
+    expect(r).toEqual({ error: expect.stringMatching(/sum/i) });
   });
 });
 
 describe("serialise", () => {
   it("returns empty string for empty rows", () => {
-    expect(serialise([])).toBe("");
+    expect(serialise("mass", [])).toBe("");
   });
 
-  it("serialises stoichiometric rows as a chemical formula", () => {
+  it("mass: sorts by descending value, balance last", () => {
     const rows: Row[] = [
-      row({ symbol: "Al", unit: "stoich", value: 2 }),
-      row({ symbol: "O", unit: "stoich", value: 3 }),
+      row({ formula: "Cu", value: 5 }),
+      row({ formula: "Al", value: 80 }),
+      row({ formula: "Zn", value: null, isBalance: true }),
     ];
-    expect(serialise(rows)).toBe("Al2O3");
+    expect(serialise("mass", rows)).toBe("Al 80%, Cu 5%, Zn bal");
   });
 
-  it("omits count of 1 in stoichiometric serialisation", () => {
+  it("atom: serialises with no percent", () => {
     const rows: Row[] = [
-      row({ symbol: "Fe", unit: "stoich", value: 1 }),
-      row({ symbol: "O", unit: "stoich", value: 2 }),
+      row({ formula: "Fe", value: 0.7 }),
+      row({ formula: "Cr", value: 0.18 }),
     ];
-    expect(serialise(rows)).toBe("FeO2");
+    expect(serialise("atom", rows)).toBe("Fe 0.7, Cr 0.18");
   });
 
-  it("serialises wt% rows with explicit percentages", () => {
+  it("single: concatenates stoich counts", () => {
     const rows: Row[] = [
-      row({ symbol: "Al", unit: "wt%", value: 80, isBalance: false }),
-      row({ symbol: "Cu", unit: "wt%", value: 5, isBalance: false }),
-      row({ symbol: "Zn", unit: "wt%", value: 15, isBalance: true }),
+      row({ formula: "Al", value: 2 }),
+      row({ formula: "O", value: 3 }),
     ];
-    expect(serialise(rows)).toBe("Al 80%, Cu 5%, Zn %");
+    expect(serialise("single", rows)).toBe("Al2O3");
   });
 
-  it("serialises a single wt% row with balance as bare percentage", () => {
-    const rows: Row[] = [row({ symbol: "Cu", unit: "wt%", isBalance: true, value: null })];
-    expect(serialise(rows)).toBe("Cu %");
-  });
-
-  it("serialises mixed units as best-effort stoich form", () => {
+  it("single: omits count of 1", () => {
     const rows: Row[] = [
-      row({ symbol: "Fe", unit: "stoich", value: 1 }),
-      row({ symbol: "Cr", unit: "wt%", value: 18 }),
+      row({ formula: "Fe", value: 1 }),
+      row({ formula: "O", value: 1 }),
     ];
-    expect(serialise(rows)).toBe("FeCr18");
+    expect(serialise("single", rows)).toBe("FeO");
   });
 });
 
-describe("serialise round-trip", () => {
-  it("text → rows → text is canonical for stoichiometric input", () => {
-    const parsed = parseMaterialInput("Al2O3");
-    if (!parsed || !("ok" in parsed)) throw new Error("expected ok");
-    expect(serialise(toRows(parsed.ok))).toBe("Al2O3");
+describe("round-trip", () => {
+  it("text → parse → serialise is canonical for mass mode with balance", () => {
+    const r = parseMaterialInput("Al 80%, Cu 5%, Zn bal");
+    if (!r || "error" in r) throw new Error();
+    expect(serialise("mass", r.ok.rows)).toBe("Al 80%, Cu 5%, Zn bal");
   });
 
-  it("text → rows → text is canonical for mass-ratio input with balance", () => {
-    const parsed = parseMaterialInput("Al 80%, Cu 5%, Zn %");
-    if (!parsed || !("ok" in parsed)) throw new Error("expected ok");
-    expect(serialise(toRows(parsed.ok))).toBe("Al 80%, Cu 5%, Zn %");
-  });
-
-  it("text → rows → text is canonical for FeO2", () => {
-    const parsed = parseMaterialInput("FeO2");
-    if (!parsed || !("ok" in parsed)) throw new Error("expected ok");
-    expect(serialise(toRows(parsed.ok))).toBe("FeO2");
-  });
-
-  it("text → rows → text for mass-ratio without balance preserves entries", () => {
-    const parsed = parseMaterialInput("Al 90%, Cu 10%");
-    if (!parsed || !("ok" in parsed)) throw new Error("expected ok");
-    expect(serialise(toRows(parsed.ok))).toBe("Al 90%, Cu 10%");
+  it("compound mass round-trip", () => {
+    const r = parseMaterialInput("SiO2 80%, H2O 20%");
+    if (!r || "error" in r) throw new Error();
+    expect(serialise("mass", r.ok.rows)).toBe("SiO2 80%, H2O 20%");
   });
 });
 
 describe("validate", () => {
-  it("accepts a clean row list", () => {
+  it("clean mass mixture has no issues", () => {
     const rows: Row[] = [
-      row({ symbol: "Al", unit: "wt%", value: 80, isBalance: false }),
-      row({ symbol: "Cu", unit: "wt%", value: 5, isBalance: false }),
-      row({ symbol: "Zn", unit: "wt%", value: 15, isBalance: true }),
+      row({ formula: "Al", value: 80 }),
+      row({ formula: "Cu", value: 5 }),
+      row({ formula: "Zn", value: null, isBalance: true }),
     ];
-    expect(validate(rows)).toEqual([]);
-  });
-
-  it("flags duplicate symbols as warnings", () => {
-    const rows: Row[] = [
-      row({ symbol: "Cu", unit: "wt%", value: 50 }),
-      row({ symbol: "Cu", unit: "wt%", value: 50 }),
-    ];
-    const issues = validate(rows);
-    const dup = issues.filter((i) => i.message.includes("Duplicate"));
-    expect(dup.length).toBe(1);
-    expect(dup[0].level).toBe("warning");
-  });
-
-  it("flags >1 balance row as form-level error", () => {
-    const rows: Row[] = [
-      row({ symbol: "Al", unit: "wt%", isBalance: true, value: null }),
-      row({ symbol: "Cu", unit: "wt%", isBalance: true, value: null }),
-    ];
-    const issues = validate(rows);
-    expect(issues.some((i) => i.level === "error" && i.message.includes("balance"))).toBe(true);
-  });
-
-  it("flags non-balance row with null value as row-scoped error", () => {
-    const rows: Row[] = [
-      row({ id: "r1", symbol: "Al", unit: "wt%", value: null, isBalance: false }),
-    ];
-    const issues = validate(rows);
-    const blank = issues.find((i) => i.rowId === "r1" && i.level === "error");
-    expect(blank).toBeDefined();
-    expect(blank!.message).toMatch(/value/i);
-  });
-
-  it("flags negative value as row-scoped error", () => {
-    const rows: Row[] = [
-      row({ id: "r1", symbol: "Al", unit: "wt%", value: -10, isBalance: false }),
-    ];
-    const issues = validate(rows);
-    expect(
-      issues.some((i) => i.rowId === "r1" && i.level === "error" && /non-negative/.test(i.message)),
-    ).toBe(true);
+    expect(validate("mass", rows)).toEqual([]);
   });
 
   it("flags wt% sum != 100 (no balance) as warning", () => {
     const rows: Row[] = [
-      row({ symbol: "Al", unit: "wt%", value: 50 }),
-      row({ symbol: "Cu", unit: "wt%", value: 30 }),
+      row({ formula: "Al", value: 50 }),
+      row({ formula: "Cu", value: 30 }),
     ];
-    const issues = validate(rows);
-    expect(
-      issues.some((i) => i.level === "warning" && /sum/i.test(i.message)),
-    ).toBe(true);
+    const issues = validate("mass", rows);
+    expect(issues.some((i) => i.level === "warning" && /sum/i.test(i.message))).toBe(true);
   });
 
-  it("does not flag wt% sum when balance row is present", () => {
+  it("flags >1 balance as error", () => {
     const rows: Row[] = [
-      row({ symbol: "Al", unit: "wt%", value: 50 }),
-      row({ symbol: "Cu", unit: "wt%", value: 30 }),
-      row({ symbol: "Zn", unit: "wt%", value: null, isBalance: true }),
+      row({ formula: "Al", value: null, isBalance: true }),
+      row({ formula: "Cu", value: null, isBalance: true }),
     ];
-    const issues = validate(rows);
-    expect(issues.some((i) => /sum/i.test(i.message))).toBe(false);
+    expect(validate("mass", rows).some((i) => i.level === "error" && /one/i.test(i.message))).toBe(true);
   });
 
-  it("flags wt% sum > 100 with balance as error (negative balance)", () => {
+  it("flags blank value (non-balance) as row-scoped error", () => {
+    const rows: Row[] = [row({ id: "r1", formula: "Al", value: null })];
+    expect(validate("mass", rows).some((i) => i.rowId === "r1" && i.level === "error")).toBe(true);
+  });
+
+  it("flags duplicate formula as warning", () => {
     const rows: Row[] = [
-      row({ symbol: "Al", unit: "wt%", value: 60 }),
-      row({ symbol: "Cu", unit: "wt%", value: 60 }),
-      row({ symbol: "Zn", unit: "wt%", value: null, isBalance: true }),
+      row({ formula: "Cu", value: 50 }),
+      row({ formula: "Cu", value: 50 }),
     ];
-    const issues = validate(rows);
-    expect(
-      issues.some((i) => i.level === "error" && /exceed/i.test(i.message)),
-    ).toBe(true);
+    const issues = validate("mass", rows);
+    expect(issues.filter((i) => /duplicate/i.test(i.message)).length).toBe(1);
   });
 
-  it("flags mixed units as form-level warning", () => {
+  it("validateSingle rejects balance rows", () => {
+    const rows: Row[] = [row({ formula: "Al", value: null, isBalance: true })];
+    expect(validateSingle(rows).some((i) => /balance/i.test(i.message))).toBe(true);
+  });
+
+  it("validateAtom flags sum != 1 (no balance)", () => {
     const rows: Row[] = [
-      row({ symbol: "Fe", unit: "stoich", value: 1 }),
-      row({ symbol: "Cr", unit: "wt%", value: 18 }),
+      row({ formula: "Fe", value: 0.5 }),
+      row({ formula: "Cr", value: 0.2 }),
     ];
-    const issues = validate(rows);
-    expect(
-      issues.some((i) => i.level === "warning" && /mixed units/i.test(i.message)),
-    ).toBe(true);
+    expect(validateAtom(rows).some((i) => /sum/i.test(i.message))).toBe(true);
   });
 
-  it("flags unknown symbol as row-scoped error", () => {
-    const rows: Row[] = [row({ id: "r1", symbol: "Xx", unit: "wt%", value: 50 })];
-    const issues = validate(rows);
-    expect(
-      issues.some((i) => i.rowId === "r1" && i.level === "error" && /Unknown/.test(i.message)),
-    ).toBe(true);
-  });
-
-  it("returns empty issues for empty rows (form is empty, not invalid)", () => {
-    expect(validate([])).toEqual([]);
-  });
-
-  it("ignores blank symbol field (not a known element check)", () => {
-    const rows: Row[] = [row({ id: "r1", symbol: "", unit: "wt%", value: 50 })];
-    const issues = validate(rows);
-    // empty symbol isn't a known-element error; it's just a row in flux
-    expect(issues.some((i) => /Unknown/.test(i.message))).toBe(false);
-  });
-
-  it("treats stoich-only rows without sum check", () => {
+  it("validateMass flags sum > 100 with balance as error", () => {
     const rows: Row[] = [
-      row({ symbol: "Al", unit: "stoich", value: 2 }),
-      row({ symbol: "O", unit: "stoich", value: 3 }),
+      row({ formula: "Al", value: 60 }),
+      row({ formula: "Cu", value: 60 }),
+      row({ formula: "Zn", value: null, isBalance: true }),
     ];
-    expect(validate(rows)).toEqual([]);
+    expect(validateMass(rows).some((i) => i.level === "error" && /exceed/i.test(i.message))).toBe(true);
   });
 
-  it("preserves error/warning ordering deterministically", () => {
-    const rows: Row[] = [
-      row({ id: "a", symbol: "Cu", unit: "wt%", value: null }),
-      row({ id: "b", symbol: "Cu", unit: "wt%", value: null }),
-    ];
-    const issues = validate(rows);
-    // Duplicate first (warning), then two missing-value errors
-    expect(issues.length).toBeGreaterThanOrEqual(3);
+  it("validateAtom rejects negative value", () => {
+    const rows: Row[] = [row({ id: "r1", formula: "Fe", value: -0.1 })];
+    expect(validateAtom(rows).some((i) => i.rowId === "r1" && i.level === "error")).toBe(true);
+  });
+
+  it("flags unknown element as row-scoped error", () => {
+    const rows: Row[] = [row({ id: "r1", formula: "Xx", value: 50 })];
+    expect(validate("mass", rows).some((i) => i.rowId === "r1" && i.level === "error")).toBe(true);
   });
 });
 
-describe("serialise → parseMaterialInput → toRows round-trip", () => {
-  it("survives stoichiometric round-trip", () => {
-    const original: Row[] = [
-      row({ symbol: "Al", unit: "stoich", value: 2 }),
-      row({ symbol: "O", unit: "stoich", value: 3 }),
-    ];
-    const text = serialise(original);
-    const parsed = parseMaterialInput(text);
-    if (!parsed || !("ok" in parsed)) throw new Error("expected ok");
-    const round = toRows(parsed.ok);
-    expect(round.map((r) => ({ s: r.symbol, u: r.unit, v: r.value, b: r.isBalance }))).toEqual(
-      original.map((r) => ({ s: r.symbol, u: r.unit, v: r.value, b: r.isBalance })),
-    );
+describe("inferMode", () => {
+  it("returns null for empty", () => {
+    expect(inferMode("")).toBeNull();
   });
 
-  it("survives mass-ratio round-trip with balance", () => {
-    const original: Row[] = [
-      row({ symbol: "Al", unit: "wt%", value: 80, isBalance: false }),
-      row({ symbol: "Cu", unit: "wt%", value: 5, isBalance: false }),
-      row({ symbol: "Zn", unit: "wt%", value: 15, isBalance: true }),
-    ];
-    const text = serialise(original);
-    const parsed = parseMaterialInput(text);
-    if (!parsed || !("ok" in parsed)) throw new Error("expected ok");
-    const round = toRows(parsed.ok);
-    expect(round.map((r) => r.symbol)).toEqual(["Al", "Cu", "Zn"]);
-    expect(round.map((r) => r.isBalance)).toEqual([false, false, true]);
-    expect(round[0].value).toBeCloseTo(80, 4);
-    expect(round[2].value).toBeCloseTo(15, 4);
+  it("returns mode + confidence for parseable input", () => {
+    const r = inferMode("Al 80%, Cu 20%");
+    expect(r!.mode).toBe("mass");
+    expect(r!.confidence).toBe("high");
+  });
+
+  it("returns null for malformed input", () => {
+    expect(inferMode("not a formula at all,,,")).toBeNull();
+  });
+
+  it("flags glassy mol% nudge", () => {
+    const r = inferMode("SiO2 75%, Na2O 14%, CaO 11%");
+    expect(r!.confidence).toBe("low");
+    expect(r!.nudge).toMatch(/mol%/);
+  });
+});
+
+describe("isTabulatedDensity", () => {
+  it("true for compounds in COMPOUND_DENSITIES", () => {
+    expect(isTabulatedDensity("H2O")).toBe(true);
+  });
+
+  it("true for single elements with tabulated density", () => {
+    expect(isTabulatedDensity("Cu")).toBe(true);
+  });
+
+  it("false for compounds with no entry", () => {
+    expect(isTabulatedDensity("Na2O")).toBe(false);
+  });
+});
+
+describe("rowAverageAtomicMass", () => {
+  it("water averages H and O atoms", () => {
+    expect(rowAverageAtomicMass("H2O")).toBeCloseTo(6.005, 2);
+  });
+
+  it("single element returns its standard weight", () => {
+    expect(rowAverageAtomicMass("Cu")).toBeCloseTo(63.55, 1);
   });
 });
