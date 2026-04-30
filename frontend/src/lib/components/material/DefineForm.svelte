@@ -14,6 +14,7 @@
   } from "../../stores/custom-materials.svelte";
   import {
     generateRowId,
+    isTabulatedDensity,
     parseMaterialInput,
     serialise,
     validate,
@@ -115,7 +116,16 @@
   const autoName = $derived(formulaPreview?.autoName ?? displayFormula);
   const autoDensity = $derived(formulaPreview?.density ?? null);
   const effectiveName = $derived(nameManuallySet ? nameDraft : autoName);
-  const effectiveDensity = $derived(densityManuallySet ? densityDraft : autoDensity);
+  // Density is now suggestion-only: effectiveDensity equals densityDraft
+  // (set when the user types or clicks "Use suggested"). autoDensity is
+  // surfaced as a placeholder, never silently fed.
+  const effectiveDensity = $derived(densityDraft);
+  /** Rows whose compound has no tabulated density — flagged inline so the
+   *  user knows the suggestion is an estimate. */
+  const untabulatedRowFormulas = $derived(
+    rows.filter((r) => !isTabulatedDensity(r.formula)).map((r) => r.formula),
+  );
+  const densityIsEstimated = $derived(autoDensity !== null && untabulatedRowFormulas.length > 0);
 
   const validationErrors = $derived(validation.filter((i) => i.level === "error"));
   const canCommit = $derived(rows.length > 0 && validationErrors.length === 0);
@@ -540,11 +550,12 @@
 
       <label class="field-label">
         Density (g/cm³)
+        <div class="density-row">
         <input
           type="text"
           inputmode="decimal"
           class="field-input"
-          placeholder={autoDensity !== null ? autoDensity.toFixed(2) : "e.g. 2.70"}
+          placeholder={autoDensity !== null ? `suggested ${autoDensity.toFixed(2)}` : "e.g. 2.70"}
           value={effectiveDensity !== null ? String(effectiveDensity) : ""}
           oninput={(e) => {
             const v = parseFloat((e.target as HTMLInputElement).value);
@@ -552,6 +563,20 @@
             densityManuallySet = true;
           }}
         />
+        {#if autoDensity !== null && densityDraft === null}
+          <button
+            type="button"
+            class="use-suggested-btn"
+            onclick={() => { densityDraft = autoDensity; densityManuallySet = true; }}
+            title="Use the weighted-average density estimate"
+          >Use {autoDensity.toFixed(2)}</button>
+        {/if}
+        </div>
+        {#if densityIsEstimated && densityDraft !== null}
+          <span class="density-warn">
+            Estimated — {untabulatedRowFormulas.join(", ")} not tabulated. Override with measured value when possible.
+          </span>
+        {/if}
       </label>
 
       {#if formError}
@@ -970,6 +995,33 @@
   }
 
   .paste-field { margin-top: 0.4rem; }
+
+  .density-row {
+    display: flex;
+    gap: 0.4rem;
+    align-items: stretch;
+  }
+
+  .density-row .field-input { flex: 1; min-width: 0; }
+
+  .use-suggested-btn {
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    color: var(--c-accent);
+    padding: 0.25rem 0.55rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .use-suggested-btn:hover { border-color: var(--c-accent); }
+
+  .density-warn {
+    color: var(--c-yellow, var(--c-text-muted));
+    font-size: 0.65rem;
+    font-style: italic;
+  }
 
   .paste-error {
     color: var(--c-red);
