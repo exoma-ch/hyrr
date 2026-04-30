@@ -5,6 +5,7 @@
   import DefineForm, { type EditableMaterial } from "./material/DefineForm.svelte";
   import PeriodicTable from "./material/PeriodicTable.svelte";
   import { PERIODIC_TABLE } from "./material/periodic-table-data";
+  import { MATERIAL_CATALOG, catalogEntryToMassText } from "@hyrr/compute";
   import { getDataStore } from "../scheduler/sim-scheduler.svelte";
   import type { MaterialInfo } from "../types";
   import {
@@ -135,6 +136,21 @@
     };
   }
 
+  /** Catalog hydration (#94 / #57). Loads the catalog entry as mass-mixture
+   *  rows in DefineForm. editingCustomId="" means save always forks — the
+   *  catalog itself is read-only. */
+  function openCatalogEditor(catalogName: string) {
+    const entry = MATERIAL_CATALOG[catalogName.toLowerCase()];
+    if (!entry) return;
+    editInitial = {
+      formula: catalogEntryToMassText(entry),
+      name: catalogName,
+      density: entry.density,
+      editingCustomId: "",
+      mode: "mass",
+    };
+  }
+
   function handleCommit(material: string, enrichment?: Record<string, Record<number, number>>) {
     onselect(material, enrichment);
     onclose();
@@ -177,6 +193,7 @@
         onQueryChange={(q) => { query = q; }}
         {materials}
         {onselect}
+        oncatalogedit={openCatalogEditor}
         {onclose}
         oneditRequest={openEditor}
       >

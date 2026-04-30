@@ -1,9 +1,16 @@
 <script lang="ts" module>
+  import type { Mode } from "./define-form-rows";
   export interface EditableMaterial {
     formula: string;
     name: string;
     density: number;
+    /** Empty string when hydrating a catalog material (no existing custom
+     *  to update; save always forks a new one). Non-empty when editing
+     *  an existing user-saved custom. */
     editingCustomId: string;
+    /** Optional explicit mode for the seeded rows. When set, mode-inference
+     *  is bypassed — catalog hydration uses "mass". */
+    mode?: Mode;
   }
 </script>
 
@@ -19,7 +26,6 @@
     serialise,
     validate,
     type Issue,
-    type Mode,
     type Row,
   } from "./define-form-rows";
   import { formulaToMassFractions, parseFormula } from "@hyrr/compute";
@@ -398,10 +404,14 @@
     if (editInitial) {
       const parsed = parseMaterialInput(editInitial.formula);
       if (parsed && "ok" in parsed) {
-        mode = parsed.ok.mode;
+        // Catalog hydration passes editInitial.mode = "mass" so the form
+        // doesn't re-infer to single when the seeded text happens to be a
+        // single bareword formula. (#94)
+        mode = editInitial.mode ?? parsed.ok.mode;
         rows = parsed.ok.rows;
+        modeUserOverride = editInitial.mode !== undefined;
       } else {
-        mode = "single";
+        mode = editInitial.mode ?? "single";
         rows = [];
       }
       defineOpen = true;

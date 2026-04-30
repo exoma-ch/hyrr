@@ -11,6 +11,7 @@ export { DataStore } from "./data-store";
 
 // --- Materials ---
 export {
+  catalogEntryToMassText,
   resolveElement,
   resolveIsotopics,
   resolveFormula,
