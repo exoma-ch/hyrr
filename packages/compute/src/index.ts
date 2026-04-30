@@ -15,6 +15,7 @@ export {
   resolveIsotopics,
   resolveFormula,
   resolveMaterial,
+  resolveMixtureToElements,
   massToAtomFractions,
   setCustomDensityLookup,
   setCustomCompositionLookup,
@@ -22,7 +23,7 @@ export {
   ELEMENT_DENSITIES,
   COMPOUND_DENSITIES,
 } from "./materials";
-export type { CatalogEntry } from "./materials";
+export type { CatalogEntry, MixtureMode, MixtureResult, MixtureResolverOpts, ResolverRow } from "./materials";
 
 // --- Types ---
 export type {
