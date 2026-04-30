@@ -184,10 +184,57 @@
     try { localStorage.setItem("hyrr.defineform.modeChipSeen", "1"); } catch { /* no-op */ }
   }
 
-  // --- "+ element" picker (PT in a focus-trapped modal) ---
+  // --- "Compose mixture" picker — workspace with free-form input + common
+  //     compounds chips + PT + sticky existing-rows panel; stays open.
   let elementPickerOpen = $state(false);
   let addBtnRef = $state<HTMLButtonElement | null>(null);
   let modalRef = $state<HTMLDivElement | null>(null);
+  let pickerFormulaDraft = $state("");
+  let pickerFormulaError = $state<string | null>(null);
+  let pickerToast = $state<string | null>(null);
+  let pickerToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Common compounds shown as chips above the PT. Seeded from
+   *  COMPOUND_DENSITIES + a small editorial list (P1 polish). */
+  const COMMON_COMPOUNDS = ["H2O", "H2O-18", "D2O", "MoO3", "Al2O3", "SiO2", "Na2O", "CaO", "Fe2O3", "NaCl", "KCl", "TiO2"];
+
+  function showPickerToast(msg: string) {
+    pickerToast = msg;
+    if (pickerToastTimer) clearTimeout(pickerToastTimer);
+    pickerToastTimer = setTimeout(() => { pickerToast = null; }, 1500);
+  }
+
+  function appendRow(formula: string, enrichment?: Record<string, Record<number, number>>) {
+    const id = generateRowId();
+    if (mode === "single") mode = "mass";
+    rows = [...rows, { id, formula, value: null, isBalance: false, ...(enrichment ? { enrichment } : {}) }];
+    showPickerToast(`Added ${formula}`);
+  }
+
+  function commitPickerFormula() {
+    const trimmed = pickerFormulaDraft.trim();
+    if (!trimmed) { pickerFormulaError = null; return; }
+    const parsed = parseMaterialInput(trimmed);
+    if (!parsed || "error" in parsed) {
+      pickerFormulaError = parsed && "error" in parsed ? parsed.error : "Empty input";
+      return;
+    }
+    // Single-formula in the picker = "add this compound as one row"
+    if (parsed.ok.mode === "single") {
+      appendRow(trimmed);
+    } else {
+      // mass / atom commit replaces the form's rows wholesale (paste-style)
+      mode = parsed.ok.mode;
+      rows = parsed.ok.rows;
+      showPickerToast(`Loaded ${parsed.ok.rows.length} rows`);
+    }
+    pickerFormulaDraft = "";
+    pickerFormulaError = null;
+  }
+
+  function onPickerFormulaKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter") { e.preventDefault(); commitPickerFormula(); }
+  }
 
   function openPicker() {
     elementPickerOpen = true;
@@ -234,20 +281,9 @@
   }
 
   function handlePtSelect(symbol: string) {
-    const id = generateRowId();
-    // Picking from PT in single mode is meaningless; switch to mass mode if
-    // we're not already in a mixture. Proper mode-chip UX lands in C3+.
-    if (mode === "single") mode = "mass";
-    rows = [...rows, { id, formula: symbol, value: null, isBalance: false }];
-    // closePicker(false) suppresses the trigger-refocus rAF; we focus the
-    // new row's number input instead.
-    closePicker(false);
-    requestAnimationFrame(() => {
-      const el = document.querySelector<HTMLInputElement>(
-        `[data-row-id="${id}"] .value-input`,
-      );
-      el?.focus();
-    });
+    // Stays-open picker: append row + stay in picker. No focus rAF (focus
+    // stays where the user clicked / on the formula input).
+    appendRow(symbol);
   }
 
   function onPasteInput(e: Event) {
@@ -454,22 +490,24 @@
           onclick={openPicker}
         >+ element</button>
 
-        <label class="field-label paste-field">
-          Or paste formula
-          <input
-            type="text"
-            class="field-input"
-            placeholder="Al2O3  or  Al 80%, Cu 5%, Zn %"
-            value={displayText}
-            oninput={onPasteInput}
-            onblur={commitPastedText}
-            onkeydown={onPasteKeydown}
-          />
-          <span class="field-hint">Stoichiometric formula or mass ratios. Cmd/Ctrl-Enter or blur to apply.</span>
-          {#if pasteError}
-            <span class="paste-error">{pasteError}</span>
-          {/if}
-        </label>
+        {#if mode === "single"}
+          <label class="field-label paste-field">
+            Or paste formula
+            <input
+              type="text"
+              class="field-input"
+              placeholder="Al2O3  or  H2O"
+              value={displayText}
+              oninput={onPasteInput}
+              onblur={commitPastedText}
+              onkeydown={onPasteKeydown}
+            />
+            <span class="field-hint">Stoichiometric formula. Cmd/Ctrl-Enter or blur to apply.</span>
+            {#if pasteError}
+              <span class="paste-error">{pasteError}</span>
+            {/if}
+          </label>
+        {/if}
 
         {#if rows.length > 0}
           <div class="preview">
@@ -543,20 +581,67 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="picker-overlay" onclick={(e) => { if (e.target === e.currentTarget) closePicker(); }}>
     <div
-      class="picker-modal"
+      class="picker-modal compose-mixture"
       role="dialog"
       aria-modal="true"
-      aria-label="Pick an element"
+      aria-label="Compose mixture"
       tabindex="-1"
       bind:this={modalRef}
       onkeydown={onPickerKeydown}
     >
       <div class="picker-header">
-        <h3>Pick an element</h3>
+        <h3>Compose mixture</h3>
         <button class="picker-close" aria-label="Close" onclick={() => closePicker()}>×</button>
       </div>
-      <div class="picker-body">
-        <PeriodicTable onselect={handlePtSelect} />
+      <div class="picker-body compose-body">
+        <div class="compose-main">
+          <label class="field-label compose-formula-input">
+            Formula
+            <input
+              type="text"
+              class="field-input"
+              placeholder="e.g. SiO2, H2O, ³He, D2O"
+              value={pickerFormulaDraft}
+              oninput={(e) => { pickerFormulaDraft = (e.target as HTMLInputElement).value; pickerFormulaError = null; }}
+              onkeydown={onPickerFormulaKeydown}
+            />
+            <span class="field-hint">Type a formula and press Enter to add as a row.</span>
+            {#if pickerFormulaError}
+              <span class="paste-error">{pickerFormulaError}</span>
+            {/if}
+          </label>
+
+          <div class="compose-chips" role="list" aria-label="Common compounds">
+            {#each COMMON_COMPOUNDS as c}
+              <button type="button" class="compose-chip" role="listitem" onclick={() => appendRow(c)}>{c}</button>
+            {/each}
+          </div>
+
+          <div class="compose-pt">
+            <PeriodicTable onselect={handlePtSelect} />
+          </div>
+        </div>
+
+        <aside class="compose-side" aria-label="Existing rows">
+          <h4>Current rows ({rows.length})</h4>
+          {#if rows.length === 0}
+            <p class="empty-hint">None yet — add via formula, chip, or PT.</p>
+          {:else}
+            <ul class="compose-rowlist">
+              {#each rows as r (r.id)}
+                <li>
+                  <span class="compose-row-formula">{r.formula}</span>
+                  {#if r.isBalance}<span class="compose-row-bal">bal</span>{:else if r.value !== null}<span class="compose-row-val">{r.value}{mode === "mass" ? "%" : ""}</span>{/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        </aside>
+      </div>
+
+      <div class="picker-footer">
+        <span class="picker-toast" aria-live="polite">{pickerToast ?? ""}</span>
+        <button type="button" class="picker-done" onclick={() => closePicker()}>Done</button>
       </div>
     </div>
   </div>
@@ -726,6 +811,107 @@
     flex-direction: column;
     overflow: hidden;
   }
+
+  .picker-modal.compose-mixture { max-width: 1080px; }
+
+  .compose-body {
+    display: grid;
+    grid-template-columns: 1fr 220px;
+    gap: 0.75rem;
+  }
+
+  .compose-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    min-width: 0;
+  }
+
+  .compose-formula-input { margin-bottom: 0.2rem; }
+
+  .compose-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  .compose-chip {
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
+    border-radius: 12px;
+    color: var(--c-text-muted);
+    padding: 0.15rem 0.55rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+  }
+
+  .compose-chip:hover { color: var(--c-accent); border-color: var(--c-accent); }
+
+  .compose-pt { /* PT renders its own inner styling */ }
+
+  .compose-side {
+    border-left: 1px solid var(--c-border);
+    padding-left: 0.6rem;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .compose-side h4 {
+    margin: 0 0 0.4rem;
+    font-size: 0.75rem;
+    color: var(--c-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .compose-rowlist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .compose-rowlist li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.4rem;
+    padding: 0.15rem 0.3rem;
+    background: var(--c-bg-default);
+    border-radius: 3px;
+    font-size: 0.72rem;
+  }
+
+  .compose-row-formula { font-family: monospace; color: var(--c-text); }
+  .compose-row-val { color: var(--c-text-muted); }
+  .compose-row-bal { color: var(--c-yellow, var(--c-text-muted)); font-style: italic; }
+
+  .picker-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.9rem;
+    border-top: 1px solid var(--c-border);
+  }
+
+  .picker-toast {
+    color: var(--c-green-text, var(--c-text-muted));
+    font-size: 0.7rem;
+    min-height: 1em;
+  }
+
+  .picker-done {
+    background: var(--c-accent);
+    border: none;
+    border-radius: 4px;
+    color: white;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .picker-done:hover { background: var(--c-accent-hover); }
 
   .picker-header {
     display: flex;
