@@ -221,6 +221,22 @@ export function resolveMaterial(
   return { elements, density, molecularWeight };
 }
 
+/**
+ * Catalog entry → mass-mixture text. Renders as the canonical comma-
+ * separated form parseMaterialInput accepts: "Co 42%, Cr 20%, Ni 13%, ..."
+ * — the form hydrates this back into rows via parseMaterialInput.
+ *
+ * Sorted by descending mass fraction (matches serialise canonical order).
+ * Round-trip equality is used by the catalog idempotency fixture (#94).
+ */
+export function catalogEntryToMassText(entry: CatalogEntry): string {
+  const parts = Object.entries(entry.massFractions)
+    .filter(([, w]) => w > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([sym, w]) => `${sym} ${(w * 100).toFixed(1)}%`);
+  return parts.join(", ");
+}
+
 /* ────────── Mixture resolver (#92) ──────────
  *
  * Converts a row-list (form-level mode + per-row formula + per-row optional

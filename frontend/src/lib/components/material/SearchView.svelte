@@ -14,11 +14,15 @@
     onselect: (material: string, enrichment?: Record<string, Record<number, number>>) => void;
     onclose: () => void;
     oneditRequest: (customId: string) => void;
+    /** Catalog edit-as-fork: open DefineForm seeded with the catalog entry's
+     *  mass-mixture rows so the user can inspect and modify before saving
+     *  as a new custom. (#94 / #57) */
+    oncatalogedit?: (catalogName: string) => void;
     /** Optional slot rendered between the search input and the results list. */
     betweenInputAndResults?: Snippet;
   }
 
-  let { query, onQueryChange, materials, onselect, onclose, oneditRequest, betweenInputAndResults }: Props = $props();
+  let { query, onQueryChange, materials, onselect, onclose, oneditRequest, oncatalogedit, betweenInputAndResults }: Props = $props();
 
   let searchInput: HTMLInputElement | undefined = $state();
 
@@ -150,6 +154,19 @@
     event.stopPropagation();
     oneditRequest(customId);
   }
+
+  /** Catalog rows are direct keys in MATERIAL_CATALOG. Compound / element
+   *  entries (H2O, Cu, ...) are NOT catalog entries — they're either
+   *  COMPOUND_DENSITIES lookups or single elements. Only catalog entries
+   *  with massFractions get the Edit affordance. */
+  function isCatalogEntry(entry: MaterialInfo): boolean {
+    return entry.name.toLowerCase() in MATERIAL_CATALOG;
+  }
+
+  function editCatalog(catalogName: string, event: Event) {
+    event.stopPropagation();
+    oncatalogedit?.(catalogName);
+  }
 </script>
 
 <div class="search-row">
@@ -187,6 +204,8 @@
       {#if custom}
         <button class="edit-btn" title="Edit" onclick={(e) => editCustom(custom.customId, e)}>&#9998;</button>
         <button class="delete-btn" title="Delete" onclick={(e) => handleDelete(custom.customId, e)}>&times;</button>
+      {:else if isCatalogEntry(entry) && oncatalogedit}
+        <button class="edit-btn" title="Edit catalog material as new custom" onclick={(e) => editCatalog(entry.name, e)}>&#9998;</button>
       {/if}
     </li>
   {/each}

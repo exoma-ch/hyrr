@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  catalogEntryToMassText,
   ELEMENT_DENSITIES,
   COMPOUND_DENSITIES,
   MATERIAL_CATALOG,
@@ -159,5 +160,23 @@ describe("resolveMaterial", () => {
     expect(density).toBe(ELEMENT_DENSITIES["Mo"]);
     expect(elements.length).toBe(1);
     expect(elements[0][0].symbol).toBe("Mo");
+  });
+});
+
+describe("catalogEntryToMassText (#94)", () => {
+  it("renders havar as a comma-separated wt% string sorted desc by share", () => {
+    const text = catalogEntryToMassText(MATERIAL_CATALOG.havar);
+    // Co=42% should be first (largest fraction).
+    expect(text.startsWith("Co 42.0%")).toBe(true);
+    // Co=42, Cr=20, Fe=18.4, Ni=13, W=2.8, Mo=2.0, Mn=1.6, C=0.2 — 8 entries.
+    expect(text.split(",").length).toBe(8);
+  });
+
+  it("Σ wt% rounds to 100% with each fixed-decimal share", () => {
+    const text = catalogEntryToMassText(MATERIAL_CATALOG.havar);
+    const sum = text.split(",")
+      .map((p) => parseFloat(p.trim().split(" ")[1].replace("%", "")))
+      .reduce((s, x) => s + x, 0);
+    expect(sum).toBeCloseTo(100.0, 1);
   });
 });
