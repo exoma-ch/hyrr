@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import "./lib/stores/theme.svelte"; // initialise theme (applies data-theme attribute)
   import { registerServiceWorker } from "./lib/sw-register";
-  import { decodeSerializableConfigFromHash, setConfigInHash } from "./lib/config-url";
+  import { decodeSerializableConfigFromHash, setConfigInHash, setCustomMaterialResolver } from "./lib/config-url";
   import {
     getConfig,
     setConfig,
@@ -151,6 +151,14 @@
     setCustomCompositionLookup((identifier) => {
       const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
       return cm?.massFractions ?? null;
+    });
+    // #96: when encoding share URLs, embed the layer's full composition
+    // inline so the receiver can resolve density + per-element fractions
+    // without first re-defining the custom locally.
+    setCustomMaterialResolver((identifier) => {
+      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
+      if (!cm || !cm.massFractions) return null;
+      return { density: cm.density, massFractions: cm.massFractions };
     });
 
     loadingState = "Ready";

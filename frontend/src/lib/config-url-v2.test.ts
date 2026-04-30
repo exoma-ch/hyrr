@@ -132,3 +132,61 @@ describe("config-url-v2", () => {
     expect(hash.startsWith("#config=1:")).toBe(true);
   });
 });
+
+describe("v3 inline composition (#96)", () => {
+  it("encodes a layer's composition inline when the resolver returns one", async () => {
+    const { setCustomMaterialResolver } = await import("./config-url-v2");
+    setCustomMaterialResolver((name) =>
+      name === "soda-lime-glass"
+        ? { density: 2.5, massFractions: { Si: 0.34, Na: 0.10, Ca: 0.08, O: 0.48 } }
+        : null,
+    );
+    const cfg: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 16, current_mA: 0.150 },
+      items: [{ material: "soda-lime-glass", thickness_cm: 0.025 }],
+      irradiation_s: 3600,
+      cooling_s: 600,
+    };
+    const hash = encodeConfigV2(cfg);
+    const payload = hash.replace("#config=1:", "");
+    const decoded = decodeConfigV2Ser(payload);
+    expect(decoded).not.toBeNull();
+    expect((decoded!.items[0] as { material: string }).material).toBe("soda-lime-glass");
+    setCustomMaterialResolver(null);
+  });
+
+  it("registers a session lookup on decode so resolveMaterial finds the entry", async () => {
+    const { setCustomMaterialResolver } = await import("./config-url-v2");
+    setCustomMaterialResolver((name) =>
+      name === "soda-lime-glass"
+        ? { density: 2.5, massFractions: { Si: 0.34, Na: 0.10, Ca: 0.08, O: 0.48 } }
+        : null,
+    );
+    const cfg: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 16, current_mA: 0.150 },
+      items: [{ material: "soda-lime-glass", thickness_cm: 0.025 }],
+      irradiation_s: 3600,
+      cooling_s: 600,
+    };
+    const hash = encodeConfigV2(cfg);
+    // Drop the resolver to simulate the receiver client.
+    setCustomMaterialResolver(null);
+    const payload = hash.replace("#config=1:", "");
+    decodeConfigV2Ser(payload);
+    // The decoder should have registered a session lookup so resolveMaterial
+    // can find density + composition without the user redefining locally.
+    const compute = await import("@hyrr/compute");
+    const mockDb = {
+      getCrossSections: () => [],
+      hasCrossSections: () => false,
+      getStoppingPower: () => ({ energiesMeV: new Float64Array(0), dedx: new Float64Array(0) }),
+      getNaturalAbundances: () => new Map(),
+      getDecayData: () => null,
+      getDoseConstant: () => null,
+      getElementSymbol: () => "?",
+      getElementZ: () => 0,
+    };
+    const r = compute.resolveMaterial(mockDb, "soda-lime-glass");
+    expect(r.density).toBeCloseTo(2.5);
+  });
+});

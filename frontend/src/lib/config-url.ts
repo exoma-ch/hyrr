@@ -11,7 +11,10 @@ import {
   decodeSerializableFromHash,
   decodeConfigFromHashV2,
   setConfigInHashV2,
+  setCustomMaterialResolver,
 } from "./config-url-v2";
+
+export { setCustomMaterialResolver };
 
 /** Decode a config from the current URL hash — preserves groups. */
 export function decodeSerializableConfigFromHash(): SerializableConfig | null {

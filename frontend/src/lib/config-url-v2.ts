@@ -8,11 +8,44 @@
  */
 
 import { deflateSync, inflateSync } from "fflate";
+import { setCustomDensityLookup, setCustomCompositionLookup } from "@hyrr/compute";
 import type { SimulationConfig, LayerConfig, BeamConfig } from "./types";
 import type { SerializableConfig } from "./stores/config.svelte";
 
 const V2_PREFIX = "1:";
 const MAX_URL_ITEMS = 30;
+
+/**
+ * Custom-material resolver for inline-composition layers (#96). The
+ * encoder calls this with each layer's material name; if the resolver
+ * returns a non-null entry, the layer's compact form gains an `x` field
+ * carrying density + per-element mass fractions inline. The decoder, on
+ * seeing `x`, registers a session-only lookup so resolveMaterial finds
+ * the entry on the receiving client.
+ */
+let customResolver: ((name: string) => { density: number; massFractions: Record<string, number> } | null) | null = null;
+
+export function setCustomMaterialResolver(fn: typeof customResolver): void {
+  customResolver = fn;
+}
+
+/** Inline-composition data carried by a layer when its material is a
+ *  user-saved custom (or hydrated catalog fork). Receiver registers it
+ *  via setCustomDensityLookup + setCustomCompositionLookup so the
+ *  simulator can resolve density and per-element fractions on the fly. */
+interface InlineComposition {
+  /** density g/cm³ */
+  d: number;
+  /** per-element mass fractions, summing to ~1 */
+  e: Record<string, number>;
+}
+
+const __sessionCompositions = new Map<string, InlineComposition>();
+function registerSessionComposition(name: string, x: InlineComposition): void {
+  __sessionCompositions.set(name, x);
+  setCustomDensityLookup((id) => __sessionCompositions.get(id)?.d ?? null);
+  setCustomCompositionLookup((id) => __sessionCompositions.get(id)?.e ?? null);
+}
 
 /** Compact a single layer. */
 function compactLayer(l: LayerConfig): any {
@@ -22,6 +55,14 @@ function compactLayer(l: LayerConfig): any {
   if (l.energy_out_MeV !== undefined) cl.o = l.energy_out_MeV;
   if (l.enrichment) cl.n = l.enrichment;
   if (l.is_monitor) cl.f = true;
+  // #96 v3 invariant: embed inline composition when the material is a
+  // user-saved custom. Receiver registers via setCustomDensityLookup +
+  // setCustomCompositionLookup so resolveMaterial finds it without the
+  // user having to redefine the material first.
+  if (customResolver) {
+    const x = customResolver(l.material);
+    if (x) cl.x = { d: x.density, e: x.massFractions };
+  }
   return cl;
 }
 
@@ -74,6 +115,12 @@ function expandLayer(cl: any): LayerConfig {
   if (cl.o !== undefined) layer.energy_out_MeV = cl.o;
   if (cl.n) layer.enrichment = cl.n;
   if (cl.f) layer.is_monitor = true;
+  // #96 v3: layer carries inline composition for ad-hoc / custom materials.
+  // Register session-only so resolveMaterial finds it. Validate shape so a
+  // malformed share URL doesn't poison the session.
+  if (cl.x && typeof cl.x === "object" && typeof cl.x.d === "number" && cl.x.e && typeof cl.x.e === "object") {
+    registerSessionComposition(layer.material, { d: cl.x.d, e: cl.x.e });
+  }
   return layer;
 }
 
