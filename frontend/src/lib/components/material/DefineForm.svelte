@@ -57,7 +57,6 @@
   let nameDraft = $state("");
   let nameManuallySet = $state(false);
   let densityDraft = $state<number | null>(null);
-  let densityManuallySet = $state(false);
   let formError = $state<string | null>(null);
   let saving = $state(false);
   let editingCustomId = $state<string | null>(null);
@@ -81,7 +80,9 @@
   const displayFormula = $derived.by(() => {
     if (rows.length === 0) return "";
     if (mode === "single") return serialised;
-    return rows.map((r) => r.isBalance ? r.formula : `${r.formula}${Math.round(r.value ?? 0)}`).join("-");
+    // Preserve precision for non-integer values (e.g. SiO2 75.5%) — rounding
+    // here was clobbering the saved autoName.
+    return rows.map((r) => r.isBalance ? r.formula : `${r.formula}${r.value ?? 0}`).join("-");
   });
   /** Distinct element symbols across all rows (used for the enrichment-badge row). */
   const previewElements = $derived.by(() => {
@@ -134,6 +135,12 @@
 
   const validationErrors = $derived(validation.filter((i) => i.level === "error"));
   const canCommit = $derived(rows.length > 0 && validationErrors.length === 0);
+  /** When switching modes leaves stale rows that the new mode's validator
+   *  rejects, surface a "Reset rows" affordance so the user has an obvious
+   *  recovery path instead of a silently-disabled Save button. */
+  const staleRowsForMode = $derived(
+    rows.length > 0 && validationErrors.length > 0 && validationErrors.some((i) => !i.rowId),
+  );
   const formIssues = $derived(validation.filter((i) => !i.rowId));
   const issuesByRow = $derived.by(() => {
     const byRow = new Map<string, Issue[]>();
@@ -164,6 +171,18 @@
   };
 
   let modeMenuOpen = $state(false);
+  let modeMenuRef = $state<HTMLSpanElement | null>(null);
+
+  function onModeMenuWindow(e: MouseEvent | KeyboardEvent) {
+    if (!modeMenuOpen) return;
+    if (e.type === "keydown" && (e as KeyboardEvent).key === "Escape") {
+      modeMenuOpen = false;
+      return;
+    }
+    if (e.type === "click" && modeMenuRef && !modeMenuRef.contains(e.target as Node)) {
+      modeMenuOpen = false;
+    }
+  }
 
   /** Splice a row immutably with a partial patch. When isBalance flips on,
    *  also clear it from every other row so only one survives. */
@@ -185,13 +204,20 @@
   }
 
   /** Mode-switch path. MUST be event-driven, not $effect-driven (#92 §3.1
-   *  hard rule — runes-review-predicted footgun). Non-destructive: rows
-   *  are kept; only mode changes. Mass→Single is a no-op on rows but the
-   *  Single-mode UI will only show the first row. */
+   *  hard rule). Non-destructive: rows are kept across the switch.
+   *
+   *  Real demote with 30s undo strip is a follow-up (#95). For now: when
+   *  switching to Single mode, surface a "Reset rows" affordance because
+   *  mass/atom rows that survived the switch will fail validateSingle if
+   *  any has a non-stoichiometric formula or value. (Runes-review point 2.) */
   function setMode(next: Mode) {
     if (next === mode) return;
     mode = next;
     modeUserOverride = true;
+  }
+
+  function clearRows() {
+    rows = [];
   }
 
   function dismissModeFirstTime() {
@@ -221,7 +247,13 @@
 
   function appendRow(formula: string, enrichment?: Record<string, Record<number, number>>) {
     const id = generateRowId();
-    if (mode === "single") mode = "mass";
+    // Adding a row in single mode implies the user wants a mixture; flip
+    // mode AND mark it as a user override so a subsequent paste doesn't
+    // re-infer back to single.
+    if (mode === "single") {
+      mode = "mass";
+      modeUserOverride = true;
+    }
     rows = [...rows, { id, formula, value: null, isBalance: false, ...(enrichment ? { enrichment } : {}) }];
     showPickerToast(`Added ${formula}`);
   }
@@ -262,6 +294,11 @@
    *  refocus would fight the row-input refocus for the next frame. */
   function closePicker(returnFocus = true) {
     if (!elementPickerOpen) return;
+    // Flush any in-flight formula draft before close — Done / Escape /
+    // click-outside / × all "commit + close" per spec. (Reviewer-flagged
+    // hazard: typing a formula and closing without Enter would silently
+    // drop the draft.)
+    if (pickerFormulaDraft.trim()) commitPickerFormula();
     elementPickerOpen = false;
     if (returnFocus) {
       // addBtnRef may be null if the form was collapsed mid-flight; falling
@@ -371,7 +408,7 @@
       nameDraft = editInitial.name;
       nameManuallySet = true;
       densityDraft = editInitial.density;
-      densityManuallySet = true;
+
       editingCustomId = editInitial.editingCustomId;
       textDraft = "";
       textDirty = false;
@@ -384,7 +421,7 @@
       nameDraft = "";
       nameManuallySet = false;
       densityDraft = null;
-      densityManuallySet = false;
+
       editingCustomId = null;
       textDraft = "";
       textDirty = false;
@@ -446,6 +483,8 @@
   }
 </script>
 
+<svelte:window onclick={onModeMenuWindow} onkeydown={onModeMenuWindow} />
+
 <div class="define-section">
   <button class="define-toggle" onclick={() => { defineOpen = !defineOpen; }}>
     <span class="toggle-icon">{defineOpen ? "▾" : "▸"}</span>
@@ -455,7 +494,7 @@
   {#if defineOpen}
     <div class="define-form">
       <div class="mode-chip-row">
-        <span class="mode-chip-wrap">
+        <span class="mode-chip-wrap" bind:this={modeMenuRef}>
           <button
             type="button"
             class="mode-chip"
@@ -572,14 +611,14 @@
           oninput={(e) => {
             const v = parseFloat((e.target as HTMLInputElement).value);
             densityDraft = Number.isFinite(v) ? v : null;
-            densityManuallySet = true;
+
           }}
         />
         {#if autoDensity !== null && densityDraft === null}
           <button
             type="button"
             class="use-suggested-btn"
-            onclick={() => { densityDraft = autoDensity; densityManuallySet = true; }}
+            onclick={() => { densityDraft = autoDensity; }}
             title="Use the weighted-average density estimate"
           >Use {autoDensity.toFixed(2)}</button>
         {/if}
@@ -597,6 +636,12 @@
       {#each formIssues as issue}
         <p class="form-{issue.level}">{issue.message}</p>
       {/each}
+      {#if staleRowsForMode}
+        <p class="form-warning">
+          The current rows don't match {MODE_LABEL[mode]}.
+          <button type="button" class="reset-rows-btn" onclick={clearRows}>Reset rows</button>
+        </p>
+      {/if}
 
       <div class="form-actions">
         <button
@@ -1136,6 +1181,18 @@
 
   .save-btn:hover:not(:disabled) { background: var(--c-green-emphasis); }
   .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .reset-rows-btn {
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-yellow, var(--c-border));
+    border-radius: 3px;
+    color: var(--c-yellow, var(--c-text-muted));
+    padding: 0.1rem 0.4rem;
+    font-size: 0.65rem;
+    cursor: pointer;
+    margin-left: 0.4rem;
+  }
+  .reset-rows-btn:hover { background: var(--c-bg-muted); }
 
   .save-btn.save-overwrite {
     background: var(--c-bg-muted);
