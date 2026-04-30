@@ -209,17 +209,42 @@
     rows = rows.filter((r) => r.id !== id);
   }
 
-  /** Mode-switch path. MUST be event-driven, not $effect-driven (#92 §3.1
-   *  hard rule). Non-destructive: rows are kept across the switch.
-   *
-   *  Real demote with 30s undo strip is a follow-up (#95). For now: when
-   *  switching to Single mode, surface a "Reset rows" affordance because
-   *  mass/atom rows that survived the switch will fail validateSingle if
-   *  any has a non-stoichiometric formula or value. (Runes-review point 2.) */
-  function setMode(next: Mode) {
+  /** "Demote slot" — captured by setMode when the user changes modes. Lets
+   *  the user restore the previous (mode, rows) within 30 s. Killed on
+   *  Save so the round-2 race (Save during the undo window silently
+   *  dropping demoted rows) doesn't fire. (#95) */
+  let demoteSlot = $state<{ mode: Mode; rows: Row[]; name: string } | null>(null);
+  let demoteTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearDemote() {
+    if (demoteTimer) { clearTimeout(demoteTimer); demoteTimer = null; }
+    demoteSlot = null;
+  }
+
+  /** Mode-switch path. Event-driven (NOT $effect — preserves §3.1 rule).
+   *  Non-destructive: rows survive the switch. The previous (mode, rows)
+   *  is captured into demoteSlot so a 30 s "Restore mixture" undo strip
+   *  can revert. (#95) */
+  function resetForMode(next: Mode) {
     if (next === mode) return;
+    if (rows.length > 0) {
+      demoteSlot = { mode, rows: rows.slice(), name: MODE_LABEL[mode] };
+      if (demoteTimer) clearTimeout(demoteTimer);
+      demoteTimer = setTimeout(clearDemote, 30_000);
+    }
     mode = next;
     modeUserOverride = true;
+  }
+
+  // Backwards-compat wrapper — the chip handler / tests still call setMode.
+  function setMode(next: Mode) { resetForMode(next); }
+
+  function restoreDemote() {
+    if (!demoteSlot) return;
+    mode = demoteSlot.mode;
+    rows = demoteSlot.rows;
+    modeUserOverride = true;
+    clearDemote();
   }
 
   function clearRows() {
@@ -477,6 +502,10 @@
         );
         lastSavedSession = { id: newId, name: nameVal };
       }
+      // Save captures the current mode's rows; kill any in-flight undo
+      // slot so the round-2 race (Save at second 28 silently drops
+      // demoted rows) can't fire. (#95)
+      clearDemote();
       oncommit(nameVal, currentEnrichment);
       // Mark first-time guidance done after a successful save.
       dismissModeFirstTime();
@@ -646,6 +675,13 @@
       {#each formIssues as issue}
         <p class="form-{issue.level}">{issue.message}</p>
       {/each}
+      {#if demoteSlot}
+        <div class="demote-strip" role="status" aria-live="polite">
+          <span>{demoteSlot.rows.length} {demoteSlot.name} row{demoteSlot.rows.length === 1 ? "" : "s"} kept — restore?</span>
+          <button type="button" class="demote-restore" onclick={restoreDemote}>Restore</button>
+          <button type="button" class="demote-dismiss" onclick={clearDemote} aria-label="Dismiss">×</button>
+        </div>
+      {/if}
       {#if staleRowsForMode}
         <p class="form-warning">
           The current rows don't match {MODE_LABEL[mode]}.
@@ -1159,6 +1195,39 @@
     font-size: 0.7rem;
     margin: 0;
   }
+
+  .demote-strip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.55rem;
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    font-size: 0.7rem;
+    color: var(--c-text-muted);
+  }
+  .demote-restore {
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-accent);
+    border-radius: 3px;
+    color: var(--c-accent);
+    padding: 0.15rem 0.5rem;
+    font-size: 0.7rem;
+    cursor: pointer;
+  }
+  .demote-restore:hover { background: var(--c-bg-active); }
+  .demote-dismiss {
+    background: none;
+    border: none;
+    color: var(--c-text-subtle);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 0.25rem;
+    margin-left: auto;
+  }
+  .demote-dismiss:hover { color: var(--c-text); }
 
   .form-actions {
     display: flex;
