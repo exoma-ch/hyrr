@@ -147,7 +147,9 @@
   }
 </script>
 
-<Modal {open} {onclose} title="Select Material">
+<!-- #92: PT view needs the wider modal so the periodic table doesn't crowd
+     against its own borders. Search view stays narrow. -->
+<Modal {open} {onclose} title="Select Material" wide={view === "table"}>
   <div class="material-popup">
     <div class="view-toggle" role="tablist" aria-label="Material picker view">
       <button

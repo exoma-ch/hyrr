@@ -220,3 +220,161 @@ export function resolveMaterial(
 
   return { elements, density, molecularWeight };
 }
+
+/* ────────── Mixture resolver (#92) ──────────
+ *
+ * Converts a row-list (form-level mode + per-row formula + per-row optional
+ * enrichment) into the simulator-facing per-element shape:
+ *   - massFractions: Σ mass-fraction per element across all rows
+ *   - isotopes: per-element merged isotope vector. Atom-weighted blend of
+ *     row-level overrides with the natural / layer-level abundance for any
+ *     row that did NOT provide its own override. This is the load-bearing
+ *     semantics from #93: "row-level enrichment overrides natural Mo for
+ *     that row only; co-existing natural-Mo row resolves naturally."
+ *
+ * Pure: takes a `naturalAbundance(symbol) → vector` callback so tests can
+ * mock it without a DataStore. The DataStore caller wires it via
+ * `db.getNaturalAbundances(Z)` lookup.
+ */
+
+export interface ResolverRow {
+  formula: string;
+  value: number | null;
+  isBalance: boolean;
+  enrichment?: Record<string, Record<number, number>>;
+}
+
+export type MixtureMode = "single" | "mass" | "atom";
+
+export interface MixtureResult {
+  /** Per-element mass fractions, summing to ~1. */
+  massFractions: Record<string, number>;
+  /** Per-element merged isotope vector. Each inner record sums to ~1. */
+  isotopes: Record<string, Record<number, number>>;
+}
+
+export interface MixtureResolverOpts {
+  /** Layer-level enrichment override (legacy element-level global) — used
+   *  for rows that don't provide their own override. */
+  layerEnrichment?: Record<string, Record<number, number>>;
+  /** Natural abundance lookup, keyed by element symbol. Returns a vector
+   *  `{A: frac}` summing to 1, or `{}` if unknown (caller falls back to
+   *  the "first stable isotope" behaviour upstream). */
+  naturalAbundance: (symbol: string) => Record<number, number>;
+}
+
+/** Atomic mass of a row's formula (used to convert wt% → mole share). */
+function formulaWeight(formula: string): number {
+  let mw = 0;
+  const counts = parseFormula(formula);
+  for (const [sym, c] of Object.entries(counts)) {
+    const w = STANDARD_ATOMIC_WEIGHT[sym];
+    if (w === undefined) continue;
+    mw += c * w;
+  }
+  return mw;
+}
+
+export function resolveMixtureToElements(
+  mode: MixtureMode,
+  rows: ResolverRow[],
+  opts: MixtureResolverOpts,
+): MixtureResult {
+  // 1. Compute each row's *mass share* in the mixture (0..1 summing to 1).
+  const rowMass: number[] = new Array(rows.length).fill(0);
+  if (mode === "single") {
+    // Single-formula mode: rows hold stoich counts (Al=2, O=3 for Al2O3).
+    // Compute mass share = (count × atomic weight) / total formula weight.
+    let total = 0;
+    const masses = rows.map((r) => {
+      const c = r.value ?? 1;
+      const w = STANDARD_ATOMIC_WEIGHT[r.formula] ?? 0;
+      const m = c * w;
+      total += m;
+      return m;
+    });
+    for (let i = 0; i < rows.length; i++) {
+      rowMass[i] = total > 0 ? masses[i] / total : 0;
+    }
+  } else if (mode === "mass") {
+    // Mass mode: row.value is wt% (0..100); balance row inherits remainder.
+    let specifiedSum = 0;
+    for (const r of rows) if (!r.isBalance) specifiedSum += r.value ?? 0;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const wt = r.isBalance ? Math.max(0, 100 - specifiedSum) : (r.value ?? 0);
+      rowMass[i] = wt / 100;
+    }
+  } else {
+    // Atom mode: row.value is atom-fraction (0..1) or atom-percent (0..100).
+    // Convert to mass fraction via row formula's average atomic mass.
+    const numericVals = rows.filter((r) => !r.isBalance && r.value !== null).map((r) => r.value as number);
+    const maxV = numericVals.length > 0 ? Math.max(...numericVals) : 0;
+    const denom = maxV > 1.5 ? 100 : 1;
+    let specifiedAtom = 0;
+    for (const r of rows) if (!r.isBalance) specifiedAtom += (r.value ?? 0) / denom;
+    const atomShares = rows.map((r) => (r.isBalance ? Math.max(0, 1 - specifiedAtom) : (r.value ?? 0) / denom));
+    const masses = rows.map((r, i) => atomShares[i] * formulaWeight(r.formula));
+    const total = masses.reduce((s, m) => s + m, 0);
+    for (let i = 0; i < rows.length; i++) {
+      rowMass[i] = total > 0 ? masses[i] / total : 0;
+    }
+  }
+
+  // 2. Per-element mass fractions: walk each row, weight by row mass share
+  //    through its formula's per-element mass fractions.
+  const massFractions: Record<string, number> = {};
+  for (let i = 0; i < rows.length; i++) {
+    const elFracs = formulaToMassFractions(rows[i].formula);
+    for (const [el, f] of Object.entries(elFracs)) {
+      massFractions[el] = (massFractions[el] ?? 0) + rowMass[i] * f;
+    }
+  }
+
+  // 3. Per-element atom-share-weighted isotope merge.
+  //    For each element, walk every row that contains it; if the row carries
+  //    an override, contribute (override × row's element-atom-share);
+  //    otherwise contribute (natural × row's element-atom-share).
+  //    Layer-level enrichment substitutes for natural when a row has no
+  //    override.
+  const elementAtomShares: Record<string, number[]> = {};
+  for (let i = 0; i < rows.length; i++) {
+    const counts = parseFormula(rows[i].formula);
+    const formulaW = formulaWeight(rows[i].formula);
+    if (formulaW === 0) continue;
+    // Mass of this row in the mixture (in arbitrary units, since we only
+    // care about ratios).
+    const rowMassUnits = rowMass[i];
+    // Moles of this row: rowMass / formulaWeight.
+    const rowMoles = rowMassUnits / formulaW;
+    for (const [el, count] of Object.entries(counts)) {
+      const atomsFromRow = count * rowMoles;
+      (elementAtomShares[el] ??= [])[i] = atomsFromRow;
+    }
+  }
+
+  const isotopes: Record<string, Record<number, number>> = {};
+  for (const [el, sharesByRow] of Object.entries(elementAtomShares)) {
+    const totalAtoms = sharesByRow.reduce((s, x) => s + (x ?? 0), 0);
+    if (totalAtoms === 0) continue;
+
+    const merged: Record<number, number> = {};
+    for (let i = 0; i < rows.length; i++) {
+      const atomsHere = sharesByRow[i] ?? 0;
+      if (atomsHere === 0) continue;
+      // Resolve the isotope vector for this (row, element):
+      //   row.enrichment[el] → opts.layerEnrichment[el] → naturalAbundance(el)
+      const vector = rows[i].enrichment?.[el]
+        ?? opts.layerEnrichment?.[el]
+        ?? opts.naturalAbundance(el);
+      const share = atomsHere / totalAtoms;
+      for (const [a, frac] of Object.entries(vector)) {
+        const A = Number(a);
+        merged[A] = (merged[A] ?? 0) + share * frac;
+      }
+    }
+    isotopes[el] = merged;
+  }
+
+  return { massFractions, isotopes };
+}

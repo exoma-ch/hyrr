@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Issue, Row, Unit } from "./define-form-rows";
+  import type { Issue, Row } from "./define-form-rows";
 
   interface Props {
     row: Row;
@@ -7,22 +7,16 @@
      *  enforces single-selection within the radiogroup. */
     radioName: string;
     issues: Issue[];
-    /** Parent splices immutably. No bind: into nested $state per #64 §3.2. */
+    /** Parent splices immutably. No bind: into nested $state per #92 §3.2. */
     onchange: (patch: Partial<Row>) => void;
     onremove: () => void;
   }
 
   let { row, radioName, issues, onchange, onremove }: Props = $props();
-
-  const UNIT_LABEL: Record<Unit, string> = {
-    "wt%": "wt%",
-    atomfrac: "atom frac",
-    stoich: "stoich",
-  };
 </script>
 
 <div class="row" role="row" data-row-id={row.id}>
-  <span class="symbol" role="gridcell">{row.symbol}</span>
+  <span class="formula" role="gridcell">{row.formula}</span>
 
   <input
     type="number"
@@ -32,7 +26,7 @@
     step="any"
     min="0"
     placeholder={row.isBalance ? "balance" : "0"}
-    aria-label={`Value for ${row.symbol}`}
+    aria-label={`Value for ${row.formula}`}
     disabled={row.isBalance}
     value={row.value ?? ""}
     oninput={(e) => {
@@ -40,18 +34,6 @@
       onchange({ value: Number.isFinite(v) ? v : null });
     }}
   />
-
-  <select
-    class="unit-select"
-    role="gridcell"
-    aria-label={`Unit for ${row.symbol}`}
-    value={row.unit}
-    onchange={(e) => onchange({ unit: (e.target as HTMLSelectElement).value as Unit })}
-  >
-    <option value="wt%">{UNIT_LABEL["wt%"]}</option>
-    <option value="atomfrac">{UNIT_LABEL.atomfrac}</option>
-    <option value="stoich">{UNIT_LABEL.stoich}</option>
-  </select>
 
   <label class="balance-label" role="gridcell" title="Use this row to balance to 100%">
     <input
@@ -70,7 +52,7 @@
     type="button"
     class="remove-btn"
     role="gridcell"
-    aria-label={`Remove ${row.symbol}`}
+    aria-label={`Remove ${row.formula}`}
     onclick={onremove}
   >×</button>
 </div>
@@ -86,7 +68,7 @@
 <style>
   .row {
     display: grid;
-    grid-template-columns: 2.2rem minmax(0, 1fr) 5rem auto 1.5rem;
+    grid-template-columns: minmax(2.5rem, auto) minmax(0, 1fr) auto 1.5rem;
     gap: 0.4rem;
     align-items: center;
     padding: 0.25rem 0.4rem;
@@ -96,13 +78,13 @@
     font-size: 0.75rem;
   }
 
-  .symbol {
+  .formula {
     font-weight: 500;
     color: var(--c-text);
+    font-family: monospace;
   }
 
-  .value-input,
-  .unit-select {
+  .value-input {
     background: var(--c-bg-default);
     border: 1px solid var(--c-border);
     border-radius: 3px;
@@ -112,8 +94,7 @@
     min-width: 0;
   }
 
-  .value-input:focus,
-  .unit-select:focus {
+  .value-input:focus {
     outline: none;
     border-color: var(--c-accent);
   }
