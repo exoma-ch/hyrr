@@ -61,6 +61,11 @@
   let formError = $state<string | null>(null);
   let saving = $state(false);
   let editingCustomId = $state<string | null>(null);
+  /** In-session memory of the last custom material the user saved through
+   *  this form instance. Drives the "Overwrite" affordance — once the user
+   *  has saved one, a second save offers to replace it instead of forking
+   *  yet another duplicate. (#57 follow-on UX) */
+  let lastSavedSession = $state<{ id: string; name: string } | null>(null);
 
   // Pure derivations off rows. NOTE: no $effect watches rows, mode, or textDraft —
   // round-trips run inside event handlers (commitPastedText) only. (#92)
@@ -388,7 +393,7 @@
     }
   });
 
-  async function handleSave() {
+  async function handleSave(intent: "new" | "overwrite" = "new") {
     if (rows.length === 0) return;
     const formulaForSave = mode === "single" ? serialised : displayFormula;
     const nameVal = effectiveName.trim() || autoName || formulaForSave;
@@ -400,9 +405,12 @@
     saving = true;
     formError = null;
     try {
-      if (editingCustomId) {
+      const overwriteId = intent === "overwrite"
+        ? (editingCustomId ?? lastSavedSession?.id)
+        : null;
+      if (overwriteId) {
         await updateCustomMaterial(
-          editingCustomId,
+          overwriteId,
           nameVal,
           formulaForSave,
           densityVal,
@@ -410,8 +418,9 @@
           serialised,
           currentEnrichment,
         );
+        lastSavedSession = { id: overwriteId, name: nameVal };
       } else {
-        await saveCustomMaterial(
+        const newId = await saveCustomMaterial(
           nameVal,
           formulaForSave,
           densityVal,
@@ -419,8 +428,11 @@
           serialised,
           currentEnrichment,
         );
+        lastSavedSession = { id: newId, name: nameVal };
       }
       oncommit(nameVal, currentEnrichment);
+      // Mark first-time guidance done after a successful save.
+      dismissModeFirstTime();
     } catch {
       formError = "Failed to save";
     } finally {
@@ -592,10 +604,18 @@
           disabled={!canCommit}
           onclick={useFormula}
         >Use without saving</button>
+        {#if (editingCustomId || lastSavedSession) && !editingCustomId}
+          <button
+            class="save-btn save-overwrite"
+            disabled={saving || !canCommit || effectiveDensity === null || (effectiveDensity ?? 0) <= 0}
+            onclick={() => handleSave("overwrite")}
+            title={`Overwrite "${lastSavedSession?.name}" (last saved this session)`}
+          >Overwrite "{lastSavedSession?.name}"</button>
+        {/if}
         <button
           class="save-btn"
           disabled={saving || !canCommit || effectiveDensity === null || (effectiveDensity ?? 0) <= 0}
-          onclick={handleSave}
+          onclick={() => handleSave(editingCustomId ? "overwrite" : "new")}
         >{saving ? "Saving..." : editingCustomId ? "Update & Use" : "Save & Use"}</button>
       </div>
     </div>
@@ -1116,4 +1136,11 @@
 
   .save-btn:hover:not(:disabled) { background: var(--c-green-emphasis); }
   .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .save-btn.save-overwrite {
+    background: var(--c-bg-muted);
+    border: 1px solid var(--c-border);
+    color: var(--c-text-muted);
+  }
+  .save-btn.save-overwrite:hover:not(:disabled) { color: var(--c-text); border-color: var(--c-accent); }
 </style>
