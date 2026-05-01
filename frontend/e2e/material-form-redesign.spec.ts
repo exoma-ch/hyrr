@@ -51,6 +51,23 @@ test.describe("Material-form redesign (#92)", () => {
     await expect(page.getByText(/mol%/i)).toBeVisible();
   });
 
+  test("per-row 'E' enrichment button appears for single-element rows in mixture mode (#93)", async ({ page }) => {
+    await page.locator(".material-name").first().click();
+    await page.waitForSelector(".material-popup", { timeout: 5_000 });
+    await page.getByRole("button", { name: /Define.*save material/ }).click();
+
+    await page.getByPlaceholder(/Al2O3/).fill("Cu 80%, H2O 20%");
+    await page.getByPlaceholder(/Al2O3/).blur();
+
+    // Cu row exposes the E button (single-element row).
+    const cuRow = page.locator('[role="row"][data-row-id]').filter({ hasText: "Cu" });
+    await expect(cuRow.locator(".enrich-btn")).toBeVisible();
+
+    // H2O row hides it (compound — ambiguous which element to enrich).
+    const h2oRow = page.locator('[role="row"][data-row-id]').filter({ hasText: "H2O" });
+    await expect(h2oRow.locator(".enrich-btn")).toHaveCount(0);
+  });
+
   test("density renders as suggestion only — Save disabled until accepted", async ({ page }) => {
     await page.locator(".material-name").first().click();
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
