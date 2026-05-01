@@ -163,6 +163,30 @@ describe("resolveMaterial", () => {
   });
 });
 
+describe("Gas-target catalog entries (#68)", () => {
+  it("o18-gas: pure O at STP density", () => {
+    const e = MATERIAL_CATALOG["o18-gas"];
+    expect(e).toBeDefined();
+    expect(e.density).toBeCloseTo(1.428e-3, 6);
+    expect(e.massFractions.O).toBe(1.0);
+  });
+
+  it("xe124-gas: pure Xe at STP density", () => {
+    const e = MATERIAL_CATALOG["xe124-gas"];
+    expect(e).toBeDefined();
+    expect(e.density).toBeCloseTo(5.532e-3, 6);
+    expect(e.massFractions.Xe).toBe(1.0);
+  });
+
+  it("sr86-carbonate: stoichiometry sums to ~1", () => {
+    const e = MATERIAL_CATALOG["sr86-carbonate"];
+    expect(e).toBeDefined();
+    expect(e.density).toBeCloseTo(3.50);
+    const sum = Object.values(e.massFractions).reduce((s, v) => s + v, 0);
+    expect(sum).toBeCloseTo(1.0, 3);
+  });
+});
+
 describe("catalogEntryToMassText (#94)", () => {
   it("renders havar as a comma-separated wt% string sorted desc by share", () => {
     const text = catalogEntryToMassText(MATERIAL_CATALOG.havar);
