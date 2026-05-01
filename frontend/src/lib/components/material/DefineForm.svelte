@@ -379,8 +379,10 @@
     if (!textDirty) return;
     const trimmed = textDraft.trim();
     if (!trimmed) {
-      // User cleared the field → clear rows.
-      rows = [];
+      // Empty blur is a no-op on rows (#87). Resetting textDirty re-syncs
+      // the input to serialise(rows) on next render so the field shows the
+      // canonical text again. Users who want to wipe rows have the per-row
+      // × button or the form's Reset Rows affordance.
       textDirty = false;
       pasteError = null;
       return;

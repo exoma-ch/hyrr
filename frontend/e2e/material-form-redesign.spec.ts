@@ -35,6 +35,35 @@ test.describe("Material-form redesign (#92)", () => {
     await expect(rowItems.filter({ hasText: "H2O" })).toBeVisible();
   });
 
+  test("clearing the paste field on blur is a no-op on rows (#87)", async ({ page }) => {
+    await page.locator(".material-name").first().click();
+    await page.waitForSelector(".material-popup", { timeout: 5_000 });
+    await page.getByRole("button", { name: /Define.*save material/ }).click();
+
+    const paste = page.getByPlaceholder(/Al2O3/);
+    await paste.fill("Al 80%, Cu 20%");
+    await paste.blur();
+
+    const rowItems = page.locator('[role="row"][data-row-id]');
+    await expect(rowItems).toHaveCount(2);
+
+    // User accidentally selects-all + delete + tab. Rows must survive.
+    // (Mass mode hides the bottom paste field, so the form switches back
+    // to picker-as-text-path; for this fixture we exercise the contract
+    // by re-opening single mode.)
+    // Switch back to single by clicking the chip → pick Single formula.
+    await page.getByRole("button", { name: /Mass mixture/ }).click();
+    await page.getByRole("menuitem", { name: /Single formula/ }).click();
+
+    // Bottom paste field is now visible again. Clear it and blur.
+    const paste2 = page.getByPlaceholder(/Al2O3/);
+    await paste2.fill("");
+    await paste2.blur();
+
+    // Rows are still there (2 from the original mass mixture).
+    await expect(rowItems).toHaveCount(2);
+  });
+
   test("glassy mass mixture renders amber low-confidence chip with mol% nudge", async ({ page }) => {
     await page.locator(".material-name").first().click();
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
