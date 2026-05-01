@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { parseFormula } from "@hyrr/compute";
   import type { Issue, Row } from "./define-form-rows";
 
   interface Props {
@@ -10,9 +11,27 @@
     /** Parent splices immutably. No bind: into nested $state per #92 §3.2. */
     onchange: (patch: Partial<Row>) => void;
     onremove: () => void;
+    /** Open ElementPopup scoped to this row's element (#93). Only fired
+     *  for single-element rows (compounds defer to a future cycle). */
+    oneditenrichment?: (rowId: string, element: string) => void;
   }
 
-  let { row, radioName, issues, onchange, onremove }: Props = $props();
+  let { row, radioName, issues, onchange, onremove, oneditenrichment }: Props = $props();
+
+  /** Single-element rows expose a per-row "E" button to override that
+   *  element's isotopic vector. Compound rows hide it (no obvious choice
+   *  of which element to enrich; would need disambiguation UI). */
+  const singleElement = $derived.by((): string | null => {
+    try {
+      const counts = parseFormula(row.formula);
+      const elements = Object.keys(counts);
+      return elements.length === 1 ? elements[0] : null;
+    } catch { return null; }
+  });
+
+  const hasRowEnrichment = $derived(
+    singleElement !== null && row.enrichment !== undefined && row.enrichment[singleElement] !== undefined,
+  );
 </script>
 
 <div class="row" role="row" data-row-id={row.id}>
@@ -48,6 +67,18 @@
     <span class="balance-text">balance</span>
   </label>
 
+  {#if singleElement && oneditenrichment}
+    <button
+      type="button"
+      class="enrich-btn"
+      class:active={hasRowEnrichment}
+      role="gridcell"
+      aria-label={`Edit isotope enrichment for ${singleElement}`}
+      title={hasRowEnrichment ? `Row enrichment set for ${singleElement} — click to edit` : `Override natural isotope abundance for ${singleElement}`}
+      onclick={() => oneditenrichment(row.id, singleElement)}
+    >E</button>
+  {/if}
+
   <button
     type="button"
     class="remove-btn"
@@ -68,7 +99,7 @@
 <style>
   .row {
     display: grid;
-    grid-template-columns: minmax(2.5rem, auto) minmax(0, 1fr) auto 1.5rem;
+    grid-template-columns: minmax(2.5rem, auto) minmax(0, 1fr) auto auto 1.5rem;
     gap: 0.4rem;
     align-items: center;
     padding: 0.25rem 0.4rem;
@@ -77,6 +108,26 @@
     border-radius: 4px;
     font-size: 0.75rem;
   }
+
+  .enrich-btn {
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    color: var(--c-text-muted);
+    font-size: 0.65rem;
+    width: 1.4rem;
+    height: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .enrich-btn:hover { color: var(--c-accent); border-color: var(--c-accent); }
+  .enrich-btn.active {
+    color: var(--c-gold, var(--c-accent));
+    border-color: var(--c-gold, var(--c-accent));
+    background: var(--c-gold-tint-subtle, var(--c-bg-active));
+  }
+  .enrich-btn:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
 
   .formula {
     font-weight: 500;

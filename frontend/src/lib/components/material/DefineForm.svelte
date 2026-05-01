@@ -30,6 +30,7 @@
   } from "./define-form-rows";
   import { formulaToMassFractions, parseFormula } from "@hyrr/compute";
   import DefineFormRow from "./DefineFormRow.svelte";
+  import ElementPopup from "../ElementPopup.svelte";
   import PeriodicTable from "./PeriodicTable.svelte";
 
   interface Props {
@@ -208,6 +209,44 @@
   function removeRow(id: string) {
     rows = rows.filter((r) => r.id !== id);
   }
+
+  // --- Per-row enrichment editor (#93) ---
+  let rowEnrichmentEditor = $state<{ rowId: string; element: string } | null>(null);
+
+  function openRowEnrichmentEditor(rowId: string, element: string) {
+    rowEnrichmentEditor = { rowId, element };
+  }
+
+  function closeRowEnrichmentEditor() {
+    rowEnrichmentEditor = null;
+  }
+
+  function applyRowEnrichment(vector: Record<number, number> | undefined) {
+    if (!rowEnrichmentEditor) return;
+    const { rowId, element } = rowEnrichmentEditor;
+    rows = rows.map((r) => {
+      if (r.id !== rowId) return r;
+      const next = { ...r };
+      const existing = { ...(r.enrichment ?? {}) };
+      if (vector) {
+        existing[element] = vector;
+      } else {
+        delete existing[element];
+      }
+      next.enrichment = Object.keys(existing).length > 0 ? existing : undefined;
+      return next;
+    });
+    // ElementPopup's onchange fires on every change; close happens via
+    // its own onclose. Don't auto-close here.
+  }
+
+  /** The vector to seed ElementPopup with — pulled from the row's existing
+   *  enrichment override for the element under edit. */
+  const rowEnrichmentSeed = $derived.by((): Record<number, number> | undefined => {
+    if (!rowEnrichmentEditor) return undefined;
+    const r = rows.find((x) => x.id === rowEnrichmentEditor!.rowId);
+    return r?.enrichment?.[rowEnrichmentEditor.element];
+  });
 
   /** "Demote slot" — captured by setMode when the user changes modes. Lets
    *  the user restore the previous (mode, rows) within 30 s. Killed on
@@ -581,6 +620,7 @@
               issues={issuesByRow.get(r.id) ?? []}
               onchange={(patch) => patchRow(r.id, patch)}
               onremove={() => removeRow(r.id)}
+              oneditenrichment={mode !== "single" ? openRowEnrichmentEditor : undefined}
             />
           {/each}
         {/if}
@@ -783,6 +823,18 @@
       </div>
     </div>
   </div>
+{/if}
+
+<!-- Per-row enrichment editor (#93). Reuses the same ElementPopup that
+     drives layer-level enrichment, scoped to (rowId, element). -->
+{#if rowEnrichmentEditor}
+  <ElementPopup
+    open={true}
+    onclose={closeRowEnrichmentEditor}
+    element={rowEnrichmentEditor.element}
+    enrichment={rowEnrichmentSeed}
+    onchange={applyRowEnrichment}
+  />
 {/if}
 
 <style>
