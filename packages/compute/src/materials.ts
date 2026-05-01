@@ -29,6 +29,28 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
       W: 0.028, Mo: 0.02, Mn: 0.016, C: 0.002,
     },
   },
+  // Gas-target catalog entries (#68). Densities are STP baselines —
+  // operators routinely override for fill pressure / temperature. The
+  // per-row "E" button (#93) sets isotopic enrichment vectors after the
+  // catalog material hydrates into the form's rows.
+  "o18-gas": {
+    // 18O2 at STP (1 atm, 273.15 K). M = 32 g/mol; 32/22.414 ≈ 1.428 g/L
+    // → 1.428e-3 g/cm³. The exact value shifts ~12% with enrichment-mass;
+    // operators override for their fill condition.
+    density: 1.428e-3,
+    massFractions: { O: 1.0 },
+  },
+  "xe124-gas": {
+    // 124Xe at STP. M = 124 g/mol; 124/22.414 ≈ 5.532 g/L → 5.532e-3 g/cm³.
+    density: 5.532e-3,
+    massFractions: { Xe: 1.0 },
+  },
+  "sr86-carbonate": {
+    // 86SrCO3 powder. Solid theoretical density ≈ 3.50 g/cm³. Mass
+    // fractions: 86Sr / M_total where M_total = 86 + 12.011 + 3·16 = 146.011.
+    density: 3.50,
+    massFractions: { Sr: 0.589, C: 0.0823, O: 0.329 },
+  },
 };
 
 /** Convert mass fractions to atom fractions. */
