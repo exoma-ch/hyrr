@@ -65,10 +65,13 @@ test.describe("Supplier chips in inspect panel (#66)", () => {
       expect(href).toMatch(/^https?:\/\//);
     }
 
-    // The JSC Isotope chip exists and carries a sanctions flag glyph.
+    // The JSC Isotope chip exists, carries a sanctions flag glyph, and the
+    // tooltip surfaces the sanctions reason (pitfall #3 in the issue —
+    // sanctions visibility, not just exclusion).
     const jsc = block.locator('[data-supplier-id="jsc-isotope"]');
     await expect(jsc).toBeVisible();
     await expect(jsc).toHaveClass(/flagged/);
+    await expect(jsc).toHaveAttribute("title", /sanctions/i);
 
     // Footer shows last-reviewed date.
     await expect(block.getByText(/last reviewed/i)).toBeVisible();

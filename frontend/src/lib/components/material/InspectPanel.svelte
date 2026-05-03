@@ -33,9 +33,13 @@
       let bestMass = -1;
       let bestFrac = -1;
       for (const [m, f] of entries) {
-        if (f > bestFrac) {
+        const mass = Number(m);
+        // On a tie (e.g. user sets Mo-98 = Mo-100 = 0.5) prefer the
+        // heavier isotope — the typical procurement intent for medical
+        // targets is the more-neutron-rich mass.
+        if (f > bestFrac || (f === bestFrac && mass > bestMass)) {
           bestFrac = f;
-          bestMass = Number(m);
+          bestMass = mass;
         }
       }
       if (bestMass > 0) out.push({ element: el, mass: bestMass, fraction: bestFrac });

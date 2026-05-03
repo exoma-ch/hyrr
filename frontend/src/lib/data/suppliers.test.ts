@@ -47,9 +47,11 @@ describe("supplier catalog — schema validation", () => {
   });
 
   it("flagged suppliers carry asOf and detail", () => {
+    const VALID_FLAG_TYPES = ["sanctions", "export-control", "restricted"] as const;
     for (const s of SUPPLIER_CATALOG.suppliers) {
       for (const flag of s.flags ?? []) {
-        expect(["sanctions", "export-control", "restricted"]).toContain(flag.type);
+        // Runtime check — TS types alone don't guard the JSON file.
+        expect(VALID_FLAG_TYPES, `${s.id}: unknown flag.type "${flag.type}"`).toContain(flag.type);
         expect(flag.asOf, `${s.id}/${flag.type}: missing asOf`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
         expect(flag.detail.length, `${s.id}/${flag.type}: empty detail`).toBeGreaterThan(0);
       }
