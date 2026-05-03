@@ -48,3 +48,13 @@ jobs:
         run: uv sync --dev
       - name: Run tests with coverage
         run: uv run pytest tests/ --cov --benchmark-disable --ignore=tests/integration
+
+  supplier-catalog-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Warn if supplier catalog is stale (>90 days)
+        run: node frontend/scripts/check-suppliers-fresh.mjs
