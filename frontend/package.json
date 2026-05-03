@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:suppliers-fresh": "node scripts/check-suppliers-fresh.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
