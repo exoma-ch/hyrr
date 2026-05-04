@@ -50,6 +50,17 @@
 
     <link rel="icon" type="image/svg+xml" href="/hyrr/favicon.svg" />
     <link rel="apple-touch-icon" href="/hyrr/hyrr-icon-180.png" />
+
+    <!-- PWA installability: lets users "Add to Home Screen" on iOS Safari
+         and Chrome Android, and run in standalone mode (no browser chrome).
+         Service-worker caching is already handled by /hyrr/sw.js. -->
+    <link rel="manifest" href="/hyrr/manifest.webmanifest" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0f1117" media="(prefers-color-scheme: dark)" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="HYRR" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   </head>
   <body>
     <script>
