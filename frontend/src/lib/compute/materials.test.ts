@@ -6,7 +6,7 @@ import {
   type CatalogEntry,
 } from "./materials";
 import { SYMBOL_TO_Z } from "../utils/formula";
-import type { DatabaseProtocol } from "./types";
+import type { DatabaseProtocol } from "@hyrr/compute";
 
 /**
  * Minimal in-memory stub of DatabaseProtocol — only implements the two methods
