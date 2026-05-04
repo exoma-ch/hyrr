@@ -69,18 +69,55 @@ def main(argv: list[str] | None = None) -> int:
         "--layer", type=int, default=None, help="Filter to specific layer index"
     )
 
-    # hyrr download-data
+    # hyrr fetch-data (#52) — new canonical surface
+    fd_parser = subparsers.add_parser(
+        "fetch-data",
+        help="Fetch nuclear data into the managed cache (~/.hyrr/nucl-parquet/)",
+    )
+    fd_group = fd_parser.add_mutually_exclusive_group()
+    fd_group.add_argument(
+        "--library",
+        type=str,
+        default=None,
+        metavar="ID",
+        help="Fetch a specific library (e.g. tendl-2025)",
+    )
+    fd_group.add_argument(
+        "--all",
+        action="store_true",
+        help="Fetch every library (~400 MB)",
+    )
+    fd_group.add_argument(
+        "--offline-bundle",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Repack the existing cache into a portable .tar.zst at PATH",
+    )
+    fd_group.add_argument(
+        "--from",
+        dest="from_tarball",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Install from a local .tar.zst (use after --offline-bundle on a connected machine)",
+    )
+
+    # hyrr download-data — deprecated alias retained for legacy docs
     dl_parser = subparsers.add_parser(
-        "download-data", help="Download pre-built database from GitHub Releases"
+        "download-data",
+        help="(deprecated) alias for `fetch-data --all`",
     )
     dl_parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path.home() / ".hyrr",
-        help="Directory to store the database (default: ~/.hyrr/)",
+        help="(deprecated, ignored) cache always lives at ~/.hyrr/nucl-parquet/",
     )
     dl_parser.add_argument(
-        "--force", action="store_true", help="Overwrite existing database"
+        "--force",
+        action="store_true",
+        help="(deprecated, ignored)",
     )
 
     # hyrr generate-xs
@@ -130,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_run(args)
     elif args.command == "compare":
         return _cmd_compare(args)
+    elif args.command == "fetch-data":
+        return _cmd_fetch_data(args)
     elif args.command == "download-data":
         return _cmd_download_data(args)
     elif args.command == "generate-xs":
@@ -462,46 +501,89 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_download_data(args: argparse.Namespace) -> int:
-    """Download pre-built nucl-parquet data from GitHub Releases."""
-    import subprocess
-    import urllib.request
+def _cmd_fetch_data(args: argparse.Namespace) -> int:
+    """Fetch nuclear data into the managed cache (#52).
 
-    output_dir = args.output_dir
-    data_dir = output_dir / "nucl-parquet"
-
-    if data_dir.is_dir() and not args.force:
-        print(f"Data already exists: {data_dir}")
-        print("Use --force to overwrite.")
-        return 0
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    release_url = "https://github.com/eXoma-ch/nucl-parquet/releases/latest/download/nucl-parquet.tar.zst"
-
-    print(f"Downloading data from {release_url} ...")
-
+    Routes the four mutually-exclusive flags to the underlying Rust
+    `data_fetch` module. The cache lives at `~/.hyrr/nucl-parquet/v{V}/`
+    with a `.complete` sentinel and atomic install semantics — partial
+    downloads can't masquerade as a usable cache.
+    """
     try:
-        archive_path = output_dir / "nucl-parquet.tar.zst"
-        urllib.request.urlretrieve(release_url, str(archive_path))
-
-        try:
-            subprocess.run(
-                ["tar", "--zstd", "-xf", str(archive_path), "-C", str(output_dir)],
-                check=True,
-            )
-            archive_path.unlink()
-            print(f"Data extracted to: {data_dir}")
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            print(f"Downloaded archive: {archive_path}")
-            print("Extract manually with: tar --zstd -xf nucl-parquet.tar.zst")
-    except Exception as e:
-        print(f"Download failed: {e}", file=sys.stderr)
+        from hyrr import _native
+    except ImportError as e:
         print(
-            "Clone nucl-parquet manually from https://github.com/eXoma-ch/nucl-parquet",
+            f"hyrr._native not available: {e}\n"
+            "fetch-data requires the compiled Rust extension. "
+            "Reinstall hyrr or run `maturin develop` if working from source.",
             file=sys.stderr,
         )
         return 1
+
+    try:
+        if args.from_tarball is not None:
+            print(f"Installing from {args.from_tarball} ...")
+            _native.py_fetch_data(from_tarball=str(args.from_tarball))
+            print(f"Installed to ~/.hyrr/nucl-parquet/v{_native.py_data_version()}/")
+            return 0
+
+        if args.offline_bundle is not None:
+            if not _native.py_cache_is_complete():
+                print(
+                    "Cache is not complete; run `hyrr fetch-data --all` (or "
+                    "`--library X`) first to populate it.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"Packing cache into {args.offline_bundle} ...")
+            _native.py_fetch_data(offline_bundle=str(args.offline_bundle))
+            print(f"Wrote {args.offline_bundle}")
+            return 0
+
+        if args.all:
+            print(
+                f"Fetching all nucl-parquet libraries (v{_native.py_data_version()}, "
+                "~400 MB) ..."
+            )
+            _native.py_fetch_data(all_libs=True)
+        elif args.library:
+            print(
+                f"Fetching library `{args.library}` "
+                f"(v{_native.py_data_version()}) ..."
+            )
+            _native.py_fetch_data(library=args.library)
+        else:
+            print(
+                f"Fetching meta + stopping (v{_native.py_data_version()}) ..."
+            )
+            _native.py_fetch_data()
+
+        print(
+            f"Cached at: {_native.py_cache_data_dir()}\n"
+            "(set HYRR_DATA to override)"
+        )
+        return 0
+    except Exception as e:
+        print(f"fetch-data failed: {e}", file=sys.stderr)
+        return 1
+
+
+def _cmd_download_data(args: argparse.Namespace) -> int:
+    """(deprecated) Alias for `fetch-data --all`. Retained for legacy docs."""
+    print(
+        "warning: `hyrr download-data` is deprecated; use `hyrr fetch-data --all` "
+        "(or `--library X`) instead.",
+        file=sys.stderr,
+    )
+    # Translate to the new surface — ignore the legacy --output-dir / --force
+    # since the cache always lives at ~/.hyrr/nucl-parquet/v{V}/ now.
+    new_args = argparse.Namespace(
+        all=True,
+        library=None,
+        offline_bundle=None,
+        from_tarball=None,
+    )
+    return _cmd_fetch_data(new_args)
 
     return 0
 
