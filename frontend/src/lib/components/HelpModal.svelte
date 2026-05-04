@@ -71,7 +71,7 @@
     <section>
       <h3>Nuclear data</h3>
       <p>
-        Cross-sections from <strong>TENDL-2024</strong>, stopping powers from <strong>PSTAR/ASTAR</strong> tabulated data
+        Cross-sections from <strong>TENDL-2025</strong>, stopping powers from <strong>PSTAR/ASTAR</strong> tabulated data
         with velocity scaling for heavier projectiles (more accurate than Bethe-Bloch, especially at low energies relevant to cyclotron targetry).
         Data is loaded as Parquet files and cached in your browser (IndexedDB).
       </p>

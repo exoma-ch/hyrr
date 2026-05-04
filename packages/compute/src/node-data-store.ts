@@ -65,7 +65,7 @@ async function readParquetFile(filePath: string): Promise<ParquetRow[]> {
  * Priority: explicit arg > HYRR_DATA env > ../nucl-parquet sibling > ~/.hyrr/nucl-parquet
  */
 export function resolveDataDir(dataDir?: string, library?: string): string {
-  const lib = library ?? process.env.HYRR_LIBRARY ?? "tendl-2024";
+  const lib = library ?? process.env.HYRR_LIBRARY ?? "tendl-2025";
 
   if (dataDir) {
     return resolve(dataDir, lib);

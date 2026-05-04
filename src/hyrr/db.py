@@ -11,7 +11,7 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 
-DEFAULT_LIBRARY = "tendl-2024"
+DEFAULT_LIBRARY = "tendl-2025"
 
 
 def load_catalog(data_dir: str | Path) -> dict[str, Any]:

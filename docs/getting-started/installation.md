@@ -48,11 +48,11 @@ The Python CLI populates the same managed cache the desktop app uses:
 
 ```bash
 hyrr fetch-data                       # default: meta + stopping
-hyrr fetch-data --library tendl-2024  # specific library (~50 MB)
+hyrr fetch-data --library tendl-2025  # specific library (~50 MB)
 hyrr fetch-data --all                 # every library (~400 MB)
 ```
 
-The default library is `tendl-2024`. Override with `--library` or `HYRR_LIBRARY` env var. The cache is sentinel-protected: a partial download or interrupted extract leaves the dir behind for cleanup but is never picked up as a usable cache.
+The default library is `tendl-2025`. Override with `--library` or `HYRR_LIBRARY` env var. The cache is sentinel-protected: a partial download or interrupted extract leaves the dir behind for cleanup but is never picked up as a usable cache.
 
 ### Air-gapped install
 
