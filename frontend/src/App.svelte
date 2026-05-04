@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import "./lib/stores/theme.svelte"; // initialise theme (applies data-theme attribute)
   import { registerServiceWorker } from "./lib/sw-register";
-  import { decodeSerializableConfigFromHash, setConfigInHash } from "./lib/config-url";
+  import { decodeSerializableConfigFromHash, setConfigInHash, setCustomMaterialResolver } from "./lib/config-url";
   import {
     getConfig,
     setConfig,
@@ -67,6 +67,7 @@
 
   let config = $derived(getConfig());
   let layers = $derived(getLayers());
+  let projectile = $derived(config.beam.projectile);
   let hasLayers = $derived(layers.length > 0);
   let status = $derived(getStatus());
   let result = $derived(getResult());
@@ -76,13 +77,15 @@
   let materialPopupOpen = $state(false);
   let materialPopupLayerIndex = $state(0);
   let materialPopupEditId = $state<string | null>(null);
-  let materialPopupCurrent = $state<string>("");
   let elementPopupOpen = $state(false);
   let elementPopupSymbol = $state("");
   let elementPopupEnrichment = $state<Record<number, number> | undefined>(undefined);
   let elementPopupLayerIndex = $state(0);
   let isotopePopupOpen = $state(false);
   let isotopePopupData = $state({ name: "", Z: 0, A: 0, nuclearState: "" });
+  /** One-time banner shown after the 0.x material-schema break (#92).
+   *  Dismissed permanently in localStorage on close. */
+  let showSchemaBreakBanner = $state(false);
 
   // Must call initScheduler synchronously in component context for $effect
   initScheduler();
@@ -137,14 +140,17 @@
       restoreSerializableConfig(urlConfig);
     }
 
-    // Load custom materials and register density lookup in both material
-    // resolvers — `./lib/compute/materials` is the older local one,
-    // `@hyrr/compute` is the shared package that `resolveMaterial` in
-    // components (IsotopePopup, MaterialPopup inspect) actually calls.
-    // Registering only the local one silently drops custom lookups, which
-    // manifested as "No density for X-custom" warnings after saving
-    // clone-as-custom materials.
+    // Load custom materials and register density+composition lookups on
+    // both resolvers — `./lib/compute/materials` is the older local one
+    // and `@hyrr/compute` is the shared package that components use.
+    // The 0.x material schema break (#92) drops any legacy entries that
+    // don't map cleanly; surface a one-time banner so users notice their
+    // saved customs may be gone after this deploy.
     await loadCustomMaterials();
+    try {
+      const seen = localStorage.getItem("hyrr.notice.materialSchemaBreak");
+      if (!seen) showSchemaBreakBanner = true;
+    } catch { /* no-op */ }
     const densityFn = (identifier: string): number | null => {
       const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
       return cm ? cm.density : null;
@@ -161,6 +167,14 @@
     setCustomMaterialExpander((name) => {
       const cm = getCustomMaterials().find((m) => m.name === name);
       return cm ? cm.formula : null;
+    });
+    // #96: when encoding share URLs, embed the layer's full composition
+    // inline so the receiver can resolve density + per-element fractions
+    // without first re-defining the custom locally.
+    setCustomMaterialResolver((identifier) => {
+      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
+      if (!cm || !cm.massFractions) return null;
+      return { density: cm.density, massFractions: cm.massFractions };
     });
 
     loadingState = "Ready";
@@ -221,7 +235,6 @@
     }
     const cm = mat ? getCustomMaterials().find((m) => m.name === mat || m.formula === mat) : null;
     materialPopupEditId = cm?.id ?? null;
-    materialPopupCurrent = mat ?? "";
     materialPopupOpen = true;
   }
 
@@ -293,6 +306,23 @@
 
 <main>
   <HeaderBar />
+
+  {#if showSchemaBreakBanner}
+    <div class="schema-break-banner" role="status">
+      <span>
+        hyrr 0.x — the material schema changed in this build. If saved custom materials don't open, redefine them via the "Define & save material" form. Share URLs from earlier versions may no longer load.
+      </span>
+      <button
+        type="button"
+        class="schema-break-close"
+        aria-label="Dismiss"
+        onclick={() => {
+          showSchemaBreakBanner = false;
+          try { localStorage.setItem("hyrr.notice.materialSchemaBreak", "1"); } catch { /* no-op */ }
+        }}
+      >×</button>
+    </div>
+  {/if}
 
   {#if !ready}
     <div class="loading">
@@ -366,7 +396,7 @@
         : (() => { const item = getInternalItems()[materialPopupLayerIndex]; return item && !('mode' in item) ? item.enrichment : undefined; })()}
       materials={[]}
       editMaterialId={materialPopupEditId}
-      currentMaterial={materialPopupCurrent}
+      {projectile}
     />
 
     <ElementPopup
@@ -414,6 +444,28 @@
 <BugReportModal />
 
 <style>
+  .schema-break-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    background: var(--c-yellow-tint, var(--c-bg-muted));
+    color: var(--c-text);
+    padding: 0.5rem 0.9rem;
+    font-size: 0.78rem;
+    border-bottom: 1px solid var(--c-border);
+  }
+  .schema-break-close {
+    background: none;
+    border: none;
+    color: var(--c-text-muted);
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+  }
+  .schema-break-close:hover { color: var(--c-text); background: var(--c-bg-default); }
   /* ─── Theme tokens ─── */
   :global(:root),
   :global([data-theme="dark"]) {

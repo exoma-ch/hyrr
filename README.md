@@ -69,9 +69,26 @@ Key frontend features:
 - **URL sharing + sessions** — full config (including groups) encoded in URL hash; session tabs persist across reloads
 - **Isotope filter** — shared filter bar above activity plots and activity table
 
+## Install channels
+
+HYRR ships through one channel per surface. Pick the one that matches what you actually want:
+
+| You want… | Use | Command |
+|---|---|---|
+| The desktop GUI | GitHub Releases | [Download installer](https://github.com/exoma-ch/hyrr/releases) (`.dmg` / `.msi` / `.deb` / `.AppImage`) |
+| The MCP server, no GUI | uvx (PyPI) | `claude mcp add hyrr -- uvx hyrr-mcp` |
+| The MCP server, already have desktop | desktop binary | `claude mcp add hyrr -- /Applications/HYRR.app/Contents/MacOS/hyrr --mcp` |
+| The Python library | pip / uv | `pip install hyrr` |
+| The browser app | static GitHub Pages | [hyrr.app](https://exoma-ch.github.io/hyrr/) |
+| Build the MCP from source (devs) | cargo | `cargo install hyrr-mcp` |
+
+See [docs/adr/0001-mcp-single-ssot-and-install-channels.md](docs/adr/0001-mcp-single-ssot-and-install-channels.md) for the rationale behind the split.
+
 ## MCP Server
 
-`mcp/` — agent-driven irradiation analysis via the Model Context Protocol. Tools: `simulate`, `list_materials`, `get_cross_sections`, `get_decay_data`, `compare_results`. Resources: `hyrr://libraries`, `hyrr://elements`.
+Agent-driven irradiation analysis via the Model Context Protocol. All entry points share the same Rust codepath (`core/src/mcp/`) — adding a tool means editing one file and every surface picks it up on next build.
+
+Tools: `simulate`, `list_materials`, `list_reaction_channels`, `get_decay_data`, `compare_simulations`, `get_stack_energy_budget`, `get_stopping_power`, `get_isotope_production_curve`. Every response footer carries `*Library: <id>*` so agents see which nuclear data fed the calculation.
 
 ## Desktop App
 

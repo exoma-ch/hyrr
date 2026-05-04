@@ -1,0 +1,142 @@
+{
+  "$schema": "hyrr-supplier-catalog/1",
+  "last_reviewed": "2026-05-03",
+  "policy": "Curated, hand-maintained catalog of suppliers for enriched stable isotopes used as cyclotron target material. Editorial decisions: (1) we link only to top-level supplier URLs, never deep-links — supplier sites change structure too often for templates to stay accurate, and many suppliers' ToS are ambiguous about third-party deep-linking; (2) suppliers under sanctions/export control are listed with a visible flag rather than removed — users planning a procurement campaign need to know the restriction exists; (3) no prices in this catalog (quote-only suppliers + liability); (4) reviewed quarterly. Out of scope: scraping, API integrations, structural-material suppliers (Cu, Kapton, etc.).",
+  "suppliers": [
+    {
+      "id": "isoflex",
+      "name": "Isoflex USA",
+      "url": "https://isoflex.com/",
+      "country": "United States",
+      "countryCode": "US",
+      "isotopesOffered": [
+        "Li-6", "Li-7", "Be-9", "B-10", "B-11", "C-13",
+        "N-15", "O-17", "O-18", "Mg-24", "Mg-25", "Mg-26",
+        "Si-28", "Si-29", "Si-30", "S-33", "S-34", "S-36",
+        "Ca-40", "Ca-42", "Ca-43", "Ca-44", "Ca-46", "Ca-48",
+        "Ti-46", "Ti-47", "Ti-48", "Ti-49", "Ti-50",
+        "Cr-50", "Cr-52", "Cr-53", "Cr-54",
+        "Fe-54", "Fe-56", "Fe-57", "Fe-58",
+        "Ni-58", "Ni-60", "Ni-61", "Ni-62", "Ni-64",
+        "Cu-63", "Cu-65",
+        "Zn-64", "Zn-66", "Zn-67", "Zn-68", "Zn-70",
+        "Ga-69", "Ga-71",
+        "Ge-70", "Ge-72", "Ge-73", "Ge-74", "Ge-76",
+        "Se-74", "Se-76", "Se-77", "Se-78", "Se-80", "Se-82",
+        "Sr-84", "Sr-86", "Sr-87", "Sr-88",
+        "Mo-92", "Mo-94", "Mo-95", "Mo-96", "Mo-97", "Mo-98", "Mo-100",
+        "Cd-106", "Cd-108", "Cd-110", "Cd-111", "Cd-112", "Cd-113", "Cd-114", "Cd-116",
+        "Te-120", "Te-122", "Te-123", "Te-124", "Te-125", "Te-126", "Te-128", "Te-130",
+        "Xe-124", "Xe-126", "Xe-128", "Xe-129", "Xe-130", "Xe-131", "Xe-132", "Xe-134", "Xe-136"
+      ],
+      "notes": "Broad enriched-stable-isotope catalog. Quote-only pricing. US-based."
+    },
+    {
+      "id": "trace-sciences",
+      "name": "Trace Sciences International",
+      "url": "https://www.tracesciences.com/",
+      "country": "Canada",
+      "countryCode": "CA",
+      "isotopesOffered": [
+        "Li-6", "Li-7", "B-10", "B-11", "C-13", "N-15", "O-17", "O-18",
+        "Ca-40", "Ca-42", "Ca-43", "Ca-44", "Ca-46", "Ca-48",
+        "Ti-46", "Ti-47", "Ti-48", "Ti-49", "Ti-50",
+        "Fe-54", "Fe-56", "Fe-57", "Fe-58",
+        "Ni-58", "Ni-60", "Ni-61", "Ni-62", "Ni-64",
+        "Cu-63", "Cu-65",
+        "Zn-64", "Zn-66", "Zn-67", "Zn-68", "Zn-70",
+        "Ga-69", "Ga-71",
+        "Sr-84", "Sr-86", "Sr-87", "Sr-88",
+        "Mo-92", "Mo-94", "Mo-95", "Mo-96", "Mo-97", "Mo-98", "Mo-100",
+        "Cd-106", "Cd-108", "Cd-111", "Cd-112", "Cd-114", "Cd-116",
+        "Te-122", "Te-123", "Te-124", "Te-125", "Te-126", "Te-128", "Te-130",
+        "Xe-124", "Xe-128", "Xe-129", "Xe-131", "Xe-132", "Xe-134", "Xe-136"
+      ],
+      "notes": "Broad enriched-stable-isotope catalog. Quote-only pricing. Canada-based."
+    },
+    {
+      "id": "eurisotop",
+      "name": "Eurisotop / Cambridge Isotope Labs",
+      "url": "https://www.eurisotop.com/",
+      "country": "France / United States",
+      "countryCode": "FR",
+      "isotopesOffered": ["H-2", "C-13", "N-15", "O-17", "O-18", "S-34"],
+      "notes": "Primarily stable light isotopes for chemistry/biology. High-purity ¹⁸O water for medical-cyclotron ¹⁸F production."
+    },
+    {
+      "id": "ornl-nidc",
+      "name": "ORNL National Isotope Development Center",
+      "url": "https://www.isotopes.gov/",
+      "country": "United States",
+      "countryCode": "US",
+      "isotopesOffered": [
+        "Ca-48", "Ni-64", "Zn-68", "Mo-100",
+        "Ac-225", "Ac-227", "Ra-223", "Ra-224", "Ra-225", "Ra-226", "Ra-228",
+        "Th-228", "Th-229", "Th-230", "Th-232",
+        "U-232", "U-233", "U-234", "U-235", "U-236", "U-238",
+        "Cf-252", "Bk-249",
+        "Cu-67", "Sr-82", "Ge-68"
+      ],
+      "notes": "US National Isotope Development Center. Rare/heavy isotopes including ²²⁵Ac, ²²⁸Th. Allocation-based — request via isotopes.gov.",
+      "flags": [
+        {
+          "type": "export-control",
+          "asOf": "2026-05-03",
+          "detail": "Several heavy-element isotopes are export-controlled from the US (e.g. ²²⁸Th, ²²⁵Ac, ²³²U). Eligibility depends on destination + end-use; requires ORNL approval."
+        }
+      ]
+    },
+    {
+      "id": "jsc-isotope",
+      "name": "JSC Isotope",
+      "url": "https://isotop.ru/en/",
+      "country": "Russian Federation",
+      "countryCode": "RU",
+      "isotopesOffered": [
+        "Li-6", "Li-7", "B-10", "B-11", "C-13", "N-15", "O-17", "O-18",
+        "Mg-24", "Mg-25", "Mg-26",
+        "Si-28", "Si-29", "Si-30",
+        "Ca-40", "Ca-42", "Ca-43", "Ca-44", "Ca-46", "Ca-48",
+        "Ti-46", "Ti-47", "Ti-48", "Ti-49", "Ti-50",
+        "Cr-50", "Cr-52", "Cr-53", "Cr-54",
+        "Fe-54", "Fe-56", "Fe-57", "Fe-58",
+        "Ni-58", "Ni-60", "Ni-61", "Ni-62", "Ni-64",
+        "Cu-63", "Cu-65",
+        "Zn-64", "Zn-66", "Zn-67", "Zn-68", "Zn-70",
+        "Ge-70", "Ge-72", "Ge-73", "Ge-74", "Ge-76",
+        "Se-74", "Se-76", "Se-77", "Se-78", "Se-80", "Se-82",
+        "Sr-84", "Sr-86", "Sr-87", "Sr-88",
+        "Mo-92", "Mo-94", "Mo-95", "Mo-96", "Mo-97", "Mo-98", "Mo-100",
+        "Cd-106", "Cd-108", "Cd-110", "Cd-111", "Cd-112", "Cd-113", "Cd-114", "Cd-116",
+        "Te-120", "Te-122", "Te-123", "Te-124", "Te-125", "Te-126", "Te-128", "Te-130",
+        "Xe-124", "Xe-126", "Xe-128", "Xe-129", "Xe-130", "Xe-131", "Xe-132", "Xe-134", "Xe-136",
+        "Ac-225"
+      ],
+      "notes": "Historically dominant global supplier of enriched stable isotopes. Quote-only.",
+      "flags": [
+        {
+          "type": "sanctions",
+          "asOf": "2026-05-03",
+          "detail": "JSC Isotope is subject to international sanctions (US/EU/UK) following the 2022 invasion of Ukraine. Imports are restricted or prohibited from many jurisdictions; check current export-control regimes before procuring."
+        }
+      ]
+    },
+    {
+      "id": "sigma-aldrich",
+      "name": "Sigma-Aldrich / Merck",
+      "url": "https://www.sigmaaldrich.com/",
+      "country": "Germany / Global",
+      "countryCode": "DE",
+      "isotopesOffered": [
+        "H-2", "C-13", "N-15", "O-17", "O-18",
+        "Mg-25", "Mg-26",
+        "Ca-44", "Ca-48",
+        "Fe-57", "Fe-58",
+        "Ni-62", "Ni-64",
+        "Zn-67", "Zn-68",
+        "Mo-95", "Mo-97", "Mo-100"
+      ],
+      "notes": "Small-quantity research grades; convenient for proof-of-concept buys. Higher unit price than dedicated isotope houses."
+    }
+  ]
+}

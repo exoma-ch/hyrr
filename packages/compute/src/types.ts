@@ -49,6 +49,14 @@ export interface DatabaseProtocol {
     targetA: number,
   ): CrossSectionData[];
 
+  /**
+   * Synchronous coverage check — true if any cross-section data is loaded
+   * for the given (projectile, Z) target. Reads from cache only; the
+   * caller is responsible for first awaiting the relevant
+   * ensureCrossSections / ensureMultipleCrossSections call.
+   */
+  hasCrossSections(projectile: string, Z: number): boolean;
+
   getStoppingPower(
     source: string,
     targetZ: number,

@@ -11,10 +11,12 @@ export { DataStore } from "./data-store";
 
 // --- Materials ---
 export {
+  catalogEntryToMassText,
   resolveElement,
   resolveIsotopics,
   resolveFormula,
   resolveMaterial,
+  resolveMixtureToElements,
   massToAtomFractions,
   setCustomDensityLookup,
   setCustomCompositionLookup,
@@ -22,7 +24,7 @@ export {
   ELEMENT_DENSITIES,
   COMPOUND_DENSITIES,
 } from "./materials";
-export type { CatalogEntry } from "./materials";
+export type { CatalogEntry, MixtureMode, MixtureResult, MixtureResolverOpts, ResolverRow } from "./materials";
 
 // --- Types ---
 export type {
@@ -69,12 +71,14 @@ export {
 // --- Formula parsing ---
 export {
   parseFormula,
+  parseIsotopicFormula,
   formulaToMassFractions,
   elementsFromIdentifier,
   SYMBOL_TO_Z,
   STANDARD_ATOMIC_WEIGHT,
   Z_TO_SYMBOL,
 } from "./formula";
+export type { IsotopicFormula } from "./formula";
 
 // --- Config bridge ---
 export {

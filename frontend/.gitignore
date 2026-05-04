@@ -5,5 +5,7 @@ dist/
 .svelte-kit/
 public/data/*.sql.gz
 public/data/xs/
+public/data/parquet
 public/data/parquet/
 .vite/
+e2e/results/

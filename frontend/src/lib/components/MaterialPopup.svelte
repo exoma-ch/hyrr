@@ -1,15 +1,17 @@
 <script lang="ts">
   import Modal from "./Modal.svelte";
+  import InspectPanel from "./material/InspectPanel.svelte";
+  import SearchView from "./material/SearchView.svelte";
+  import DefineForm, { type EditableMaterial } from "./material/DefineForm.svelte";
+  import PeriodicTable from "./material/PeriodicTable.svelte";
+  import { PERIODIC_TABLE } from "./material/periodic-table-data";
+  import { MATERIAL_CATALOG, catalogEntryToMassText } from "@hyrr/compute";
+  import { getDataStore } from "../scheduler/sim-scheduler.svelte";
   import type { MaterialInfo } from "../types";
   import {
     getCustomMaterials,
     loadCustomMaterials,
-    saveCustomMaterial,
-    updateCustomMaterial,
-    deleteCustomMaterial,
-    validateFormula,
   } from "../stores/custom-materials.svelte";
-  import { ELEMENT_DENSITIES, COMPOUND_DENSITIES, MATERIAL_CATALOG, parseFormula, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT } from "@hyrr/compute";
 
   interface Props {
     open: boolean;
@@ -22,765 +24,197 @@
     materials: MaterialInfo[];
     /** If set, auto-open editor for this custom material ID when popup opens */
     editMaterialId?: string | null;
-    /** Current material identifier (catalog name, formula, or element) — drives the inspect panel. */
-    currentMaterial?: string;
+    /** Active beam projectile ("p", "d", "a", …). Used to compute the
+     *  PeriodicTable's TENDL-coverage disabled set in a later commit. */
+    projectile?: string;
   }
 
-  let { open, onclose, onselect, onenrichment, currentEnrichment, materials, editMaterialId = null, currentMaterial = "" }: Props = $props();
+  let {
+    open,
+    onclose,
+    onselect,
+    onenrichment,
+    currentEnrichment,
+    materials,
+    editMaterialId = null,
+    projectile,
+  }: Props = $props();
 
   let query = $state("");
-  let searchInput: HTMLInputElement | undefined = $state();
-  let defineOpen = $state(false);
-  let newFormula = $state("");
-  let newName = $state("");
-  let nameManuallySet = $state(false);
-  let newDensity = $state<number | null>(null);
-  let formulaError = $state<string | null>(null);
-  let saving = $state(false);
-  let editingCustomId = $state<string | null>(null);
+  let searchView: { focus: () => void } | undefined = $state();
+  let editInitial = $state<EditableMaterial | null>(null);
+  let view = $state<"search" | "table">("search");
+
+  /** TENDL coverage disabled-set per projectile. Computed lazily when
+   *  the user opens the table view; cached so flipping back-and-forth
+   *  doesn't refetch. */
+  const disabledCache = new Map<string, Set<string>>();
+  let disabledSet = $state<Set<string> | undefined>(undefined);
+
+  /** Symbols of elements with ≥ 2 stable natural isotopes — a proxy
+   *  for "enrichable" (you can't separate isotopes of a mono-isotopic
+   *  element). Computed once when the data store is ready. */
+  let enrichableSet = $state<Set<string> | undefined>(undefined);
+
+  // Probe every element on the table — when the user toggles "Show
+  // Z>92" the transuranics need to be in `disabledSet` too, otherwise
+  // a click on Og falls through to onselect() and commits a symbol
+  // the simulator has no cross-section data for. Most Z>92 fetches
+  // 404 silently and the cache stores an empty result, so this only
+  // costs 26 extra cold-cache requests per (projectile) and is free
+  // afterwards.
+  const COVERAGE_PROBE_SYMBOLS = PERIODIC_TABLE.map((c) => c.symbol);
+
+  $effect(() => {
+    if (!open || view !== "table" || !projectile) return;
+    const cached = disabledCache.get(projectile);
+    if (cached) {
+      disabledSet = cached;
+      return;
+    }
+    const db = getDataStore();
+    if (!db) return;
+    const proj = projectile;
+    db.ensureMultipleCrossSections(proj, COVERAGE_PROBE_SYMBOLS).then(() => {
+      const disabled = new Set<string>();
+      for (const cell of PERIODIC_TABLE) {
+        if (!db.hasCrossSections(proj, cell.Z)) disabled.add(cell.symbol);
+      }
+      disabledCache.set(proj, disabled);
+      // Only apply if the user hasn't switched away while we were loading.
+      if (view === "table" && projectile === proj) disabledSet = disabled;
+    });
+  });
+
+  $effect(() => {
+    if (!open || view !== "table" || enrichableSet) return;
+    const db = getDataStore();
+    if (!db) return;
+    const set = new Set<string>();
+    for (const cell of PERIODIC_TABLE) {
+      if (db.getNaturalAbundances(cell.Z).size >= 2) set.add(cell.symbol);
+    }
+    enrichableSet = set;
+  });
 
   $effect(() => {
     if (open) {
+      query = "";
+      editInitial = null;
+      view = "search";
+      // Force a clean state so a stale disabledSet from a previous
+      // popup-open with a different projectile doesn't flash through.
+      disabledSet = undefined;
       loadCustomMaterials().then(() => {
         if (editMaterialId) {
           const cm = getCustomMaterials().find((m) => m.id === editMaterialId);
           if (cm) {
-            defineOpen = true;
-            newFormula = cm.originalInput ?? cm.formula;
-            newName = cm.name;
-            nameManuallySet = true;
-            newDensity = cm.density;
-            editingCustomId = cm.id;
-            return;
+            editInitial = {
+              formula: cm.originalInput ?? cm.formula,
+              name: cm.name,
+              density: cm.density,
+              editingCustomId: cm.id,
+            };
           }
         }
       });
-      query = "";
-      defineOpen = false;
-      newFormula = "";
-      newName = "";
-      nameManuallySet = false;
-      newDensity = null;
-      formulaError = null;
-      editingCustomId = null;
       // Auto-focus search input so user can type immediately
-      requestAnimationFrame(() => searchInput?.focus());
-    }
-  });
-
-  /** Parse input — stoichiometric ("Al2O3") or mass-ratio ("Al 80%, Cu 5%, Zn %").
-   *  Returns { ok: ParsedMaterial } | { error: string } | null. Pure — no side effects.
-   */
-  interface ParsedMaterial {
-    type: "stoichiometric" | "mass-ratio";
-    formula: string;
-    elements: string[];
-    density: number | null;
-    autoName: string;
-    /** For mass-ratio materials: element → mass fraction (0–1). */
-    massFractions?: Record<string, number>;
-  }
-
-  type ParseResult = { ok: ParsedMaterial } | { error: string } | null;
-
-  function parseMaterialInput(input: string): ParseResult {
-    const trimmed = input.trim();
-    if (!trimmed) return null;
-
-    if (trimmed.includes("%")) {
-      return parseMassRatio(trimmed);
-    }
-
-    try {
-      const parsed = parseFormula(trimmed);
-      const elements = Object.keys(parsed);
-      if (elements.length === 0) return { error: "No elements found in formula" };
-      for (const el of elements) {
-        if (!SYMBOL_TO_Z[el]) return { error: `Unknown element: ${el}` };
-      }
-      let density: number | null = null;
-      if (COMPOUND_DENSITIES[trimmed]) {
-        density = COMPOUND_DENSITIES[trimmed];
-      } else if (elements.length === 1 && ELEMENT_DENSITIES[elements[0]]) {
-        density = ELEMENT_DENSITIES[elements[0]];
-      }
-      return { ok: { type: "stoichiometric", formula: trimmed, elements, density, autoName: trimmed } };
-    } catch {
-      return { error: "Invalid formula" };
-    }
-  }
-
-  function parseMassRatio(input: string): ParseResult {
-    const parts = input.split(",").map((s) => s.trim()).filter(Boolean);
-    const entries: { symbol: string; pct: number | null }[] = [];
-
-    for (const part of parts) {
-      const m = part.match(/^([A-Z][a-z]?)\s*(\d+(?:\.\d+)?)?\s*%$/);
-      if (!m) return { error: `Invalid: "${part}". Use "Al 80%, Cu 5%, Zn %"` };
-      const sym = m[1];
-      if (!SYMBOL_TO_Z[sym]) return { error: `Unknown element: ${sym}` };
-      entries.push({ symbol: sym, pct: m[2] ? parseFloat(m[2]) : null });
-    }
-
-    const specified = entries.filter((e) => e.pct !== null);
-    const remainder = entries.filter((e) => e.pct === null);
-    const specifiedSum = specified.reduce((s, e) => s + (e.pct ?? 0), 0);
-
-    if (remainder.length > 1) return { error: "Only one element can have unspecified %" };
-    if (remainder.length === 0 && Math.abs(specifiedSum - 100) > 0.5) {
-      return { error: `Sum is ${specifiedSum.toFixed(1)}%, needs 100%` };
-    }
-    if (remainder.length === 1) {
-      const rest = 100 - specifiedSum;
-      if (rest < 0) return { error: `Sum exceeds 100% (${specifiedSum.toFixed(1)}%)` };
-      remainder[0].pct = rest;
-    }
-
-    // Convert wt% to atom fractions using atomic masses for stoichiometric formula
-    const massFractions: Record<string, number> = {};
-    const moles: Record<string, number> = {};
-    let totalMoles = 0;
-    let density = 0;
-    const nameParts: string[] = [];
-
-    for (const e of entries) {
-      const wt = (e.pct ?? 0) / 100;
-      massFractions[e.symbol] = wt;
-      const atomicWeight = STANDARD_ATOMIC_WEIGHT[e.symbol] ?? 1;
-      const mol = wt / atomicWeight;
-      moles[e.symbol] = mol;
-      totalMoles += mol;
-      density += wt * (ELEMENT_DENSITIES[e.symbol] ?? 5);
-      nameParts.push(`${e.symbol}${Math.round(e.pct ?? 0)}`);
-    }
-
-    // Build stoichiometric formula from atom fractions (normalize to smallest)
-    const atomFracs = entries.map((e) => ({ symbol: e.symbol, frac: moles[e.symbol] / totalMoles }));
-    const minFrac = Math.min(...atomFracs.map((a) => a.frac));
-    const formula = atomFracs
-      .map((a) => {
-        const ratio = a.frac / minFrac;
-        const rounded = Math.round(ratio * 100) / 100;
-        return rounded === 1 ? a.symbol : `${a.symbol}${rounded}`;
-      })
-      .join("");
-
-    return { ok: { type: "mass-ratio", formula, elements: entries.map((e) => e.symbol), density, autoName: nameParts.join("-"), massFractions } };
-  }
-
-  /** Live preview — pure derived, no state mutations. */
-  let parseResult = $derived.by((): ParseResult => {
-    if (!newFormula.trim()) return null;
-    return parseMaterialInput(newFormula);
-  });
-
-  let formulaPreview = $derived<ParsedMaterial | null>(
-    parseResult && "ok" in parseResult ? parseResult.ok : null,
-  );
-
-  // Derive error from parse result (replaces formulaError state for parse-related errors)
-  let parsedError = $derived<string | null>(
-    parseResult && "error" in parseResult ? parseResult.error : null,
-  );
-
-  // Auto-fill name and density in a separate effect (side effects not allowed in $derived)
-  $effect(() => {
-    const result = formulaPreview;
-    if (result && !nameManuallySet) {
-      newName = result.autoName;
-    }
-    if (result?.density && newDensity === null) {
-      newDensity = result.density;
-    }
-  });
-
-  async function handleSave() {
-    const preview = formulaPreview;
-    if (!preview) return;
-
-    const nameVal = newName.trim() || preview.autoName;
-    const densityVal = newDensity;
-
-    if (densityVal === null || densityVal <= 0) {
-      formulaError = "Enter density (g/cm³)";
-      return;
-    }
-
-    saving = true;
-    formulaError = null;
-    try {
-      if (editingCustomId) {
-        await updateCustomMaterial(editingCustomId, nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim(), currentEnrichment);
-      } else {
-        await saveCustomMaterial(nameVal, preview.formula, densityVal, preview.massFractions, newFormula.trim(), currentEnrichment);
-      }
-      // Use name as layer identifier so resolveMaterial can look up stored composition
-      onselect(nameVal, currentEnrichment);
-      onclose();
-    } catch (e: any) {
-      const msg = e?.message ?? String(e);
-      console.error("[material-popup] save failed", e);
-      formulaError = `Failed to save: ${msg}`;
-    } finally {
-      saving = false;
-    }
-  }
-
-  function useFormula() {
-    const preview = formulaPreview;
-    if (!preview) return;
-    onselect(preview.formula);
-    onclose();
-  }
-
-  // -- Material list --
-
-  let builtinMaterials = $derived.by(() => {
-    const entries: MaterialInfo[] = [];
-
-    for (const [name, entry] of Object.entries(MATERIAL_CATALOG)) {
-      entries.push({
-        path: name,
-        name: name.charAt(0).toUpperCase() + name.slice(1),
-        category: "alloy",
-        density_g_cm3: entry.density,
-        formula: Object.keys(entry.massFractions).join(", "),
+      requestAnimationFrame(() => {
+        if (view === "search") searchView?.focus();
       });
     }
-
-    for (const [formula, density] of Object.entries(COMPOUND_DENSITIES)) {
-      entries.push({ path: formula, name: formula, category: "compound", density_g_cm3: density, formula });
-    }
-
-    const sorted = Object.entries(ELEMENT_DENSITIES)
-      .filter(([sym]) => SYMBOL_TO_Z[sym] !== undefined)
-      .sort(([a], [b]) => (SYMBOL_TO_Z[a] ?? 0) - (SYMBOL_TO_Z[b] ?? 0));
-    for (const [sym, density] of sorted) {
-      entries.push({ path: sym, name: sym, category: "element", density_g_cm3: density, formula: sym });
-    }
-
-    return entries;
   });
 
-  let customEntries = $derived<(MaterialInfo & { customId: string })[]>(
-    getCustomMaterials().map((m) => ({
-      path: m.formula,
-      name: m.name,
-      category: "custom",
-      density_g_cm3: m.density,
-      formula: m.formula,
-      customId: m.id,
-    })),
-  );
-
-  let allMaterials = $derived([...builtinMaterials, ...materials]);
-
-  let results = $derived.by(() => {
-    const custom = customEntries;
-
-    if (!query.trim()) {
-      return [...custom, ...allMaterials.slice(0, 30 - custom.length)];
-    }
-
-    const lower = query.toLowerCase();
-    const tokens = lower.split(/\s+/).filter(Boolean);
-
-    type ScoredEntry = { entry: MaterialInfo; score: number; customId?: string };
-    const scored: ScoredEntry[] = [];
-
-    for (const entry of custom) {
-      const fields = [entry.name.toLowerCase(), (entry.formula ?? "").toLowerCase()];
-      let score = 0;
-      let allMatch = true;
-      for (const token of tokens) {
-        let matched = false;
-        for (const f of fields) {
-          if (f === token) { score += 100; matched = true; }
-          else if (f.startsWith(token)) { score += 60; matched = true; }
-          else if (f.includes(token)) { score += 30; matched = true; }
-        }
-        if (!matched) { allMatch = false; break; }
-      }
-      if (allMatch && score > 0) scored.push({ entry, score: score + 1000, customId: entry.customId });
-    }
-
-    for (const entry of allMaterials) {
-      const fields = [entry.path.toLowerCase(), entry.name.toLowerCase(), (entry.formula ?? "").toLowerCase(), entry.category ?? ""];
-      let score = 0;
-      let allMatch = true;
-      for (const token of tokens) {
-        let matched = false;
-        for (const f of fields) {
-          if (f === token) { score += 100; matched = true; }
-          else if (f.startsWith(token)) { score += 60; matched = true; }
-          else if (f.includes(token)) { score += 30; matched = true; }
-        }
-        if (!matched) { allMatch = false; break; }
-      }
-      if (allMatch && score > 0) scored.push({ entry, score });
-    }
-
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, 30).map((s) => s.entry);
-  });
-
-  function findCustomEntry(entry: MaterialInfo): (MaterialInfo & { customId: string }) | null {
-    return customEntries.find((c) => c.name === entry.name && c.formula === entry.formula) ?? null;
+  function openEditor(customId: string) {
+    const cm = getCustomMaterials().find((m) => m.id === customId);
+    if (!cm) return;
+    editInitial = {
+      formula: cm.originalInput ?? cm.formula,
+      name: cm.name,
+      density: cm.density,
+      editingCustomId: cm.id,
+    };
   }
 
-  function select(entry: MaterialInfo) {
-    // For custom materials with mass fractions, use the name as identifier
-    // so resolveMaterial can look up the stored composition
-    const custom = findCustomEntry(entry);
-    if (custom) {
-      const cm = getCustomMaterials().find((m) => m.id === custom.customId);
-      onselect(custom.name, cm?.enrichment);
-    } else {
-      // Prefer canonical `path` (e.g. "havar", "H2O", "Mo") over the expanded
-      // formula — for catalog alloys the formula is an exploded element list,
-      // which is lossy and unreadable. `resolve_material` in core hits the
-      // catalog (by path) before falling back to formula parsing, so this
-      // stays backwards compatible with old URL-encoded configs.
-      onselect(entry.path ?? entry.formula);
-    }
+  /** Catalog hydration (#94 / #57). Loads the catalog entry as mass-mixture
+   *  rows in DefineForm. editingCustomId="" means save always forks — the
+   *  catalog itself is read-only. */
+  function openCatalogEditor(catalogName: string) {
+    const entry = MATERIAL_CATALOG[catalogName.toLowerCase()];
+    if (!entry) return;
+    editInitial = {
+      formula: catalogEntryToMassText(entry),
+      name: catalogName,
+      density: entry.density,
+      editingCustomId: "",
+      mode: "mass",
+    };
+  }
+
+  function handleCommit(material: string, enrichment?: Record<string, Record<number, number>>) {
+    onselect(material, enrichment);
     onclose();
   }
 
-  function useQuery() {
-    // Select first search result if available (proper-cased), otherwise use raw query
-    if (results.length > 0 && query.trim()) {
-      select(results[0]);
-      return;
-    }
-    const val = query.trim();
-    if (!val) return;
-    onselect(val);
-    onclose();
-  }
-
-  async function handleDelete(id: string, event: Event) {
-    event.stopPropagation();
-    await deleteCustomMaterial(id);
-  }
-
-  function editCustomMaterial(entry: MaterialInfo & { customId: string }, event: Event) {
-    event.stopPropagation();
-    defineOpen = true;
-    // Restore original input (wt% string) if available, otherwise fall back to formula
-    const cm = getCustomMaterials().find((m) => m.id === entry.customId);
-    newFormula = cm?.originalInput ?? entry.formula ?? "";
-    newName = entry.name;
-    nameManuallySet = true;
-    newDensity = entry.density_g_cm3 ?? null;
-    editingCustomId = entry.customId;
-  }
-
-  /** Elements from current query for enrichment access. */
-  let queryElements = $derived.by(() => {
-    const q = query.trim();
-    if (!q) return [];
-    try { return Object.keys(parseFormula(q)); } catch { return []; }
-  });
-
-  // -- Inspect panel for the layer's current material --
-
-  interface InspectRow {
-    symbol: string;
-    Z: number;
-    atomFraction: number;
-    weightPercent: number;
-  }
-
-  interface InspectInfo {
-    identifier: string;
-    displayName: string;
-    source: "catalog" | "custom" | "compound" | "element" | "formula";
-    density: number | null;
-    densitySource: string;
-    formula: string | null;
-    originalInput?: string;
-    rows: InspectRow[];
-    /** Mass fractions (0–1) — used to seed the clone-as-custom form. */
-    massFractions: Record<string, number>;
-    /** Pre-built "El 42%, ..." string for the clone form. */
-    wtPercentString: string;
-  }
-
-  function buildRowsFromMassFractions(
-    massFractions: Record<string, number>,
-  ): InspectRow[] {
-    // atom fraction n_i = (w_i / A_i) / Σ (w_j / A_j)
-    const moles: Record<string, number> = {};
-    let total = 0;
-    for (const [sym, w] of Object.entries(massFractions)) {
-      const A = STANDARD_ATOMIC_WEIGHT[sym];
-      if (!A || !(w > 0)) continue;
-      const m = w / A;
-      moles[sym] = m;
-      total += m;
-    }
-    const totalMass = Object.values(massFractions).reduce((s, v) => s + v, 0) || 1;
-    const rows: InspectRow[] = Object.entries(massFractions).map(([sym, w]) => ({
-      symbol: sym,
-      Z: SYMBOL_TO_Z[sym] ?? 0,
-      atomFraction: total > 0 ? (moles[sym] ?? 0) / total : 0,
-      weightPercent: (w / totalMass) * 100,
-    }));
-    rows.sort((a, b) => b.weightPercent - a.weightPercent);
-    return rows;
-  }
-
-  function buildRowsFromAtomFractions(
-    atomFractions: Record<string, number>,
-  ): InspectRow[] {
-    // w_i ∝ n_i * A_i
-    const weights: Record<string, number> = {};
-    let totalMass = 0;
-    for (const [sym, n] of Object.entries(atomFractions)) {
-      const A = STANDARD_ATOMIC_WEIGHT[sym];
-      if (!A || !(n > 0)) continue;
-      const m = n * A;
-      weights[sym] = m;
-      totalMass += m;
-    }
-    const totalAtom = Object.values(atomFractions).reduce((s, v) => s + v, 0) || 1;
-    const rows: InspectRow[] = Object.entries(atomFractions).map(([sym, n]) => ({
-      symbol: sym,
-      Z: SYMBOL_TO_Z[sym] ?? 0,
-      atomFraction: n / totalAtom,
-      weightPercent: totalMass > 0 ? ((weights[sym] ?? 0) / totalMass) * 100 : 0,
-    }));
-    rows.sort((a, b) => b.weightPercent - a.weightPercent);
-    return rows;
-  }
-
-  function massFractionsToWtString(
-    massFractions: Record<string, number>,
-  ): string {
-    const entries = Object.entries(massFractions).sort((a, b) => b[1] - a[1]);
-    return entries
-      .map(([sym, w]) => `${sym} ${(w * 100).toFixed(2)}%`)
-      .join(", ");
-  }
-
-  let inspectInfo = $derived.by<InspectInfo | null>(() => {
-    const id = currentMaterial.trim();
-    if (!id) return null;
-
-    // 1. Catalog (havar, etc.)
-    const catalogKey = id.toLowerCase();
-    const catalogEntry = MATERIAL_CATALOG[catalogKey];
-    if (catalogEntry) {
-      const rows = buildRowsFromMassFractions(catalogEntry.massFractions);
-      return {
-        identifier: id,
-        displayName: id,
-        source: "catalog",
-        density: catalogEntry.density,
-        densitySource: "catalog",
-        formula: Object.keys(catalogEntry.massFractions).join(", "),
-        rows,
-        massFractions: { ...catalogEntry.massFractions },
-        wtPercentString: massFractionsToWtString(catalogEntry.massFractions),
-      };
-    }
-
-    // 2. Custom material
-    const custom = getCustomMaterials().find((m) => m.name === id || m.formula === id);
-    if (custom) {
-      const rows = custom.massFractions
-        ? buildRowsFromMassFractions(custom.massFractions)
-        : (() => {
-            try {
-              const parsed = parseFormula(custom.formula);
-              return buildRowsFromAtomFractions(parsed);
-            } catch { return []; }
-          })();
-      return {
-        identifier: id,
-        displayName: custom.name,
-        source: "custom",
-        density: custom.density,
-        densitySource: "user-defined",
-        formula: custom.formula,
-        originalInput: custom.originalInput,
-        rows,
-        massFractions: custom.massFractions ?? {},
-        wtPercentString: custom.massFractions
-          ? massFractionsToWtString(custom.massFractions)
-          : custom.formula,
-      };
-    }
-
-    // 3. Known compound (COMPOUND_DENSITIES) or simple formula
-    try {
-      const atoms = parseFormula(id);
-      const symbols = Object.keys(atoms);
-      if (symbols.length === 0) return null;
-      for (const s of symbols) { if (!SYMBOL_TO_Z[s]) return null; }
-      const rows = buildRowsFromAtomFractions(atoms);
-
-      let density: number | null = null;
-      let densitySource = "estimated";
-      let source: InspectInfo["source"] = "formula";
-
-      if (symbols.length === 1) {
-        density = ELEMENT_DENSITIES[symbols[0]] ?? null;
-        densitySource = "element";
-        source = "element";
-      } else if (COMPOUND_DENSITIES[id]) {
-        density = COMPOUND_DENSITIES[id];
-        densitySource = "compound";
-        source = "compound";
-      }
-
-      return {
-        identifier: id,
-        displayName: id,
-        source,
-        density,
-        densitySource,
-        formula: id,
-        rows,
-        massFractions: {},
-        wtPercentString: id,
-      };
-    } catch {
-      return null;
-    }
-  });
-
-  function cloneAsCustom() {
-    if (!inspectInfo) return;
-    // Expand `defineOpen` and pre-fill the form with editable wt% string or formula.
-    defineOpen = true;
-    editingCustomId = null;
-    if (inspectInfo.source === "catalog" || inspectInfo.source === "custom") {
-      // Mass-ratio clone — use wt% string so user can edit percentages.
-      newFormula = inspectInfo.wtPercentString;
-    } else {
-      newFormula = inspectInfo.formula ?? inspectInfo.identifier;
-    }
-    newName = inspectInfo.displayName
-      ? `${inspectInfo.displayName}-custom`
-      : newFormula;
-    nameManuallySet = true;
-    newDensity = inspectInfo.density ?? null;
-    formulaError = null;
+  function handlePtSelect(symbol: string) {
+    // Same code path as clicking a search result with that symbol — the
+    // symbol is treated as a formula and the popup closes immediately.
+    handleCommit(symbol);
   }
 </script>
 
-<Modal {open} {onclose} title="Select Material">
+<!-- #92: PT view needs the wider modal so the periodic table doesn't crowd
+     against its own borders. Search view stays narrow. -->
+<Modal {open} {onclose} title="Select Material" wide={view === "table"}>
   <div class="material-popup">
-    <!-- Search / quick select -->
-    <div class="search-row">
-      <input
-        type="text"
-        class="search"
-        placeholder="Search or type formula (Mo, H2O, NaCl)..."
-        bind:value={query}
-        bind:this={searchInput}
-        onkeydown={(e) => { if (e.key === "Enter") useQuery(); }}
+    <div class="view-toggle" role="tablist" aria-label="Material picker view">
+      <button
+        type="button"
+        role="tab"
+        class="view-toggle-btn"
+        class:active={view === "search"}
+        aria-selected={view === "search"}
+        onclick={() => { view = "search"; requestAnimationFrame(() => searchView?.focus()); }}
+      >Search</button>
+      <button
+        type="button"
+        role="tab"
+        class="view-toggle-btn"
+        class:active={view === "table"}
+        aria-selected={view === "table"}
+        onclick={() => { view = "table"; }}
+      >Periodic table</button>
+    </div>
+
+    {#if view === "search"}
+      <SearchView
+        bind:this={searchView}
+        {query}
+        onQueryChange={(q) => { query = q; }}
+        {materials}
+        {onselect}
+        oncatalogedit={openCatalogEditor}
+        {onclose}
+        oneditRequest={openEditor}
+      >
+        {#snippet betweenInputAndResults()}
+          <InspectPanel {query} {currentEnrichment} {onenrichment} />
+        {/snippet}
+      </SearchView>
+    {:else}
+      <PeriodicTable
+        onselect={handlePtSelect}
+        disabled={disabledSet}
+        {enrichableSet}
       />
-      {#if query.trim()}
-        <button class="use-btn" onclick={useQuery} title="Use as-is">Use</button>
-      {/if}
-    </div>
-
-    <!-- Inspect panel: composition & density source for the layer's current material -->
-    {#if inspectInfo}
-      <div class="inspect-panel">
-        <div class="inspect-header">
-          <div class="inspect-title">
-            <span class="inspect-name">{inspectInfo.displayName}</span>
-            <span class="inspect-badge inspect-badge-{inspectInfo.source}">{inspectInfo.source}</span>
-          </div>
-          <button
-            class="clone-btn"
-            title="Pre-fill the define form with these elements so you can tweak & save a variant"
-            onclick={cloneAsCustom}
-          >Clone as custom…</button>
-        </div>
-        <div class="inspect-meta">
-          {#if inspectInfo.density !== null}
-            <span class="meta-item">
-              <span class="meta-label">Density:</span>
-              <span class="meta-value">{inspectInfo.density.toFixed(3)} g/cm³</span>
-              <span class="meta-source">({inspectInfo.densitySource})</span>
-            </span>
-          {/if}
-          {#if inspectInfo.formula && inspectInfo.formula !== inspectInfo.displayName}
-            <span class="meta-item">
-              <span class="meta-label">Formula:</span>
-              <span class="meta-value mono">{inspectInfo.formula}</span>
-            </span>
-          {/if}
-          {#if inspectInfo.originalInput && inspectInfo.originalInput !== inspectInfo.formula}
-            <span class="meta-item">
-              <span class="meta-label">Input:</span>
-              <span class="meta-value mono">{inspectInfo.originalInput}</span>
-            </span>
-          {/if}
-        </div>
-        {#if inspectInfo.rows.length > 0}
-          <table class="inspect-table">
-            <thead>
-              <tr>
-                <th>El</th>
-                <th class="num">Z</th>
-                <th class="num">Atom frac</th>
-                <th class="num">wt %</th>
-                {#if onenrichment}<th></th>{/if}
-              </tr>
-            </thead>
-            <tbody>
-              {#each inspectInfo.rows as row}
-                <tr>
-                  <td>
-                    <span class="el-sym">{row.symbol}</span>
-                    {#if currentEnrichment?.[row.symbol]}<span class="enr-dot" title="Enrichment override"></span>{/if}
-                  </td>
-                  <td class="num">{row.Z}</td>
-                  <td class="num">{row.atomFraction.toFixed(4)}</td>
-                  <td class="num">{row.weightPercent.toFixed(2)}</td>
-                  {#if onenrichment}
-                    <td>
-                      <button
-                        class="enr-btn"
-                        title="Edit isotopic enrichment"
-                        onclick={() => onenrichment?.(row.symbol)}
-                      >⚛</button>
-                    </td>
-                  {/if}
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        {/if}
-      </div>
     {/if}
 
-    <!-- Enrichment quick-access for current query -->
-    {#if queryElements.length > 0 && onenrichment}
-      <div class="enrichment-row">
-        <span class="enr-label">Isotopic enrichment:</span>
-        {#each queryElements as el}
-          <button
-            class="el-badge"
-            class:enriched={!!currentEnrichment?.[el]}
-            onclick={() => onenrichment?.(el)}
-          >{el}{#if currentEnrichment?.[el]}<span class="enr-dot"></span>{/if}</button>
-        {/each}
-      </div>
-    {/if}
-
-    <!-- Results -->
-    <ul class="results-list">
-      {#each results as entry}
-        {@const custom = findCustomEntry(entry)}
-        <li>
-          <button class="result-item" onclick={() => select(entry)}>
-            <span class="mat-name">
-              {entry.name}
-              {#if custom}<span class="badge-custom">custom</span>{/if}
-              {#if entry.category === "element"}<span class="badge-el">Z={SYMBOL_TO_Z[entry.name] ?? "?"}</span>{/if}
-            </span>
-            <span class="mat-meta">
-              {#if entry.formula && entry.formula !== entry.name}<span class="formula">{entry.formula}</span>{/if}
-              {#if entry.density_g_cm3}<span class="density">{entry.density_g_cm3.toFixed(2)} g/cm³</span>{/if}
-            </span>
-          </button>
-          {#if custom}
-            <button class="edit-btn" title="Edit" onclick={(e) => editCustomMaterial(custom, e)}>&#9998;</button>
-            <button class="delete-btn" title="Delete" onclick={(e) => handleDelete(custom.customId, e)}>&times;</button>
-          {/if}
-        </li>
-      {/each}
-      {#if results.length === 0 && query.trim()}
-        <li class="no-results">No matches — Enter or "Use" to use as formula</li>
-      {/if}
-    </ul>
-
-    <!-- Define new material (stoichiometric OR mass ratio — auto-detected) -->
-    <div class="define-section">
-      <button class="define-toggle" onclick={() => { defineOpen = !defineOpen; }}>
-        <span class="toggle-icon">{defineOpen ? "▾" : "▸"}</span>
-        Define &amp; save material
-      </button>
-
-      {#if defineOpen}
-        <div class="define-form">
-          <label class="field-label">
-            Composition
-            <input
-              type="text"
-              class="field-input"
-              placeholder="Al2O3  or  Al 80%, Cu 5%, Zn %"
-              bind:value={newFormula}
-              oninput={() => { formulaError = null; if (!editingCustomId) nameManuallySet = false; }}
-            />
-          </label>
-          <p class="hint">Stoichiometric formula or mass ratios (comma-separated with %)</p>
-
-          {#if formulaPreview}
-            <div class="preview">
-              <span class="preview-type">{formulaPreview.type}</span>
-              {#if formulaPreview.type === "mass-ratio"}
-                <span class="preview-formula">{formulaPreview.formula}</span>
-              {/if}
-              {#each formulaPreview.elements as el}
-                <button
-                  class="el-badge"
-                  class:enriched={!!currentEnrichment?.[el]}
-                  onclick={() => onenrichment?.(el)}
-                >{el}</button>
-              {/each}
-            </div>
-          {/if}
-
-          <label class="field-label">
-            Name
-            <input
-              type="text"
-              class="field-input"
-              placeholder={formulaPreview?.autoName ?? "auto-filled from composition"}
-              bind:value={newName}
-              oninput={() => { nameManuallySet = true; }}
-            />
-            <span class="field-hint">Auto-filled — edit to override</span>
-          </label>
-
-          <label class="field-label">
-            Density (g/cm³)
-            <input
-              type="text"
-              inputmode="decimal"
-              class="field-input"
-              placeholder={formulaPreview?.density?.toFixed(2) ?? "e.g. 2.70"}
-              value={newDensity !== null ? String(newDensity) : ""}
-              oninput={(e) => { const v = parseFloat((e.target as HTMLInputElement).value); newDensity = Number.isFinite(v) ? v : null; }}
-            />
-          </label>
-
-          {#if parsedError || formulaError}
-            <p class="form-error">{parsedError ?? formulaError}</p>
-          {/if}
-
-          <div class="form-actions">
-            <button
-              class="use-formula-btn"
-              disabled={!formulaPreview}
-              onclick={useFormula}
-            >Use without saving</button>
-            <button
-              class="save-btn"
-              disabled={saving || !formulaPreview || newDensity === null || (newDensity ?? 0) <= 0}
-              onclick={handleSave}
-            >{saving ? "Saving..." : editingCustomId ? "Update & Use" : "Save & Use"}</button>
-          </div>
-        </div>
-      {/if}
-    </div>
+    <DefineForm
+      {editInitial}
+      {currentEnrichment}
+      {onenrichment}
+      oncommit={handleCommit}
+    />
   </div>
 </Modal>
 
@@ -791,414 +225,30 @@
     gap: 0.75rem;
   }
 
-  .search-row {
-    display: flex;
-    gap: 0.3rem;
-  }
-
-  .search {
-    flex: 1;
+  .view-toggle {
+    display: inline-flex;
+    align-self: flex-start;
     background: var(--c-bg-default);
     border: 1px solid var(--c-border);
     border-radius: 4px;
-    color: var(--c-text);
-    padding: 0.4rem 0.5rem;
-    font-size: 0.85rem;
-    box-sizing: border-box;
+    padding: 2px;
+    gap: 2px;
   }
 
-  .search:focus { outline: none; border-color: var(--c-accent); }
-
-  .use-btn {
-    background: var(--c-green);
+  .view-toggle-btn {
+    background: transparent;
     border: none;
-    border-radius: 4px;
-    color: white;
-    padding: 0.3rem 0.75rem;
-    font-size: 0.8rem;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
-
-  .use-btn:hover { background: var(--c-green-emphasis); }
-
-  .enrichment-row {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    padding: 0.25rem 0.4rem;
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-  }
-
-  .enr-label {
-    font-size: 0.7rem;
     color: var(--c-text-muted);
-    margin-right: 0.2rem;
-  }
-
-  .el-badge {
-    background: var(--c-bg-muted);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text-muted);
-    font-size: 0.7rem;
-    font-weight: 500;
-    padding: 0.15rem 0.35rem;
-    cursor: pointer;
-    line-height: 1;
-  }
-
-  .el-badge:hover { border-color: var(--c-accent); color: var(--c-accent); }
-
-  .el-badge.enriched {
-    border-color: var(--c-gold);
-    color: var(--c-gold);
-    background: var(--c-gold-tint-subtle);
-  }
-
-  .enr-dot {
-    display: inline-block;
-    width: 4px;
-    height: 4px;
-    background: var(--c-gold);
-    border-radius: 50%;
-    margin-left: 0.2rem;
-    vertical-align: middle;
-  }
-
-  .results-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    max-height: 250px;
-    overflow-y: auto;
-  }
-
-  .results-list li {
-    position: relative;
-    display: flex;
-    align-items: center;
-  }
-
-  .result-item {
-    width: 100%;
-    text-align: left;
-    background: none;
-    border: none;
-    color: var(--c-text);
-    padding: 0.3rem 0.5rem;
-    cursor: pointer;
-    display: flex;
-    flex-direction: column;
-    gap: 0.05rem;
-    font-size: 0.8rem;
-    border-radius: 4px;
-  }
-
-  .result-item:hover { background: var(--c-bg-hover); }
-
-  .mat-name {
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .badge-custom {
-    font-size: 0.6rem;
-    background: var(--c-bg-active);
-    color: var(--c-accent);
-    padding: 0.05rem 0.35rem;
-    border-radius: 3px;
-    font-weight: 400;
-    text-transform: uppercase;
-  }
-
-  .badge-el {
-    font-size: 0.6rem;
-    color: var(--c-text-subtle);
-    font-weight: 400;
-  }
-
-  .mat-meta {
-    font-size: 0.65rem;
-    color: var(--c-text-muted);
-    display: flex;
-    gap: 0.5rem;
-  }
-
-  .formula { color: var(--c-accent); }
-  .density { color: var(--c-green-text); }
-
-  .edit-btn, .delete-btn {
-    position: absolute;
-    background: none;
-    border: none;
-    color: var(--c-text-faint);
-    font-size: 0.85rem;
-    cursor: pointer;
-    padding: 0.1rem 0.3rem;
-    border-radius: 3px;
-    line-height: 1;
-  }
-
-  .edit-btn { right: 1.6rem; }
-  .delete-btn { right: 0.3rem; font-size: 1rem; }
-
-  .edit-btn:hover { color: var(--c-accent); background: var(--c-accent-tint-subtle); }
-  .delete-btn:hover { color: var(--c-red); background: var(--c-red-tint-subtle); }
-
-  .no-results {
-    color: var(--c-text-faint);
-    font-style: italic;
-    font-size: 0.8rem;
-    padding: 0.5rem;
-  }
-
-  .define-section {
-    border-top: 1px solid var(--c-border);
-    padding-top: 0.5rem;
-  }
-
-  .define-toggle {
-    background: none;
-    border: none;
-    color: var(--c-accent);
-    font-size: 0.8rem;
-    cursor: pointer;
-    padding: 0.2rem 0;
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-  }
-
-  .define-toggle:hover { color: var(--c-accent-hover); }
-  .toggle-icon { font-size: 0.7rem; }
-
-  .define-form {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    margin-top: 0.5rem;
-    padding: 0.5rem;
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-  }
-
-  .field-label {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    font-size: 0.75rem;
-    color: var(--c-text-muted);
-  }
-
-  .field-input {
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    color: var(--c-text);
-    padding: 0.3rem 0.5rem;
-    font-size: 0.8rem;
-  }
-
-  .field-input:focus { outline: none; border-color: var(--c-accent); }
-
-  .field-hint {
-    font-size: 0.6rem;
-    color: var(--c-text-subtle);
-    font-style: italic;
-  }
-
-  .hint {
-    font-size: 0.65rem;
-    color: var(--c-text-subtle);
-    margin: 0;
-    font-style: italic;
-  }
-
-  .preview {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0.4rem;
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    font-size: 0.75rem;
-  }
-
-  .preview-type {
-    color: var(--c-green-text);
-    font-size: 0.6rem;
-    text-transform: uppercase;
-    font-weight: 500;
-  }
-
-  .preview-formula {
-    color: var(--c-text-label);
-    font-weight: 500;
-    font-family: monospace;
-    font-size: 0.8rem;
-  }
-
-  .form-error {
-    color: var(--c-red);
-    font-size: 0.75rem;
-    margin: 0;
-  }
-
-  .form-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.4rem;
-  }
-
-  .use-formula-btn {
-    background: var(--c-bg-muted);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    color: var(--c-text-muted);
-    padding: 0.3rem 0.6rem;
-    font-size: 0.75rem;
-    cursor: pointer;
-  }
-
-  .use-formula-btn:hover:not(:disabled) { border-color: var(--c-accent); color: var(--c-text); }
-  .use-formula-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .save-btn {
-    background: var(--c-green);
-    border: none;
-    border-radius: 4px;
-    color: white;
-    padding: 0.35rem 0.75rem;
-    font-size: 0.8rem;
-    cursor: pointer;
-  }
-
-  .save-btn:hover:not(:disabled) { background: var(--c-green-emphasis); }
-  .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  /* Inspect panel */
-  .inspect-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    padding: 0.5rem 0.6rem;
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-  }
-
-  .inspect-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-
-  .inspect-title {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    min-width: 0;
-  }
-
-  .inspect-name {
-    font-weight: 600;
-    font-size: 0.9rem;
-    color: var(--c-text);
-  }
-
-  .inspect-badge {
-    font-size: 0.6rem;
-    text-transform: uppercase;
-    padding: 0.05rem 0.4rem;
-    border-radius: 3px;
-    font-weight: 500;
-    background: var(--c-bg-muted);
-    color: var(--c-text-muted);
-  }
-
-  .inspect-badge-catalog { color: var(--c-accent); background: var(--c-accent-tint-subtle); }
-  .inspect-badge-custom { color: var(--c-gold); background: var(--c-gold-tint-subtle); }
-  .inspect-badge-element { color: var(--c-green-text); background: var(--c-green-tint-subtle); }
-
-  .clone-btn {
-    background: var(--c-bg-muted);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    color: var(--c-text);
     padding: 0.25rem 0.6rem;
     font-size: 0.75rem;
     cursor: pointer;
-    flex-shrink: 0;
-  }
-
-  .clone-btn:hover { border-color: var(--c-accent); color: var(--c-accent); }
-
-  .inspect-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.6rem;
-    font-size: 0.7rem;
-    color: var(--c-text-muted);
-  }
-
-  .meta-item {
-    display: inline-flex;
-    gap: 0.25rem;
-    align-items: baseline;
-  }
-
-  .meta-label { color: var(--c-text-subtle); }
-  .meta-value { color: var(--c-text); font-weight: 500; }
-  .meta-source { color: var(--c-text-faint); font-style: italic; }
-  .mono { font-family: monospace; }
-
-  .inspect-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.72rem;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .inspect-table th,
-  .inspect-table td {
-    padding: 0.15rem 0.35rem;
-    border-bottom: 1px solid var(--c-bg-hover);
-    text-align: left;
-  }
-
-  .inspect-table th {
-    color: var(--c-text-muted);
-    font-weight: 500;
-    font-size: 0.65rem;
-  }
-
-  .inspect-table .num {
-    text-align: right;
-  }
-
-  .el-sym {
-    font-weight: 600;
-    color: var(--c-text);
-  }
-
-  .enr-btn {
-    background: none;
-    border: 1px solid var(--c-border);
     border-radius: 3px;
-    color: var(--c-text-muted);
-    font-size: 0.75rem;
-    padding: 0.05rem 0.3rem;
-    cursor: pointer;
-    line-height: 1;
   }
 
-  .enr-btn:hover { color: var(--c-accent); border-color: var(--c-accent); }
+  .view-toggle-btn:hover { color: var(--c-text); }
+
+  .view-toggle-btn.active {
+    background: var(--c-bg-subtle);
+    color: var(--c-accent);
+  }
 </style>

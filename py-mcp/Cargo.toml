@@ -1,0 +1,16 @@
+[package]
+name = "hyrr-mcp-py"
+version = "0.1.0"
+edition = "2021"
+description = "PyO3 wrapper around hyrr-core's MCP server for uvx distribution"
+license = "MIT"
+# Keep the nix-libiconv dev workaround out of published sdists.
+exclude = [".cargo/**", "python/hyrr_mcp/__pycache__/**"]
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+hyrr-core = { path = "../core", features = ["mcp"] }
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py311"] }

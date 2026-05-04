@@ -1,0 +1,10 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_materials","arguments":{}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_stopping_power","arguments":{"projectile":"p","material":"Cu","energies_mev":[5,10,20,50]}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_stack_energy_budget","arguments":{"projectile":"p","energy_mev":20,"current_ma":0.1,"layers":[{"material":"Cu","thickness_cm":0.05},{"material":"Al","thickness_cm":0.02}]}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"simulate","arguments":{"projectile":"p","energy_mev":18,"current_ma":0.1,"layers":[{"material":"Cu","thickness_cm":0.02}],"irradiation_time_s":3600,"cooling_time_s":3600}}}
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_decay_data","arguments":{"z":29,"a":64}}}
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"list_reaction_channels","arguments":{"projectile":"p","target_z":29,"target_a":63}}}
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"compare_simulations","arguments":{"config_a":{"projectile":"p","energy_mev":18,"current_ma":0.1,"layers":[{"material":"Cu","thickness_cm":0.02}],"irradiation_time_s":3600,"cooling_time_s":3600,"label":"18 MeV"},"config_b":{"projectile":"p","energy_mev":12,"current_ma":0.1,"layers":[{"material":"Cu","thickness_cm":0.02}],"irradiation_time_s":3600,"cooling_time_s":3600,"label":"12 MeV"}}}}
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_isotope_production_curve","arguments":{"projectile":"p","energy_mev":18,"current_ma":0.1,"layers":[{"material":"Cu","thickness_cm":0.02}],"irradiation_time_s":3600,"cooling_time_s":3600,"isotope":"Cu-64","vs":"time"}}}

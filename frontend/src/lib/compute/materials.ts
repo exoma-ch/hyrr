@@ -15,10 +15,27 @@ import type { DatabaseProtocol, Element } from "./types";
 
 export { parseFormula, formulaToMassFractions, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT };
 
-/** Known material definitions: density and mass fractions by element. */
+/** Catalog-entry role — drives category filtering + search ranking. */
+export type CatalogRole =
+  | "monitor"
+  | "target"
+  | "window"
+  | "structural"
+  | "compound"
+  | "gas";
+
+/**
+ * Known material definitions.
+ *
+ * `defaultEnrichment` is applied by `resolveMaterial` when no caller-provided
+ * `overrides` are given. Explicit overrides always take precedence, per-element.
+ */
 export interface CatalogEntry {
   density: number;
   massFractions: Record<string, number>;
+  defaultEnrichment?: Record<string, Record<number, number>>;
+  role?: CatalogRole;
+  notes?: string;
 }
 
 export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
@@ -28,8 +45,250 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
       Co: 0.42, Cr: 0.20, Ni: 0.13, Fe: 0.184,
       W: 0.028, Mo: 0.02, Mn: 0.016, C: 0.002,
     },
+    role: "structural",
+    notes:
+      "Cobalt-based alloy, common beam-window material. Co dust is an IARC" +
+      " 2A carcinogen — machining/grinding is controlled in many jurisdictions",
+  },
+
+  // ─── Monitor foils (natural composition) ───────────────────────────
+  natcu: {
+    density: 8.96,
+    massFractions: { Cu: 1.0 },
+    role: "monitor",
+    notes: "Natural Cu monitor foil; IAEA-recommended (p,X) monitor reactions",
+  },
+  natti: {
+    density: 4.51,
+    massFractions: { Ti: 1.0 },
+    role: "monitor",
+    notes: "Natural Ti monitor foil; natTi(p,X)48V common monitor",
+  },
+  natni: {
+    density: 8.91,
+    massFractions: { Ni: 1.0 },
+    role: "monitor",
+    notes: "Natural Ni monitor foil",
+  },
+
+  // ─── Monoisotopic / simple natural targets ─────────────────────────
+  y89: {
+    density: 4.47,
+    massFractions: { Y: 1.0 },
+    role: "target",
+    notes: "89Y (monoisotopic natural); 89Y(p,n)89Zr for immunoPET",
+  },
+  graphite: {
+    density: 1.80,
+    massFractions: { C: 1.0 },
+    role: "window",
+    notes: "Reactor-grade graphite (degrader stock). Density varies 1.6–2.26",
+  },
+  "be-window": {
+    density: 1.85,
+    massFractions: { Be: 1.0 },
+    role: "window",
+    notes: "Beryllium cyclotron window. Be metal is toxic — handle per local SOP",
+  },
+
+  // ─── Enriched-isotope targets ──────────────────────────────────────
+  // Naming convention: `{A}{Symbol}-{role}` avoids collision with the
+  // `Element-Mass` free-text form (e.g. "Zn-68") that resolveMaterial
+  // strips at line ~188.
+  "zn68-electrodeposit": {
+    density: 7.13,
+    massFractions: { Zn: 1.0 },
+    // Typical commercial 98% 68Zn remainder (Trace Sciences / Isoflex specs):
+    defaultEnrichment: { Zn: { 68: 0.982, 66: 0.01, 67: 0.004, 64: 0.003, 70: 0.001 } },
+    role: "target",
+    notes: "68Zn electrodeposit at 98% enrichment; 68Zn(p,n)68Ga",
+  },
+  "ni64-electrodeposit": {
+    density: 8.91,
+    massFractions: { Ni: 1.0 },
+    // Typical commercial 95% 64Ni remainder: 60Ni > 62Ni > 58Ni (per supplier specs).
+    defaultEnrichment: { Ni: { 64: 0.95, 60: 0.025, 62: 0.02, 58: 0.005 } },
+    role: "target",
+    notes: "64Ni electrodeposit at 95% enrichment; 64Ni(p,n)64Cu",
+  },
+  "mo100-pellet": {
+    // Sintered pressed-powder pellet typical bulk density 9.0–9.8 g/cm³
+    // (domain review: 70–85% of bulk Mo = 7.2–8.7 pre-sinter; 9.5+ sintered).
+    density: 9.5,
+    massFractions: { Mo: 1.0 },
+    defaultEnrichment: { Mo: { 100: 0.96, 98: 0.02, 97: 0.01, 96: 0.01 } },
+    role: "target",
+    notes:
+      "100Mo sintered pressed-powder pellet at 96% enrichment; 100Mo(p,2n)99mTc." +
+      " Irradiated pellets accumulate long-lived 93mNb contaminants",
+  },
+  "ca44-carbonate": {
+    // 44CaCO3 pressed pellet — the more common commercial delivery form
+    // (stable, non-hygroscopic). Ca metal targets are not used in practice
+    // (air-reactive, low m.p.).
+    // M(CaCO3) = 40.078 + 12.011 + 3*15.999 = 100.086
+    density: 2.80,
+    massFractions: { Ca: 0.40045, C: 0.12001, O: 0.47954 },
+    defaultEnrichment: { Ca: { 44: 0.97, 40: 0.025, 42: 0.003, 48: 0.002 } },
+    role: "target",
+    notes: "44CaCO3 pressed pellet at 97% enrichment on Ca; 44Ca(p,n)44Sc for PET",
+  },
+  "ca44-oxide": {
+    // 44CaO pressed pellet — higher Ca atomic density than the carbonate
+    // (~1.8× Ca per cm³), but hygroscopic and harder to store.
+    // M(CaO) = 40.078 + 15.999 = 56.077
+    density: 3.35,
+    massFractions: { Ca: 0.71469, O: 0.28531 },
+    defaultEnrichment: { Ca: { 44: 0.97, 40: 0.025, 42: 0.003, 48: 0.002 } },
+    role: "target",
+    notes:
+      "44CaO pressed pellet at 97% enrichment on Ca; higher Ca density than" +
+      " 44CaCO3 but hygroscopic (handle + store under inert atmosphere)",
+  },
+  "ra226-target": {
+    density: 5.50,
+    massFractions: { Ra: 1.0 },
+    defaultEnrichment: { Ra: { 226: 1.0 } },
+    role: "target",
+    notes:
+      "226Ra (bulk-metal density; practical form is RaCl2 or Ra(NO3)2 on a" +
+      " backing — override density for your actual form). α-emitter precursor;" +
+      " licensing + handling restrictions apply (high radiotoxicity)",
+  },
+  "th232-target": {
+    density: 11.72,
+    massFractions: { Th: 1.0 },
+    defaultEnrichment: { Th: { 232: 1.0 } },
+    role: "target",
+    notes:
+      "232Th target (monoisotopic natural); route to 225Ac, 99Mo, etc. — export" +
+      " controls apply",
+  },
+  "u238-target": {
+    density: 19.05,
+    massFractions: { U: 1.0 },
+    // Depleted U with trace 234U (commercial typical 5–10 ppm).
+    defaultEnrichment: { U: { 238: 0.99749, 235: 0.0025, 234: 0.00001 } },
+    role: "target",
+    notes:
+      "Depleted U target (~0.25% 235U, trace 234U); route to 99Mo via fission." +
+      " Export + licensing controls apply",
+  },
+  natu: {
+    density: 19.05,
+    massFractions: { U: 1.0 },
+    defaultEnrichment: { U: { 238: 0.992742, 235: 0.007204, 234: 0.000054 } },
+    role: "target",
+    notes: "Natural U (0.72% 235U). Licensing + export controls apply",
+  },
+
+  // ─── Compounds ─────────────────────────────────────────────────────
+  // Natural abundance; mass fractions derived from formula weight.
+  baco3: {
+    density: 4.29,
+    // M = 137.33 + 12.01 + 3*16.00 = 197.34
+    massFractions: { Ba: 0.69591, C: 0.06086, O: 0.24323 },
+    role: "compound",
+    notes: "Barium carbonate; target matrix for enriched-Ba production routes",
+  },
+  zno: {
+    density: 5.61,
+    // M = 65.38 + 16.00 = 81.38
+    massFractions: { Zn: 0.80340, O: 0.19660 },
+    role: "compound",
+    notes: "Zinc oxide; compact target form",
+  },
+  moo3: {
+    density: 4.69,
+    // M = 95.96 + 3*16.00 = 143.96
+    massFractions: { Mo: 0.66657, O: 0.33343 },
+    role: "compound",
+    notes: "Molybdenum trioxide; pressed-pellet matrix for 100Mo production",
+  },
+  "h2o-18-enriched": {
+    density: 1.11,
+    // M = 2*1.008 + 17.999 = 20.015 (enriched water)
+    massFractions: { H: 0.10072, O: 0.89928 },
+    defaultEnrichment: { O: { 18: 0.97, 16: 0.025, 17: 0.005 } },
+    role: "compound",
+    notes:
+      "Enriched H2[18O] water at 97% 18O; 18O(p,n)18F. Separate key from the" +
+      " legacy `H2O-18` compound entry, which stays unenriched",
+  },
+
+  // ─── Structural / windows ──────────────────────────────────────────
+  "nb-1zr": {
+    density: 8.57,
+    massFractions: { Nb: 0.99, Zr: 0.01 },
+    role: "structural",
+    notes: "Niobium–1% zirconium; high-temperature target backing",
+  },
+  ss316l: {
+    density: 7.99,
+    massFractions: {
+      Fe: 0.654, Cr: 0.17, Ni: 0.12, Mo: 0.025, Mn: 0.02,
+      Si: 0.01, C: 0.001,
+    },
+    role: "structural",
+    notes:
+      "Austenitic stainless steel, low-carbon grade (midpoint-of-spec" +
+      " composition)",
+  },
+  "inconel-625": {
+    density: 8.44,
+    // Midpoint-of-range per ASM (pitfall 2); Ni adjusted so sum == 1.000.
+    massFractions: {
+      Ni: 0.585, Cr: 0.22, Mo: 0.09, Fe: 0.05, Nb: 0.035,
+      Al: 0.004, Ti: 0.004, Mn: 0.005, Si: 0.005, C: 0.002,
+    },
+    role: "structural",
+    notes: "Ni-based high-temperature superalloy (midpoint-of-spec composition)",
+  },
+  "al-6061": {
+    density: 2.70,
+    massFractions: {
+      Al: 0.979, Mg: 0.010, Si: 0.006, Cu: 0.003, Cr: 0.002,
+    },
+    role: "structural",
+    notes: "Aluminium wrought alloy; common target-holder material",
+  },
+  kapton: {
+    density: 1.42,
+    // C22H10N2O5 polyimide: M = 22*12.011 + 10*1.008 + 2*14.007 + 5*15.999
+    //                        = 264.242 + 10.080 + 28.014 + 79.995 = 382.331
+    massFractions: {
+      C: 0.69113, H: 0.02637, N: 0.07328, O: 0.20922,
+    },
+    role: "window",
+    notes: "Polyimide film (DuPont Kapton); common thin-window material",
   },
 };
+
+/**
+ * Merge caller-provided overrides with a catalog entry's `defaultEnrichment`.
+ * Per-element: caller overrides win; otherwise fall back to the catalog default.
+ */
+function mergeEnrichmentWithDefaults(
+  defaults: Record<string, Record<number, number>> | undefined,
+  overrides: Record<string, Map<number, number>> | undefined,
+): Record<string, Map<number, number>> | undefined {
+  if (!defaults) return overrides;
+  const merged: Record<string, Map<number, number>> = {};
+  for (const [sym, abundances] of Object.entries(defaults)) {
+    const m = new Map<number, number>();
+    for (const [a, f] of Object.entries(abundances)) m.set(Number(a), f);
+    merged[sym] = m;
+  }
+  if (overrides) {
+    for (const [sym, m] of Object.entries(overrides)) {
+      // Empty override Map is treated as "not provided" — keeps the catalog
+      // default rather than silently wiping the element to zero isotopes.
+      if (m.size === 0) continue;
+      merged[sym] = m;
+    }
+  }
+  return merged;
+}
 
 /** Convert mass fractions to atom fractions. */
 export function massToAtomFractions(
@@ -165,7 +424,8 @@ export function resolveMaterial(
   const lowerIdent = identifier.toLowerCase();
   const catalogEntry = MATERIAL_CATALOG[lowerIdent];
   if (catalogEntry) {
-    const elements = resolveIsotopics(db, catalogEntry.massFractions, false, overrides);
+    const effective = mergeEnrichmentWithDefaults(catalogEntry.defaultEnrichment, overrides);
+    const elements = resolveIsotopics(db, catalogEntry.massFractions, false, effective);
     return { elements, density: catalogEntry.density, molecularWeight: 0 };
   }
 

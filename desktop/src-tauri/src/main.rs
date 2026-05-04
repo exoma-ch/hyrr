@@ -3,7 +3,6 @@
 
 #[allow(non_snake_case)]
 mod commands;
-mod mcp;
 
 use std::sync::Mutex;
 
@@ -12,8 +11,9 @@ fn main() {
 
     if args.iter().any(|a| a == "--mcp") {
         // MCP mode: stdio JSON-RPC server, no GUI
-        let data_dir = resolve_data_dir();
-        mcp::transport::run_mcp_server(&data_dir);
+        let data_dir = hyrr_core::data_dir::resolve();
+        let library = resolve_mcp_library(&args);
+        hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library);
         return;
     }
 
@@ -31,52 +31,20 @@ fn main() {
         .expect("error while running tauri application");
 }
 
-/// Resolve nucl-parquet data directory.
-///
-/// Priority:
-/// 1. `--data-dir <path>` CLI argument
-/// 2. `HYRR_DATA` environment variable
-/// 3. `../nucl-parquet` sibling directory (dev layout)
-/// 4. Bundled resources (installed app)
-/// 5. `~/.hyrr/nucl-parquet` fallback
-fn resolve_data_dir() -> String {
-    // Check CLI args
-    let args: Vec<String> = std::env::args().collect();
-    for i in 0..args.len() - 1 {
-        if args[i] == "--data-dir" {
-            return args[i + 1].clone();
+/// Resolve the nuclear data library: `--library <id>` arg → `HYRR_LIBRARY`
+/// env → `tendl-2024` (DEFAULT_LIBRARY).
+fn resolve_mcp_library(args: &[String]) -> String {
+    if args.len() >= 2 {
+        for i in 0..args.len() - 1 {
+            if args[i] == "--library" {
+                return args[i + 1].clone();
+            }
         }
     }
-
-    // Check env var
-    if let Ok(dir) = std::env::var("HYRR_DATA") {
-        return dir;
-    }
-
-    // Dev layout: sibling directory
-    let exe_path = std::env::current_exe().unwrap_or_default();
-    let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
-
-    // Try relative to project root (dev)
-    for candidate in &[
-        exe_dir.join("../../../nucl-parquet"),
-        exe_dir.join("../../nucl-parquet"),
-        std::path::PathBuf::from("nucl-parquet"),
-        std::path::PathBuf::from("../nucl-parquet"),
-    ] {
-        if candidate.join("meta").exists() {
-            return candidate.to_string_lossy().to_string();
+    if let Ok(id) = std::env::var("HYRR_LIBRARY") {
+        if !id.is_empty() {
+            return id;
         }
     }
-
-    // Home directory fallback
-    if let Ok(home) = std::env::var("HOME") {
-        let path = format!("{}/.hyrr/nucl-parquet", home);
-        if std::path::Path::new(&path).join("meta").exists() {
-            return path;
-        }
-    }
-
-    // Last resort
-    "nucl-parquet".to_string()
+    hyrr_core::mcp::transport::DEFAULT_LIBRARY.to_string()
 }

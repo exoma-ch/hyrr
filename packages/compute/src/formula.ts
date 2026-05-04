@@ -95,6 +95,147 @@ export function formulaToMassFractions(
   );
 }
 
+/* ────────── Isotope-prefix parser ──────────
+ *
+ * Accepts notation common in cyclotron-target literature:
+ *   - Unicode superscript prefix:  ³He, ¹³CO₂, H₂¹⁸O
+ *   - ASCII numeric prefix:        13C, 18O   (digits before symbol)
+ *   - "Symbol-A" suffix:           He-3, Mo-100
+ *   - Deuterium / tritium:         D → H@2, T → H@3
+ *   - Unicode subscript counts:    H₂O is parsed identically to H2O
+ *
+ * Returns the natural-element formula (parseable by parseFormula) plus an
+ * enrichment vector per element, normalized to sum to 1 over the atoms of
+ * that element actually present in the formula. Mixed-isotope formulae
+ * (e.g. ¹⁸O¹⁶O) yield fractional vectors (0.5/0.5).
+ *
+ * Refs: #92 (material-form unified redesign — isotope-prefix parsing)
+ */
+
+const SUPER_DIGITS: Record<string, string> = {
+  "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+  "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
+};
+const SUB_DIGITS: Record<string, string> = {
+  "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4",
+  "₅": "5", "₆": "6", "₇": "7", "₈": "8", "₉": "9",
+};
+
+function isAsciiDigit(c: string): boolean { return c >= "0" && c <= "9"; }
+function isSuperDigit(c: string): boolean { return c in SUPER_DIGITS; }
+function isSubDigit(c: string): boolean { return c in SUB_DIGITS; }
+function superToAscii(c: string): string { return SUPER_DIGITS[c] ?? c; }
+function subToAscii(c: string): string { return SUB_DIGITS[c] ?? c; }
+function isUpper(c: string): boolean { return c >= "A" && c <= "Z"; }
+function isLower(c: string): boolean { return c >= "a" && c <= "z"; }
+
+export interface IsotopicFormula {
+  /** ASCII-only natural-element formula, parseable by parseFormula. */
+  formula: string;
+  /** Per-element fractional enrichment overlay; empty when no isotope hints. */
+  enrichment: Record<string, Record<number, number>>;
+}
+
+/**
+ * Parse a chemical formula that may carry isotope-prefix notation. Returns
+ * null if the input contains a dangling number, an unknown symbol, or
+ * mixes an isotope prefix with deuterium/tritium shorthand on the same
+ * element ambiguously (e.g. "³D" — undefined).
+ */
+export function parseIsotopicFormula(input: string): IsotopicFormula | null {
+  // Pre-pass: rewrite "Sym-A" → "ASym" so the main pass picks it up as a
+  // numeric prefix. Only digits, no minus signs, are valid as prefixes.
+  const norm = input.replace(/([A-Z][a-z]?)-(\d+)/g, "$2$1");
+
+  let formula = "";
+  // Per-element atom counts (totals across the formula, including the
+  // isotope-prefixed and natural ones, used to normalise enrichment).
+  const totals: Record<string, number> = {};
+  // Per-element accumulated isotope contributions (atom-count by mass A).
+  const isoCounts: Record<string, Record<number, number>> = {};
+
+  let i = 0;
+  while (i < norm.length) {
+    // Skip whitespace.
+    while (i < norm.length && (norm[i] === " " || norm[i] === "\t")) i++;
+    if (i >= norm.length) break;
+
+    // Optional isotope prefix.
+    let isoMass = "";
+    while (i < norm.length && (isAsciiDigit(norm[i]) || isSuperDigit(norm[i]))) {
+      isoMass += superToAscii(norm[i]);
+      i++;
+    }
+
+    if (i >= norm.length) {
+      if (isoMass !== "") return null; // dangling number with no symbol
+      break;
+    }
+
+    if (!isUpper(norm[i])) {
+      if (isoMass !== "") return null;
+      i++; // skip stray punctuation
+      continue;
+    }
+
+    // Symbol [A-Z][a-z]?
+    let sym = norm[i++];
+    if (i < norm.length && isLower(norm[i])) sym += norm[i++];
+
+    // Deuterium / tritium shorthand. If the user already supplied a numeric
+    // prefix on D/T, that's ambiguous (³D? makes no sense), reject.
+    let mappedSym = sym;
+    let mappedIso: number | null = null;
+    if (sym === "D") {
+      if (isoMass !== "") return null;
+      mappedSym = "H";
+      mappedIso = 2;
+    } else if (sym === "T") {
+      if (isoMass !== "") return null;
+      mappedSym = "H";
+      mappedIso = 3;
+    } else if (isoMass !== "") {
+      mappedIso = parseInt(isoMass, 10);
+      if (!Number.isFinite(mappedIso) || mappedIso <= 0) return null;
+    }
+
+    // Subscript / ASCII count suffix.
+    let countStr = "";
+    while (i < norm.length && (isAsciiDigit(norm[i]) || isSubDigit(norm[i]))) {
+      countStr += subToAscii(norm[i]);
+      i++;
+    }
+    const count = countStr === "" ? 1 : parseInt(countStr, 10);
+    if (!Number.isFinite(count) || count <= 0) return null;
+
+    formula += mappedSym + (count === 1 ? "" : String(count));
+    totals[mappedSym] = (totals[mappedSym] ?? 0) + count;
+    if (mappedIso !== null) {
+      isoCounts[mappedSym] ??= {};
+      isoCounts[mappedSym][mappedIso] = (isoCounts[mappedSym][mappedIso] ?? 0) + count;
+    }
+  }
+
+  if (formula === "") return null;
+
+  // Validate every produced symbol is a known element.
+  for (const sym of Object.keys(totals)) {
+    if (!(sym in SYMBOL_TO_Z)) return null;
+  }
+
+  // Normalize isotope counts to fractions of the element's total atoms.
+  const enrichment: Record<string, Record<number, number>> = {};
+  for (const [sym, byMass] of Object.entries(isoCounts)) {
+    const total = totals[sym] ?? 0;
+    if (total === 0) continue;
+    const frac: Record<number, number> = {};
+    for (const [m, c] of Object.entries(byMass)) frac[Number(m)] = c / total;
+    enrichment[sym] = frac;
+  }
+
+  return { formula, enrichment };
+}
+
 /** Known alloy element compositions for XS loading. */
 const ALLOY_ELEMENTS: Record<string, string[]> = {
   havar: ["Co", "Cr", "Ni", "Fe", "W", "Mo", "Mn", "C"],

@@ -67,12 +67,60 @@ const SERVER_NAME: &str = "hyrr";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
-/// Run the MCP stdio server loop.
+/// Default nuclear data library when none is specified.
+pub const DEFAULT_LIBRARY: &str = "tendl-2024";
+
+/// Run the MCP stdio server loop with the default library (`tendl-2024`).
+///
+/// Convenience wrapper around [`run_mcp_server_with_library`].
 pub fn run_mcp_server(data_dir: &str) {
-    let db = match hyrr_core::db::ParquetDataStore::new(data_dir, "tendl-2024") {
+    run_mcp_server_with_library(data_dir, DEFAULT_LIBRARY);
+}
+
+/// Run the MCP stdio server loop pinned to `library`.
+///
+/// `library` is the data-library identifier (e.g. `"tendl-2024"`,
+/// `"endfb-8.1"`); it must correspond to a `<data_dir>/<library>/` tree.
+/// The server's `library_used` echo footer reflects this value, and every
+/// tool's data fetches happen against this library for the lifetime of
+/// the process.
+pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
+    // Pre-flight: verify the data directory actually contains a nucl-parquet
+    // tree. ParquetDataStore::new only loads the eager metadata files; many
+    // tools fault later when they reach for cross-sections / abundances /
+    // decay data, which manifests as a mid-conversation panic from inside
+    // an MCP call. Catch the missing-data case here with one actionable
+    // line so the user can fix `HYRR_DATA` before Claude Code loses the
+    // server connection.
+    let meta_dir = std::path::Path::new(data_dir).join("meta");
+    if !meta_dir.is_dir() {
+        eprintln!(
+            "hyrr-mcp: no nucl-parquet data found at {data_dir}\n\
+             \n\
+             Expected `{}` to exist. Set HYRR_DATA or pass --data-dir to point at a\n\
+             nucl-parquet checkout, or clone\n\
+             https://github.com/exoma-ch/nucl-parquet into ~/.hyrr/nucl-parquet.\n",
+            meta_dir.display(),
+        );
+        std::process::exit(2);
+    }
+
+    let lib_dir = std::path::Path::new(data_dir).join(library);
+    if !lib_dir.is_dir() {
+        eprintln!(
+            "hyrr-mcp: nuclear data library `{library}` not found in {data_dir}\n\
+             \n\
+             Expected `{}` to exist. Pick a different library with HYRR_LIBRARY\n\
+             or --library, or run `nucl-parquet download {library}` to fetch it.\n",
+            lib_dir.display(),
+        );
+        std::process::exit(2);
+    }
+
+    let db = match crate::db::ParquetDataStore::new(data_dir, library) {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("Failed to load nuclear data from {}: {}", data_dir, e);
+            eprintln!("hyrr-mcp: failed to load nuclear data from {data_dir} (library {library}): {e}");
             std::process::exit(1);
         }
     };
@@ -109,7 +157,7 @@ pub fn run_mcp_server(data_dir: &str) {
 }
 
 fn handle_request(
-    db: &hyrr_core::db::ParquetDataStore,
+    db: &crate::db::ParquetDataStore,
     request: JsonRpcRequest,
 ) -> JsonRpcResponse {
     let id = request.id.clone();
