@@ -39,11 +39,6 @@ pub const DATA_VERSION: &str = "0.9.0";
 /// GitHub Releases base URL for nucl-parquet data tarballs.
 const RELEASE_BASE: &str = "https://github.com/exoma-ch/nucl-parquet/releases/download";
 
-/// Subdirectories that are required by *every* simulation regardless of the
-/// chosen library. Bundled in the Tauri installer; `ensure_meta_stopping`
-/// fetches them only when not already present (e.g. the Python CLI path).
-pub const ALWAYS_NEEDED: &[&str] = &["meta", "stopping"];
-
 /// Errors surfaced by the data-fetch path.
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
@@ -122,15 +117,23 @@ pub fn fetch_full_tarball_to(out: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Extract a `.tar.zst` archive into `dest`, keeping only entries whose
-/// top-level path component is in `keep` (or all entries if `keep` is empty).
+/// Extract a `.tar.zst` archive into `dest`. If `prefixes` is non-empty,
+/// keeps only entries whose path *starts with* one of the listed prefixes
+/// (the prefix is matched as a literal string against the entry path).
+/// Pass `&[]` to extract everything.
 ///
-/// Filters macOS `._*` resource-fork files which sometimes leak into archives
-/// produced on Macs.
+/// Filters macOS `._*` resource-fork files which sometimes leak into
+/// archives produced on Macs.
+///
+/// Path semantics: prefixes match the leading characters of `entry.path()`.
+/// E.g. `"data/tendl-2025/"` matches `data/tendl-2025/xs/p_Cu.parquet` but
+/// not `data/tendl-2024/`. The trailing slash matters — without it,
+/// `"data/tendl-2"` would also match `data/tendl-2024/`. Callers should
+/// always include the slash for directory-scoped extracts.
 pub fn extract_tarball(
     archive: &Path,
     dest: &Path,
-    keep: &[&str],
+    prefixes: &[&str],
 ) -> Result<()> {
     let file = fs::File::open(archive)?;
     let decoder = zstd::stream::Decoder::new(file)
@@ -158,9 +161,19 @@ pub fn extract_tarball(
             continue;
         }
 
-        if !keep.is_empty() {
-            let top = path.components().next().and_then(|c| c.as_os_str().to_str());
-            if !top.map(|t| keep.contains(&t)).unwrap_or(false) {
+        if !prefixes.is_empty() {
+            let path_str = path.to_string_lossy();
+            // A prefix without a trailing slash matches a file (e.g.
+            // "data/catalog.json"); with a trailing slash, only entries
+            // strictly under that directory.
+            let matches = prefixes.iter().any(|p| {
+                if p.ends_with('/') {
+                    path_str.starts_with(p)
+                } else {
+                    path_str == *p || path_str.starts_with(&format!("{p}/"))
+                }
+            });
+            if !matches {
                 continue;
             }
         }
@@ -172,23 +185,22 @@ pub fn extract_tarball(
     Ok(())
 }
 
-/// Atomically install a downloaded tarball into the versioned cache dir.
+/// Atomically install (a subset of) a downloaded tarball into the
+/// versioned cache dir.
 ///
 /// 1. Take the cache lock.
-/// 2. Extract into `<cache_root>/v{V}.partial-{pid}/`.
-/// 3. `fs::rename` to `<cache_root>/v{V}/`.
-/// 4. Write the `.complete` sentinel.
+/// 2. Extract matching entries into `<cache_root>/v{V}.partial-{pid}/`.
+/// 3. Promote: if cache is empty, atomic `fs::rename`. If cache already
+///    exists (merging into a populated cache), drop the sentinel first,
+///    merge entries, then re-write the sentinel last. The window during
+///    which sentinel is missing is the only window during which a
+///    concurrent reader sees the cache as incomplete — never as
+///    "complete-but-half-merged".
 ///
-/// `keep` filters which top-level directories from the archive are extracted;
-/// pass `&[]` to extract everything.
-fn install_tarball_atomic(archive: &Path, keep: &[&str]) -> Result<()> {
+/// `prefixes`: same semantics as `extract_tarball` — empty extracts
+/// everything, a list of strings filters by `starts_with`.
+fn install_tarball_atomic(archive: &Path, prefixes: &[&str]) -> Result<()> {
     let _lock = acquire_lock()?;
-
-    // Re-check sentinel under the lock — another caller may have raced us
-    // and finished while we were blocked.
-    if is_cache_complete() && keep.is_empty() {
-        return Ok(());
-    }
 
     let cache = cache_dir()?;
     let root = cache_root()?;
@@ -201,30 +213,29 @@ fn install_tarball_atomic(archive: &Path, keep: &[&str]) -> Result<()> {
         fs::remove_dir_all(&partial)?;
     }
 
-    // The tarball's contents live under a `data/` prefix in the archive.
-    // We want them under `<cache_dir>/data/...` to match the existing
-    // resolver expectation, so extract into the partial dir as-is.
-    extract_tarball(archive, &partial, keep)?;
+    extract_tarball(archive, &partial, prefixes)?;
 
     // If `cache` already exists but is incomplete, blow it away — its
     // contents are by definition stale (the sentinel would be present
-    // otherwise). Selective merge would be a P2 optimisation.
+    // otherwise).
     if cache.exists() && !is_cache_complete() {
         fs::remove_dir_all(&cache)?;
     }
 
-    // For library-only fetches we may have an existing complete cache
-    // we want to merge into, not replace. Detect by `keep` being non-empty.
-    if !keep.is_empty() && cache.exists() {
-        // Move each entry under partial into cache, overwriting.
+    if cache.exists() {
+        // Merge into an already-populated cache. Drop the sentinel BEFORE
+        // touching cache contents so a mid-merge crash leaves the cache
+        // visibly incomplete rather than "complete but corrupt".
+        let sentinel = sentinel_path()?;
+        let _ = fs::remove_file(&sentinel);
         merge_dir_into(&partial, &cache)?;
         fs::remove_dir_all(&partial)?;
     } else {
         fs::rename(&partial, &cache)?;
     }
 
-    // Write sentinel last — its existence is the contract for "this cache
-    // is fully usable".
+    // Write sentinel last — its existence is the contract for
+    // "this cache is fully usable".
     fs::write(sentinel_path()?, DATA_VERSION)?;
     Ok(())
 }
@@ -241,8 +252,10 @@ fn merge_dir_into(src: &Path, dst: &Path) -> Result<()> {
         if entry.file_type()?.is_dir() {
             merge_dir_into(&from, &to)?;
         } else {
-            // `rename` is atomic across the same filesystem.
-            // Fall back to copy+delete if rename fails (e.g. crossing FS).
+            // Overwrite an existing file by removing it first — `rename`
+            // on most platforms requires the destination not exist (or
+            // be empty). Cross-FS: fall back to copy+delete.
+            let _ = fs::remove_file(&to);
             if fs::rename(&from, &to).is_err() {
                 fs::copy(&from, &to)?;
                 fs::remove_file(&from)?;
@@ -252,9 +265,25 @@ fn merge_dir_into(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Ensure the `meta/` and `stopping/` directories are present in the cache.
+/// Path prefixes that always need to be present for any simulation.
+/// `meta/` and `stopping/` are required by every library; the catalog
+/// and supplier JSONs are read by frontend code and need to live in
+/// the same data dir.
+const MANDATORY_PREFIXES: &[&str] = &[
+    "data/meta/",
+    "data/stopping/",
+    "data/catalog.json",
+    "data/suppliers.json",
+];
+
+/// Ensure the `meta/` and `stopping/` directories (plus catalog/suppliers
+/// JSON) are present in the cache.
 ///
-/// Idempotent: returns immediately if the sentinel already exists.
+/// Idempotent: returns immediately if the sentinel already exists. If
+/// the cache is incomplete, fetches the full release tarball and
+/// extracts only the mandatory prefixes — disk write is bounded to
+/// ~54 MB even though the download itself is the full ~400 MB until
+/// upstream ships per-library tarballs.
 pub fn ensure_meta_stopping() -> Result<()> {
     if is_cache_complete() {
         return Ok(());
@@ -265,17 +294,22 @@ pub fn ensure_meta_stopping() -> Result<()> {
     }
     let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
     fetch_full_tarball_to(&tmp)?;
-    install_tarball_atomic(&tmp, &["data"])?;
+    install_tarball_atomic(&tmp, MANDATORY_PREFIXES)?;
     let _ = fs::remove_file(&tmp);
     Ok(())
 }
 
-/// Ensure the given library's `xs/` directory is present in the cache.
+/// Ensure the given library's data is present in the cache.
 ///
-/// Currently fetches the full tarball and extracts only the `data/<library>/`
-/// subtree (plus `data/meta`/`data/stopping` if missing). When upstream ships
-/// per-library tarballs, this is the function whose URL changes — callers
-/// shouldn't notice.
+/// On a cold cache fetches the full release tarball but extracts only the
+/// requested library's subtree plus the mandatory `meta/`/`stopping/` —
+/// disk write bounded to ~50–110 MB rather than the full 400 MB. When
+/// upstream ships per-library tarballs, only the URL changes here.
+///
+/// On a warm cache (sentinel present) where the library is already
+/// extracted, returns immediately. If the sentinel is present but the
+/// library subtree is absent (the bundled-resources-on-installer case),
+/// fetches and merges only that library into the cache.
 pub fn ensure_library(library: &str) -> Result<()> {
     if is_cache_complete() && cache_dir()?.join("data").join(library).exists() {
         return Ok(());
@@ -286,8 +320,46 @@ pub fn ensure_library(library: &str) -> Result<()> {
     }
     let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
     fetch_full_tarball_to(&tmp)?;
-    install_tarball_atomic(&tmp, &["data"])?;
+    let lib_prefix = format!("data/{library}/");
+    let mut prefixes: Vec<&str> = MANDATORY_PREFIXES.to_vec();
+    prefixes.push(&lib_prefix);
+    install_tarball_atomic(&tmp, &prefixes)?;
     let _ = fs::remove_file(&tmp);
+    Ok(())
+}
+
+/// Ensure *every* library is present in the cache. This is the path the
+/// `hyrr fetch-data --all` flag wires into — extracts the whole tarball,
+/// roughly 400 MB on disk.
+///
+/// Idempotent: returns immediately if the sentinel is present AND every
+/// known library directory exists. (We can't enumerate libraries without
+/// reading the catalog, so we trust the sentinel + a no-op merge: the
+/// re-extraction overwrites identical bytes which is harmless.)
+pub fn ensure_all() -> Result<()> {
+    let _lock = acquire_lock()?;
+    let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
+    fetch_full_tarball_to(&tmp)?;
+    install_tarball_atomic(&tmp, &[])?;
+    let _ = fs::remove_file(&tmp);
+    Ok(())
+}
+
+/// Mark the cache as complete *without* fetching anything. Used by the
+/// Tauri startup hook after copying bundled `meta/`+`stopping/` resources
+/// from the installer into the cache. The downstream `ensure_library`
+/// path is then responsible for fetching per-library data on demand.
+///
+/// Caller must hold no other lock (this acquires the cache lock itself).
+pub fn mark_cache_seeded() -> Result<()> {
+    let _lock = acquire_lock()?;
+    let cache = cache_dir()?;
+    if !cache.join("data/meta").is_dir() || !cache.join("data/stopping").is_dir() {
+        return Err(FetchError::Io(io::Error::other(
+            "mark_cache_seeded: data/meta or data/stopping not present",
+        )));
+    }
+    fs::write(sentinel_path()?, DATA_VERSION)?;
     Ok(())
 }
 

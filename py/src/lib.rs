@@ -268,7 +268,7 @@ fn py_fetch_data(
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
     }
     if all_libs {
-        return data_fetch::ensure_meta_stopping()
+        return data_fetch::ensure_all()
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
     }
     if let Some(name) = library {

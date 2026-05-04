@@ -96,11 +96,16 @@ fn seed_cache_from_resources(app: &tauri::App) {
             }
         }
     }
-    // Sentinel: meta+stopping alone don't make a "complete" cache by the
-    // contract — a library is still needed. We do NOT write the .complete
-    // sentinel here; the lazy-fetch of a library is what eventually writes
-    // it. Bundling just shaves the 27+27=54 MB blocking download off the
-    // first sim.
+    // Mark the cache as complete so the resolver picks it up on the very
+    // first launch — without this, the bundled meta+stopping copy would be
+    // wasted: `is_cache_complete()` would still return false, and the
+    // splash-screen `data_ready` check would fall through to a network
+    // fetch even though the bytes are already on disk. The chosen library's
+    // xs/ data is still missing on first launch and is fetched lazily by
+    // `commands::ensure_data` when the user runs their first simulation.
+    if let Err(e) = hyrr_core::data_fetch::mark_cache_seeded() {
+        eprintln!("seed_cache: mark_cache_seeded: {e}");
+    }
 }
 
 fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
