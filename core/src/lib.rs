@@ -8,6 +8,8 @@ pub mod chains;
 pub mod compute;
 pub mod constants;
 pub mod data_dir;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod data_fetch;
 pub mod db;
 pub mod formula;
 pub mod interpolation;
