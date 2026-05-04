@@ -177,17 +177,71 @@ fn layer_composition(layer: &Layer) -> Vec<(u32, f64)> {
 // ---------------------------------------------------------------------------
 
 /// Initialize the Parquet data store. Must be called before compute commands.
+///
+/// If `data_dir` is empty, falls back to the same resolver used by the
+/// `--mcp` mode (`hyrr_core::data_dir::resolve()`), which prefers a managed
+/// cache populated by [`ensure_data`]. If the cache is incomplete the
+/// caller should invoke [`ensure_data`] first and surface progress to the
+/// user, otherwise this call returns the underlying ParquetDataStore error
+/// (which the frontend currently swallows into a silent WASM fallback —
+/// known issue #52).
 #[tauri::command]
 pub fn init_data_store(
     state: State<'_, DataStoreState>,
     data_dir: String,
     library: String,
 ) -> Result<(), String> {
-    let store =
-        ParquetDataStore::new(&data_dir, &library).map_err(|e| format!("Failed to init DB: {e}"))?;
+    let resolved = if data_dir.is_empty() {
+        hyrr_core::data_dir::resolve()
+    } else {
+        data_dir
+    };
+    let store = ParquetDataStore::new(&resolved, &library)
+        .map_err(|e| format!("Failed to init DB at {resolved}: {e}"))?;
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
     *guard = Some(store);
     Ok(())
+}
+
+/// Ensure the managed nucl-parquet cache contains the given `library`,
+/// downloading from GitHub Releases if necessary. Idempotent, blocking,
+/// and safe to call from multiple threads (see `data_fetch` hardening).
+///
+/// Returns the resolved data directory the caller should hand to
+/// [`init_data_store`]. Frontend callers should display a "Initializing
+/// nuclear data…" splash while this runs because a cold cache pulls
+/// ~50 MB at minimum.
+///
+/// Pass an empty `library` (or a known-good library name) to ensure only
+/// `meta/`+`stopping/` are present (e.g. for a depth preview that doesn't
+/// need cross-sections).
+#[tauri::command]
+pub fn ensure_data(library: String) -> Result<String, String> {
+    if library.is_empty() {
+        hyrr_core::data_fetch::ensure_meta_stopping()
+            .map_err(|e| format!("ensure_meta_stopping: {e}"))?;
+    } else {
+        hyrr_core::data_fetch::ensure_library(&library)
+            .map_err(|e| format!("ensure_library({library}): {e}"))?;
+    }
+    let cache = hyrr_core::data_fetch::cache_dir()
+        .map_err(|e| format!("cache_dir: {e}"))?;
+    Ok(cache.join("data").to_string_lossy().to_string())
+}
+
+/// Quick check from the frontend: does the cache already have everything we
+/// need to skip the splash entirely? Cheap (just file-existence checks).
+#[tauri::command]
+pub fn data_ready(library: String) -> bool {
+    if !hyrr_core::data_fetch::is_cache_complete() {
+        return false;
+    }
+    if library.is_empty() {
+        return true;
+    }
+    hyrr_core::data_fetch::cache_dir()
+        .map(|c| c.join("data").join(&library).is_dir())
+        .unwrap_or(false)
 }
 
 /// Run a full HYRR simulation. Returns SimulationResult JSON.
