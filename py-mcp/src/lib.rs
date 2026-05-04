@@ -24,7 +24,7 @@ fn resolve_data_dir() -> String {
     hyrr_core::data_dir::resolve()
 }
 
-/// Default nuclear data library identifier (e.g. "tendl-2024").
+/// Default nuclear data library identifier (e.g. "tendl-2025").
 #[pyfunction]
 fn default_library() -> &'static str {
     hyrr_core::mcp::transport::DEFAULT_LIBRARY

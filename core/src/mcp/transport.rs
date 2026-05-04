@@ -68,9 +68,9 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Default nuclear data library when none is specified.
-pub const DEFAULT_LIBRARY: &str = "tendl-2024";
+pub const DEFAULT_LIBRARY: &str = "tendl-2025";
 
-/// Run the MCP stdio server loop with the default library (`tendl-2024`).
+/// Run the MCP stdio server loop with the default library (`tendl-2025`).
 ///
 /// Convenience wrapper around [`run_mcp_server_with_library`].
 pub fn run_mcp_server(data_dir: &str) {
@@ -79,7 +79,7 @@ pub fn run_mcp_server(data_dir: &str) {
 
 /// Run the MCP stdio server loop pinned to `library`.
 ///
-/// `library` is the data-library identifier (e.g. `"tendl-2024"`,
+/// `library` is the data-library identifier (e.g. `"tendl-2025"`,
 /// `"endfb-8.1"`); it must correspond to a `<data_dir>/<library>/` tree.
 /// The server's `library_used` echo footer reflects this value, and every
 /// tool's data fetches happen against this library for the lifetime of

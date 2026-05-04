@@ -48,4 +48,4 @@ To download data manually:
 hyrr download-data
 ```
 
-The default library is `tendl-2024`. Override with `--library` or `HYRR_LIBRARY` env var.
+The default library is `tendl-2025`. Override with `--library` or `HYRR_LIBRARY` env var.
