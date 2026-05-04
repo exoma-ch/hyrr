@@ -34,6 +34,11 @@
   import { saveRun } from "./lib/history-db";
   import { restoreSessions, syncActiveTab, getActiveTabId } from "./lib/stores/sessions.svelte";
   import { setCustomDensityLookup, setCustomCompositionLookup } from "./lib/compute/materials";
+  import {
+    setCustomDensityLookup as setPkgCustomDensityLookup,
+    setCustomCompositionLookup as setPkgCustomCompositionLookup,
+  } from "@hyrr/compute";
+  import { setCustomMaterialExpander } from "./lib/compute/backend";
   import { getCustomMaterials, loadCustomMaterials } from "./lib/stores/custom-materials.svelte";
 
   // New components
@@ -135,22 +140,33 @@
       restoreSerializableConfig(urlConfig);
     }
 
-    // Load custom materials and register density lookup. The 0.x material
-    // schema break (#92) clears any incompatible legacy entries by simply
-    // not migrating them; surface a one-time banner so users notice their
+    // Load custom materials and register density+composition lookups on
+    // both resolvers — `./lib/compute/materials` is the older local one
+    // and `@hyrr/compute` is the shared package that components use.
+    // The 0.x material schema break (#92) drops any legacy entries that
+    // don't map cleanly; surface a one-time banner so users notice their
     // saved customs may be gone after this deploy.
     await loadCustomMaterials();
     try {
       const seen = localStorage.getItem("hyrr.notice.materialSchemaBreak");
       if (!seen) showSchemaBreakBanner = true;
     } catch { /* no-op */ }
-    setCustomDensityLookup((identifier) => {
+    const densityFn = (identifier: string): number | null => {
       const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
       return cm ? cm.density : null;
-    });
-    setCustomCompositionLookup((identifier) => {
+    };
+    const compositionFn = (identifier: string): Record<string, number> | null => {
       const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
       return cm?.massFractions ?? null;
+    };
+    setCustomDensityLookup(densityFn);
+    setCustomCompositionLookup(compositionFn);
+    setPkgCustomDensityLookup(densityFn);
+    setPkgCustomCompositionLookup(compositionFn);
+    // Rust/WASM engine doesn't know custom materials — expand to formula.
+    setCustomMaterialExpander((name) => {
+      const cm = getCustomMaterials().find((m) => m.name === name);
+      return cm ? cm.formula : null;
     });
     // #96: when encoding share URLs, embed the layer's full composition
     // inline so the receiver can resolve density + per-element fractions

@@ -6,6 +6,8 @@
   import { nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes } from "../stores/selection.svelte";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
+  import type { CsvTrace } from "../plotting/csv-export";
+  import SaveMenu from "./SaveMenu.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -21,6 +23,8 @@
 
   let legendVisibility = new Map<string, boolean | "legendonly">();
   let legendListenersAttached = false;
+
+  let lastExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
 
   onMount(async () => {
     Plotly = await import("plotly.js-dist-min");
@@ -286,9 +290,15 @@
       margin: { t: 40, r: 20, b: 50, l: 80 },
     });
 
+    lastExport = {
+      xLabel: "Depth (mm)",
+      yLabel: "Production rate (atoms/s/cm)",
+      traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+    };
     Plotly.react(plotDiv, traces, layout, PLOTLY_CONFIG);
     attachLegendListeners();
   }
+
 </script>
 
 {#if hasData}
@@ -298,6 +308,14 @@
       <button class="ctrl-btn" class:active={logY} onclick={() => { logY = !logY; }}>
         log Y
       </button>
+      <SaveMenu
+        filenamePrefix="hyrr-depth-production"
+        xLabel={lastExport?.xLabel ?? "Depth (mm)"}
+        yLabel={lastExport?.yLabel ?? "Production rate (atoms/s/cm)"}
+        getTraces={() => lastExport?.traces ?? []}
+        notes={() => [`HYRR production-vs-depth export`, `generated ${new Date().toISOString()}`]}
+        title="Save / download plot data"
+      />
     </div>
     <div class="plot" bind:this={plotDiv}></div>
   </div>

@@ -129,7 +129,12 @@
       const cm = getCustomMaterials().find((m) => m.id === custom.customId);
       onselect(custom.name, cm?.enrichment);
     } else {
-      onselect(entry.formula ?? entry.path);
+      // Pass the canonical path (catalog key like "havar", or the formula
+      // for compound/element entries) so picking Havar writes "havar" into
+      // the layer name rather than the expanded mass-fraction string. The
+      // resolver in core/src/materials.rs falls back to formula parsing if
+      // the path isn't a known catalog key. (#57)
+      onselect(entry.path);
     }
     onclose();
   }

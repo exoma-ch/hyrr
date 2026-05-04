@@ -3,9 +3,13 @@
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
   import { getResolvedTheme } from "../stores/theme.svelte";
+  import type { CsvTrace } from "../plotting/csv-export";
+  import SaveMenu from "./SaveMenu.svelte";
 
   let plotDiv = $state<HTMLDivElement | null>(null);
   let Plotly = $state<any>(null);
+
+  let lastExport: { traces: CsvTrace[] } | null = null;
 
   let preview = $derived(getDepthPreview());
 
@@ -106,11 +110,25 @@
       margin: { t: 30, r: 60, b: 50, l: 60 },
     });
 
+    lastExport = {
+      traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+    };
     Plotly.react(plotDiv, traces, layout, PLOTLY_CONFIG);
   }
 </script>
 
 <div class="depth-profile-live">
+  <div class="toolbar">
+    <span class="label">Depth profile</span>
+    <SaveMenu
+      filenamePrefix="hyrr-depth-profile"
+      xLabel="Depth (mm)"
+      yLabel="Energy (MeV) | Heat (W/mm)"
+      getTraces={() => lastExport?.traces ?? []}
+      notes={() => [`HYRR depth profile live export`, `generated ${new Date().toISOString()}`]}
+      title="Save / download depth profile"
+    />
+  </div>
   <div bind:this={plotDiv} class="plot"></div>
 </div>
 
@@ -120,6 +138,17 @@
     border: 1px solid var(--c-border);
     border-radius: 3px;
     padding: 0.5rem;
+  }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0.1rem 0.25rem;
+  }
+  .label {
+    font-size: 0.75rem;
+    color: var(--c-text-muted);
+    font-weight: 500;
   }
 
   .plot {

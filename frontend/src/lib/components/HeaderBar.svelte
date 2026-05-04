@@ -1,21 +1,53 @@
 <script lang="ts">
   import { toggleHistory, getHistoryOpen } from "../stores/ui.svelte";
-  import { setConfig, resetConfig } from "../stores/config.svelte";
+  import { setConfig, resetConfig, getSerializableConfig, restoreSerializableConfig } from "../stores/config.svelte";
   import { PRESETS } from "../presets";
   import SessionTabs from "./SessionTabs.svelte";
   import HelpModal from "./HelpModal.svelte";
   import { openBugReport } from "../stores/bugreport.svelte";
   import { cycleTheme, getThemeMode, getResolvedTheme } from "../stores/theme.svelte";
+  import { getResult, setResult } from "../stores/results.svelte";
+  import { buildSessionFile, downloadSessionFile, pickSessionFile } from "../session-io";
   import logoUrl from "/logo.svg?url";
 
   let historyOpen = $derived(getHistoryOpen());
   let helpOpen = $state(false);
   let themeMode = $derived(getThemeMode());
   let resolved = $derived(getResolvedTheme());
+  let saveMenuOpen = $state(false);
+
+  function toggleSaveMenu(e: MouseEvent) {
+    e.stopPropagation();
+    saveMenuOpen = !saveMenuOpen;
+  }
 
   function feelingLucky() {
     const idx = Math.floor(Math.random() * PRESETS.length);
     setConfig({ ...PRESETS[idx].config });
+  }
+
+  function saveSession(includeResult: boolean) {
+    saveMenuOpen = false;
+    const cfg = getSerializableConfig();
+    const res = includeResult ? getResult() : null;
+    const file = buildSessionFile(cfg, res);
+    downloadSessionFile(file);
+  }
+
+  async function importSession() {
+    saveMenuOpen = false;
+    try {
+      const f = await pickSessionFile();
+      restoreSerializableConfig(f.config);
+      if (f.result) {
+        setResult(f.result);
+      }
+    } catch (e: any) {
+      if (!/No file selected/.test(String(e?.message ?? e))) {
+        // eslint-disable-next-line no-alert
+        alert(`Could not load session: ${e?.message ?? e}`);
+      }
+    }
   }
 </script>
 
@@ -53,6 +85,33 @@
       {/if}
     </button>
 
+    <div class="save-menu-wrap">
+      <button
+        class="icon-btn"
+        onclick={toggleSaveMenu}
+        class:active={saveMenuOpen}
+        title="Save / load session"
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0113.25 16H3.75A1.75 1.75 0 012 14.25V1.75zm1.75-.25a.25.25 0 00-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 00.25-.25V6h-2.75A1.75 1.75 0 019 4.25V1.5H3.75zm6.75.62v2.13c0 .138.112.25.25.25h2.13L10.5 2.12zM4.5 7.75A.75.75 0 015.25 7h5.5a.75.75 0 010 1.5h-5.5a.75.75 0 01-.75-.75zm0 3A.75.75 0 015.25 10h5.5a.75.75 0 010 1.5h-5.5a.75.75 0 01-.75-.75z"></path>
+        </svg>
+      </button>
+      {#if saveMenuOpen}
+        <div class="save-menu" role="menu">
+          <button class="menu-item" role="menuitem" onclick={() => saveSession(true)}>
+            Save session <span class="menu-hint">(config + result)</span>
+          </button>
+          <button class="menu-item" role="menuitem" onclick={() => saveSession(false)}>
+            Export config <span class="menu-hint">(re-computes on load)</span>
+          </button>
+          <div class="menu-sep"></div>
+          <button class="menu-item" role="menuitem" onclick={importSession}>
+            Import session or config…
+          </button>
+        </div>
+      {/if}
+    </div>
+
     <button class="icon-btn" onclick={() => helpOpen = true} title="Help">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
         <path d="M0 8a8 8 0 1116 0A8 8 0 010 8zm8-6.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM6.92 6.085h.001a.749.749 0 11-1.342-.67c.169-.339.436-.701.849-.977C6.845 4.16 7.369 4 8 4a2.756 2.756 0 011.637.525c.503.377.863.965.863 1.725 0 .448-.115.83-.329 1.15-.205.307-.478.513-.708.662-.04.027-.08.049-.118.07h-.001l-.001.001v.001L9 8.5l-.343.356a.756.756 0 01-.214.468.751.751 0 01-.788.103.751.751 0 01-.453-.685v-.399c0-.199.079-.39.22-.53.14-.14.332-.22.53-.22h.001l.003-.002.005-.003.025-.016a1.514 1.514 0 00.21-.159c.163-.142.252-.296.252-.478 0-.263-.128-.467-.335-.623A1.26 1.26 0 008 5.5c-.369 0-.626.1-.806.224a1.132 1.132 0 00-.358.447l-.002.005zM9 11a1 1 0 11-2 0 1 1 0 012 0z"></path>
@@ -87,7 +146,49 @@
 
 <HelpModal open={helpOpen} onclose={() => helpOpen = false} />
 
+<svelte:window onclick={(e: MouseEvent) => {
+  // Close on outside click. Defer via a microtask so the button's own
+  // onclick handler gets to flip state first — otherwise the window
+  // handler wins the race and the menu never opens.
+  if (!saveMenuOpen) return;
+  const target = e.target as HTMLElement | null;
+  if (target?.closest?.(".save-menu-wrap")) return;
+  saveMenuOpen = false;
+}} />
+
 <style>
+  .save-menu-wrap { position: relative; display: inline-flex; }
+  .save-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 260px;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    z-index: 1000;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+  }
+  .menu-item {
+    text-align: left;
+    padding: 6px 10px;
+    background: none;
+    border: 0;
+    border-radius: 4px;
+    color: var(--c-text);
+    font-size: 0.8rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .menu-item:hover { background: var(--c-bg-muted); }
+  .menu-hint { color: var(--c-text-muted); font-size: 0.72rem; }
+  .menu-sep { height: 1px; background: var(--c-border); margin: 4px 0; }
   .header-bar {
     display: flex;
     align-items: stretch;

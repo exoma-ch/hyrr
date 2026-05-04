@@ -22,6 +22,8 @@
   } from "@hyrr/compute";
   import type { DecayMode, CrossSectionData, ProjectileType } from "@hyrr/compute";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
+  import type { CsvTrace } from "../plotting/csv-export";
+  import SaveMenu from "./SaveMenu.svelte";
 
   interface Props {
     open: boolean;
@@ -38,6 +40,11 @@
   let xsPlotDiv = $state<HTMLDivElement | null>(null);
   let depthPlotDiv = $state<HTMLDivElement | null>(null);
   let actPlotDiv = $state<HTMLDivElement | null>(null);
+
+  // CSV export state — updated by each plot's render function.
+  let xsExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
+  let depthExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
+  let actExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
 
   /** Determine reaction notation, e.g. "(p,n)", "(p,γ)", "(p,2n)" */
   function reactionNotation(proj: string, targetZ: number, targetA: number, residualZ: number, residualA: number): string {
@@ -423,9 +430,15 @@
         annotations,
       });
 
+      xsExport = {
+        xLabel: "Energy (MeV)",
+        yLabel: "Cross-section (mb)",
+        traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+      };
       Plotly.react(xsPlotDiv, traces, layout, PLOTLY_CONFIG);
     });
   }
+
 
   // Compare: add an isotope with all its XS channels
   function addCompare(iso: { name: string; Z: number; A: number; state: string }) {
@@ -533,6 +546,11 @@
       legend: { x: 1, xanchor: "right", y: 0.95, bgcolor: "rgba(0,0,0,0)" },
       shapes, annotations,
     });
+    depthExport = {
+      xLabel: "Depth (mm)",
+      yLabel: "σ (mb) | Energy (MeV)",
+      traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+    };
     Plotly.react(depthPlotDiv, traces, layout, PLOTLY_CONFIG);
   }
 
@@ -630,8 +648,14 @@
       legend: { x: 1, xanchor: "right", y: 0.95, bgcolor: "rgba(0,0,0,0)" },
       shapes, annotations,
     });
+    depthExport = {
+      xLabel: "Depth (mm)",
+      yLabel: "Production rate (atoms/s/cm)",
+      traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+    };
     Plotly.react(depthPlotDiv, traces, layout, PLOTLY_CONFIG);
   }
+
 
   function layerMarkers(boundaries: { depth: number; label: string }[], tc: ReturnType<typeof themeColors>) {
     const shapes = boundaries.slice(1).map((b) => ({
@@ -798,6 +822,11 @@
         }],
       });
 
+      actExport = {
+        xLabel: `Time (${timeLabel})`,
+        yLabel: `Activity (${actLabel})`,
+        traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+      };
       Plotly.react(actPlotDiv, traces, layout, PLOTLY_CONFIG);
     } else {
       // Single isotope mode: simple activity curve
@@ -830,9 +859,15 @@
         }],
       });
 
+      actExport = {
+        xLabel: `Time (${timeLabel})`,
+        yLabel: `Activity (${actLabel})`,
+        traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+      };
       Plotly.react(actPlotDiv, traces, layout, PLOTLY_CONFIG);
     }
   }
+
 
   onDestroy(() => {
     if (Plotly) {
@@ -989,6 +1024,14 @@
               Scaled
             </button>
           {/if}
+          <SaveMenu
+            filenamePrefix={`hyrr-xs-${name}`}
+            xLabel={xsExport?.xLabel ?? "Energy (MeV)"}
+            yLabel={xsExport?.yLabel ?? "Cross-section (mb)"}
+            getTraces={() => xsExport?.traces ?? []}
+            notes={() => [`HYRR cross-section export for ${name}`, `generated ${new Date().toISOString()}`]}
+            title="Save / download XS data"
+          />
         </div>
         <div bind:this={xsPlotDiv} class="xs-plot"></div>
       </div>
@@ -1002,6 +1045,14 @@
           <button class="scale-toggle" class:active={depthReal} onclick={() => { depthReal = !depthReal; }}>
             {depthReal ? "Real" : "Theory"}
           </button>
+          <SaveMenu
+            filenamePrefix={`hyrr-depth-${name}`}
+            xLabel={depthExport?.xLabel ?? "Depth (mm)"}
+            yLabel={depthExport?.yLabel ?? "Production rate (atoms/s/cm)"}
+            getTraces={() => depthExport?.traces ?? []}
+            notes={() => [`HYRR depth plot export for ${name}`, `generated ${new Date().toISOString()}`]}
+            title="Save / download depth data"
+          />
         </div>
         <div bind:this={depthPlotDiv} class="depth-plot"></div>
       </div>
@@ -1012,6 +1063,14 @@
       <div class="section">
         <div class="section-bar">
           <span class="section-label">Activity{showRnp ? " / RNP%" : ""}</span>
+          <SaveMenu
+            filenamePrefix={`hyrr-activity-${name}`}
+            xLabel={actExport?.xLabel ?? "Time"}
+            yLabel={actExport?.yLabel ?? "Activity"}
+            getTraces={() => actExport?.traces ?? []}
+            notes={() => [`HYRR activity export for ${name}`, `generated ${new Date().toISOString()}`]}
+            title="Save / download activity data"
+          />
         </div>
         <div bind:this={actPlotDiv} class="act-plot"></div>
       </div>
