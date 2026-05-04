@@ -112,7 +112,11 @@
     loadingState = "Loading nuclear data...";
     loadingProgress = 0;
 
-    const TIMEOUT_MS = 30_000;
+    // 5-minute ceiling. Covers first-launch downloads (~50 MB at hotel-wifi
+    // speeds is up to 5 min per the #52 spike bench). The progress callback
+    // keeps the user informed during any wait — a hard timeout is the
+    // backstop if something is genuinely wedged, not a snappiness signal.
+    const TIMEOUT_MS = 300_000;
     try {
       const loadPromise = initDataStore("./data/parquet", (msg: string, fraction?: number) => {
         loadingState = msg;
@@ -120,7 +124,7 @@
       });
 
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Data loading timed out after 30s")), TIMEOUT_MS),
+        setTimeout(() => reject(new Error("Data loading timed out after 5 min")), TIMEOUT_MS),
       );
 
       await Promise.race([loadPromise, timeoutPromise]);
