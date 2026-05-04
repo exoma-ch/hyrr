@@ -131,7 +131,7 @@ class TestCLIInfo:
         meta.mkdir()
         stopping = tmp_path / "stopping"
         stopping.mkdir()
-        xs = tmp_path / "tendl-2024" / "xs"
+        xs = tmp_path / "tendl-2025" / "xs"
         xs.mkdir(parents=True)
 
         pl.DataFrame({"Z": [42], "symbol": ["Mo"]}).cast({"Z": pl.Int32}).write_parquet(

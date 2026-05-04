@@ -32,7 +32,7 @@ fn main() {
 }
 
 /// Resolve the nuclear data library: `--library <id>` arg → `HYRR_LIBRARY`
-/// env → `tendl-2024` (DEFAULT_LIBRARY).
+/// env → `tendl-2025` (DEFAULT_LIBRARY).
 fn resolve_mcp_library(args: &[String]) -> String {
     if args.len() >= 2 {
         for i in 0..args.len() - 1 {

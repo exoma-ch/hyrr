@@ -29,7 +29,7 @@ Pure Python package for predicting radio-isotope production in stacked target as
 ## Data
 
 - **nucl-parquet** (`../nucl-parquet/`) — standalone repo with 12 evaluated nuclear data libraries (TENDL, ENDF/B, JENDL, JEFF, EXFOR, etc.)
-- Default library: `tendl-2024` (configurable via `DataStore(data_dir, library="...")`, `--library` CLI flag, or `HYRR_LIBRARY` env var)
+- Default library: `tendl-2025` (configurable via `DataStore(data_dir, library="...")`, `--library` CLI flag, or `HYRR_LIBRARY` env var)
 - Data resolution order: `--data-dir` arg > `HYRR_DATA` env > `../nucl-parquet` sibling > `~/.hyrr/nucl-parquet`
 - `frontend/public/data/parquet/` — Parquet files served as static assets for the browser frontend (hyparquet)
 - Stopping power source: PSTAR/ASTAR from libdEdx (APTG/libdedx), shared across all libraries

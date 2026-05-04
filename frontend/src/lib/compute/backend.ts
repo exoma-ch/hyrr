@@ -48,7 +48,7 @@ export async function initBackend(
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const dir = dataDir ?? resolveDataDir();
-      const lib = library ?? "tendl-2024";
+      const lib = library ?? "tendl-2025";
       await invoke("init_data_store", { dataDir: dir, library: lib });
       activeBackend = "tauri";
       return "tauri";
@@ -65,7 +65,7 @@ export async function initBackend(
     if (typeof wasm.default === "function") {
       await wasm.default();
     }
-    wasmStore = new wasm.WasmDataStore(library ?? "tendl-2024");
+    wasmStore = new wasm.WasmDataStore(library ?? "tendl-2025");
 
     // Feed data from existing TS DataStore (hyparquet)
     onProgress?.("Loading nuclear data for WASM...", 0.3);
