@@ -142,9 +142,27 @@
     return parts.join(", ");
   }
 
+  /** Polite announcement for disabled-cell activation. Sighted users see
+   *  the cell stays greyed; without this, screen-reader users get no
+   *  feedback that Enter/click did anything. Cleared after ~1s so a
+   *  second attempt on the same cell re-announces. */
+  let liveMessage = $state("");
+  let liveMessageTimer: number | undefined;
+  function announceDisabled(cell: ElementCell): void {
+    if (liveMessageTimer !== undefined) clearTimeout(liveMessageTimer);
+    liveMessage = `${cell.name}: no TENDL data for the current projectile. Pick another element or switch projectile.`;
+    liveMessageTimer = window.setTimeout(() => {
+      liveMessage = "";
+      liveMessageTimer = undefined;
+    }, 1000);
+  }
+
   function handleClick(cell: ElementCell): void {
     focusedZ = cell.Z;
-    if (disabled?.has(cell.symbol)) return;
+    if (disabled?.has(cell.symbol)) {
+      announceDisabled(cell);
+      return;
+    }
     onselect(cell.symbol);
   }
 
@@ -237,6 +255,7 @@
 </script>
 
 <div class="pt-wrap" data-pt-tooltip-id={tooltipId}>
+  <div role="status" aria-live="polite" class="pt-live-region">{liveMessage}</div>
   <div
     role="grid"
     aria-label="Periodic table"
@@ -307,6 +326,18 @@
     flex-direction: column;
     align-items: stretch;
     gap: 0.4rem;
+  }
+
+  .pt-live-region {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .pt-grid {
