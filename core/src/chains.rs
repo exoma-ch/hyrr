@@ -228,10 +228,62 @@ pub fn solve_chain(
         .map(|(i, iso)| (iso.key(), i))
         .collect();
 
-    // Build decay matrix A (n×n flat row-major)
+    // Identify isotopes whose half-life is so short that including them in
+    // the matrix-exp would blow up the conditioning. The chain discovery
+    // can pull in nuclear-prompt nuclides (e.g. ¹⁶F at t½ ≈ 1×10⁻²⁰ s — a
+    // β-delayed-proton precursor of ¹⁵O); for any reasonable physical
+    // timestep these have λ·dt ≫ 1, scaling-and-squaring needs > 60
+    // squarings, and the surviving slow-mode entries are numerical
+    // garbage. Treat them as instantaneous feed-through: their entire
+    // production-rate flux is redirected to their daughters before the
+    // matrix is built. Their reported activity is the analytical
+    // saturation value (which is just R during irradiation, ~0 during
+    // cooling — they decay in << one timestep).
+    //
+    // Threshold: 1 ms. Catches all nuclear-prompt species (10⁻²⁰ s …
+    // µs scale) without sweeping up legitimate sub-second daughters
+    // like ⁸Li (t½=0.84 s) or ⁸B (t½=0.77 s) which the matrix-exp
+    // handles correctly.
+    const INSTANTANEOUS_THRESHOLD_S: f64 = 1.0e-3;
+    let is_instantaneous: Vec<bool> = chain
+        .iter()
+        .map(|iso| matches!(iso.half_life_s, Some(t) if t > 0.0 && t < INSTANTANEOUS_THRESHOLD_S))
+        .collect();
+
+    // Effective production-rate vector: redistribute each instantaneous
+    // isotope's production into its daughters via the branching ratio.
+    // The chain is topologically sorted, so iterating in order ensures
+    // that an instantaneous isotope feeding another instantaneous
+    // isotope is fully cascaded.
+    let mut r_nominal: Vec<f64> = chain.iter().map(|iso| iso.production_rate).collect();
+    let r_original_for_instant: Vec<f64> = r_nominal.clone();
+    for i in 0..n {
+        if !is_instantaneous[i] {
+            continue;
+        }
+        let r_i = r_nominal[i];
+        if r_i <= 0.0 {
+            continue;
+        }
+        for mode in &chain[i].decay_modes {
+            let (Some(dz), Some(da)) = (mode.daughter_z, mode.daughter_a) else {
+                continue;
+            };
+            let dkey = format!("{}-{}-{}", dz, da, mode.daughter_state);
+            if let Some(&j) = idx.get(&dkey) {
+                r_nominal[j] += r_i * mode.branching;
+            }
+        }
+        r_nominal[i] = 0.0;
+    }
+
+    // Build decay matrix A (n×n flat row-major). Skip instantaneous
+    // isotopes — their rows and columns stay zero, which keeps them out
+    // of the matrix-exp entirely while preserving their position in the
+    // output vectors so downstream indexing is unaffected.
     let mut a_mat = vec![0.0; n * n];
     for (i, iso) in chain.iter().enumerate() {
-        if iso.is_stable() {
+        if iso.is_stable() || is_instantaneous[i] {
             continue;
         }
         let lam = iso.lambda();
@@ -251,9 +303,6 @@ pub fn solve_chain(
             }
         }
     }
-
-    // Nominal production rate vector
-    let r_nominal: Vec<f64> = chain.iter().map(|iso| iso.production_rate).collect();
 
     // Time grid
     let n_irr = n_time_points / 2;
@@ -345,60 +394,44 @@ pub fn solve_chain(
         }
     }
 
-    // Compute activities with ceilings
-    let total_production_atoms: f64 =
-        chain.iter().map(|iso| iso.production_rate).sum::<f64>() * irradiation_time_s;
-
+    // Compute activities. The previous implementation clamped abundances
+    // to a global ceiling (Σ R · t_irr) and a per-daughter analytical
+    // transient-equilibrium ceiling — both bandaids for a chain-solver
+    // that produced numerical garbage when nuclear-prompt isotopes
+    // dragged ‖A·dt‖ to ~10²¹. With those isotopes now collapsed to
+    // instantaneous feed-through above, the matrix-exp output matches
+    // analytical Bateman / RK4 to f64 round-off and the ceilings only
+    // suppress correct results (they'd cap Tc-99m below transient-eq
+    // build-up before the chain reaches secular equilibrium).
     for (i, iso) in chain.iter().enumerate() {
         if iso.is_stable() {
             continue;
         }
-        let lam = iso.lambda();
-
-        // Global ceiling
-        for t in 0..n_t {
-            if abundances[i][t] > total_production_atoms {
-                abundances[i][t] = total_production_atoms;
-            }
-        }
-
-        // Per-isotope analytical ceiling for daughters
-        if iso.production_rate == 0.0 {
-            let parent_indices: Vec<(usize, f64)> = chain
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| !p.is_stable())
-                .flat_map(|(p_idx, p)| {
-                    p.decay_modes
-                        .iter()
-                        .filter(|mode| {
-                            mode.daughter_z == Some(iso.z)
-                                && mode.daughter_a == Some(iso.a)
-                                && mode.daughter_state == iso.state
-                        })
-                        .map(move |mode| (p_idx, mode.branching))
-                })
-                .collect();
-
-            if !parent_indices.is_empty() {
-                for t in 0..n_t {
-                    let mut max_n = 0.0;
-                    for &(p, br) in &parent_indices {
-                        let lam_p = chain[p].lambda();
-                        let np = abundances[p][t];
-                        if lam > lam_p && lam_p > 0.0 {
-                            max_n += np * lam_p * br / (lam - lam_p);
-                        } else {
-                            max_n += np * br;
-                        }
-                    }
-                    if abundances[i][t] > max_n && max_n > 0.0 {
-                        abundances[i][t] = max_n;
-                    }
+        if is_instantaneous[i] {
+            // Instantaneous isotope: activity ≡ R during irradiation
+            // (saturation reached in << dt), 0 during cooling. Abundance
+            // stays at its analytical equilibrium value R/λ — which is
+            // negligible for any nuclear-prompt species but mathematically
+            // consistent so downstream code doesn't see a NaN/zero
+            // surprise.
+            let r_orig = r_original_for_instant[i];
+            let lam = iso.lambda();
+            let n_eq = if lam > 0.0 { r_orig / lam } else { 0.0 };
+            // Use index, not time-value comparison: linspace can produce
+            // 7200.0000000001 for the EOI sample, which would fail a
+            // <= irradiation_time_s test and incorrectly mark EOI as cooling.
+            for t in 0..n_t {
+                if t < n_irr {
+                    abundances[i][t] = n_eq;
+                    activities[i][t] = r_orig;
+                } else {
+                    abundances[i][t] = 0.0;
+                    activities[i][t] = 0.0;
                 }
             }
+            continue;
         }
-
+        let lam = iso.lambda();
         for t in 0..n_t {
             activities[i][t] = lam * abundances[i][t];
         }
