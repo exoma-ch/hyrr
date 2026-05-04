@@ -585,8 +585,6 @@ def _cmd_download_data(args: argparse.Namespace) -> int:
     )
     return _cmd_fetch_data(new_args)
 
-    return 0
-
 
 def _cmd_generate_xs(args: argparse.Namespace) -> int:
     """Generate cross-section data using TALYS."""

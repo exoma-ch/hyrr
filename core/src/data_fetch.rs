@@ -96,6 +96,41 @@ fn acquire_lock() -> Result<fs::File> {
     Ok(lock)
 }
 
+/// Build a configured reqwest client for cache fetches.
+///
+/// - `User-Agent`: GitHub increasingly rate-limits UA-less clients.
+/// - `connect_timeout(30s)`: a half-open TCP socket on flaky Wi-Fi
+///   would otherwise hang the splash until the App.svelte wall clock
+///   fires (5 min) with no progress.
+/// - No read timeout: a slow-but-progressing 400 MB download on a
+///   rural DSL line should not be killed mid-stream.
+fn build_http_client() -> reqwest::Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .user_agent(concat!("hyrr/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .build()
+}
+
+/// Drop guard that removes `path` when it goes out of scope. Used so
+/// the partial tarball is cleaned up on every code path — including
+/// disk-full / network-drop / panic — without each caller needing to
+/// remember `let _ = fs::remove_file(&tmp)`.
+struct TmpFileGuard {
+    path: PathBuf,
+}
+
+impl TmpFileGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl Drop for TmpFileGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 /// Download the full nucl-parquet data tarball into `out`.
 ///
 /// Streams the response to disk — does not buffer the full ~400 MB in RAM.
@@ -103,7 +138,10 @@ pub fn fetch_full_tarball_to(out: &Path) -> Result<()> {
     let url = format!(
         "{RELEASE_BASE}/v{DATA_VERSION}/nucl-parquet-data-v{DATA_VERSION}.tar.zst"
     );
-    let resp = reqwest::blocking::get(&url)
+    let client = build_http_client().map_err(|e| FetchError::Network(e.to_string()))?;
+    let resp = client
+        .get(&url)
+        .send()
         .map_err(|e| FetchError::Network(e.to_string()))?;
     if !resp.status().is_success() {
         return Err(FetchError::HttpStatus(resp.status().as_u16()));
@@ -115,6 +153,30 @@ pub fn fetch_full_tarball_to(out: &Path) -> Result<()> {
     let mut reader = io::BufReader::new(resp);
     io::copy(&mut reader, &mut file)?;
     Ok(())
+}
+
+/// Conservative pre-flight free-space check before downloading the
+/// release tarball. The full release is ~400 MB compressed and ~400 MB
+/// extracted, so 1 GiB is enough headroom while still being safe on
+/// laptops with tight free space. A `disk full` failure mid-`io::copy`
+/// otherwise leaves a partial tarball that the drop-guard cleans up but
+/// also a confusing user-facing error.
+fn require_free_space(min_bytes: u64) -> Result<()> {
+    let root = cache_root()?;
+    fs::create_dir_all(&root)?;
+    match fs2::available_space(&root) {
+        Ok(avail) if avail >= min_bytes => Ok(()),
+        Ok(avail) => Err(FetchError::Io(io::Error::other(format!(
+            "insufficient disk space: have {} MiB free at {}, need at least {} MiB",
+            avail / 1_048_576,
+            root.display(),
+            min_bytes / 1_048_576,
+        )))),
+        // available_space lookup itself failed — proceed and let
+        // io::copy surface the real error rather than blocking on a
+        // diagnostic that didn't work.
+        Err(_) => Ok(()),
+    }
 }
 
 /// Extract a `.tar.zst` archive into `dest`. If `prefixes` is non-empty,
@@ -207,8 +269,20 @@ fn install_tarball_atomic(archive: &Path, prefixes: &[&str]) -> Result<()> {
     let pid = std::process::id();
     let partial = root.join(format!("v{DATA_VERSION}.partial-{pid}"));
 
-    // Clean any stale partial from a previous failed run with the same pid
-    // (vanishingly rare in practice but cheap to handle).
+    // Sweep stale partial dirs left by SIGKILL'd previous runs. The
+    // lock guarantees no other live process is writing one right now,
+    // so any `v{V}.partial-*` we see is genuinely orphaned. Without
+    // this, a crashed extract leaves a ~400 MB carcass per crash that
+    // accumulates forever (pids recycle slowly on macOS).
+    let prefix = format!("v{DATA_VERSION}.partial-");
+    if let Ok(entries) = fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with(&prefix) {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
     if partial.exists() {
         fs::remove_dir_all(&partial)?;
     }
@@ -292,10 +366,11 @@ pub fn ensure_meta_stopping() -> Result<()> {
     if is_cache_complete() {
         return Ok(());
     }
+    require_free_space(1024 * 1024 * 1024)?;
     let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
+    let _guard = TmpFileGuard::new(tmp.clone());
     fetch_full_tarball_to(&tmp)?;
     install_tarball_atomic(&tmp, MANDATORY_PREFIXES)?;
-    let _ = fs::remove_file(&tmp);
     Ok(())
 }
 
@@ -318,13 +393,14 @@ pub fn ensure_library(library: &str) -> Result<()> {
     if is_cache_complete() && cache_dir()?.join("data").join(library).exists() {
         return Ok(());
     }
+    require_free_space(1024 * 1024 * 1024)?;
     let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
+    let _guard = TmpFileGuard::new(tmp.clone());
     fetch_full_tarball_to(&tmp)?;
     let lib_prefix = format!("data/{library}/");
     let mut prefixes: Vec<&str> = MANDATORY_PREFIXES.to_vec();
     prefixes.push(&lib_prefix);
     install_tarball_atomic(&tmp, &prefixes)?;
-    let _ = fs::remove_file(&tmp);
     Ok(())
 }
 
@@ -338,29 +414,104 @@ pub fn ensure_library(library: &str) -> Result<()> {
 /// re-extraction overwrites identical bytes which is harmless.)
 pub fn ensure_all() -> Result<()> {
     let _lock = acquire_lock()?;
+    require_free_space(1024 * 1024 * 1024)?;
     let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
+    let _guard = TmpFileGuard::new(tmp.clone());
     fetch_full_tarball_to(&tmp)?;
     install_tarball_atomic(&tmp, &[])?;
-    let _ = fs::remove_file(&tmp);
     Ok(())
 }
 
-/// Mark the cache as complete *without* fetching anything. Used by the
-/// Tauri startup hook after copying bundled `meta/`+`stopping/` resources
-/// from the installer into the cache. The downstream `ensure_library`
-/// path is then responsible for fetching per-library data on demand.
+/// Seed the managed cache from a directory of bundled-installer
+/// resources. Used by the Tauri startup hook to drop the ~54 MB of
+/// `meta/` + `stopping/` (+ catalog/suppliers JSONs) into the cache
+/// without paying the network cost on first launch.
 ///
-/// Caller must hold no other lock (this acquires the cache lock itself).
-pub fn mark_cache_seeded() -> Result<()> {
+/// `src` is the directory containing `meta/`, `stopping/`,
+/// `catalog.json`, `suppliers.json` (i.e. the resource root the Tauri
+/// installer materialised — the equivalent of the upstream
+/// `nucl-parquet/data/` tree).
+///
+/// Atomicity:
+/// - Acquires the cache lock so a concurrent `ensure_library` /
+///   `--mcp` invocation can't `remove_dir_all` the cache mid-copy.
+/// - Re-checks `is_cache_complete()` after acquiring the lock —
+///   another instance may have populated the cache while this one
+///   was contending for the lock. Idempotent on cold and warm caches.
+/// - Validates that at least one regular file landed under both
+///   `meta/` and `stopping/` before writing the sentinel, so a
+///   half-copied seed can't masquerade as a complete cache. Any
+///   error returns without writing the sentinel; the caller is
+///   expected to leave the partial state for `ensure_library` to
+///   wipe on the next fetch.
+pub fn seed_from_dir(src: &Path) -> Result<()> {
     let _lock = acquire_lock()?;
-    let cache = cache_dir()?;
-    if !cache.join("data/meta").is_dir() || !cache.join("data/stopping").is_dir() {
+    if is_cache_complete() {
+        return Ok(());
+    }
+    let cache_data = cache_dir()?.join("data");
+    fs::create_dir_all(&cache_data)?;
+    for child in &["meta", "stopping", "catalog.json", "suppliers.json"] {
+        let from = src.join(child);
+        let to = cache_data.join(child);
+        if to.exists() {
+            continue;
+        }
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if from.is_file() {
+            fs::copy(&from, &to)?;
+        } else {
+            // Missing source — installer didn't ship this resource.
+            // Bail without seeding; ensure_library will fetch from
+            // the network later.
+            return Err(FetchError::Io(io::Error::other(format!(
+                "seed_from_dir: source missing: {}",
+                from.display()
+            ))));
+        }
+    }
+    if !dir_has_any_file(&cache_data.join("meta"))?
+        || !dir_has_any_file(&cache_data.join("stopping"))?
+    {
         return Err(FetchError::Io(io::Error::other(
-            "mark_cache_seeded: data/meta or data/stopping not present",
+            "seed_from_dir: meta/ or stopping/ ended up empty",
         )));
     }
     fs::write(sentinel_path()?, DATA_VERSION)?;
     Ok(())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+fn dir_has_any_file(p: &Path) -> Result<bool> {
+    if !p.is_dir() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(p)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        if ft.is_file() {
+            return Ok(true);
+        }
+        if ft.is_dir() && dir_has_any_file(&entry.path())? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Produce a portable tarball of the current cache to `out`. Used by
@@ -547,5 +698,76 @@ mod tests {
         let bundle = std::env::temp_dir().join("offline.tar.zst");
         let err = export_offline_bundle(&bundle).unwrap_err();
         assert!(matches!(err, FetchError::Io(_)));
+    }
+
+    /// `seed_from_dir` should populate the cache, write the sentinel,
+    /// and be idempotent — second call is a no-op once the sentinel
+    /// is present.
+    #[test]
+    fn seed_from_dir_populates_and_marks_complete() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let src = td.path().join("bundle");
+        fs::create_dir_all(src.join("meta")).unwrap();
+        fs::create_dir_all(src.join("stopping")).unwrap();
+        fs::write(src.join("meta/elements.parquet"), b"meta-marker").unwrap();
+        fs::write(src.join("stopping/stopping.parquet"), b"stop-marker").unwrap();
+        fs::write(src.join("catalog.json"), b"{}").unwrap();
+        fs::write(src.join("suppliers.json"), b"{}").unwrap();
+
+        assert!(!is_cache_complete());
+        seed_from_dir(&src).unwrap();
+        assert!(is_cache_complete());
+        let cached = cache_dir().unwrap().join("data/meta/elements.parquet");
+        assert_eq!(fs::read(&cached).unwrap(), b"meta-marker");
+
+        // Idempotent: second call is a no-op.
+        seed_from_dir(&src).unwrap();
+        assert!(is_cache_complete());
+    }
+
+    /// Validation guard: empty `meta/` or `stopping/` must not produce
+    /// a "complete" sentinel — that would let `ensure_library`
+    /// short-circuit on a hollow cache.
+    #[test]
+    fn seed_from_dir_rejects_empty_meta() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let src = td.path().join("bundle");
+        fs::create_dir_all(src.join("meta")).unwrap();
+        fs::create_dir_all(src.join("stopping")).unwrap();
+        fs::write(src.join("stopping/stopping.parquet"), b"stop").unwrap();
+        fs::write(src.join("catalog.json"), b"{}").unwrap();
+        fs::write(src.join("suppliers.json"), b"{}").unwrap();
+        // No file under meta/.
+
+        let err = seed_from_dir(&src).unwrap_err();
+        assert!(matches!(err, FetchError::Io(_)));
+        assert!(!is_cache_complete());
+    }
+
+    /// Stale partial dirs (left by SIGKILL'd previous runs) must be
+    /// swept by `install_tarball_atomic`. Without the sweep these
+    /// accumulate at ~400 MB per crash forever.
+    #[test]
+    fn install_sweeps_orphaned_partial_dirs() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("test.tar.zst");
+        make_test_tarball(&archive);
+
+        // Manually plant a stale partial dir from a "previous run" with
+        // a different pid.
+        let root = cache_root().unwrap();
+        fs::create_dir_all(&root).unwrap();
+        let stale = root.join(format!("v{DATA_VERSION}.partial-99999"));
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("orphan-marker"), b"x").unwrap();
+        assert!(stale.exists());
+
+        install_from_tarball(&archive).unwrap();
+
+        assert!(!stale.exists(), "stale partial-99999 was not swept");
+        assert!(is_cache_complete());
     }
 }

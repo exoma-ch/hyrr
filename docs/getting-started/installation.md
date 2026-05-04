@@ -17,7 +17,7 @@ For air-gapped machines or offline use, download the native desktop app from **[
 | macOS 10.15+ (Intel) | `.dmg` |
 | Ubuntu 22.04+ | `.deb` or `.AppImage` |
 
-The installer ships with the always-needed `meta/` and `stopping/` data (~54 MB) bundled. The chosen cross-section library (default `tendl-2025`, ~50 MB) is downloaded on first launch into `~/.hyrr/nucl-parquet/v{version}/`. A returning user pays no network cost; switching libraries triggers another small download. **Installer size ~80 MB** (was ~15 MB before #52 — the difference is bundled meta+stopping).
+The installer ships with the always-needed `meta/` and `stopping/` data (~54 MB) bundled. The chosen cross-section library (default `tendl-2024`, ~50 MB) is downloaded on first launch into `~/.hyrr/nucl-parquet/v{version}/`. A returning user pays no network cost; switching libraries triggers another small download. **Installer size ~80 MB** (was ~15 MB before #52 — the difference is bundled meta+stopping).
 
 ## Python Package
 
@@ -48,11 +48,11 @@ The Python CLI populates the same managed cache the desktop app uses:
 
 ```bash
 hyrr fetch-data                       # default: meta + stopping
-hyrr fetch-data --library tendl-2025  # specific library (~50 MB)
+hyrr fetch-data --library tendl-2024  # specific library (~50 MB)
 hyrr fetch-data --all                 # every library (~400 MB)
 ```
 
-The default library is `tendl-2025`. Override with `--library` or `HYRR_LIBRARY` env var. The cache is sentinel-protected: a partial download or interrupted extract leaves the dir behind for cleanup but is never picked up as a usable cache.
+The default library is `tendl-2024`. Override with `--library` or `HYRR_LIBRARY` env var. The cache is sentinel-protected: a partial download or interrupted extract leaves the dir behind for cleanup but is never picked up as a usable cache.
 
 ### Air-gapped install
 

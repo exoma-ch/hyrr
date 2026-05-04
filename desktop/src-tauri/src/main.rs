@@ -45,10 +45,12 @@ fn main() {
 }
 
 /// Copy bundled `meta/` and `stopping/` into the managed cache iff the
-/// cache is not already complete. Idempotent: a returning user pays no
-/// IO. Failures here are logged and swallowed because the user can still
-/// fall through to the lazy-fetch path if the bundle copy fails (e.g. the
-/// installer didn't ship resources for some reason).
+/// cache is not already complete. The actual copy + sentinel-write is
+/// done by `data_fetch::seed_from_dir` under the cache lock — that's
+/// the only safe way to write into the final cache directory while a
+/// concurrent `--mcp` invocation might be calling `ensure_library`.
+/// Failures are logged and swallowed: the user can still fall through
+/// to the lazy-fetch path on first simulation.
 fn seed_cache_from_resources(app: &tauri::App) {
     if hyrr_core::data_fetch::is_cache_complete() {
         return;
@@ -66,61 +68,9 @@ fn seed_cache_from_resources(app: &tauri::App) {
         // builds where bundle.resources isn't materialized.
         return;
     }
-    let cache = match hyrr_core::data_fetch::cache_dir() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("seed_cache: no cache_dir: {e}");
-            return;
-        }
-    };
-    let cache_data = cache.join("data");
-    if let Err(e) = std::fs::create_dir_all(&cache_data) {
-        eprintln!("seed_cache: mkdir {}: {e}", cache_data.display());
-        return;
+    if let Err(e) = hyrr_core::data_fetch::seed_from_dir(&bundled_data) {
+        eprintln!("seed_cache: seed_from_dir: {e}");
     }
-    for child in &["meta", "stopping", "catalog.json", "suppliers.json"] {
-        let from = bundled_data.join(child);
-        let to = cache_data.join(child);
-        if to.exists() {
-            continue;
-        }
-        if from.is_dir() {
-            if let Err(e) = copy_dir_recursive(&from, &to) {
-                eprintln!("seed_cache: copy {} → {}: {e}", from.display(), to.display());
-                return;
-            }
-        } else if from.is_file() {
-            if let Err(e) = std::fs::copy(&from, &to) {
-                eprintln!("seed_cache: copy {} → {}: {e}", from.display(), to.display());
-                return;
-            }
-        }
-    }
-    // Mark the cache as complete so the resolver picks it up on the very
-    // first launch — without this, the bundled meta+stopping copy would be
-    // wasted: `is_cache_complete()` would still return false, and the
-    // splash-screen `data_ready` check would fall through to a network
-    // fetch even though the bytes are already on disk. The chosen library's
-    // xs/ data is still missing on first launch and is fetched lazily by
-    // `commands::ensure_data` when the user runs their first simulation.
-    if let Err(e) = hyrr_core::data_fetch::mark_cache_seeded() {
-        eprintln!("seed_cache: mark_cache_seeded: {e}");
-    }
-}
-
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
 }
 
 /// Resolve the nuclear data library: `--library <id>` arg → `HYRR_LIBRARY`
