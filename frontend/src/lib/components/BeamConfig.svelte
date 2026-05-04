@@ -15,7 +15,7 @@
     bestUnit,
     type TimeUnit,
   } from "../utils/time-convert";
-  import { isHeavyIon, heavyIonA } from "../compute/types";
+  import { isHeavyIon, heavyIonA } from "@hyrr/compute";
 
   const LIGHT_PROJECTILES: { id: string; symbol: string; name: string }[] = [
     { id: "p", symbol: "p", name: "Proton" },
