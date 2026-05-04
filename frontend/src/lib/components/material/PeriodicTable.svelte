@@ -381,8 +381,11 @@
 
   .pt-cell:hover { filter: brightness(1.06); }
 
-  /* Focus ring — wide black core with a white halo so the contrast
-     ratio stays ≥ 3:1 against every block colour (WCAG 2.4.13). */
+  /* Focus ring — black core carries WCAG 2.4.13 (~19:1 against every
+     block colour). The white halo is for legibility against dark
+     surrounding chrome / future dark-theme support; it is intentionally
+     low-contrast (~1.1:1) against light block backgrounds and is not
+     the indicator carrying the contrast requirement. */
   .pt-cell:focus-visible {
     outline: 2px solid #000;
     outline-offset: 1px;
