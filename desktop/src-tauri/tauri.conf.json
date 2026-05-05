@@ -55,7 +55,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://exoma-ch.github.io/hyrr/latest.json"
+        "https://github.com/exoma-ch/hyrr/releases/latest/download/latest.json"
       ],
       "pubkey": "REPLACE_WITH_GENERATED_MINISIGN_PUBKEY",
       "windows": {
