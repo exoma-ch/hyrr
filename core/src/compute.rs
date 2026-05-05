@@ -398,16 +398,15 @@ fn apply_chain_solver_by_component(
         // see https://github.com/exoma-ch/hyrr/issues — the chain solver's
         // known Padé instability — so fall through to the same fallback
         // path used for oversized chains.
-        // Always use the analytical Bateman fallback per-isotope. The
-        // matrix-exponential `solve_chain` path has a known regression that
-        // replaces the build-up/decay curve with a step function for
-        // short-lived isotopes (saturation R during irradiation, zero during
-        // cooling). The fallback loses real parent→daughter ingrowth
-        // coupling (e.g. ⁹⁹Mo → ⁹⁹ᵐTc), but every directly-produced isotope
-        // — the common case — is correct. See follow-up issue for the fix.
-        #[allow(clippy::overly_complex_bool_expr)]
-        let use_bateman_fallback = true;
-        if use_bateman_fallback || component.len() > MAX_CHAIN_SIZE {
+        // The matrix-exp chain solver was previously bypassed because
+        // `discover_chains` could pull in nuclear-prompt isotopes (e.g.
+        // ¹⁶F at t½ ≈ 1×10⁻²⁰ s — a β-delayed-proton precursor of ¹⁵O)
+        // that pushed ‖A·dt‖ to ~10²¹ and destroyed all precision in
+        // the matrix-exp. solve_chain now collapses such isotopes to
+        // instantaneous feed-through before building the matrix (#58),
+        // so the chain solver is back as the correct path. Oversized
+        // chains still fall back to per-isotope Bateman.
+        if component.len() > MAX_CHAIN_SIZE {
             // Fallback to independent Bateman.
             // TODO(#56): annotate daughter decay_notations with parent info
             // here. Currently skipped because this branch treats every
@@ -923,14 +922,7 @@ mod tests {
         db
     }
 
-    // Ignored: the chain-solver bypass on this branch only emits isotopes
-    // that were already directly produced (see `use_bateman_fallback` block
-    // above). Daughters fed purely by ingrowth are not surfaced, so this
-    // test's expectation that BBB-100/CCC-100 appear with parent-annotated
-    // `decay_notations` will only hold once the matrix-exp solver is fixed.
-    // Tracked in #58.
     #[test]
-    #[ignore = "blocked on #58 — chain-solver bypass drops ingrowth-only daughters"]
     fn daughter_decay_notations_mention_parent() {
         let db = make_chain_db();
 
@@ -1092,5 +1084,109 @@ mod tests {
         let mid_cool = r.activity_vs_time_bq[mid_cool_idx];
         assert!(mid_cool > 0.0, "mid-cooling must be > 0, got {}", mid_cool);
         assert!(mid_cool < rate, "mid-cooling must be < R, got {}", mid_cool);
+    }
+
+    /// Regression for #58: a chain that contains a nuclear-prompt
+    /// β-delayed-particle precursor (here: t½ = 1×10⁻²⁰ s, the F-16-style
+    /// case that originally produced step functions) must produce a
+    /// correct Bateman build-up + decay curve for the long-lived daughter.
+    /// Before the fix the matrix-exp received λ·dt ≈ 10²¹ and returned
+    /// numerical garbage; the fix collapses such isotopes to instantaneous
+    /// feed-through before assembling A.
+    #[test]
+    fn chain_solver_handles_nuclear_prompt_parent() {
+        use crate::chains::solve_chain;
+        use crate::types::{ChainIsotope, DecayMode};
+
+        let irr = 7200.0;
+        let cool = 3600.0;
+        let n_pts = 200;
+
+        // Nuclear-prompt parent (analogous to F-16) feeds a 122s daughter
+        // (analogous to O-15). Its production rate must propagate fully to
+        // the daughter via instantaneous feed-through.
+        let r_prompt = 1.0e9;
+        let r_daughter = 1.0e11;
+        let chain = vec![
+            ChainIsotope {
+                z: 9,
+                a: 16,
+                state: String::new(),
+                half_life_s: Some(1.0e-20),
+                production_rate: r_prompt,
+                decay_modes: vec![DecayMode {
+                    mode: "p".into(),
+                    daughter_z: Some(8),
+                    daughter_a: Some(15),
+                    daughter_state: String::new(),
+                    branching: 1.0,
+                }],
+            },
+            ChainIsotope {
+                z: 8,
+                a: 15,
+                state: String::new(),
+                half_life_s: Some(122.24),
+                production_rate: r_daughter,
+                decay_modes: vec![DecayMode {
+                    mode: "β+".into(),
+                    daughter_z: Some(7),
+                    daughter_a: Some(15),
+                    daughter_state: String::new(),
+                    branching: 1.0,
+                }],
+            },
+            ChainIsotope {
+                z: 7,
+                a: 15,
+                state: String::new(),
+                half_life_s: None,
+                production_rate: 0.0,
+                decay_modes: vec![DecayMode {
+                    mode: "stable".into(),
+                    daughter_z: None,
+                    daughter_a: None,
+                    daughter_state: String::new(),
+                    branching: 1.0,
+                }],
+            },
+        ];
+
+        let sol = solve_chain(&chain, irr, cool, 0.0, n_pts, None, 1.0);
+
+        // The instantaneous parent reports saturation activity = R during
+        // irradiation, ~0 during cooling.
+        let prompt_eoi = sol.activities[0][n_pts / 2 - 1];
+        assert!(
+            (prompt_eoi - r_prompt).abs() / r_prompt < 1e-9,
+            "instantaneous parent EOI: got {}, expected {}",
+            prompt_eoi,
+            r_prompt
+        );
+        let prompt_after = *sol.activities[0].last().unwrap();
+        assert_eq!(prompt_after, 0.0, "instantaneous parent must be 0 post-EOI");
+
+        // The daughter's effective production rate is r_daughter + r_prompt
+        // (since prompt feeds straight into it). Its activity must follow
+        // the standard Bateman build-up.
+        let lam = std::f64::consts::LN_2 / 122.24;
+        let r_eff = r_daughter + r_prompt;
+        for (k, &t) in sol.time_grid_s.iter().enumerate() {
+            let act_solver = sol.activities[1][k];
+            let act_ref = if t <= irr {
+                r_eff * (1.0 - (-lam * t).exp())
+            } else {
+                r_eff * (1.0 - (-lam * irr).exp()) * (-lam * (t - irr)).exp()
+            };
+            let rel = (act_solver - act_ref).abs() / act_ref.max(1.0);
+            assert!(
+                rel < 1e-2,
+                "daughter at t={:.1}s: solver={:.3e} ref={:.3e} rel_err={:.2e}",
+                t,
+                act_solver,
+                act_ref,
+                rel
+            );
+        }
     }
 }
