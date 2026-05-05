@@ -17,7 +17,7 @@
   } from "../scheduler/sim-scheduler.svelte";
   import { getStatus } from "../stores/results.svelte";
   import { parseTime } from "../utils/time-parse";
-  import { isHeavyIon, heavyIonA } from "../compute/types";
+  import { isHeavyIon, heavyIonA } from "@hyrr/compute";
 
   const LIGHT_PROJECTILES: { id: string; label: string }[] = [
     { id: "p", label: "p" },

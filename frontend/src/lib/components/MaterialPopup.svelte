@@ -157,8 +157,16 @@
   }
 
   function handlePtSelect(symbol: string) {
-    // Same code path as clicking a search result with that symbol — the
-    // symbol is treated as a formula and the popup closes immediately.
+    // PT-onselect must route through the same path as a search-result
+    // click (#64 §2.2). If a custom material is named exactly this
+    // symbol (e.g. user saved a custom "Fe" with their own enrichment),
+    // commit that custom and its enrichment — otherwise treat the
+    // symbol as a formula. Mirrors SearchView.select.
+    const custom = getCustomMaterials().find((m) => m.name === symbol);
+    if (custom) {
+      handleCommit(custom.name, custom.enrichment);
+      return;
+    }
     handleCommit(symbol);
   }
 </script>

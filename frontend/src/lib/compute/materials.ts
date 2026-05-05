@@ -11,7 +11,7 @@ import {
   SYMBOL_TO_Z,
   STANDARD_ATOMIC_WEIGHT,
 } from "../utils/formula";
-import type { DatabaseProtocol, Element } from "./types";
+import type { DatabaseProtocol, Element } from "@hyrr/compute";
 
 export { parseFormula, formulaToMassFractions, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT };
 

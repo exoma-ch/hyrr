@@ -142,9 +142,27 @@
     return parts.join(", ");
   }
 
+  /** Polite announcement for disabled-cell activation. Sighted users see
+   *  the cell stays greyed; without this, screen-reader users get no
+   *  feedback that Enter/click did anything. Cleared after ~1s so a
+   *  second attempt on the same cell re-announces. */
+  let liveMessage = $state("");
+  let liveMessageTimer: number | undefined;
+  function announceDisabled(cell: ElementCell): void {
+    if (liveMessageTimer !== undefined) clearTimeout(liveMessageTimer);
+    liveMessage = `${cell.name}: no TENDL data for the current projectile. Pick another element or switch projectile.`;
+    liveMessageTimer = window.setTimeout(() => {
+      liveMessage = "";
+      liveMessageTimer = undefined;
+    }, 1000);
+  }
+
   function handleClick(cell: ElementCell): void {
     focusedZ = cell.Z;
-    if (disabled?.has(cell.symbol)) return;
+    if (disabled?.has(cell.symbol)) {
+      announceDisabled(cell);
+      return;
+    }
     onselect(cell.symbol);
   }
 
@@ -237,6 +255,7 @@
 </script>
 
 <div class="pt-wrap" data-pt-tooltip-id={tooltipId}>
+  <div role="status" aria-live="polite" class="pt-live-region">{liveMessage}</div>
   <div
     role="grid"
     aria-label="Periodic table"
@@ -309,6 +328,18 @@
     gap: 0.4rem;
   }
 
+  .pt-live-region {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
   .pt-grid {
     display: grid;
     grid-template-columns: repeat(18, minmax(1.4rem, 1fr));
@@ -350,8 +381,11 @@
 
   .pt-cell:hover { filter: brightness(1.06); }
 
-  /* Focus ring — wide black core with a white halo so the contrast
-     ratio stays ≥ 3:1 against every block colour (WCAG 2.4.13). */
+  /* Focus ring — black core carries WCAG 2.4.13 (~19:1 against every
+     block colour). The white halo is for legibility against dark
+     surrounding chrome / future dark-theme support; it is intentionally
+     low-contrast (~1.1:1) against light block backgrounds and is not
+     the indicator carrying the contrast requirement. */
   .pt-cell:focus-visible {
     outline: 2px solid #000;
     outline-offset: 1px;
