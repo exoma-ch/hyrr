@@ -59,11 +59,14 @@
   import BugReportModal from "./lib/components/BugReportModal.svelte";
   import WelcomeScreen from "./lib/components/WelcomeScreen.svelte";
   import DownloadLinks from "./lib/components/DownloadLinks.svelte";
+  import UpdatePrompt from "./lib/components/UpdatePrompt.svelte";
+  import { checkForUpdate, type PendingUpdate } from "./lib/updater";
 
   let loadingState = $state("Initializing...");
   let loadingProgress = $state(0);
   let loadingError = $state("");
   let ready = $state(false);
+  let pendingUpdate = $state<PendingUpdate | null>(null);
 
   let config = $derived(getConfig());
   let layers = $derived(getLayers());
@@ -187,6 +190,14 @@
 
     // Preload Plotly for faster popup opening
     import("plotly.js-dist-min").catch(() => {});
+
+    // Auto-updater check — runs *after* the splash clears so a fresh
+    // install doesn't get two blocking modals at once (the data-fetch
+    // splash and the update prompt). On dev/web/.deb/.rpm the check
+    // short-circuits silently inside `checkForUpdate`.
+    checkForUpdate().then((u) => {
+      if (u) pendingUpdate = u;
+    });
   });
 
   // Update URL hash when config changes (debounced) — includes groups
@@ -419,6 +430,10 @@
       A={isotopePopupData.A}
       nuclearState={isotopePopupData.nuclearState}
     />
+  {/if}
+
+  {#if pendingUpdate}
+    <UpdatePrompt update={pendingUpdate} ondismiss={() => (pendingUpdate = null)} />
   {/if}
 </main>
 
