@@ -21,5 +21,14 @@ parquet = { version = "54", default-features = false, features = ["arrow", "snap
 arrow = { version = "54", default-features = false, features = ["csv", "json"], optional = true }
 regex = "1"
 
+# Native-only deps for the lazy data-fetch path (#52). Gated so wasm32
+# consumers don't pull reqwest/tar/zstd into their dependency graph.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+tar = "0.4"
+zstd = "0.13"
+fs2 = "0.4"
+
 [dev-dependencies]
 approx = "0.5"
+tempfile = "3"

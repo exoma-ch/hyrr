@@ -4,10 +4,12 @@
 //! JSON-in/JSON-out strategy — simple, correct, matches the Tauri/WASM approach.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use hyrr_core::bateman::bateman_activity as rust_bateman;
 use hyrr_core::compute::compute_stack;
+use hyrr_core::data_fetch;
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::formula::parse_formula;
 use hyrr_core::materials::resolve_material;
@@ -219,6 +221,90 @@ fn py_compute_thickness(
 }
 
 // ---------------------------------------------------------------------------
+// Data-fetch CLI surface (#52)
+// ---------------------------------------------------------------------------
+
+/// Implements `hyrr fetch-data`. Exactly one of the four mutually-exclusive
+/// modes is selected by the caller:
+///
+/// - `library=Some("tendl-2024")` — fetch a specific library
+/// - `all_libs=true` — fetch every library (~400 MB)
+/// - `offline_bundle=Some("/tmp/hyrr.tar.zst")` — repack the existing cache
+///   into a portable archive (cache must already be complete)
+/// - `from_tarball=Some("/tmp/hyrr.tar.zst")` — install from a local tarball
+///
+/// With all four left default, fetches the always-needed `meta/`+`stopping/`
+/// (the "default library" path — caller is expected to specify a library
+/// for the actual XS data).
+#[pyfunction]
+#[pyo3(signature = (library=None, all_libs=false, offline_bundle=None, from_tarball=None))]
+fn py_fetch_data(
+    library: Option<&str>,
+    all_libs: bool,
+    offline_bundle: Option<&str>,
+    from_tarball: Option<&str>,
+) -> PyResult<()> {
+    let active = [
+        library.is_some(),
+        all_libs,
+        offline_bundle.is_some(),
+        from_tarball.is_some(),
+    ]
+    .iter()
+    .filter(|&&b| b)
+    .count();
+    if active > 1 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "fetch-data: --library, --all, --offline-bundle, --from are mutually exclusive",
+        ));
+    }
+
+    if let Some(path) = from_tarball {
+        return data_fetch::install_from_tarball(&PathBuf::from(path))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
+    }
+    if let Some(path) = offline_bundle {
+        return data_fetch::export_offline_bundle(&PathBuf::from(path))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
+    }
+    if all_libs {
+        return data_fetch::ensure_all()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
+    }
+    if let Some(name) = library {
+        return data_fetch::ensure_library(name)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
+    }
+    // Default mode: ensure meta/+stopping/. Library-specific fetch is the
+    // caller's responsibility because we don't know their default here.
+    data_fetch::ensure_meta_stopping()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
+}
+
+/// Path to the managed cache root: `~/.hyrr/nucl-parquet/v{DATA_VERSION}/data/`.
+/// Returns the path even if the cache isn't yet populated; check
+/// [`py_cache_is_complete`] for usability.
+#[pyfunction]
+fn py_cache_data_dir() -> PyResult<String> {
+    let cache = data_fetch::cache_dir()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+    Ok(cache.join("data").to_string_lossy().to_string())
+}
+
+/// True iff the managed cache is fully populated (sentinel present).
+#[pyfunction]
+fn py_cache_is_complete() -> bool {
+    data_fetch::is_cache_complete()
+}
+
+/// Version of the nucl-parquet data this build expects (matches submodule
+/// pin). Surfaced for diagnostics / sanity-checks.
+#[pyfunction]
+fn py_data_version() -> &'static str {
+    data_fetch::DATA_VERSION
+}
+
+// ---------------------------------------------------------------------------
 // Internal types for JSON deserialization
 // ---------------------------------------------------------------------------
 
@@ -286,5 +372,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_dedx_mev_per_cm, m)?)?;
     m.add_function(wrap_pyfunction!(py_compute_energy_out, m)?)?;
     m.add_function(wrap_pyfunction!(py_compute_thickness, m)?)?;
+    m.add_function(wrap_pyfunction!(py_fetch_data, m)?)?;
+    m.add_function(wrap_pyfunction!(py_cache_data_dir, m)?)?;
+    m.add_function(wrap_pyfunction!(py_cache_is_complete, m)?)?;
+    m.add_function(wrap_pyfunction!(py_data_version, m)?)?;
     Ok(())
 }

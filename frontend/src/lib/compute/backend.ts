@@ -47,8 +47,25 @@ export async function initBackend(
   if (isTauri()) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const dir = dataDir ?? resolveDataDir();
       const lib = library ?? "tendl-2024";
+
+      // #52: cache check before init. `data_ready` is cheap (file-existence
+      // only), so we pay nothing on the returning-user path. When the cache
+      // is missing, `ensure_data` downloads — ~50 MB for the default
+      // library, less if meta+stopping were already bundled in the
+      // installer. We surface the progress message so the user understands
+      // they're not staring at a hang.
+      const ready = await invoke<boolean>("data_ready", { library: lib });
+      let dir = dataDir ?? "";
+      if (!ready) {
+        onProgress?.(
+          `Initializing nuclear data (${lib}) — first-launch download...`,
+          0.05,
+        );
+        dir = await invoke<string>("ensure_data", { library: lib });
+        onProgress?.("Nuclear data ready", 0.95);
+      }
+
       await invoke("init_data_store", { dataDir: dir, library: lib });
       activeBackend = "tauri";
       return "tauri";
