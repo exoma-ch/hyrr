@@ -31,7 +31,7 @@ pub trait DatabaseProtocol: Send + Sync {
     fn get_element_symbol(&self, z: u32) -> String;
     fn get_element_z(&self, symbol: &str) -> u32;
 
-    /// Nuclear data library identifier (e.g. "tendl-2024"). Used so MCP
+    /// Nuclear data library identifier (e.g. "tendl-2025"). Used so MCP
     /// tool responses can echo which library fed the calculation.
     fn library(&self) -> &str;
 }

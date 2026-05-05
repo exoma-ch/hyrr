@@ -21,7 +21,7 @@ fn main() {
 }
 
 /// Resolve the nuclear data library: `--library <id>` arg → `HYRR_LIBRARY`
-/// env → `tendl-2024` (DEFAULT_LIBRARY).
+/// env → `tendl-2025` (DEFAULT_LIBRARY).
 fn resolve_library(args: &[String]) -> String {
     if args.len() >= 2 {
         for i in 0..args.len() - 1 {
@@ -49,7 +49,7 @@ fn print_help() {
          \n\
          OPTIONS:\n    \
              --data-dir <PATH>  Override nucl-parquet data directory\n    \
-             --library <ID>     Nuclear data library, e.g. tendl-2024 (default), endfb-8.1\n    \
+             --library <ID>     Nuclear data library, e.g. tendl-2025 (default), endfb-8.1\n    \
              --version, -V      Print version and exit\n    \
              --help, -h         Print this help and exit\n\
          \n\

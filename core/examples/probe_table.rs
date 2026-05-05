@@ -10,7 +10,7 @@ use hyrr_core::types::*;
 fn main() {
     let data_dir =
         std::env::var("HYRR_DATA").unwrap_or_else(|_| "../nucl-parquet/data".to_string());
-    let mut db = ParquetDataStore::new(&data_dir, "tendl-2024").unwrap();
+    let mut db = ParquetDataStore::new(&data_dir, "tendl-2025").unwrap();
     db.load_xs("p", 1).unwrap();
     db.load_xs("p", 8).unwrap();
     db.load_xs("p", 13).unwrap();

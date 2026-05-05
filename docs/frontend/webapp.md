@@ -20,7 +20,7 @@ The HYRR web app is a standalone browser application for radioisotope production
 
 ## Supported nuclear data
 
-Default library: **TENDL-2024**. Cross-sections, stopping powers, abundances, and decay data are loaded as Parquet files via hyparquet and cached in the browser.
+Default library: **TENDL-2025**. Cross-sections, stopping powers, abundances, and decay data are loaded as Parquet files via hyparquet and cached in the browser.
 
 ## Bug reports
 

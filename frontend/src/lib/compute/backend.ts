@@ -47,7 +47,7 @@ export async function initBackend(
   if (isTauri()) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const lib = library ?? "tendl-2024";
+      const lib = library ?? "tendl-2025";
 
       // #52: cache check before init. `data_ready` is cheap (file-existence
       // only), so we pay nothing on the returning-user path. When the cache
@@ -82,7 +82,7 @@ export async function initBackend(
     if (typeof wasm.default === "function") {
       await wasm.default();
     }
-    wasmStore = new wasm.WasmDataStore(library ?? "tendl-2024");
+    wasmStore = new wasm.WasmDataStore(library ?? "tendl-2025");
 
     // Feed data from existing TS DataStore (hyparquet)
     onProgress?.("Loading nuclear data for WASM...", 0.3);
