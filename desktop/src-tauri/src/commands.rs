@@ -229,6 +229,29 @@ pub fn ensure_data(library: String) -> Result<String, String> {
     Ok(cache.join("data").to_string_lossy().to_string())
 }
 
+/// True when the auto-updater plugin is wired into this build of the app —
+/// i.e. when the frontend should attempt the post-startup version check.
+/// Mirrors the gating in `main.rs::updater_enabled`. The frontend uses this
+/// to short-circuit the check on Linux .deb/.rpm installs (where apt/dnf
+/// own updates) and on dev builds.
+#[tauri::command]
+pub fn updater_enabled() -> bool {
+    if std::env::var("HYRR_DISABLE_UPDATER")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return std::env::var("APPIMAGE").is_ok() || std::env::var("APPDIR").is_ok();
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
 /// Quick check from the frontend: does the cache already have everything we
 /// need to skip the splash entirely? Cheap (just file-existence checks).
 #[tauri::command]
