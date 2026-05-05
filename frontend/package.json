@@ -32,6 +32,6 @@
     "hyparquet-compressors": "^1.1.1",
     "hyparquet-writer": "^0.13.1",
     "hyrr-wasm": "file:src/lib/compute/hyrr-wasm-pkg",
-    "plotly.js-dist-min": "^2.35.0"
+    "plotly.js-dist-min": "^3.5.1"
   }
 }
