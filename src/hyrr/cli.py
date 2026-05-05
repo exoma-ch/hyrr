@@ -548,20 +548,14 @@ def _cmd_fetch_data(args: argparse.Namespace) -> int:
             _native.py_fetch_data(all_libs=True)
         elif args.library:
             print(
-                f"Fetching library `{args.library}` "
-                f"(v{_native.py_data_version()}) ..."
+                f"Fetching library `{args.library}` (v{_native.py_data_version()}) ..."
             )
             _native.py_fetch_data(library=args.library)
         else:
-            print(
-                f"Fetching meta + stopping (v{_native.py_data_version()}) ..."
-            )
+            print(f"Fetching meta + stopping (v{_native.py_data_version()}) ...")
             _native.py_fetch_data()
 
-        print(
-            f"Cached at: {_native.py_cache_data_dir()}\n"
-            "(set HYRR_DATA to override)"
-        )
+        print(f"Cached at: {_native.py_cache_data_dir()}\n(set HYRR_DATA to override)")
         return 0
     except Exception as e:
         print(f"fetch-data failed: {e}", file=sys.stderr)
