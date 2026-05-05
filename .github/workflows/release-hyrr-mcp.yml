@@ -140,7 +140,7 @@ jobs:
         run: |
           (cd hyrr-mcp && cargo build --release)
           (cd desktop/src-tauri && cargo build)
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: wheels-linux-x86_64
           path: dist
@@ -169,7 +169,7 @@ jobs:
     permissions:
       id-token: write   # OIDC trusted-publishing
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
       - name: Flatten artifact directory
