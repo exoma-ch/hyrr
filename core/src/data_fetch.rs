@@ -31,10 +31,12 @@ use fs2::FileExt;
 
 /// Version of the `nucl-parquet` data this build expects.
 ///
-/// MUST match the version of the pinned `nucl-parquet/` submodule. When
-/// bumping the submodule, also bump this constant. Mismatch will produce a
-/// 404 from GitHub Releases at fetch time, which is detectable but ugly.
-pub const DATA_VERSION: &str = "0.9.0";
+/// Sourced at build time from `nucl-parquet/pyproject.toml` by
+/// `core/build.rs` — the submodule pin is the single source of truth.
+/// On a fresh clone without `--recurse-submodules` this falls back to
+/// `"0.0.0-unknown"` (a deliberately invalid version that 404s loudly
+/// at fetch time rather than serving stale data).
+pub const DATA_VERSION: &str = env!("HYRR_DATA_VERSION");
 
 /// GitHub Releases base URL for nucl-parquet data tarballs.
 const RELEASE_BASE: &str = "https://github.com/exoma-ch/nucl-parquet/releases/download";
@@ -598,6 +600,23 @@ mod tests {
         assert!(cd.ends_with(format!("v{DATA_VERSION}")));
         let s = sentinel_path().unwrap();
         assert!(s.ends_with(".complete"));
+    }
+
+    /// `DATA_VERSION` is sourced from `nucl-parquet/pyproject.toml` by
+    /// `core/build.rs`. If the submodule is missing at build time, the
+    /// fallback `"0.0.0-unknown"` ships, which would silently 404 on
+    /// every fetch. Catch that in CI by asserting the version parses
+    /// as N.N.N. The fallback `0.0.0-unknown` fails the dot-count check.
+    #[test]
+    fn data_version_is_resolved_from_submodule() {
+        assert_ne!(DATA_VERSION, "0.0.0-unknown",
+            "build.rs fell back — submodule not checked out at build time");
+        let parts: Vec<&str> = DATA_VERSION.split('.').collect();
+        assert_eq!(parts.len(), 3, "DATA_VERSION = {DATA_VERSION:?} is not N.N.N");
+        for p in &parts {
+            assert!(p.chars().all(|c| c.is_ascii_digit()),
+                "DATA_VERSION component {p:?} not numeric");
+        }
     }
 
     #[test]
