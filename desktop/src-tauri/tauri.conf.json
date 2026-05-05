@@ -57,7 +57,7 @@
       "endpoints": [
         "https://github.com/exoma-ch/hyrr/releases/latest/download/latest.json"
       ],
-      "pubkey": "REPLACE_WITH_GENERATED_MINISIGN_PUBKEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4NzE5NTY0QUMyNTM1QjEKUldTeE5TV3NaSlZ4U0dvN3AvZ1VGd3ZnaTF6a0tlTnFvbTRvMGd2NVJjQkppMUdsY1h4YnRDU3kK",
       "windows": {
         "installMode": "passive"
       }
