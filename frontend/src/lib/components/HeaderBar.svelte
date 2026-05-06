@@ -197,7 +197,10 @@
     border-radius: 3px;
     margin: 0 0 0.75rem;
     background: var(--c-bg-subtle);
-    overflow: hidden;
+    /* No overflow:hidden — the save-menu dropdown is absolutely-positioned
+     * inside .save-menu-wrap and must escape the header's box vertically.
+     * The corners stay rounded via background-clip on .header-bar itself
+     * and the children don't paint past it. */
   }
 
   .home-btn {
