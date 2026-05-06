@@ -213,6 +213,7 @@
       <PeriodicTable
         onselect={handlePtSelect}
         disabled={disabledSet}
+        disabledReason={projectile ? `No cross-section data for ${projectile} on this element in the active library — try switching projectile or library.` : undefined}
         {enrichableSet}
       />
     {/if}
