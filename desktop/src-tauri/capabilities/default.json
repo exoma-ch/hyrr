@@ -12,6 +12,8 @@
     "fs:allow-write-file",
     "updater:default",
     "process:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "opener:default",
+    "opener:allow-open-url"
   ]
 }
