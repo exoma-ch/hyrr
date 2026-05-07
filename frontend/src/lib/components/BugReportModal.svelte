@@ -391,8 +391,8 @@
       </div>
 
       <div class="field">
-        <label for="bug-name">Name <span class="optional">(optional)</span></label>
-        <input id="bug-name" type="text" bind:value={name} placeholder="Your name" />
+        <label for="bug-name">Your name <span class="optional">(optional, for follow-up — leave blank for anonymous)</span></label>
+        <input id="bug-name" type="text" bind:value={name} placeholder="leave blank for anonymous" />
       </div>
 
       {#if !desktop}
