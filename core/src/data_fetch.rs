@@ -26,6 +26,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fs2::FileExt;
 
@@ -143,20 +144,50 @@ pub fn is_cache_complete() -> bool {
     sentinel_path().map(|p| p.exists()).unwrap_or(false)
 }
 
-/// Acquire an exclusive lock on `<cache_root>/.lock`. Blocks the current
-/// thread until competing fetch attempts release. Drops on `Drop`.
-fn acquire_lock() -> Result<fs::File> {
+/// Process-wide mutex that pairs with the on-disk `flock`. Two threads
+/// in the same process opening `<cache_root>/.lock` independently and
+/// both calling `flock(LOCK_EX)` is unreliable on macOS — the kernel
+/// can leave both threads parked when neither holds the lock. The
+/// in-process mutex makes the intra-process race deterministic; the
+/// file lock continues to handle the inter-process case (the GUI
+/// process and a separately-spawned `--mcp` process).
+fn process_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Combined cross-thread + cross-process lock guard. Holds the
+/// in-process mutex *and* the on-disk `flock` for as long as it lives.
+/// Both are released on `Drop` in field-declaration order: file lock
+/// first, then the mutex, which matches the order they were acquired
+/// in reverse.
+struct CacheLock {
+    _file: fs::File,
+    _guard: MutexGuard<'static, ()>,
+}
+
+/// Acquire the cross-thread + cross-process cache lock. Blocks the
+/// current thread until competing fetch attempts release. Drops on
+/// `Drop`.
+fn acquire_lock() -> Result<CacheLock> {
+    // In-process mutex first — see `process_lock` for the macOS
+    // rationale. Poisoning means a previous holder panicked mid-op;
+    // we recover and proceed because the file lock + sentinel-based
+    // recovery handle the on-disk consistency story.
+    let guard = process_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let root = cache_root()?;
     fs::create_dir_all(&root)?;
-    let lock = fs::OpenOptions::new()
+    let file = fs::OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
         .truncate(false)
         .open(root.join(".lock"))?;
-    lock.lock_exclusive()
+    file.lock_exclusive()
         .map_err(|e| FetchError::Io(io::Error::other(format!("lock: {e}"))))?;
-    Ok(lock)
+    Ok(CacheLock { _file: file, _guard: guard })
 }
 
 /// Build a configured reqwest client for cache fetches.
@@ -338,9 +369,12 @@ pub fn extract_tarball(
 ///
 /// `prefixes`: same semantics as `extract_tarball` — empty extracts
 /// everything, a list of strings filters by `starts_with`.
+///
+/// **Caller must hold the cache lock** (`acquire_lock`) — every public
+/// entry point in this module already does, and re-acquiring here
+/// would deadlock the in-process mutex paired with the on-disk
+/// `flock` (see `process_lock`).
 fn install_tarball_atomic(archive: &Path, prefixes: &[&str]) -> Result<()> {
-    let _lock = acquire_lock()?;
-
     let cache = cache_dir()?;
     let root = cache_root()?;
     let pid = std::process::id();
@@ -627,6 +661,7 @@ pub fn install_from_tarball(archive: &Path) -> Result<()> {
             format!("tarball not found: {}", archive.display()),
         )));
     }
+    let _lock = acquire_lock()?;
     install_tarball_atomic(archive, &["data"])
 }
 
