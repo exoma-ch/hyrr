@@ -229,6 +229,36 @@ pub fn ensure_data(library: String) -> Result<String, String> {
     Ok(cache.join("data").to_string_lossy().to_string())
 }
 
+/// SSoT accessors for the data-fetch path. Each command is a thin
+/// passthrough to `hyrr_core::data_fetch` — the frontend MUST consume
+/// these rather than hardcoding any of the constants below.
+///
+/// See `frontend/src/lib/compute/data-fetch-meta.ts` for the TS wrapper.
+#[tauri::command]
+pub fn data_release_url() -> String {
+    hyrr_core::data_fetch::release_url()
+}
+
+#[tauri::command]
+pub fn data_release_base_url() -> &'static str {
+    hyrr_core::data_fetch::release_base_url()
+}
+
+#[tauri::command]
+pub fn data_version() -> &'static str {
+    hyrr_core::data_fetch::data_version()
+}
+
+#[tauri::command]
+pub fn data_tarball_filename() -> String {
+    hyrr_core::data_fetch::tarball_filename()
+}
+
+#[tauri::command]
+pub fn data_cache_root_pattern() -> String {
+    hyrr_core::data_fetch::cache_root_pattern()
+}
+
 /// True when the auto-updater plugin is wired into this build of the app —
 /// i.e. when the frontend should attempt the post-startup version check.
 /// Mirrors the gating in `main.rs::updater_enabled`. The frontend uses this
