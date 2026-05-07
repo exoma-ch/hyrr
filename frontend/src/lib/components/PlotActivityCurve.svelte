@@ -35,9 +35,11 @@
   // When true, fall back to one trace per (layer, isotope) pair. (#54)
   let expandPerLayer = $state<boolean>(false);
 
-  // Populated by render() — captured for CSV/Parquet export. Never read
-  // inside $derived to avoid reactivity loops; only read by save handlers.
-  let lastExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
+  // Populated by render() — captured for CSV/Parquet export. Wrapped in
+  // $state so the SaveMenu's xLabel/yLabel bindings invalidate when the
+  // user toggles RNP / EOB / time-unit; previously a plain `let` left the
+  // export header stale on subsequent saves.
+  let lastExport = $state<{ traces: CsvTrace[]; xLabel: string; yLabel: string } | null>(null);
 
   function toggleRnpIso(name: string) {
     const next = new Set(rnpIsotopes);

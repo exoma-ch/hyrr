@@ -20,11 +20,11 @@
         : "energy_out_MeV",
   );
 
-  const MODES: { id: ThicknessMode; label: string; disabled?: boolean }[] = [
+  const MODES = $derived<{ id: ThicknessMode; label: string; disabled?: boolean }[]>([
     { id: "thickness_cm", label: "Thickness" },
     { id: "areal_density_g_cm2", label: "Areal dens." },
     { id: "energy_out_MeV", label: "E<sub>out</sub>", disabled: isInGroup },
-  ];
+  ]);
 
   // --- Smart thickness text input (thickness_cm mode) ---
   let thicknessText = $state("");

@@ -24,7 +24,7 @@
   let legendVisibility = new Map<string, boolean | "legendonly">();
   let legendListenersAttached = false;
 
-  let lastExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
+  let lastExport = $state<{ traces: CsvTrace[]; xLabel: string; yLabel: string } | null>(null);
 
   onMount(async () => {
     Plotly = await import("plotly.js-dist-min");
