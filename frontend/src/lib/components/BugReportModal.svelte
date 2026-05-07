@@ -5,11 +5,13 @@
   import { getBugReportOpen, closeBugReport } from "../stores/bugreport.svelte";
   import { isTauri } from "../utils/platform";
   import { openExternalUrl } from "../utils/open-url";
+  import { buildIssueTitle, bodyTitleHeader } from "./bug-report-title";
 
   let open = $derived(getBugReportOpen());
 
   let name = $state("");
   let email = $state("");
+  let title = $state("");
   let description = $state("");
   let screenshot = $state<Blob | null>(null);
   let screenshotPreview = $state<string | null>(null);
@@ -62,8 +64,7 @@
 
   function openMailto() {
     if (!canOpenGitHub) return;
-    const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
-    const subj = `${prefix} ${description.slice(0, 70)}`;
+    const subj = buildIssueTitle(reportType, title, description);
     const body = buildBody();
     const qs = new URLSearchParams({ subject: subj, body }).toString();
     const to = MAILTO_TARGET;
@@ -221,6 +222,7 @@
     const sections: string[] = [];
 
     sections.push(reportType === "bug" ? `## Bug Report` : `## Feature Request`);
+    sections.push(bodyTitleHeader(title, description));
     sections.push(`**Reporter:** ${name || "Anonymous"}${email ? ` (${email})` : ""}`);
     sections.push(`## Description\n\n${description}`);
 
@@ -259,8 +261,7 @@
     // Get Turnstile token (renders widget on demand, waits for challenge)
     const token = await getTurnstileToken();
 
-    const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
-    const title = `${prefix} ${description.slice(0, 70)}`;
+    const issueTitle = buildIssueTitle(reportType, title, description);
 
     try {
       let screenshotUrl: string | undefined;
@@ -274,7 +275,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title,
+          title: issueTitle,
           body,
           labels: [reportType === "bug" ? "bug" : "enhancement"],
           email,
@@ -299,12 +300,11 @@
   /** Open on GitHub directly (user authenticates via their GH session). */
   function openOnGitHub() {
     if (!canOpenGitHub) return;
-    const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
-    const title = `${prefix} ${description.slice(0, 70)}`;
+    const issueTitle = buildIssueTitle(reportType, title, description);
     const body = buildBody();
 
     const url = `https://github.com/${REPO}/issues/new?` + new URLSearchParams({
-      title,
+      title: issueTitle,
       body,
       labels: reportType === "bug" ? "bug" : "enhancement",
     }).toString();
@@ -336,9 +336,8 @@
       if (!reportPath) { submitting = false; return; }
 
       const body = buildBody();
-      const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
-      const title = `${prefix} ${description.slice(0, 70)}`;
-      const content = `# ${title}\n\n${body}`;
+      const issueTitle = buildIssueTitle(reportType, title, description);
+      const content = `# ${issueTitle}\n\n${body}`;
       await writeTextFile(reportPath, content);
 
       // Save screenshot alongside the report if present
@@ -359,6 +358,7 @@
   }
 
   function resetForm() {
+    title = "";
     description = "";
     screenshot = null;
     screenshotPreview = null;
@@ -410,6 +410,17 @@
           {/if}
         </div>
       {/if}
+
+      <div class="field">
+        <label for="bug-title">Title <span class="optional">(optional — auto-generated from description if blank)</span></label>
+        <input
+          id="bug-title"
+          type="text"
+          bind:value={title}
+          placeholder="Short summary, e.g. 'Heavy ions crash compute'"
+          maxlength="70"
+        />
+      </div>
 
       <div class="field">
         <label for="bug-desc">Description <span class="required">*</span></label>
