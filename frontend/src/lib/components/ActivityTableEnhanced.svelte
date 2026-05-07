@@ -5,6 +5,7 @@
   import { getDoseConstant, type DoseSource } from "../utils/dose-constants";
   import { toggleIsotope, isSelected, clearSelection, getSelectedIsotopes } from "../stores/selection.svelte";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
+  import { formatReaction } from "../format";
 
   interface Props {
     result: SimulationResult;
@@ -429,7 +430,7 @@
             <td class="col-a">{row.A}</td>
             <td class="col-hl">{formatHalfLife(row.half_life_s)}</td>
             <td class="col-reaction">
-              {#each [...row.reactions, ...row.decayNotations] as rxn, i}{#if i > 0}, {/if}{rxn}{/each}
+              {#each [...row.reactions, ...row.decayNotations] as rxn, i}{#if i > 0}, {/if}{formatReaction(rxn)}{/each}
               {#if row.reactions.length === 0 && row.decayNotations.length === 0 && row.source === "daughter"}decay{/if}
             </td>
             <td class="col-act">{fmtActivity(row.activity_eob_Bq)}</td>
