@@ -658,6 +658,32 @@ mod tests {
     /// fallback `"0.0.0-unknown"` ships, which would silently 404 on
     /// every fetch. Catch that in CI by asserting the version parses
     /// as N.N.N. The fallback `0.0.0-unknown` fails the dot-count check.
+    /// SSoT pattern for the release URL. Pins the host/path shape so a
+    /// silent string-edit elsewhere in the tree gets caught here. Don't
+    /// remove without also updating the `data-fetch-meta.ts` consumer
+    /// and any docs/CI that grep for the URL.
+    #[test]
+    fn release_url_pattern_is_canonical() {
+        let url = release_url();
+        assert!(
+            url.starts_with("https://github.com/exoma-ch/nucl-parquet/releases/download/v"),
+            "release_url() = {url:?} drifted from the canonical host/path"
+        );
+        assert!(
+            url.ends_with(".tar.zst"),
+            "release_url() = {url:?} should end with .tar.zst"
+        );
+        let fname = tarball_filename();
+        assert!(
+            fname.starts_with("nucl-parquet-data-v") && fname.ends_with(".tar.zst"),
+            "tarball_filename() = {fname:?} drifted"
+        );
+        assert!(
+            url.ends_with(&fname),
+            "release_url() = {url:?} does not end in tarball_filename() = {fname:?}"
+        );
+    }
+
     #[test]
     fn data_version_is_resolved_from_submodule() {
         assert_ne!(DATA_VERSION, "0.0.0-unknown",

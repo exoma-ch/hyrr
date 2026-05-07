@@ -70,6 +70,26 @@ jobs:
           HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
         run: cargo test --test projectile_matrix -- --include-ignored
 
+  data-fetch-ssot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert docs do not pin a concrete data tarball version
+        run: |
+          # SSoT: tarball filename pattern lives in core/src/data_fetch.rs.
+          # Concrete `vN.N.N` URLs in markdown drift silently when the
+          # submodule version bumps. Use placeholder `<V>` instead.
+          if grep -RnE 'nucl-parquet-data-v[0-9]+\.[0-9]+\.[0-9]+\.tar\.zst' docs/; then
+            echo "::error::docs hardcodes a concrete data-tarball version. Use <V> placeholder; SSoT is hyrr_core::data_fetch::release_url()."
+            exit 1
+          fi
+      - name: Assert RELEASE_BASE host appears verbatim in data_fetch.rs
+        run: |
+          grep -q '"https://github.com/exoma-ch/nucl-parquet/releases/download"' core/src/data_fetch.rs || {
+            echo "::error::RELEASE_BASE literal in core/src/data_fetch.rs has drifted; CI/docs assertions need updating in lockstep."
+            exit 1
+          }
+
   supplier-catalog-freshness:
     runs-on: ubuntu-latest
     steps:
