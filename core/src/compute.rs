@@ -139,13 +139,25 @@ fn compute_layer(
 
     let sp_sources = get_stopping_sources(db, projectile, &composition)?;
 
-    // Validated above via `compute_thickness_from_energy` / `compute_energy_out`,
-    // so the inner `dedx_mev_per_cm` cannot return an error for this layer's
-    // source/target combo. Use the panicking _scalar/_unchecked helper inside
-    // the closure to keep the existing `Fn(&[f64]) -> Vec<f64>` shape.
+    // Validate the FULL energy range the layer's grid will query — both ends.
+    // `compute_energy_out` only checks the entrance energy; if integration
+    // brings residual below the table_min for the chosen catima source, the
+    // downstream `linspace(energy_out.max(0.01), energy_in)` will produce
+    // points below table_min and the closure's `.expect()` would panic mid-
+    // loop. Surfacing here propagates a typed StoppingError::EnergyOutOfRange
+    // to the frontend recovery card. See #150 (panic-class follow-up to #142).
+    let layer_e_low_for_validate = energy_out.max(0.01);
+    dedx_mev_per_cm(
+        db,
+        projectile,
+        &composition,
+        density,
+        &[layer_e_low_for_validate, energy_in],
+    )?;
+
     let dedx_fn = |energies: &[f64]| -> Vec<f64> {
         dedx_mev_per_cm(db, projectile, &composition, density, energies)
-            .expect("dedx_fn: layer-level prevalidation should have caught any miss")
+            .expect("dedx_fn: layer-level prevalidation above guarantees coverage")
     };
     let _ = dedx_mev_per_cm_scalar; // silence unused-import noise on some build configs
 

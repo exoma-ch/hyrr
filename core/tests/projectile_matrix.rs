@@ -141,3 +141,59 @@ fn unsupported_heavy_ion_returns_typed_error_not_panic() {
         Ok(_) => panic!("expected error for unsupported Cl-35, got Ok"),
     }
 }
+
+#[test]
+#[ignore = "requires bundled nucl-parquet data; run with --include-ignored after submodule init"]
+fn thick_target_residual_below_table_min_returns_typed_error_not_panic() {
+    // Regression for #150. compute_energy_out used dedx_mev_per_cm_scalar
+    // (panicking) inside its integration loop, and compute_layer's downstream
+    // closure also `.expect()`'d on a layer-grid linspace that could land
+    // below catima table_min. A thick Cu foil with a heavy-ion projectile
+    // brings residual energy below 0.012 MeV (catima_C12 table_min) — must
+    // surface as Err(EnergyOutOfRange), not a panic.
+    let Some(mut db) = make_db("tendl-2025") else {
+        eprintln!("skipping: no nucl-parquet data dir found");
+        return;
+    };
+    let Some(proj) = ProjectileType::from_str("C-12") else {
+        eprintln!("skipping: C-12 not parseable in this build");
+        return;
+    };
+    let _ = db.load_xs("C-12", 29);
+
+    // 100 µm Cu (ρ=8.96 g/cm³ → 0.0896 g/cm² areal) at only 5 MeV is
+    // intentionally too thick — the integration WILL drive residual energy
+    // through the table_min boundary.
+    let cu = resolve_material(&db, "Cu", None);
+    let layer = Layer {
+        density_g_cm3: cu.density,
+        elements: cu.elements.clone(),
+        thickness_cm: Some(100.0e-4),
+        areal_density_g_cm2: None,
+        energy_out_mev: None,
+        is_monitor: false,
+        computed_energy_in: 0.0,
+        computed_energy_out: 0.0,
+        computed_thickness: 0.0,
+    };
+    let mut stack = TargetStack {
+        beam: Beam::new(proj, 5.0, 0.04),
+        layers: vec![layer],
+        irradiation_time_s: 1.0,
+        cooling_time_s: 0.0,
+        area_cm2: 1.0,
+        current_profile: None,
+    };
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compute_stack(&db, &mut stack, true)
+    }));
+    let inner = outcome.expect(
+        "compute_stack PANICKED on residual-below-table_min — must return typed Err (#150)",
+    );
+    match inner {
+        Err(StoppingError::EnergyOutOfRange { .. }) => {} // expected
+        Err(other) => panic!("expected EnergyOutOfRange, got {other:?}"),
+        Ok(_) => panic!("expected EnergyOutOfRange for thick C-12 stack, got Ok"),
+    }
+}

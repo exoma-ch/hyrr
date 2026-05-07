@@ -396,8 +396,12 @@ pub fn compute_energy_out(
     let mut energy = energy_in_mev;
 
     for _ in 0..n_points {
-        let loss = dedx_mev_per_cm_scalar(db, projectile, composition, density_g_cm3, energy) * dx;
-        energy -= loss;
+        // Use the Result variant so a mid-loop drop below table_min surfaces
+        // as typed Err(EnergyOutOfRange) instead of panicking via _scalar.
+        // See #150 — without this, heavy-ion stacks that bring residual
+        // energy below the catima table-min crash compute opaquely.
+        let dedx = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy])?;
+        energy -= dedx[0] * dx;
         if energy <= 0.0 {
             return Ok(0.0);
         }
