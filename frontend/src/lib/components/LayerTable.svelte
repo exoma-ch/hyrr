@@ -174,10 +174,6 @@
     background: var(--c-red-tint-faint);
   }
 
-  .group-boundary td {
-    border-top: 2px dashed var(--c-accent);
-  }
-
   .layer-error {
     display: block;
     font-size: 0.65rem;
@@ -222,7 +218,6 @@
       background: var(--c-bg-hover);
     }
 
-    .total-row .col-idx,
     .total-row .col-mat {
       background: var(--c-bg-subtle);
     }

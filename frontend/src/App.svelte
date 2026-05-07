@@ -386,8 +386,12 @@
     </div>
 
     {#if historyOpen}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="history-overlay" onclick={() => setHistoryOpen(false)}></div>
+      <div
+        class="history-overlay"
+        role="presentation"
+        onclick={() => setHistoryOpen(false)}
+        onkeydown={(e) => { if (e.key === "Escape") setHistoryOpen(false); }}
+      ></div>
       <div class="history-drawer">
         <div class="panel">
           <div class="panel-header">

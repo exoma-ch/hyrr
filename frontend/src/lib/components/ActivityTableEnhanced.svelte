@@ -576,104 +576,10 @@
     color: var(--c-text);
   }
 
-  .action-btn.has-filters {
-    border-color: var(--c-accent);
-    color: var(--c-accent);
-  }
-
   .row-count {
     font-size: 0.65rem;
     color: var(--c-text-subtle);
     font-variant-numeric: tabular-nums;
-  }
-
-  /* Filter panel */
-  .filter-panel {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 1rem;
-    padding: 0.5rem;
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    align-items: center;
-  }
-
-  .filter-section {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-  }
-
-  .filter-section-wide {
-    flex-basis: 100%;
-  }
-
-  .filter-label {
-    font-size: 0.65rem;
-    color: var(--c-text-subtle);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    white-space: nowrap;
-  }
-
-  .filter-input {
-    width: 90px;
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text);
-    padding: 0.2rem 0.35rem;
-    font-size: 0.7rem;
-  }
-
-  .filter-input:focus {
-    outline: none;
-    border-color: var(--c-accent);
-  }
-
-  .filter-num {
-    width: 38px;
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text);
-    padding: 0.2rem 0.3rem;
-    font-size: 0.7rem;
-    text-align: center;
-  }
-
-  .filter-num:focus {
-    outline: none;
-    border-color: var(--c-accent);
-  }
-
-  .filter-num-wide {
-    width: 60px;
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text);
-    padding: 0.2rem 0.3rem;
-    font-size: 0.7rem;
-    text-align: right;
-  }
-
-  .filter-num-wide:focus {
-    outline: none;
-    border-color: var(--c-accent);
-  }
-
-  .filter-sep {
-    color: var(--c-text-faint);
-    font-size: 0.7rem;
-  }
-
-
-  .chip-group {
-    display: flex;
-    gap: 0.2rem;
-    flex-wrap: wrap;
   }
 
   .chip {
@@ -697,19 +603,6 @@
     background: var(--c-bg-active);
     border-color: var(--c-accent);
     color: var(--c-accent);
-  }
-
-  .clear-btn {
-    background: none;
-    border: none;
-    color: var(--c-red);
-    font-size: 0.65rem;
-    cursor: pointer;
-    padding: 0.2rem 0.35rem;
-  }
-
-  .clear-btn:hover {
-    text-decoration: underline;
   }
 
   /* Table */
@@ -831,15 +724,6 @@
     .action-btn {
       padding: 0.35rem 0.6rem;
       font-size: 0.75rem;
-    }
-
-    .filter-panel {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .filter-section {
-      width: 100%;
     }
   }
 </style>

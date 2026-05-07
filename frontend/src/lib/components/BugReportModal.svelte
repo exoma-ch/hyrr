@@ -422,7 +422,7 @@
       </div>
 
       <div class="field">
-        <label>Screenshot <span class="optional">(optional)</span></label>
+        <span class="field-label">Screenshot <span class="optional">(optional)</span></span>
         {#if screenshotPreview}
           <div class="preview-wrap">
             <img src={screenshotPreview} alt="Screenshot preview" class="preview-img" />
@@ -627,7 +627,7 @@
     gap: 0.2rem;
   }
 
-  label {
+  label, .field-label {
     font-size: 0.75rem;
     color: var(--c-text-label);
   }
