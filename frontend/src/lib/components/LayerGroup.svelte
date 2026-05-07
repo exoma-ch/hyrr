@@ -65,6 +65,7 @@
 
 <div class="layer-group" role="group">
   <button class="remove-group-btn" onclick={onRemove} title="Remove group">×</button>
+  <!-- TODO(#139): keyboard reorder (Alt+Arrow) for drag-drop layer cards is out of scope here. -->
   <!-- Layer cards -->
   {#each group.layers as layer, i (i)}
     {#if i > 0}
@@ -74,6 +75,8 @@
       class="layer-card"
       class:dragging={dragIdx === i}
       class:drag-over={dragOverIdx === i}
+      role="group"
+      aria-label={`Layer G${groupIndex + 1}.${i + 1}`}
       draggable="true"
       ondragstart={(e) => { dragIdx = i; e.dataTransfer?.setData("text/plain", String(i)); }}
       ondragover={(e) => { e.preventDefault(); if (dragIdx !== null) e.stopPropagation(); dragOverIdx = i; }}

@@ -51,18 +51,20 @@
     }}
   />
 
-  <label class="balance-label" role="gridcell" title="Use this row to balance to 100% — click again to clear">
-    <input
-      type="checkbox"
-      checked={row.isBalance}
-      aria-label={row.isBalance ? `Clear balance for ${row.formula}` : `Set ${row.formula} as the balance row`}
-      onchange={(e) => {
-        const checked = (e.target as HTMLInputElement).checked;
-        onchange({ isBalance: checked, ...(checked ? { value: null } : {}) });
-      }}
-    />
-    <span class="balance-text">balance</span>
-  </label>
+  <div role="gridcell">
+    <label class="balance-label" title="Use this row to balance to 100% — click again to clear">
+      <input
+        type="checkbox"
+        checked={row.isBalance}
+        aria-label={row.isBalance ? `Clear balance for ${row.formula}` : `Set ${row.formula} as the balance row`}
+        onchange={(e) => {
+          const checked = (e.target as HTMLInputElement).checked;
+          onchange({ isBalance: checked, ...(checked ? { value: null } : {}) });
+        }}
+      />
+      <span class="balance-text">balance</span>
+    </label>
+  </div>
 
   {#if singleElement && oneditenrichment}
     <button
