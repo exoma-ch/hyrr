@@ -555,6 +555,98 @@ pub fn install_from_tarball(archive: &Path) -> Result<()> {
     install_tarball_atomic(archive, &["data"])
 }
 
+/// Parse a `v{N}.{N}.{N}` directory name into a sortable tuple. Returns
+/// `None` for anything that doesn't match — the directory is treated as
+/// not-a-version-cache and left alone.
+///
+/// We roll our own rather than pull in `semver` because the cache layout
+/// only ever produces strict 3-part numeric versions (the data tarballs
+/// are pinned to nucl-parquet's pyproject version, which is a 3-tuple).
+fn parse_version_dir(name: &str) -> Option<(u64, u64, u64)> {
+    let s = name.strip_prefix('v')?;
+    let mut parts = s.split('.');
+    let major = parts.next()?.parse::<u64>().ok()?;
+    let minor = parts.next()?.parse::<u64>().ok()?;
+    let patch = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+/// Prune older `v{N.N.N}/` cache directories, keeping only the `keep`
+/// most recent (by semver order) plus the current `DATA_VERSION` dir.
+///
+/// Returns the number of directories removed. Idempotent: a second call
+/// with the same `keep` returns `0`.
+///
+/// The cache lock is held for the whole sweep so a concurrent
+/// `ensure_library` cannot promote a partial dir we're about to delete,
+/// and we cannot delete a sibling that another process is mid-extracting.
+///
+/// `v{V}.partial-*` partial dirs and any non-version entries (`.lock`,
+/// `.tmp` tarballs, the user's stray notes) are ignored.
+pub fn prune_old_versions(keep: usize) -> Result<usize> {
+    let _lock = acquire_lock()?;
+    let root = cache_root()?;
+    if !root.exists() {
+        return Ok(0);
+    }
+
+    let current = parse_version_dir(&format!("v{DATA_VERSION}"));
+
+    let mut versioned: Vec<(PathBuf, (u64, u64, u64))> = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        // Don't follow symlinks — a chmod / move accident could otherwise
+        // wipe data outside the cache.
+        let ft = entry.file_type()?;
+        if !ft.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if let Some(ver) = parse_version_dir(&name_str) {
+            versioned.push((entry.path(), ver));
+        }
+    }
+
+    // Newest first.
+    versioned.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Keep set = {current} ∪ {`keep` most recent versions not equal to current}.
+    // The current pin is always preserved (the user might be mid-fetch);
+    // `keep` controls how many historical siblings to preserve on top of
+    // that. So `keep=2` with current=v0.10.0 and siblings v0.0.1..v0.0.5
+    // preserves {v0.10.0, v0.0.5, v0.0.4} = 3 dirs.
+    let mut kept: std::collections::HashSet<(u64, u64, u64)> =
+        std::collections::HashSet::new();
+    if let Some(c) = current {
+        kept.insert(c);
+    }
+    let mut historical_taken = 0usize;
+    for (_, ver) in &versioned {
+        if historical_taken == keep {
+            break;
+        }
+        if Some(*ver) == current {
+            continue;
+        }
+        kept.insert(*ver);
+        historical_taken += 1;
+    }
+
+    let mut removed = 0usize;
+    for (path, ver) in &versioned {
+        if kept.contains(ver) {
+            continue;
+        }
+        fs::remove_dir_all(path)?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,5 +880,105 @@ mod tests {
 
         assert!(!stale.exists(), "stale partial-99999 was not swept");
         assert!(is_cache_complete());
+    }
+
+    /// Plant `v0.1.0..v0.5.0` directories with `.complete` sentinels.
+    /// `prune_old_versions(2)` keeps the 2 newest plus the current
+    /// DATA_VERSION pin. Idempotency: a second call returns 0. A keep
+    /// value larger than the population removes nothing.
+    fn plant_version_dirs(root: &Path, versions: &[&str]) {
+        for v in versions {
+            let dir = root.join(format!("v{v}"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(".complete"), v).unwrap();
+        }
+    }
+
+    #[test]
+    fn prune_keeps_newest_n_plus_current() {
+        let _g = SERIAL.lock().unwrap();
+        let _td = isolated_home();
+        let root = cache_root().unwrap();
+        fs::create_dir_all(&root).unwrap();
+
+        // Plant 5 ancient versions all guaranteed strictly older than
+        // any plausible DATA_VERSION. This keeps the test invariant
+        // independent of the actual current pin.
+        let planted = ["0.0.1", "0.0.2", "0.0.3", "0.0.4", "0.0.5"];
+        plant_version_dirs(&root, &planted);
+        // Plant the current DATA_VERSION dir too.
+        plant_version_dirs(&root, &[DATA_VERSION]);
+
+        let removed = prune_old_versions(2).unwrap();
+
+        // Expected: keep v0.0.5, v0.0.4 (newest 2 of the planted set;
+        // DATA_VERSION sorts newer than all of them and is also kept by
+        // the current-pin rule). 5 planted + 1 current = 6 dirs total,
+        // minus 3 kept = 3 removed.
+        assert_eq!(removed, 3);
+        assert!(root.join("v0.0.5").exists());
+        assert!(root.join("v0.0.4").exists());
+        assert!(root.join(format!("v{DATA_VERSION}")).exists());
+        assert!(!root.join("v0.0.1").exists());
+        assert!(!root.join("v0.0.2").exists());
+        assert!(!root.join("v0.0.3").exists());
+
+        // Idempotency.
+        let removed2 = prune_old_versions(2).unwrap();
+        assert_eq!(removed2, 0);
+    }
+
+    #[test]
+    fn prune_with_large_keep_removes_nothing() {
+        let _g = SERIAL.lock().unwrap();
+        let _td = isolated_home();
+        let root = cache_root().unwrap();
+        fs::create_dir_all(&root).unwrap();
+        plant_version_dirs(&root, &["0.1.0", "0.2.0", "0.3.0"]);
+
+        let removed = prune_old_versions(10).unwrap();
+        assert_eq!(removed, 0);
+        for v in &["0.1.0", "0.2.0", "0.3.0"] {
+            assert!(root.join(format!("v{v}")).exists());
+        }
+    }
+
+    /// Non-version directories (e.g. `data/`, `notes/`) and stray files
+    /// are left untouched by prune.
+    #[test]
+    fn prune_ignores_non_version_entries() {
+        let _g = SERIAL.lock().unwrap();
+        let _td = isolated_home();
+        let root = cache_root().unwrap();
+        fs::create_dir_all(&root).unwrap();
+        plant_version_dirs(&root, &["0.1.0", "0.2.0"]);
+        fs::create_dir_all(root.join("not-a-version")).unwrap();
+        fs::create_dir_all(root.join(format!("v{DATA_VERSION}.partial-1234"))).unwrap();
+        fs::write(root.join(".lock"), b"").unwrap();
+
+        let _ = prune_old_versions(0).unwrap();
+        assert!(root.join("not-a-version").exists());
+        assert!(
+            root.join(format!("v{DATA_VERSION}.partial-1234")).exists(),
+            "partial dirs are install_tarball_atomic's responsibility, not prune's"
+        );
+        assert!(root.join(".lock").exists());
+    }
+
+    /// `prune_old_versions` must acquire the cache lock; verify it doesn't
+    /// deadlock against itself when called sequentially in the same test.
+    #[test]
+    fn prune_is_lock_safe_when_called_sequentially() {
+        let _g = SERIAL.lock().unwrap();
+        let _td = isolated_home();
+        let root = cache_root().unwrap();
+        fs::create_dir_all(&root).unwrap();
+        plant_version_dirs(&root, &["0.1.0", "0.2.0", "0.3.0", "0.4.0"]);
+
+        // Two sequential calls — the lock guard from the first call must
+        // be dropped before the second acquires.
+        let _ = prune_old_versions(1).unwrap();
+        let removed = prune_old_versions(1).unwrap();
+        assert_eq!(removed, 0);
     }
 }
