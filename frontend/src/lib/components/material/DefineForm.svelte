@@ -1038,8 +1038,6 @@
 
   .compose-chip:hover { color: var(--c-accent); border-color: var(--c-accent); }
 
-  .compose-pt { /* PT renders its own inner styling */ }
-
   .compose-side {
     border-left: 1px solid var(--c-border);
     padding-left: 0.6rem;

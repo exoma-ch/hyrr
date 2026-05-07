@@ -834,29 +834,6 @@
 
   .rnp-clear:hover { color: var(--c-red); border-color: var(--c-red); }
 
-  .layer-chips {
-    display: flex;
-    gap: 0.3rem;
-    padding: 0.15rem 0.5rem;
-    overflow-x: auto;
-  }
-
-  .chip {
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 12px;
-    color: var(--c-text-muted);
-    padding: 0.15rem 0.5rem;
-    font-size: 0.65rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .chip.active {
-    border-color: var(--c-accent);
-    color: var(--c-text);
-  }
-
   .plot {
     width: 100%;
     min-height: 350px;
