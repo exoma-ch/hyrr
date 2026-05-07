@@ -2,6 +2,22 @@
  * Shared isotope filter state — consumed by activity plot, table, and production depth.
  */
 
+/** Map Greek render forms back to the ASCII identifier used in extracted
+ * reaction-mechanism keys, so a filter chip showing "β⁻" toggles the same
+ * Set entry that the mechanism extractor produced from the wire data. */
+const MECHANISM_ALIAS: Record<string, string> = {
+  "β⁺": "β+",
+  "β⁻": "β-",
+};
+
+function canonicalizeMechanism(mech: string): string {
+  let out = mech;
+  for (const [greek, ascii] of Object.entries(MECHANISM_ALIAS)) {
+    out = out.split(greek).join(ascii);
+  }
+  return out;
+}
+
 export interface IsotopeFilter {
   text: string;              // name substring match
   layers: Set<number>;       // empty = all layers
@@ -51,8 +67,9 @@ export function clearFilterLayers(): void {
 }
 
 export function toggleFilterReaction(mech: string): void {
+  const key = canonicalizeMechanism(mech);
   const next = new Set(filter.reactions);
-  if (next.has(mech)) next.delete(mech); else next.add(mech);
+  if (next.has(key)) next.delete(key); else next.add(key);
   filter.reactions = next;
 }
 
