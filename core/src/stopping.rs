@@ -110,8 +110,15 @@ pub fn elemental_dedx(
         let (result, _) = get_interpolated_dedx(db, SOURCE_ASTAR, target_z, &lookup);
         result
     } else {
-        // Heavy ion: look up pre-generated catima table from nucl-parquet
-        let source = format!("{}{}", SOURCE_CATIMA_PREFIX, projectile.symbol_string());
+        // Heavy ion: look up pre-generated catima table from nucl-parquet.
+        // `symbol_string()` returns "O-16"; the bundled parquet is named
+        // `catima_O16.parquet` (no dash). Strip the dash so the source key
+        // matches the on-disk filename. Reported in #137.
+        let source = format!(
+            "{}{}",
+            SOURCE_CATIMA_PREFIX,
+            projectile.symbol_string().replace('-', "")
+        );
         let (result, _) = get_interpolated_dedx(db, &source, target_z, energies_mev);
         result
     }
@@ -139,7 +146,11 @@ pub fn get_stopping_source(
     } else if proj.z == 2 {
         SOURCE_ASTAR.to_string()
     } else {
-        format!("{}{}", SOURCE_CATIMA_PREFIX, projectile.symbol_string())
+        format!(
+            "{}{}",
+            SOURCE_CATIMA_PREFIX,
+            projectile.symbol_string().replace('-', "")
+        )
     };
     let (_, label) = get_interpolated_dedx(db, &source, target_z, &[10.0]);
     label
