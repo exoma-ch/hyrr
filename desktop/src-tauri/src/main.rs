@@ -23,7 +23,8 @@ fn main() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init());
 
     // Auto-updater: skip on Linux package-manager installs (.deb / .rpm),
     // where the OS owns updates and a parallel auto-updater would conflict

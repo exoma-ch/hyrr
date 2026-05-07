@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { getConfig } from "../stores/config.svelte";
+  import { getConfig, getSerializableConfig } from "../stores/config.svelte";
   import { getResult } from "../stores/results.svelte";
   import { getShareableUrl } from "../config-url";
   import { getBugReportOpen, closeBugReport } from "../stores/bugreport.svelte";
   import { isTauri } from "../utils/platform";
+  import { openExternalUrl } from "../utils/open-url";
 
   let open = $derived(getBugReportOpen());
 
@@ -38,6 +39,15 @@
     !submitting
   );
   let canOpenGitHub = $derived((description.trim().length > 0 || screenshot !== null) && !submitting);
+  /** Why the GH/email/save buttons are disabled, so the title= tooltip can
+   *  tell the user what's missing instead of nothing happening on click. */
+  let disabledReason = $derived.by(() => {
+    if (submitting) return "Submitting…";
+    if (description.trim().length === 0 && screenshot === null) {
+      return "Add a description or attach a screenshot first";
+    }
+    return "";
+  });
 
   // Localhost / dev: the Cloudflare Turnstile widget doesn't validate and the
   // worker rejects submissions, so the direct Submit path is dead. Fall
@@ -203,7 +213,10 @@
   function buildBody(screenshotUrl?: string): string {
     const config = getConfig();
     const result = getResult();
-    const configUrl = getShareableUrl(config);
+    // getShareableUrl requires SerializableConfig (with `items`, group-aware);
+    // getConfig returns SimulationConfig (flat `layers`). Use the right shape
+    // for the URL, keep the flat shape for the human-readable debug summary.
+    const configUrl = getShareableUrl(getSerializableConfig());
 
     const sections: string[] = [];
 
@@ -296,7 +309,7 @@
       labels: reportType === "bug" ? "bug" : "enhancement",
     }).toString();
 
-    window.open(url, "_blank");
+    void openExternalUrl(url);
     resetForm();
     closeBugReport();
   }
@@ -468,7 +481,7 @@
             class="gh-btn"
             onclick={openOnGitHub}
             disabled={!canOpenGitHub}
-            title="Opens GitHub in your browser (needs internet)"
+            title={disabledReason || "Opens GitHub in your browser (needs internet)"}
           >
             Open on GitHub
           </button>
@@ -476,7 +489,7 @@
             class="submit-btn"
             onclick={saveToFile}
             disabled={!canOpenGitHub || submitting}
-            title="Save report as a file to share later"
+            title={disabledReason || "Save report as a file to share later"}
           >
             {#if submitting}Saving...{:else}Save to file{/if}
           </button>
@@ -485,7 +498,7 @@
             class="gh-btn"
             onclick={openOnGitHub}
             disabled={!canOpenGitHub}
-            title="Opens GitHub — you'll review before submitting"
+            title={disabledReason || "Opens GitHub — you'll review before submitting"}
           >
             Open on GitHub
           </button>
@@ -494,7 +507,7 @@
               class="gh-btn"
               onclick={openMailto}
               disabled={!canOpenGitHub}
-              title="Send via your email client"
+              title={disabledReason || "Send via your email client"}
             >
               Email
             </button>
