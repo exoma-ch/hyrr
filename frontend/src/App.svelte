@@ -18,6 +18,7 @@
   } from "./lib/stores/config.svelte";
   import {
     getResult,
+    getResultError,
     getStatus,
     getProgress,
     getComputeError,
@@ -79,6 +80,7 @@
   let status = $derived(getStatus());
   let result = $derived(getResult());
   let computeError = $derived(getComputeError());
+  let resultError = $derived(getResultError());
   let historyOpen = $derived(getHistoryOpen());
 
   // Popup state
@@ -398,6 +400,10 @@
           <IsotopeFilterBar {result} />
           <PlotActivityCurve {result} />
           <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
+        {:else if resultError}
+          <p class="compute-error-placeholder">
+            Compute failed: <code>{String(resultError)}</code>
+          </p>
         {/if}
       {:else}
         <WelcomeScreen onstart={forceRun} />
