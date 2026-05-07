@@ -90,7 +90,10 @@ jobs:
           version: latest
 
       - name: Build WASM compute engine
-        run: wasm-pack build wasm/ --target web --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+        # --no-opt skips wasm-opt; the cached binaryen wasm-pack ships is too
+        # old for multi-table output on macOS. Tests don't care about size,
+        # and deploy-frontend.yml still optimizes for production.
+        run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
 
       - uses: actions/setup-node@v4
         with:
@@ -178,9 +181,14 @@ jobs:
             chromium_path: /usr/bin/chromium-browser
             setup: |
               set -euxo pipefail
-              dnf install -y git curl gcc gcc-c++ make nodejs npm rust cargo chromium jq tar findutils
-              cargo install wasm-pack --locked
+              # Fedora's `rust` rpm ships without the wasm32 target stdlib;
+              # use rustup instead so we can `rustup target add wasm32-…`.
+              dnf install -y git curl gcc gcc-c++ make nodejs npm chromium jq tar findutils
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+                sh -s -- -y --profile minimal --default-toolchain stable --target wasm32-unknown-unknown
               echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+              . "$HOME/.cargo/env"
+              cargo install wasm-pack --locked
           - distro: debian
             image: debian:12
             chromium_path: /usr/bin/chromium
@@ -252,7 +260,7 @@ jobs:
           cp nucl-parquet/data/endfb-8.1/xs/n_*.parquet frontend/public/data/parquet/neutron-xs/
 
       - name: Build WASM compute engine
-        run: wasm-pack build wasm/ --target web --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+        run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
 
       - name: npm install
         working-directory: frontend
