@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyRowPatch,
   generateRowId,
   inferMode,
   isTabulatedDensity,
@@ -311,9 +312,11 @@ describe("validate", () => {
     expect(issues.filter((i) => /duplicate/i.test(i.message)).length).toBe(1);
   });
 
-  it("validateSingle rejects balance rows", () => {
+  it("validateSingle does not error on balance rows (auto-cleared on mode switch)", () => {
     const rows: Row[] = [row({ formula: "Al", value: null, isBalance: true })];
-    expect(validateSingle(rows).some((i) => /balance/i.test(i.message))).toBe(true);
+    const issues = validateSingle(rows);
+    expect(issues.some((i) => /balance/i.test(i.message))).toBe(false);
+    expect(issues.some((i) => /stoichiometric/i.test(i.message))).toBe(false);
   });
 
   it("validateAtom flags sum != 1 (no balance)", () => {
@@ -387,5 +390,39 @@ describe("rowAverageAtomicMass", () => {
 
   it("single element returns its standard weight", () => {
     expect(rowAverageAtomicMass("Cu")).toBeCloseTo(63.55, 1);
+  });
+});
+
+describe("applyRowPatch (form-level balance invariant)", () => {
+  it("setting isBalance=true on one row clears it on all other rows", () => {
+    const rows: Row[] = [
+      row({ id: "a", formula: "Fe", value: 50, isBalance: false }),
+      row({ id: "b", formula: "Cr", value: null, isBalance: true }),
+      row({ id: "c", formula: "Ni", value: 30, isBalance: false }),
+    ];
+    const next = applyRowPatch(rows, "a", { isBalance: true, value: null });
+    expect(next.find((r) => r.id === "a")!.isBalance).toBe(true);
+    expect(next.find((r) => r.id === "b")!.isBalance).toBe(false);
+    expect(next.find((r) => r.id === "c")!.isBalance).toBe(false);
+    expect(next.filter((r) => r.isBalance).length).toBe(1);
+  });
+
+  it("setting isBalance=false (un-toggle) leaves zero balance rows", () => {
+    const rows: Row[] = [
+      row({ id: "a", formula: "Fe", value: 50, isBalance: false }),
+      row({ id: "b", formula: "Cr", value: null, isBalance: true }),
+    ];
+    const next = applyRowPatch(rows, "b", { isBalance: false });
+    expect(next.filter((r) => r.isBalance).length).toBe(0);
+  });
+
+  it("non-balance patch leaves other rows' isBalance untouched", () => {
+    const rows: Row[] = [
+      row({ id: "a", formula: "Fe", value: 50, isBalance: false }),
+      row({ id: "b", formula: "Cr", value: null, isBalance: true }),
+    ];
+    const next = applyRowPatch(rows, "a", { value: 60 });
+    expect(next.find((r) => r.id === "a")!.value).toBe(60);
+    expect(next.find((r) => r.id === "b")!.isBalance).toBe(true);
   });
 });
