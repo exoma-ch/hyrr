@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getConfig } from "../stores/config.svelte";
+  import { getConfig, getSerializableConfig } from "../stores/config.svelte";
   import { getResult } from "../stores/results.svelte";
   import { getShareableUrl } from "../config-url";
   import { getBugReportOpen, closeBugReport } from "../stores/bugreport.svelte";
@@ -213,7 +213,10 @@
   function buildBody(screenshotUrl?: string): string {
     const config = getConfig();
     const result = getResult();
-    const configUrl = getShareableUrl(config);
+    // getShareableUrl requires SerializableConfig (with `items`, group-aware);
+    // getConfig returns SimulationConfig (flat `layers`). Use the right shape
+    // for the URL, keep the flat shape for the human-readable debug summary.
+    const configUrl = getShareableUrl(getSerializableConfig());
 
     const sections: string[] = [];
 
