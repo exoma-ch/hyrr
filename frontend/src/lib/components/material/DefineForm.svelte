@@ -20,6 +20,7 @@
     updateCustomMaterial,
   } from "../../stores/custom-materials.svelte";
   import {
+    applyRowPatch,
     generateRowId,
     isTabulatedDensity,
     parseMaterialInput,
@@ -161,9 +162,6 @@
     return byRow;
   });
 
-  /** Stable radiogroup name so the browser enforces single-balance selection. */
-  const balanceRadioName = `define-balance-${Math.random().toString(36).slice(2, 10)}`;
-
   // First-time guidance: read flag once on init.
   try {
     if (typeof localStorage !== "undefined" && localStorage.getItem("hyrr.defineform.modeChipSeen") === "1") {
@@ -172,9 +170,15 @@
   } catch { /* no-op */ }
 
   const MODE_LABEL: Record<Mode, string> = {
-    single: "Single formula",
-    mass: "Mass mixture",
-    atom: "Atom mixture",
+    single: "Formula",
+    mass: "wt %",
+    atom: "at %",
+  };
+
+  const MODE_TOOLTIP: Record<Mode, string> = {
+    single: "Chemical formula, e.g. Fe2O3",
+    mass: "Composition by mass fraction",
+    atom: "Composition by atomic fraction",
   };
 
   let modeMenuOpen = $state(false);
@@ -191,19 +195,8 @@
     }
   }
 
-  /** Splice a row immutably with a partial patch. When isBalance flips on,
-   *  also clear it from every other row so only one survives. */
   function patchRow(id: string, patch: Partial<Row>) {
-    rows = rows.map((r) => {
-      if (r.id === id) {
-        return { ...r, ...patch };
-      }
-      // Force-clear other rows' isBalance when the patch turns one on.
-      if (patch.isBalance === true && r.isBalance) {
-        return { ...r, isBalance: false };
-      }
-      return r;
-    });
+    rows = applyRowPatch(rows, id, patch);
   }
 
   function removeRow(id: string) {
@@ -273,6 +266,9 @@
     }
     mode = next;
     modeUserOverride = true;
+    if (next === "single" && rows.some((r) => r.isBalance)) {
+      rows = rows.map((r) => (r.isBalance ? { ...r, isBalance: false } : r));
+    }
   }
 
   // Backwards-compat wrapper — the chip handler / tests still call setMode.
@@ -581,6 +577,7 @@
             class:low-conf={inferenceConfidence === "low"}
             aria-haspopup="true"
             aria-expanded={modeMenuOpen}
+            title={MODE_TOOLTIP[mode]}
             onclick={() => { modeMenuOpen = !modeMenuOpen; dismissModeFirstTime(); }}
           >
             {inferenceConfidence === "low" ? `${MODE_LABEL[mode]}?` : MODE_LABEL[mode]}
@@ -594,6 +591,7 @@
                   role="menuitem"
                   class="mode-option"
                   class:active={mode === m}
+                  title={MODE_TOOLTIP[m]}
                   onclick={() => { setMode(m); modeMenuOpen = false; }}
                 >{MODE_LABEL[m]}</button>
               {/each}
@@ -616,7 +614,6 @@
           {#each rows as r (r.id)}
             <DefineFormRow
               row={r}
-              radioName={balanceRadioName}
               issues={issuesByRow.get(r.id) ?? []}
               onchange={(patch) => patchRow(r.id, patch)}
               onremove={() => removeRow(r.id)}

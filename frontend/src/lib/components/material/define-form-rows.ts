@@ -393,16 +393,28 @@ export function validateAtom(rows: Row[]): Issue[] {
 
 export function validateSingle(rows: Row[]): Issue[] {
   const issues = validateCommon(rows);
-  const balanceRows = rows.filter((r) => r.isBalance);
-  if (balanceRows.length > 0) {
-    issues.push({ level: "error", message: "Single-formula mode does not allow a balance row" });
-  }
   for (const r of rows) {
+    if (r.isBalance) continue;
     if (r.value === null || !Number.isFinite(r.value) || r.value <= 0) {
       issues.push({ rowId: r.id, level: "error", message: "Stoichiometric count must be > 0" });
     }
   }
   return issues;
+}
+
+/**
+ * Apply a partial patch to the row identified by `id`. When the patch turns
+ * `isBalance` on, force-clear it on every other row — this is the form-level
+ * "only one balance row" invariant that used to be enforced by the browser's
+ * radio-group behaviour. With the toggle now a checkbox (#126), the invariant
+ * lives here.
+ */
+export function applyRowPatch(rows: Row[], id: string, patch: Partial<Row>): Row[] {
+  return rows.map((r) => {
+    if (r.id === id) return { ...r, ...patch };
+    if (patch.isBalance === true && r.isBalance) return { ...r, isBalance: false };
+    return r;
+  });
 }
 
 /** Mode-aware dispatch. */

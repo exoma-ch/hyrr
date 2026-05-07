@@ -4,9 +4,6 @@
 
   interface Props {
     row: Row;
-    /** Shared name across all balance radios in this form so the browser
-     *  enforces single-selection within the radiogroup. */
-    radioName: string;
     issues: Issue[];
     /** Parent splices immutably. No bind: into nested $state per #92 §3.2. */
     onchange: (patch: Partial<Row>) => void;
@@ -16,7 +13,7 @@
     oneditenrichment?: (rowId: string, element: string) => void;
   }
 
-  let { row, radioName, issues, onchange, onremove, oneditenrichment }: Props = $props();
+  let { row, issues, onchange, onremove, oneditenrichment }: Props = $props();
 
   /** Single-element rows expose a per-row "E" button to override that
    *  element's isotopic vector. Compound rows hide it (no obvious choice
@@ -54,11 +51,11 @@
     }}
   />
 
-  <label class="balance-label" role="gridcell" title="Use this row to balance to 100%">
+  <label class="balance-label" role="gridcell" title="Use this row to balance to 100% — click again to clear">
     <input
-      type="radio"
-      name={radioName}
+      type="checkbox"
       checked={row.isBalance}
+      aria-label={row.isBalance ? `Clear balance for ${row.formula}` : `Set ${row.formula} as the balance row`}
       onchange={(e) => {
         const checked = (e.target as HTMLInputElement).checked;
         onchange({ isBalance: checked, ...(checked ? { value: null } : {}) });
@@ -164,7 +161,7 @@
     cursor: pointer;
   }
 
-  .balance-label input[type="radio"] {
+  .balance-label input[type="checkbox"] {
     accent-color: var(--c-accent);
     cursor: pointer;
   }
