@@ -1,11 +1,12 @@
 <script lang="ts">
   import { getConfig, getSerializableConfig } from "../stores/config.svelte";
-  import { getResult } from "../stores/results.svelte";
+  import { getResult, getResultError } from "../stores/results.svelte";
+  import { buildBugReportBody } from "./bug-report-body";
   import { getShareableUrl } from "../config-url";
   import { getBugReportOpen, closeBugReport } from "../stores/bugreport.svelte";
   import { isTauri } from "../utils/platform";
   import { openExternalUrl } from "../utils/open-url";
-  import { buildIssueTitle, bodyTitleHeader } from "./bug-report-title";
+  import { buildIssueTitle } from "./bug-report-title";
 
   let open = $derived(getBugReportOpen());
 
@@ -212,42 +213,23 @@
   }
 
   function buildBody(screenshotUrl?: string): string {
-    const config = getConfig();
-    const result = getResult();
     // getShareableUrl requires SerializableConfig (with `items`, group-aware);
     // getConfig returns SimulationConfig (flat `layers`). Use the right shape
     // for the URL, keep the flat shape for the human-readable debug summary.
-    const configUrl = getShareableUrl(getSerializableConfig());
-
-    const sections: string[] = [];
-
-    sections.push(reportType === "bug" ? `## Bug Report` : `## Feature Request`);
-    sections.push(bodyTitleHeader(title, description));
-    sections.push(`**Reporter:** ${name || "Anonymous"}${email ? ` (${email})` : ""}`);
-    sections.push(`## Description\n\n${description}`);
-
-    if (screenshotUrl) {
-      sections.push(`## Screenshot\n\n![screenshot](${screenshotUrl})`);
-    }
-
-    sections.push(`## Debug Context`);
-    sections.push(`**[Reproduce this config](${configUrl})**`);
-    sections.push(`**Beam:** ${config.beam?.projectile ?? "?"} @ ${config.beam?.energy_MeV ?? "?"} MeV, ${config.beam?.current_mA ?? "?"} mA`);
-    const layerNames = (config.layers ?? []).map((l: any) => l.material).join(" → ");
-    sections.push(`**Stack:** ${layerNames || "empty"} (${config.layers?.length ?? 0} layers)`);
-
-    if (result) {
-      const nIso = result.layers.reduce((n: number, l: any) => n + (l.isotopes?.length ?? 0), 0);
-      sections.push(`**Result:** ${nIso} isotopes produced`);
-    } else {
-      sections.push(`**Result:** No simulation result available`);
-    }
-
-    sections.push(`**Version:** ${__APP_VERSION__}`);
-    sections.push(`**Browser:** ${navigator.userAgent}`);
-    sections.push(`**Timestamp:** ${new Date().toISOString()}`);
-
-    return sections.join("\n\n");
+    return buildBugReportBody({
+      reportType,
+      title,
+      name,
+      email,
+      description,
+      screenshotUrl,
+      config: getConfig(),
+      configUrl: getShareableUrl(getSerializableConfig()),
+      result: getResult(),
+      computeError: getResultError(),
+      appVersion: __APP_VERSION__,
+      userAgent: navigator.userAgent,
+    });
   }
 
   /** Submit via worker (requires email + Turnstile). */
