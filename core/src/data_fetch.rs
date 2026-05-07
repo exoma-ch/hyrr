@@ -39,7 +39,60 @@ use fs2::FileExt;
 pub const DATA_VERSION: &str = env!("HYRR_DATA_VERSION");
 
 /// GitHub Releases base URL for nucl-parquet data tarballs.
-const RELEASE_BASE: &str = "https://github.com/exoma-ch/nucl-parquet/releases/download";
+///
+/// This is the SSoT for the release host. All other call sites (Tauri
+/// commands, frontend, docs) MUST flow through [`release_base_url`] /
+/// [`release_url`] / [`release_url_for`] rather than re-spelling the
+/// string.
+pub const RELEASE_BASE: &str = "https://github.com/exoma-ch/nucl-parquet/releases/download";
+
+/// Canonical GitHub-Releases base URL. Prefer this over the `RELEASE_BASE`
+/// const when crossing a module/crate/FFI boundary — it pins downstream
+/// callers on a function rather than on the literal.
+pub fn release_base_url() -> &'static str {
+    RELEASE_BASE
+}
+
+/// Canonical [`DATA_VERSION`] accessor. Same SSoT motivation as
+/// [`release_base_url`] — function-shaped so non-Rust callers (Tauri,
+/// pyo3, MCP) can re-export without reaching into a `pub const`.
+pub fn data_version() -> &'static str {
+    DATA_VERSION
+}
+
+/// Tarball filename for the current [`DATA_VERSION`], e.g.
+/// `nucl-parquet-data-v0.10.0.tar.zst`. Single source of truth for the
+/// pattern — `ensure_*` and the install path consume this.
+pub fn tarball_filename() -> String {
+    tarball_filename_for(DATA_VERSION)
+}
+
+/// Tarball filename for an arbitrary version. Exposed for offline-bundle
+/// docs/tooling that need to spell a non-current version.
+pub fn tarball_filename_for(version: &str) -> String {
+    format!("nucl-parquet-data-v{version}.tar.zst")
+}
+
+/// Full release-tarball URL for the current [`DATA_VERSION`].
+pub fn release_url() -> String {
+    release_url_for(DATA_VERSION)
+}
+
+/// Full release-tarball URL for an arbitrary version.
+pub fn release_url_for(version: &str) -> String {
+    format!(
+        "{RELEASE_BASE}/v{version}/{filename}",
+        filename = tarball_filename_for(version),
+    )
+}
+
+/// Human-readable cache-root pattern for diagnostics / UX, e.g.
+/// `~/.hyrr/nucl-parquet/v0.10.0/data`. The literal returned here is
+/// always interpolated against the live [`DATA_VERSION`]; callers that
+/// need an actual filesystem path should use [`cache_dir`] instead.
+pub fn cache_root_pattern() -> String {
+    format!("~/.hyrr/nucl-parquet/v{DATA_VERSION}/data")
+}
 
 /// Errors surfaced by the data-fetch path.
 #[derive(Debug, thiserror::Error)]
@@ -137,9 +190,7 @@ impl Drop for TmpFileGuard {
 ///
 /// Streams the response to disk — does not buffer the full ~400 MB in RAM.
 pub fn fetch_full_tarball_to(out: &Path) -> Result<()> {
-    let url = format!(
-        "{RELEASE_BASE}/v{DATA_VERSION}/nucl-parquet-data-v{DATA_VERSION}.tar.zst"
-    );
+    let url = release_url();
     let client = build_http_client().map_err(|e| FetchError::Network(e.to_string()))?;
     let resp = client
         .get(&url)
@@ -369,7 +420,7 @@ pub fn ensure_meta_stopping() -> Result<()> {
         return Ok(());
     }
     require_free_space(1024 * 1024 * 1024)?;
-    let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
+    let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
     fetch_full_tarball_to(&tmp)?;
     install_tarball_atomic(&tmp, MANDATORY_PREFIXES)?;
@@ -396,7 +447,7 @@ pub fn ensure_library(library: &str) -> Result<()> {
         return Ok(());
     }
     require_free_space(1024 * 1024 * 1024)?;
-    let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
+    let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
     fetch_full_tarball_to(&tmp)?;
     let lib_prefix = format!("data/{library}/");
@@ -417,7 +468,7 @@ pub fn ensure_library(library: &str) -> Result<()> {
 pub fn ensure_all() -> Result<()> {
     let _lock = acquire_lock()?;
     require_free_space(1024 * 1024 * 1024)?;
-    let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
+    let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
     fetch_full_tarball_to(&tmp)?;
     install_tarball_atomic(&tmp, &[])?;
