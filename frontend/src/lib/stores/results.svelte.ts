@@ -9,7 +9,11 @@ export type SimStatus = "idle" | "loading" | "running" | "ready" | "error";
 let result = $state<SimulationResult | null>(null);
 let status = $state<SimStatus>("idle");
 let error = $state<string | null>(null);
+// Typed compute-backend error (#142) — drives ComputeErrorCard.
 let computeError = $state<ComputeError | null>(null);
+// Raw, untyped error captured when compute throws — fallback for callers
+// that didn't go through the typed path (#143).
+let resultError = $state<unknown | null>(null);
 let progress = $state<string>("");
 
 export function getResult(): SimulationResult | null {
@@ -29,6 +33,10 @@ export function getComputeError(): ComputeError | null {
   return computeError;
 }
 
+export function getResultError(): unknown | null {
+  return resultError;
+}
+
 export function getProgress(): string {
   return progress;
 }
@@ -38,6 +46,20 @@ export function setResult(r: SimulationResult): void {
   status = "ready";
   error = null;
   computeError = null;
+  resultError = null;
+  progress = "";
+}
+
+export function setResultError(e: unknown | null): void {
+  resultError = e;
+}
+
+/** Atomic "compute failed": clear any stale result and capture the error. */
+export function setResultErrored(e: unknown): void {
+  result = null;
+  resultError = e;
+  status = "error";
+  error = e instanceof Error ? e.message : String(e);
   progress = "";
 }
 
@@ -86,5 +108,6 @@ export function clearResult(): void {
   status = "idle";
   error = null;
   computeError = null;
+  resultError = null;
   progress = "";
 }

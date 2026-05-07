@@ -12,10 +12,10 @@ import {
   setResult,
   setLoading,
   setRunning,
-  setError,
   setIdle,
   setComputeError,
   clearResult,
+  setResultErrored,
   type SimStatus,
 } from "../stores/results.svelte";
 import { parseComputeError } from "../compute/parse-error";
@@ -153,12 +153,12 @@ async function runSimulation(hash: string): Promise<void> {
     if (cancelled) return;
     state = "error";
     const parsed = parseComputeError(e);
-    // Sibling #143 owns the result-clearing path; if its store API is in
-    // place use that, otherwise fall back to the legacy clearResult here.
-    // Either way the typed error must land in `computeError` so the
-    // recovery card renders.
+    // #143 clears the stale result + captures the raw error for the
+    // bug-report fallback; #142 layers the typed error for the recovery
+    // card on top. Both fields are read by different consumers, so set
+    // both atomically.
+    setResultErrored(e);
     setComputeError(parsed);
-    setError(parsed.message);
   }
 }
 
