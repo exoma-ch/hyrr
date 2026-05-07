@@ -354,7 +354,8 @@ fn build_and_run_sim(
         current_profile: None,
     };
 
-    let result = crate::compute::compute_stack(db, &mut stack, true);
+    let result = crate::compute::compute_stack(db, &mut stack, true)
+        .map_err(|e| e.to_string())?;
     Ok((stack, result, projectile_str.to_string(), energy_mev, current_ma))
 }
 
@@ -428,7 +429,8 @@ fn build_and_run_stopping_only(
         current_profile: None,
     };
 
-    let result = crate::compute::compute_stack_stopping_only(db, &mut stack);
+    let result = crate::compute::compute_stack_stopping_only(db, &mut stack)
+        .map_err(|e| e.to_string())?;
     Ok((result, projectile_str.to_string(), energy_mev, current_ma))
 }
 
@@ -782,7 +784,8 @@ fn tool_get_stopping_power(db: &dyn DatabaseProtocol, args: &Value) -> Result<St
         raw.into_iter().map(|(z, w)| (z, w / total)).collect()
     };
 
-    let mass_dedx = crate::stopping::compound_dedx(db, &projectile, &composition, &energies);
+    let mass_dedx = crate::stopping::compound_dedx(db, &projectile, &composition, &energies)
+        .map_err(|e| e.to_string())?;
     let lin_dedx: Vec<f64> = mass_dedx
         .iter()
         .map(|s| s * resolution.density)

@@ -14,9 +14,11 @@ import {
   setRunning,
   setError,
   setIdle,
+  setComputeError,
   clearResult,
   type SimStatus,
 } from "../stores/results.svelte";
+import { parseComputeError } from "../compute/parse-error";
 import { configHash } from "./config-hash";
 import { DataStore } from "@hyrr/compute";
 import type { SimulationConfig, SimulationResult } from "@hyrr/compute";
@@ -150,8 +152,13 @@ async function runSimulation(hash: string): Promise<void> {
   } catch (e: unknown) {
     if (cancelled) return;
     state = "error";
-    const msg = e instanceof Error ? e.message : "Simulation failed";
-    setError(msg);
+    const parsed = parseComputeError(e);
+    // Sibling #143 owns the result-clearing path; if its store API is in
+    // place use that, otherwise fall back to the legacy clearResult here.
+    // Either way the typed error must land in `computeError` so the
+    // recovery card renders.
+    setComputeError(parsed);
+    setError(parsed.message);
   }
 }
 

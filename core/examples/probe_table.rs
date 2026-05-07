@@ -45,7 +45,7 @@ fn main() {
         current_profile: None,
     };
 
-    let result = compute_stack(&db, &mut stack, true);
+    let result = compute_stack(&db, &mut stack, true).expect("compute_stack failed");
 
     println!(
         "{:>3}  {:>6}  {:>12}  {:>12}  {:>12}  {:>8}  {:>6}",

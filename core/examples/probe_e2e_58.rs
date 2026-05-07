@@ -35,7 +35,7 @@ fn run(cool_s: f64) {
         current_profile: None,
     };
 
-    let result = compute_stack(&db, &mut stack, true);
+    let result = compute_stack(&db, &mut stack, true).expect("compute_stack failed");
     let lr = &result.layer_results[0];
     let o15 = lr.isotope_results.get("O-15").expect("O-15");
 

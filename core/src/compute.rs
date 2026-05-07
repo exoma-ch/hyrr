@@ -12,7 +12,8 @@ use crate::production::{
     saturation_yield,
 };
 use crate::stopping::{
-    compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm, get_stopping_sources,
+    compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm, dedx_mev_per_cm_scalar,
+    get_stopping_sources, StoppingError,
 };
 use crate::types::*;
 
@@ -39,7 +40,7 @@ pub fn compute_stack(
     db: &dyn DatabaseProtocol,
     stack: &mut TargetStack,
     enable_chains: bool,
-) -> StackResult {
+) -> Result<StackResult, StoppingError> {
     let beam = &stack.beam;
     let irr_time = stack.irradiation_time_s;
     let cool_time = stack.cooling_time_s;
@@ -66,16 +67,16 @@ pub fn compute_stack(
             area,
             enable_chains,
             stack.current_profile.as_ref(),
-        );
+        )?;
         energy_in = lr.energy_out;
         layer_results.push(lr);
     }
 
-    StackResult {
+    Ok(StackResult {
         layer_results,
         irradiation_time_s: irr_time,
         cooling_time_s: cool_time,
-    }
+    })
 }
 
 fn compute_layer(
@@ -91,7 +92,7 @@ fn compute_layer(
     area: f64,
     enable_chains: bool,
     current_profile: Option<&CurrentProfile>,
-) -> LayerResult {
+) -> Result<LayerResult, StoppingError> {
     let composition = layer_composition(layer);
     let density = layer.density_g_cm3;
 
@@ -105,7 +106,7 @@ fn compute_layer(
             energy_in,
             e_out,
             1000,
-        );
+        )?;
         (thick, e_out)
     } else if let Some(thick) = layer.thickness_cm {
         let e_out = compute_energy_out(
@@ -116,7 +117,7 @@ fn compute_layer(
             energy_in,
             thick,
             1000,
-        );
+        )?;
         (thick, e_out)
     } else {
         let thick = layer.areal_density_g_cm2.unwrap() / density;
@@ -128,7 +129,7 @@ fn compute_layer(
             energy_in,
             thick,
             1000,
-        );
+        )?;
         (thick, e_out)
     };
 
@@ -136,11 +137,17 @@ fn compute_layer(
     layer.computed_energy_out = energy_out;
     layer.computed_thickness = thickness;
 
-    let sp_sources = get_stopping_sources(db, projectile, &composition);
+    let sp_sources = get_stopping_sources(db, projectile, &composition)?;
 
+    // Validated above via `compute_thickness_from_energy` / `compute_energy_out`,
+    // so the inner `dedx_mev_per_cm` cannot return an error for this layer's
+    // source/target combo. Use the panicking _scalar/_unchecked helper inside
+    // the closure to keep the existing `Fn(&[f64]) -> Vec<f64>` shape.
     let dedx_fn = |energies: &[f64]| -> Vec<f64> {
         dedx_mev_per_cm(db, projectile, &composition, density, energies)
+            .expect("dedx_fn: layer-level prevalidation should have caught any miss")
     };
+    let _ = dedx_mev_per_cm_scalar; // silence unused-import noise on some build configs
 
     let volume = thickness * area;
     let avg_a = layer.average_atomic_mass();
@@ -318,7 +325,7 @@ fn compute_layer(
 
     let delta_e = energy_in - energy_out;
 
-    LayerResult {
+    Ok(LayerResult {
         energy_in,
         energy_out,
         delta_e_mev: delta_e,
@@ -327,7 +334,7 @@ fn compute_layer(
         isotope_results,
         stopping_power_sources: sp_sources,
         depth_production_rates,
-    }
+    })
 }
 
 /// Convert digits (and the metastable marker 'm') to unicode superscripts.
@@ -536,7 +543,7 @@ fn apply_chain_solver_by_component(
 pub fn compute_stack_stopping_only(
     db: &dyn DatabaseProtocol,
     stack: &mut TargetStack,
-) -> StackResult {
+) -> Result<StackResult, StoppingError> {
     let beam = &stack.beam;
     let area = stack.area_cm2;
     let projectile = &beam.projectile;
@@ -555,16 +562,16 @@ pub fn compute_stack_stopping_only(
             layer,
             energy_in,
             area,
-        );
+        )?;
         energy_in = lr.energy_out;
         layer_results.push(lr);
     }
 
-    StackResult {
+    Ok(StackResult {
         layer_results,
         irradiation_time_s: stack.irradiation_time_s,
         cooling_time_s: stack.cooling_time_s,
-    }
+    })
 }
 
 /// Per-layer stopping-only computation — the prefix of [`compute_layer`]
@@ -579,25 +586,25 @@ fn compute_layer_stopping_only(
     layer: &mut Layer,
     energy_in: f64,
     area: f64,
-) -> LayerResult {
+) -> Result<LayerResult, StoppingError> {
     let composition = layer_composition(layer);
     let density = layer.density_g_cm3;
 
     let (thickness, energy_out) = if let Some(e_out) = layer.energy_out_mev {
         let thick = compute_thickness_from_energy(
             db, projectile, &composition, density, energy_in, e_out, 1000,
-        );
+        )?;
         (thick, e_out)
     } else if let Some(thick) = layer.thickness_cm {
         let e_out = compute_energy_out(
             db, projectile, &composition, density, energy_in, thick, 1000,
-        );
+        )?;
         (thick, e_out)
     } else {
         let thick = layer.areal_density_g_cm2.unwrap() / density;
         let e_out = compute_energy_out(
             db, projectile, &composition, density, energy_in, thick, 1000,
-        );
+        )?;
         (thick, e_out)
     };
 
@@ -605,13 +612,13 @@ fn compute_layer_stopping_only(
     layer.computed_energy_out = energy_out;
     layer.computed_thickness = thickness;
 
-    let sp_sources = get_stopping_sources(db, projectile, &composition);
+    let sp_sources = get_stopping_sources(db, projectile, &composition)?;
 
     // Same energy grid + dE/dx the full path uses, so heat values are
     // bit-identical to the activation path's output.
     let layer_e_low = energy_out.max(0.01);
     let layer_energies = linspace(layer_e_low, energy_in, 100);
-    let layer_dedx = dedx_mev_per_cm(db, projectile, &composition, density, &layer_energies);
+    let layer_dedx = dedx_mev_per_cm(db, projectile, &composition, density, &layer_energies)?;
 
     let depth_raw =
         generate_depth_profile(&layer_energies, &layer_dedx, current_ma, area, projectile_z);
@@ -632,7 +639,7 @@ fn compute_layer_stopping_only(
         0.0
     };
 
-    LayerResult {
+    Ok(LayerResult {
         energy_in,
         energy_out,
         delta_e_mev: energy_in - energy_out,
@@ -641,7 +648,7 @@ fn compute_layer_stopping_only(
         isotope_results: HashMap::new(),
         stopping_power_sources: sp_sources,
         depth_production_rates: HashMap::new(),
-    }
+    })
 }
 
 fn integrate_heat(profile: &[DepthPoint], area_cm2: f64) -> f64 {

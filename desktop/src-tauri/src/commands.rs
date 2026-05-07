@@ -303,7 +303,8 @@ pub fn run_compute_stack(
         current_profile: None,
     };
 
-    let result = compute_stack(db, &mut stack, true);
+    let result = compute_stack(db, &mut stack, true)
+        .map_err(|e| serde_json::to_string(&e.as_json()).unwrap_or_else(|_| e.to_string()))?;
 
     // Convert to JSON contract
     let sim_result = convert_stack_result(&config_json, &result);
@@ -369,10 +370,12 @@ pub fn compute_depth_preview(
             } else if e_out > energy_in {
                 (0.0, "energy_out", Some(format!("Eout ({e_out} MeV) > Ein ({energy_in:.1} MeV)")))
             } else {
-                let t = compute_thickness_from_energy(
+                match compute_thickness_from_energy(
                     db, &projectile, &composition, density, energy_in, e_out.max(0.0), 1000,
-                );
-                (t, "energy_out", None)
+                ) {
+                    Ok(t) => (t, "energy_out", None),
+                    Err(e) => (0.0, "energy_out", Some(e.to_string())),
+                }
             }
         } else {
             continue;
@@ -382,11 +385,29 @@ pub fn compute_depth_preview(
         let areal_density = thickness_cm * density;
 
         let (energy_out, depth_points, heat_kw) = if energy_in > 0.0 && thickness_cm > 0.0 {
-            let e_out = if user_specified == "energy_out" {
-                lc.energy_out_MeV.unwrap_or(0.0).min(energy_in).max(0.0)
+            let e_out_res: Result<f64, hyrr_core::stopping::StoppingError> = if user_specified == "energy_out" {
+                Ok(lc.energy_out_MeV.unwrap_or(0.0).min(energy_in).max(0.0))
             } else {
                 compute_energy_out(db, &projectile, &composition, density, energy_in, thickness_cm, 1000)
-                    .max(0.0)
+                    .map(|v| v.max(0.0))
+            };
+            let e_out = match e_out_res {
+                Ok(v) => v,
+                Err(err) => {
+                    preview_layers.push(DepthPreviewLayer {
+                        material: lc.material.clone(),
+                        thickness_mm: thickness_cm * 10.0,
+                        areal_density_g_cm2: thickness_cm * density,
+                        energy_in_MeV: energy_in,
+                        energy_out_MeV: 0.0,
+                        delta_E_MeV: 0.0,
+                        heat_kW: 0.0,
+                        depth_points: vec![],
+                        user_specified: user_specified.to_string(),
+                        error: Some(err.to_string()),
+                    });
+                    continue;
+                }
             };
 
             let n_pts = 50;
@@ -394,7 +415,24 @@ pub fn compute_depth_preview(
             let energies: Vec<f64> = (0..n_pts)
                 .map(|i| e_min + (energy_in - e_min) * (i as f64) / ((n_pts - 1) as f64))
                 .collect();
-            let dedx_vals = dedx_mev_per_cm(db, &projectile, &composition, density, &energies);
+            let dedx_vals = match dedx_mev_per_cm(db, &projectile, &composition, density, &energies) {
+                Ok(v) => v,
+                Err(err) => {
+                    preview_layers.push(DepthPreviewLayer {
+                        material: lc.material.clone(),
+                        thickness_mm: thickness_cm * 10.0,
+                        areal_density_g_cm2: thickness_cm * density,
+                        energy_in_MeV: energy_in,
+                        energy_out_MeV: 0.0,
+                        delta_E_MeV: 0.0,
+                        heat_kW: 0.0,
+                        depth_points: vec![],
+                        user_specified: user_specified.to_string(),
+                        error: Some(err.to_string()),
+                    });
+                    continue;
+                }
+            };
 
             let dp = generate_depth_profile(&energies, &dedx_vals, beam_current, beam_area, proj_z);
 

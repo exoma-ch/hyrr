@@ -16,6 +16,62 @@ const NIST_CANDIDATE_ZS: &[u32] = &[
     1, 2, 4, 6, 7, 8, 10, 13, 14, 18, 22, 26, 29, 32, 36, 42, 47, 50, 54, 64, 74, 78, 79, 82, 92,
 ];
 
+/// Catima projectiles bundled in nucl-parquet (kept in sync with
+/// `data/build_parquet.py`'s catima ingestion list). Used as the
+/// fallback `available_pretty` set when the database can't enumerate
+/// available sources directly — there is no `list_sources` API on
+/// `DatabaseProtocol`.
+const BUNDLED_CATIMA_PROJECTILES: &[&str] =
+    &["C-12", "O-16", "Ne-20", "Si-28", "Ar-40", "Fe-56"];
+
+/// Typed errors from the stopping-power lookup path.
+///
+/// Surfaced through the WASM bridge and Tauri commands as a structured
+/// payload so the frontend can render a recovery card (see issue #142).
+#[derive(Debug, Clone, thiserror::Error, serde::Serialize)]
+#[serde(tag = "variant")]
+pub enum StoppingError {
+    #[error("No {source_name} stopping table — projectile {projectile} not in bundled set. Available: {available_pretty}")]
+    NoSourceTable {
+        #[serde(rename = "source")]
+        source_name: String,
+        projectile: String,
+        available: Vec<String>,
+        available_pretty: String,
+    },
+    #[error("Energy {energy_mev:.3} MeV out of range [{min_mev:.3}, {max_mev:.3}] for {source_name} on {target_symbol} (Z={target_z})")]
+    EnergyOutOfRange {
+        #[serde(rename = "source")]
+        source_name: String,
+        target_symbol: String,
+        target_z: u32,
+        energy_mev: f64,
+        min_mev: f64,
+        max_mev: f64,
+    },
+    #[error("No {source_name} data for target {target_symbol} (Z={target_z}). Available Z: {available_zs:?}")]
+    NoTargetData {
+        #[serde(rename = "source")]
+        source_name: String,
+        target_symbol: String,
+        target_z: u32,
+        available_zs: Vec<u32>,
+    },
+}
+
+impl StoppingError {
+    /// Tag every variant payload with `kind: "StoppingError"` for the
+    /// frontend's discriminated-union parsing. Consumers (WASM + Tauri)
+    /// JSON-serialize this directly.
+    pub fn as_json(&self) -> serde_json::Value {
+        let mut v = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert("kind".to_string(), serde_json::Value::String("StoppingError".to_string()));
+        }
+        v
+    }
+}
+
 /// Get or build a log-log interpolator for stopping power.
 /// Returns (interpolated dE/dx values, source label).
 fn get_interpolated_dedx(
@@ -23,17 +79,32 @@ fn get_interpolated_dedx(
     source: &str,
     target_z: u32,
     energies: &[f64],
-) -> (Vec<f64>, String) {
+    projectile: &ProjectileType,
+) -> Result<(Vec<f64>, String), StoppingError> {
     let (sp_energies, sp_dedx) = db.get_stopping_power(source, target_z);
     if !sp_energies.is_empty() {
+        check_energy_range(source, target_z, db, &sp_energies, energies)?;
         let interp = make_log_log_interpolator(&sp_energies, &sp_dedx);
-        return (interp(energies), source.to_string());
+        return Ok((interp(energies), source.to_string()));
     }
 
-    // Z-interpolate between nearest available elements
     let available_zs = get_available_zs(db, source);
     if available_zs.is_empty() {
-        panic!("No {} stopping power data available", source);
+        return Err(StoppingError::NoSourceTable {
+            source_name: source.to_string(),
+            projectile: projectile.symbol_string(),
+            available: available_sources_for(projectile),
+            available_pretty: available_pretty_for(projectile),
+        });
+    }
+
+    if !available_zs.contains(&target_z) && (target_z < available_zs[0] || target_z > *available_zs.last().unwrap()) {
+        return Err(StoppingError::NoTargetData {
+            source_name: source.to_string(),
+            target_symbol: db.get_element_symbol(target_z),
+            target_z,
+            available_zs,
+        });
     }
 
     let mut z_low = available_zs[0];
@@ -52,12 +123,15 @@ fn get_interpolated_dedx(
 
     if z_low == z_high {
         let (e, d) = db.get_stopping_power(source, z_low);
+        check_energy_range(source, z_low, db, &e, energies)?;
         let interp = make_log_log_interpolator(&e, &d);
-        return (interp(energies), format!("{}(Z~{})", source, z_low));
+        return Ok((interp(energies), format!("{}(Z~{})", source, z_low)));
     }
 
     let (e_lo, d_lo) = db.get_stopping_power(source, z_low);
     let (e_hi, d_hi) = db.get_stopping_power(source, z_high);
+    check_energy_range(source, z_low, db, &e_lo, energies)?;
+    check_energy_range(source, z_high, db, &e_hi, energies)?;
     let interp_lo = make_log_log_interpolator(&e_lo, &d_lo);
     let interp_hi = make_log_log_interpolator(&e_hi, &d_hi);
     let frac = (target_z as f64 - z_low as f64) / (z_high as f64 - z_low as f64);
@@ -69,7 +143,34 @@ fn get_interpolated_dedx(
         .zip(v_hi.iter())
         .map(|(&lo, &hi)| lo + frac * (hi - lo))
         .collect();
-    (result, format!("{}(Z~{}-{})", source, z_low, z_high))
+    Ok((result, format!("{}(Z~{}-{})", source, z_low, z_high)))
+}
+
+fn check_energy_range(
+    source: &str,
+    target_z: u32,
+    db: &dyn DatabaseProtocol,
+    sp_energies: &[f64],
+    requested: &[f64],
+) -> Result<(), StoppingError> {
+    if sp_energies.is_empty() || requested.is_empty() {
+        return Ok(());
+    }
+    let min_mev = sp_energies[0];
+    let max_mev = *sp_energies.last().unwrap();
+    for &e in requested {
+        if e < min_mev || e > max_mev {
+            return Err(StoppingError::EnergyOutOfRange {
+                source_name: source.to_string(),
+                target_symbol: db.get_element_symbol(target_z),
+                target_z,
+                energy_mev: e,
+                min_mev,
+                max_mev,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn get_available_zs(db: &dyn DatabaseProtocol, source: &str) -> Vec<u32> {
@@ -81,6 +182,53 @@ fn get_available_zs(db: &dyn DatabaseProtocol, source: &str) -> Vec<u32> {
         }
     }
     zs
+}
+
+fn available_sources_for(projectile: &ProjectileType) -> Vec<String> {
+    let z = projectile.z();
+    if z == 1 {
+        vec![SOURCE_PSTAR.to_string()]
+    } else if z == 2 {
+        vec![SOURCE_ASTAR.to_string()]
+    } else {
+        // Match the on-disk catima parquet naming (no dash in symbol-A);
+        // see #141 / `source_for`.
+        BUNDLED_CATIMA_PROJECTILES
+            .iter()
+            .map(|p| format!("{}{}", SOURCE_CATIMA_PREFIX, p.replace('-', "")))
+            .collect()
+    }
+}
+
+fn available_pretty_for(projectile: &ProjectileType) -> String {
+    let z = projectile.z();
+    if z == 1 {
+        "p, d, t (PSTAR with velocity-scaling)".to_string()
+    } else if z == 2 {
+        "h, a (ASTAR with velocity-scaling)".to_string()
+    } else {
+        BUNDLED_CATIMA_PROJECTILES.join(", ")
+    }
+}
+
+/// Source identifier for a given projectile (PSTAR / ASTAR / catima_*).
+///
+/// `symbol_string()` returns "O-16"; the bundled catima parquet is named
+/// `catima_O16.parquet` (no dash). Strip the dash so the source key matches
+/// the on-disk filename. See #141 (#137 root cause).
+fn source_for(projectile: &ProjectileType) -> String {
+    let z = projectile.z();
+    if z == 1 {
+        SOURCE_PSTAR.to_string()
+    } else if z == 2 {
+        SOURCE_ASTAR.to_string()
+    } else {
+        format!(
+            "{}{}",
+            SOURCE_CATIMA_PREFIX,
+            projectile.symbol_string().replace('-', "")
+        )
+    }
 }
 
 /// Mass stopping power for a projectile in a pure element [MeV·cm²/g].
@@ -96,42 +244,37 @@ pub fn elemental_dedx(
     projectile: &ProjectileType,
     target_z: u32,
     energies_mev: &[f64],
-) -> Vec<f64> {
+) -> Result<Vec<f64>, StoppingError> {
     let proj = projectile.projectile();
 
     if proj.z == 1 {
-        // Proton, deuteron, tritium: velocity-scale to PSTAR
         let lookup: Vec<f64> = energies_mev.iter().map(|&e| e / proj.a as f64).collect();
-        let (result, _) = get_interpolated_dedx(db, SOURCE_PSTAR, target_z, &lookup);
-        result
+        let (result, _) = get_interpolated_dedx(db, SOURCE_PSTAR, target_z, &lookup, projectile)?;
+        Ok(result)
     } else if proj.z == 2 {
-        // Helion, alpha: velocity-scale to ASTAR
         let lookup: Vec<f64> = energies_mev.iter().map(|&e| e * (4.0 / proj.a as f64)).collect();
-        let (result, _) = get_interpolated_dedx(db, SOURCE_ASTAR, target_z, &lookup);
-        result
+        let (result, _) = get_interpolated_dedx(db, SOURCE_ASTAR, target_z, &lookup, projectile)?;
+        Ok(result)
     } else {
-        // Heavy ion: look up pre-generated catima table from nucl-parquet.
-        // `symbol_string()` returns "O-16"; the bundled parquet is named
-        // `catima_O16.parquet` (no dash). Strip the dash so the source key
-        // matches the on-disk filename. Reported in #137.
-        let source = format!(
-            "{}{}",
-            SOURCE_CATIMA_PREFIX,
-            projectile.symbol_string().replace('-', "")
-        );
-        let (result, _) = get_interpolated_dedx(db, &source, target_z, energies_mev);
-        result
+        let source = source_for(projectile);
+        let (result, _) = get_interpolated_dedx(db, &source, target_z, energies_mev, projectile)?;
+        Ok(result)
     }
 }
 
-/// Scalar version of elemental_dedx.
+/// Scalar variant — internal callers that have already validated the
+/// source/target/energy combo (typically inside `compute_layer` after a
+/// successful precheck) use this; it panics if the dedx lookup fails,
+/// because at that point the failure would be a bug, not a data-coverage
+/// issue.
 pub fn elemental_dedx_scalar(
     db: &dyn DatabaseProtocol,
     projectile: &ProjectileType,
     target_z: u32,
     energy_mev: f64,
 ) -> f64 {
-    elemental_dedx(db, projectile, target_z, &[energy_mev])[0]
+    elemental_dedx(db, projectile, target_z, &[energy_mev])
+        .expect("elemental_dedx_scalar: caller failed to pre-validate source/target/energy")[0]
 }
 
 /// Return the stopping power source label for an element.
@@ -139,21 +282,10 @@ pub fn get_stopping_source(
     db: &dyn DatabaseProtocol,
     projectile: &ProjectileType,
     target_z: u32,
-) -> String {
-    let proj = projectile.projectile();
-    let source = if proj.z == 1 {
-        SOURCE_PSTAR.to_string()
-    } else if proj.z == 2 {
-        SOURCE_ASTAR.to_string()
-    } else {
-        format!(
-            "{}{}",
-            SOURCE_CATIMA_PREFIX,
-            projectile.symbol_string().replace('-', "")
-        )
-    };
-    let (_, label) = get_interpolated_dedx(db, &source, target_z, &[10.0]);
-    label
+) -> Result<String, StoppingError> {
+    let source = source_for(projectile);
+    let (_, label) = get_interpolated_dedx(db, &source, target_z, &[10.0], projectile)?;
+    Ok(label)
 }
 
 /// Return stopping power sources for each element in a composition.
@@ -161,12 +293,12 @@ pub fn get_stopping_sources(
     db: &dyn DatabaseProtocol,
     projectile: &ProjectileType,
     composition: &[(u32, f64)],
-) -> std::collections::HashMap<u32, String> {
+) -> Result<std::collections::HashMap<u32, String>, StoppingError> {
     let mut result = std::collections::HashMap::new();
     for &(z, _) in composition {
-        result.insert(z, get_stopping_source(db, projectile, z));
+        result.insert(z, get_stopping_source(db, projectile, z)?);
     }
-    result
+    Ok(result)
 }
 
 /// Compound stopping power via Bragg additivity [MeV·cm²/g].
@@ -176,15 +308,15 @@ pub fn compound_dedx(
     projectile: &ProjectileType,
     composition: &[(u32, f64)],
     energies_mev: &[f64],
-) -> Vec<f64> {
+) -> Result<Vec<f64>, StoppingError> {
     let mut result = vec![0.0; energies_mev.len()];
     for &(z, mass_frac) in composition {
-        let elemental = elemental_dedx(db, projectile, z, energies_mev);
+        let elemental = elemental_dedx(db, projectile, z, energies_mev)?;
         for (i, &val) in elemental.iter().enumerate() {
             result[i] += mass_frac * val;
         }
     }
-    result
+    Ok(result)
 }
 
 /// Linear stopping power [MeV/cm].
@@ -195,14 +327,15 @@ pub fn dedx_mev_per_cm(
     composition: &[(u32, f64)],
     density_g_cm3: f64,
     energies_mev: &[f64],
-) -> Vec<f64> {
-    compound_dedx(db, projectile, composition, energies_mev)
+) -> Result<Vec<f64>, StoppingError> {
+    Ok(compound_dedx(db, projectile, composition, energies_mev)?
         .iter()
         .map(|&s| s * density_g_cm3)
-        .collect()
+        .collect())
 }
 
-/// Scalar version of dedx_mev_per_cm.
+/// Scalar variant of [`dedx_mev_per_cm`]. Panics on a stopping-data
+/// miss; callers must have done a `dedx_mev_per_cm` precheck first.
 pub fn dedx_mev_per_cm_scalar(
     db: &dyn DatabaseProtocol,
     projectile: &ProjectileType,
@@ -210,7 +343,8 @@ pub fn dedx_mev_per_cm_scalar(
     density_g_cm3: f64,
     energy_mev: f64,
 ) -> f64 {
-    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_mev])[0]
+    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_mev])
+        .expect("dedx_mev_per_cm_scalar: caller failed to pre-validate source/target/energy")[0]
 }
 
 /// Compute target thickness [cm] from energy loss.
@@ -223,19 +357,19 @@ pub fn compute_thickness_from_energy(
     energy_in_mev: f64,
     energy_out_mev: f64,
     n_points: usize,
-) -> f64 {
+) -> Result<f64, StoppingError> {
     let energies = linspace(energy_out_mev, energy_in_mev, n_points);
     let de = energies[1] - energies[0];
 
     let midpoints: Vec<f64> = (0..n_points - 1).map(|i| energies[i] + de / 2.0).collect();
 
-    let dedx_arr = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &midpoints);
+    let dedx_arr = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &midpoints)?;
 
     let mut thickness = 0.0;
     for &dedx_val in &dedx_arr {
         thickness += de / dedx_val;
     }
-    thickness
+    Ok(thickness)
 }
 
 /// Compute exit energy after traversing a material of known thickness.
@@ -248,10 +382,15 @@ pub fn compute_energy_out(
     energy_in_mev: f64,
     thickness_cm: f64,
     n_points: usize,
-) -> f64 {
+) -> Result<f64, StoppingError> {
     if thickness_cm <= 0.0 {
-        return energy_in_mev;
+        return Ok(energy_in_mev);
     }
+
+    // Pre-validate by sampling at the entrance energy. If this miss-types
+    // (NoSourceTable / NoTargetData / EnergyOutOfRange) the integration
+    // loop would otherwise panic via `_scalar`; surface the typed error.
+    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_in_mev])?;
 
     let dx = thickness_cm / n_points as f64;
     let mut energy = energy_in_mev;
@@ -260,9 +399,130 @@ pub fn compute_energy_out(
         let loss = dedx_mev_per_cm_scalar(db, projectile, composition, density_g_cm3, energy) * dx;
         energy -= loss;
         if energy <= 0.0 {
-            return 0.0;
+            return Ok(0.0);
         }
     }
 
-    energy
+    Ok(energy)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::InMemoryDataStore;
+
+    fn pstar_db() -> InMemoryDataStore {
+        let mut db = InMemoryDataStore::new("test");
+        db.add_element(1, "H");
+        db.add_element(8, "O");
+        db.add_element(13, "Al");
+        db.add_element(29, "Cu");
+        db.add_element(120, "Ubn");
+        let energies: Vec<f64> = (0..50)
+            .map(|i| 0.001_f64 * 10f64.powf(i as f64 / 10.0))
+            .collect();
+        let dedx_h: Vec<f64> = energies.iter().map(|&e| 100.0 / e.sqrt()).collect();
+        let dedx_al: Vec<f64> = energies.iter().map(|&e| 50.0 / e.sqrt()).collect();
+        let dedx_cu: Vec<f64> = energies.iter().map(|&e| 30.0 / e.sqrt()).collect();
+        db.add_stopping_data("PSTAR", 1, energies.clone(), dedx_h);
+        db.add_stopping_data("PSTAR", 13, energies.clone(), dedx_al);
+        db.add_stopping_data("PSTAR", 29, energies, dedx_cu);
+        db
+    }
+
+    #[test]
+    fn no_source_table_when_catima_missing() {
+        let db = pstar_db();
+        let projectile = ProjectileType::HeavyIon {
+            symbol: "O".to_string(),
+            z: 8,
+            a: 17,
+        };
+        let err = elemental_dedx(&db, &projectile, 13, &[10.0]).unwrap_err();
+        match err {
+            StoppingError::NoSourceTable {
+                source_name,
+                projectile: proj,
+                ref available,
+                ref available_pretty,
+            } => {
+                assert_eq!(source_name, "catima_O17");
+                assert_eq!(proj, "O-17");
+                assert!(available.iter().any(|s| s == "catima_C12"));
+                assert!(available_pretty.contains("C-12"));
+                assert!(available_pretty.contains("Fe-56"));
+            }
+            other => panic!("expected NoSourceTable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn energy_out_of_range_for_pstar() {
+        let db = pstar_db();
+        let projectile = ProjectileType::Proton;
+        // Tabulated grid runs ~0.001 → 10^3.9 MeV; 1e8 (= 100 GeV) is well above.
+        let err = elemental_dedx(&db, &projectile, 13, &[1.0e8]).unwrap_err();
+        match err {
+            StoppingError::EnergyOutOfRange {
+                source_name,
+                target_symbol,
+                target_z,
+                energy_mev,
+                min_mev: _,
+                max_mev,
+            } => {
+                assert_eq!(source_name, "PSTAR");
+                assert_eq!(target_symbol, "Al");
+                assert_eq!(target_z, 13);
+                assert_eq!(energy_mev, 1.0e8);
+                assert!(max_mev < 1.0e8);
+            }
+            other => panic!("expected EnergyOutOfRange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_target_data_when_z_outside_range() {
+        let db = pstar_db();
+        let projectile = ProjectileType::Proton;
+        // Z=120 is far above the largest tabulated Z (29 in this fixture).
+        let err = elemental_dedx(&db, &projectile, 120, &[10.0]).unwrap_err();
+        match err {
+            StoppingError::NoTargetData {
+                source_name,
+                target_z,
+                ref available_zs,
+                ..
+            } => {
+                assert_eq!(source_name, "PSTAR");
+                assert_eq!(target_z, 120);
+                assert!(!available_zs.is_empty());
+                assert!(available_zs.iter().all(|&z| z < 120));
+            }
+            other => panic!("expected NoTargetData, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn happy_path_returns_ok() {
+        let db = pstar_db();
+        let projectile = ProjectileType::Proton;
+        let result = elemental_dedx(&db, &projectile, 13, &[10.0]).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0] > 0.0);
+    }
+
+    #[test]
+    fn as_json_includes_kind_tag() {
+        let err = StoppingError::NoSourceTable {
+            source_name: "catima_O17".to_string(),
+            projectile: "O-17".to_string(),
+            available: vec!["catima_C12".to_string()],
+            available_pretty: "C-12".to_string(),
+        };
+        let json = err.as_json();
+        assert_eq!(json["kind"], "StoppingError");
+        assert_eq!(json["variant"], "NoSourceTable");
+        assert_eq!(json["projectile"], "O-17");
+    }
 }
