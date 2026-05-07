@@ -10,8 +10,10 @@
 
 import type { SimulationResult } from "./types";
 import type { SerializableConfig } from "./stores/config.svelte";
+import type { DisplayThresholdsState } from "./stores/display-thresholds.svelte";
 
-export const SESSION_SCHEMA_VERSION = 1;
+/** v1 → v2 added optional `display` (issue #130). v1 files load fine. */
+export const SESSION_SCHEMA_VERSION = 2;
 /** MIME-sensible marker that the file was produced by HYRR. */
 export const SESSION_SCHEMA_ID = "hyrr-session";
 
@@ -25,6 +27,8 @@ export interface SessionFile {
   result: SimulationResult | null;
   /** Optional free-form user text. */
   notes?: string;
+  /** Optional UI prefs (display-layer only — never affects the result). */
+  display?: DisplayThresholdsState;
 }
 
 declare const __APP_VERSION__: string;
@@ -33,6 +37,7 @@ export function buildSessionFile(
   config: SerializableConfig,
   result: SimulationResult | null,
   notes?: string,
+  display?: DisplayThresholdsState,
 ): SessionFile {
   return {
     $schema: SESSION_SCHEMA_ID,
@@ -42,6 +47,7 @@ export function buildSessionFile(
     config,
     result,
     notes,
+    display,
   };
 }
 
@@ -102,6 +108,7 @@ export function parseSessionJson(raw: string): ParseResult {
       config: obj.config,
       result: obj.result ?? null,
       notes: typeof obj.notes === "string" ? obj.notes : undefined,
+      display: obj.display && typeof obj.display === "object" ? obj.display : undefined,
     },
   };
 }

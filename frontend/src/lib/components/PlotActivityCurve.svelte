@@ -9,6 +9,7 @@
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
   import { aggregateByIsotopeName } from "../plotting/aggregate-isotopes";
+  import { getThresholds } from "../stores/display-thresholds.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -323,6 +324,17 @@
         title: `Activity (${actLabel})`,
         gridcolor: tc.border,
         type: logY ? "log" : "linear",
+        // On log scale, clamp the lower bound to the activity threshold
+        // (in plot units) so a single 1e-15 Bq straggler doesn't dominate
+        // the y-range. See #130 P1. Display-only; trace data is unmodified.
+        ...(logY
+          ? {
+              range: [
+                Math.log10(Math.max(getThresholds().activity / actDiv, 1e-30)),
+                Math.log10(Math.max(globalMax / actDiv, getThresholds().activity / actDiv * 10)),
+              ],
+            }
+          : {}),
       },
       shapes,
       annotations,
