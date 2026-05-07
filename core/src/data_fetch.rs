@@ -400,6 +400,12 @@ fn install_tarball_atomic(archive: &Path, prefixes: &[&str]) -> Result<()> {
 
     extract_tarball(archive, &partial, prefixes)?;
 
+    // Test-only seam: between partial-dir build and the
+    // atomic-rename promotion, give tests a chance to simulate a
+    // SIGKILL. Production builds compile this away entirely.
+    #[cfg(test)]
+    test_hooks::run_pre_promote_hook()?;
+
     // If `cache` already exists but is incomplete, blow it away — its
     // contents are by definition stale (the sentinel would be present
     // otherwise).
@@ -480,9 +486,22 @@ pub fn ensure_meta_stopping() -> Result<()> {
     require_free_space(1024 * 1024 * 1024)?;
     let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
-    fetch_full_tarball_to(&tmp)?;
+    fetch_full_tarball_with_seam(&tmp)?;
     install_tarball_atomic(&tmp, MANDATORY_PREFIXES)?;
     Ok(())
+}
+
+/// Indirection for the network fetch so tests can inject a local-file
+/// "fetcher" without touching production behaviour. In a non-test
+/// build this is a one-line forwarder to [`fetch_full_tarball_to`].
+fn fetch_full_tarball_with_seam(out: &Path) -> Result<()> {
+    #[cfg(test)]
+    {
+        if let Some(()) = test_hooks::try_test_fetch(out)? {
+            return Ok(());
+        }
+    }
+    fetch_full_tarball_to(out)
 }
 
 /// Ensure the given library's data is present in the cache.
@@ -755,6 +774,97 @@ pub fn prune_old_versions(keep: usize) -> Result<usize> {
         removed += 1;
     }
     Ok(removed)
+}
+
+/// Test-only seams for concurrency / interrupted-merge coverage (#123).
+///
+/// These hooks exist purely to let tests simulate failure modes that
+/// are otherwise impossible to reproduce deterministically (SIGKILL
+/// mid-merge, double-fetch under contention). Production builds compile
+/// the module away entirely (`#[cfg(test)]`).
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    /// Action to run inside `install_tarball_atomic` after the partial
+    /// dir is built but before promotion. `None` (the default) means
+    /// the hook is inert.
+    #[allow(dead_code)]
+    pub(crate) enum PrePromoteAction {
+        /// Panic — simulates a `SIGKILL` mid-install. Reserved for
+        /// future tests that exercise the unwind path; current tests
+        /// use `FailOnce` which produces the same on-disk recovery
+        /// state without needing `catch_unwind`.
+        PanicOnce,
+        /// Return a synthetic IO error from the hook — equivalent
+        /// on-disk effect to `PanicOnce` (partial dir survives,
+        /// sentinel does not get written) but propagates as `Err(_)`
+        /// through the normal `?` chain so tests can `assert!(_.is_err())`
+        /// without `catch_unwind`.
+        FailOnce,
+    }
+
+    static PRE_PROMOTE_ACTION: Mutex<Option<PrePromoteAction>> = Mutex::new(None);
+
+    pub(crate) fn arm_pre_promote(action: PrePromoteAction) {
+        *PRE_PROMOTE_ACTION.lock().unwrap() = Some(action);
+    }
+
+    pub(crate) fn clear_pre_promote() {
+        *PRE_PROMOTE_ACTION.lock().unwrap() = None;
+    }
+
+    pub(crate) fn run_pre_promote_hook() -> Result<()> {
+        let action = PRE_PROMOTE_ACTION.lock().unwrap().take();
+        match action {
+            None => Ok(()),
+            Some(PrePromoteAction::PanicOnce) => {
+                panic!("test_hooks: simulated SIGKILL mid-install");
+            }
+            Some(PrePromoteAction::FailOnce) => Err(FetchError::Io(io::Error::other(
+                "test_hooks: simulated mid-install failure",
+            ))),
+        }
+    }
+
+    /// When `Some(path)`, `ensure_meta_stopping`'s fetch step copies
+    /// `path` to `out` instead of hitting the network. The counter
+    /// tracks how many times the seam fired across all threads — used
+    /// by the lock-contention test to assert no double-fetch.
+    static FETCH_SOURCE: Mutex<Option<PathBuf>> = Mutex::new(None);
+    static FETCH_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    pub(crate) fn arm_fetch_source(src: PathBuf) {
+        *FETCH_SOURCE.lock().unwrap() = Some(src);
+        FETCH_COUNT.store(0, Ordering::SeqCst);
+    }
+
+    pub(crate) fn clear_fetch_source() {
+        *FETCH_SOURCE.lock().unwrap() = None;
+        FETCH_COUNT.store(0, Ordering::SeqCst);
+    }
+
+    pub(crate) fn fetch_count() -> usize {
+        FETCH_COUNT.load(Ordering::SeqCst)
+    }
+
+    /// If a test fetcher is armed, copy the local archive into `out`,
+    /// bump the counter, and report `Some(())`. Otherwise return
+    /// `None` to let the production fetcher run.
+    pub(crate) fn try_test_fetch(out: &Path) -> Result<Option<()>> {
+        let guard = FETCH_SOURCE.lock().unwrap();
+        let Some(src) = guard.as_ref() else {
+            return Ok(None);
+        };
+        if let Some(parent) = out.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(src, out)?;
+        FETCH_COUNT.fetch_add(1, Ordering::SeqCst);
+        Ok(Some(()))
+    }
 }
 
 #[cfg(test)]
@@ -1196,5 +1306,149 @@ mod tests {
         let _ = prune_old_versions(1).unwrap();
         let removed = prune_old_versions(1).unwrap();
         assert_eq!(removed, 0);
+    }
+
+    /// Helper: count `v{V}.partial-*` directories left under
+    /// `cache_root()`. Used by the concurrency / interruption tests
+    /// to assert no orphaned partials survive a recovery cycle.
+    fn count_partial_dirs() -> usize {
+        let root = cache_root().unwrap();
+        let prefix = format!("v{DATA_VERSION}.partial-");
+        match fs::read_dir(&root) {
+            Ok(it) => it
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+                .count(),
+            Err(_) => 0,
+        }
+    }
+
+    /// #123 — doc-comment claim:
+    /// "the user can kill the process at any moment and the next
+    /// invocation finds either (a) a fully-populated cache, or (b) a
+    /// missing/incomplete cache that gets re-fetched cleanly."
+    ///
+    /// Two threads race `install_from_tarball` against the same cache
+    /// root. The `<cache_root>/.lock` file lock must serialise them so
+    /// neither sees a half-merged cache and neither deadlocks. Both
+    /// invocations are expected to succeed (the second merges into a
+    /// populated cache and re-writes the sentinel); at minimum one
+    /// must succeed and the final state must be consistent.
+    #[test]
+    fn concurrent_install_from_tarball_serialises() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("test.tar.zst");
+        make_test_tarball(&archive);
+
+        let archive_ref = &archive;
+        let (r1, r2) = std::thread::scope(|s| {
+            let h1 = s.spawn(|| install_from_tarball(archive_ref));
+            let h2 = s.spawn(|| install_from_tarball(archive_ref));
+            (h1.join().expect("t1 panicked"), h2.join().expect("t2 panicked"))
+        });
+
+        // Neither thread deadlocked (we got here) and at least one
+        // succeeded. A second-mover may legitimately succeed too via
+        // the merge path; what's not allowed is *both* failing.
+        assert!(
+            r1.is_ok() || r2.is_ok(),
+            "both threads failed: r1={r1:?} r2={r2:?}"
+        );
+
+        // Final state is consistent: sentinel + payload present, no
+        // stray partial dirs.
+        assert!(is_cache_complete(), "sentinel missing after both threads finished");
+        let marker = cache_dir().unwrap().join("data/meta/marker");
+        assert!(marker.exists(), "payload missing after concurrent install");
+        assert_eq!(fs::read(&marker).unwrap(), b"test-marker");
+        assert_eq!(count_partial_dirs(), 0, "stray partial dirs left behind");
+    }
+
+    /// #123 — recovery half of the doc-comment claim. Simulate a
+    /// SIGKILL between partial-dir build and atomic-rename via the
+    /// test-only `FailOnce` hook. The first invocation must error and
+    /// leave the cache visibly incomplete; the next invocation must
+    /// observe `is_cache_complete() == false`, sweep the orphan
+    /// partial, and finish cleanly.
+    #[test]
+    fn interrupted_merge_recovers_on_next_invocation() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("test.tar.zst");
+        make_test_tarball(&archive);
+
+        // Arm the seam, run the interrupted install. We expect Err.
+        test_hooks::arm_pre_promote(test_hooks::PrePromoteAction::FailOnce);
+        let interrupted = install_from_tarball(&archive);
+        assert!(interrupted.is_err(), "armed hook did not fire");
+        // Hook is single-shot but clear defensively in case of test
+        // re-entry.
+        test_hooks::clear_pre_promote();
+
+        // After the interrupted install: cache must be incomplete and
+        // an orphan partial-{pid} should be visible to the sweep.
+        assert!(!is_cache_complete(), "sentinel written despite interruption");
+        assert!(
+            count_partial_dirs() >= 1,
+            "expected an orphan partial dir from the interrupted install"
+        );
+
+        // Second invocation: clean run. The orphan partial must be
+        // swept, the cache promoted, and the sentinel re-asserted.
+        install_from_tarball(&archive).expect("clean re-run failed");
+        assert!(is_cache_complete(), "sentinel not written on retry");
+        let marker = cache_dir().unwrap().join("data/meta/marker");
+        assert!(marker.exists(), "payload missing after recovery");
+        assert_eq!(count_partial_dirs(), 0, "orphan partial was not swept");
+    }
+
+    /// #123 — N-thread lock contention on `ensure_meta_stopping`. With
+    /// the network fetch redirected to a local file via the test seam,
+    /// N=4 threads racing against an empty cache must end in exactly
+    /// ONE fetch (the rest see the sentinel after the lock-holder
+    /// finishes and short-circuit). All threads must succeed.
+    #[test]
+    fn ensure_meta_stopping_serialises_and_dedupes_fetches() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("test.tar.zst");
+        make_test_tarball(&archive);
+
+        test_hooks::arm_fetch_source(archive.clone());
+        // Defensive cleanup if a previous test scribbled state.
+        let starting_count = test_hooks::fetch_count();
+        assert_eq!(starting_count, 0, "fetch counter should reset on arm");
+
+        const N: usize = 4;
+        let results = std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(N);
+            for _ in 0..N {
+                handles.push(s.spawn(|| ensure_meta_stopping()));
+            }
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("worker panicked"))
+                .collect::<Vec<_>>()
+        });
+
+        // Every thread succeeded — the lock made them serial, not
+        // failed.
+        for (i, r) in results.iter().enumerate() {
+            assert!(r.is_ok(), "thread {i} failed: {r:?}");
+        }
+        // Exactly one thread actually performed the fetch; the rest
+        // observed the sentinel after acquiring the lock and bailed.
+        assert_eq!(
+            test_hooks::fetch_count(),
+            1,
+            "expected exactly one fetch under contention"
+        );
+        assert!(is_cache_complete());
+        let marker = cache_dir().unwrap().join("data/meta/marker");
+        assert!(marker.exists(), "meta/marker missing after ensure_meta_stopping race");
+        assert_eq!(count_partial_dirs(), 0);
+
+        test_hooks::clear_fetch_source();
     }
 }
