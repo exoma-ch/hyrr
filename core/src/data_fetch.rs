@@ -54,6 +54,14 @@ pub enum FetchError {
     Decompress(String),
     #[error("tar extraction error: {0}")]
     Extract(String),
+    /// Tarball entry was not a regular file or directory. We refuse
+    /// symlinks, hardlinks, char/block/fifo devices, GNU sparse, etc.
+    /// to avoid materialising read-side surprises (e.g. a malicious
+    /// `data/meta/foo -> /etc/passwd` symlink) inside the cache. See
+    /// #122. If a real upstream change ever trips this, that's a bug
+    /// to investigate at the source — not something to silently skip.
+    #[error("unsafe tarball entry {kind} at {path}")]
+    UnsafeTarballEntry { kind: String, path: PathBuf },
     #[error("HOME environment variable not set")]
     NoHome,
 }
@@ -240,6 +248,22 @@ pub fn extract_tarball(
             if !matches {
                 continue;
             }
+        }
+
+        // Refuse anything that isn't a plain file or directory. Symlinks,
+        // hardlinks, char/block/fifo devices, GNU sparse, etc. have no
+        // legitimate place in our data cache: a malicious upstream could
+        // smuggle in `data/meta/foo -> /etc/passwd` and any later code
+        // that follows symlinks would read out-of-cache content. We
+        // surface this loudly via `FetchError::UnsafeTarballEntry`
+        // rather than silently skipping — if a real-world tarball ever
+        // trips this it's worth investigating upstream. See #122.
+        let etype = entry.header().entry_type();
+        if !(etype.is_file() || etype.is_dir()) {
+            return Err(FetchError::UnsafeTarballEntry {
+                kind: format!("{etype:?}"),
+                path,
+            });
         }
 
         entry
