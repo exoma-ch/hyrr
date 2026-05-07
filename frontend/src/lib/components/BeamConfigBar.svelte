@@ -143,8 +143,8 @@
 
 <div class="beam-bar">
   <div class="field">
-    <label>Projectile</label>
-    <select value={beam.projectile} onchange={(e) => setProjectile((e.target as HTMLSelectElement).value)}>
+    <label for="bcb-projectile">Projectile</label>
+    <select id="bcb-projectile" value={beam.projectile} onchange={(e) => setProjectile((e.target as HTMLSelectElement).value)}>
       <optgroup label="Light ions">
         {#each LIGHT_PROJECTILES as p}
           <option value={p.id}>{p.label}</option>
@@ -159,25 +159,25 @@
   </div>
 
   <div class="field">
-    <label>Energy</label>
+    <label for="bcb-energy">Energy</label>
     <div class="input-group">
-      <input type="text" inputmode="decimal" value={displayedEnergy} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onEnergyChange} />
+      <input id="bcb-energy" type="text" inputmode="decimal" value={displayedEnergy} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onEnergyChange} />
       <span class="unit">{isHI ? "MeV/u" : "MeV"}</span>
     </div>
   </div>
 
   <div class="field">
-    <label>Current</label>
+    <label for="bcb-current">Current</label>
     <div class="input-group">
-      <input type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
+      <input id="bcb-current" type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
       <span class="unit">µA</span>
     </div>
   </div>
 
   <div class="field">
-    <label>Irradiation</label>
+    <label for="bcb-irrad">Irradiation</label>
     <div class="input-with-feedback">
-      <input type="text" value={irradText} onfocus={(e) => (e.target as HTMLInputElement).select()} oninput={onIrradInput} onblur={commitIrrad} onkeydown={(e) => { if (e.key === 'Enter') { commitIrrad(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 24h" />
+      <input id="bcb-irrad" type="text" value={irradText} onfocus={(e) => (e.target as HTMLInputElement).select()} oninput={onIrradInput} onblur={commitIrrad} onkeydown={(e) => { if (e.key === 'Enter') { commitIrrad(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 24h" />
       {#if irradFeedback && irradFeedback !== "invalid"}
         <span class="feedback ok">{irradFeedback}</span>
       {:else if irradFeedback === "invalid"}
@@ -187,9 +187,9 @@
   </div>
 
   <div class="field">
-    <label>Cooling</label>
+    <label for="bcb-cooling">Cooling</label>
     <div class="input-with-feedback">
-      <input type="text" value={coolText} onfocus={(e) => (e.target as HTMLInputElement).select()} oninput={onCoolInput} onblur={commitCool} onkeydown={(e) => { if (e.key === 'Enter') { commitCool(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 1d" />
+      <input id="bcb-cooling" type="text" value={coolText} onfocus={(e) => (e.target as HTMLInputElement).select()} oninput={onCoolInput} onblur={commitCool} onkeydown={(e) => { if (e.key === 'Enter') { commitCool(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 1d" />
       {#if coolFeedback && coolFeedback !== "invalid"}
         <span class="feedback ok">{coolFeedback}</span>
       {:else if coolFeedback === "invalid"}

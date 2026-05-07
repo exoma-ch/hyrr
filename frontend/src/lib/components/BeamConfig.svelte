@@ -166,9 +166,10 @@
   <div class="separator"></div>
 
   <div class="time-row">
-    <label>Irradiation</label>
+    <label for="bc-irrad">Irradiation</label>
     <div class="time-controls">
       <input
+        id="bc-irrad"
         type="number"
         value={irradValue}
         min={0}
@@ -176,7 +177,7 @@
         onchange={onIrradChange}
         class="time-input"
       />
-      <select value={irradUnit} onchange={onIrradUnitChange} class="unit-select">
+      <select value={irradUnit} onchange={onIrradUnitChange} class="unit-select" aria-label="Irradiation unit">
         {#each TIME_UNITS as u}
           <option value={u.value}>{u.label}</option>
         {/each}
@@ -185,9 +186,10 @@
   </div>
 
   <div class="time-row">
-    <label>Cooling</label>
+    <label for="bc-cool">Cooling</label>
     <div class="time-controls">
       <input
+        id="bc-cool"
         type="number"
         value={coolValue}
         min={0}
@@ -195,7 +197,7 @@
         onchange={onCoolChange}
         class="time-input"
       />
-      <select value={coolUnit} onchange={onCoolUnitChange} class="unit-select">
+      <select value={coolUnit} onchange={onCoolUnitChange} class="unit-select" aria-label="Cooling unit">
         {#each TIME_UNITS as u}
           <option value={u.value}>{u.label}</option>
         {/each}

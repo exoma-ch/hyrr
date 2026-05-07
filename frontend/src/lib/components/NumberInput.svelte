@@ -23,18 +23,20 @@
 
 <div class="number-input">
   <label>
-    <span class="label-text">{label}</span>
-    {#if unit}<span class="unit">{unit}</span>{/if}
+    <span class="label-row">
+      <span class="label-text">{label}</span>
+      {#if unit}<span class="unit">{unit}</span>{/if}
+    </span>
+    <input
+      type="number"
+      {min}
+      {max}
+      {step}
+      {value}
+      onchange={handleChange}
+      class="text-input"
+    />
   </label>
-  <input
-    type="number"
-    {min}
-    {max}
-    {step}
-    {value}
-    onchange={handleChange}
-    class="text-input"
-  />
 </div>
 
 <style>
@@ -46,9 +48,15 @@
 
   label {
     display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.8rem;
+  }
+
+  .label-row {
+    display: flex;
     align-items: baseline;
     gap: 0.4rem;
-    font-size: 0.8rem;
   }
 
   .label-text {
