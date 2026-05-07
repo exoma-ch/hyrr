@@ -23,6 +23,7 @@
   import type { DecayMode, CrossSectionData, ProjectileType } from "@hyrr/compute";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import type { CsvTrace } from "../plotting/csv-export";
+  import { formatDecayMode } from "../format";
   import SaveMenu from "./SaveMenu.svelte";
 
   interface Props {
@@ -906,7 +907,7 @@
             <span class="prop-value">
               {#each decayInfo.decayModes as mode, i}
                 {#if i > 0}<span class="prop-sep">, </span>{/if}
-                {mode.mode}{#if mode.branching < 1 && mode.branching > 0}
+                <span title={mode.mode}>{formatDecayMode(mode.mode)}</span>{#if mode.branching < 1 && mode.branching > 0}
                   <span class="branching"> ({(mode.branching * 100).toFixed(1)}%)</span>
                 {/if}
               {/each}
@@ -923,7 +924,7 @@
           {#if parentDecays.length > 0}
             <div class="chain-group">
               {#each parentDecays as p}
-                <span class="chain-nuc parent" title="{p.mode} ({(p.branching * 100).toFixed(1)}%)">{@html nucHtml(p.name)}</span>
+                <span class="chain-nuc parent" title="{formatDecayMode(p.mode)} ({(p.branching * 100).toFixed(1)}%) [{p.mode}]">{@html nucHtml(p.name)}</span>
               {/each}
             </div>
             <span class="chain-arrow">&rarr;</span>
@@ -934,7 +935,7 @@
             <div class="chain-group">
               {#each decayInfo.decayModes.filter(m => m.daughterZ !== null) as mode}
                 {@const dSym = Z_TO_SYMBOL[mode.daughterZ!] ?? `Z${mode.daughterZ}`}
-                <span class="chain-nuc daughter" title="{mode.mode} ({(mode.branching * 100).toFixed(1)}%)">
+                <span class="chain-nuc daughter" title="{formatDecayMode(mode.mode)} ({(mode.branching * 100).toFixed(1)}%) [{mode.mode}]">
                   {@html nucHtml(`${dSym}-${mode.daughterA}${mode.daughterState || ""}`)}
                 </span>
               {/each}

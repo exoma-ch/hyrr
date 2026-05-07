@@ -10,6 +10,7 @@
     resetFilter,
   } from "../stores/isotope-filter.svelte";
   import type { SimulationResult } from "../types";
+  import { formatReaction } from "../format";
 
   interface Props {
     result: SimulationResult;
@@ -147,7 +148,7 @@
           <span class="filter-label">Reaction</span>
           <div class="chip-group">
             {#each availableMechanisms as mech}
-              <button class="chip" class:active={filter.reactions.has(mech)} onclick={() => toggleFilterReaction(mech)}>{mech}</button>
+              <button class="chip" class:active={filter.reactions.has(mech)} onclick={() => toggleFilterReaction(mech)} title={mech}>{formatReaction(`(${mech})`).slice(1, -1)}</button>
             {/each}
             {#if filter.reactions.size > 0}
               <button class="chip chip-clear" onclick={clearFilterReactions}>All</button>
