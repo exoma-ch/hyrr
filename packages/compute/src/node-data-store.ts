@@ -65,6 +65,8 @@ async function readParquetFile(filePath: string): Promise<ParquetRow[]> {
  * Priority: explicit arg > HYRR_DATA env > ../nucl-parquet sibling > ~/.hyrr/nucl-parquet
  */
 export function resolveDataDir(dataDir?: string, library?: string): string {
+  // Mirrors `hyrr_core::mcp::transport::DEFAULT_LIBRARY`. Kept as a literal
+  // here because this package has no runtime path back to the Rust core.
   const lib = library ?? process.env.HYRR_LIBRARY ?? "tendl-2025";
 
   if (dataDir) {
