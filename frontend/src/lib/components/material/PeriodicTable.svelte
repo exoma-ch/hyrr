@@ -30,6 +30,10 @@
      *  keyboard-reachable; click is suppressed; the accessible name
      *  carries the reason (", no TENDL data"). */
     disabled?: Set<string>;
+    /** Hover tooltip text for greyed cells. Parent supplies it because the
+     *  reason ("no Li(p,…) in TENDL-2024") depends on projectile + library
+     *  context that PT doesn't know. Falls back to a generic message. */
+    disabledReason?: string;
     /** Symbols that should pulse with a secondary highlight. */
     highlighted?: Set<string>;
     /** Symbols whose isotopic composition can be enriched (i.e. have
@@ -51,6 +55,7 @@
     onselect,
     selected,
     disabled,
+    disabledReason,
     highlighted,
     enrichableSet,
     mode = "single",
@@ -281,6 +286,7 @@
             tabindex={focusedZ === cell.Z ? 0 : -1}
             aria-colindex={cell.col}
             aria-label={ariaLabelFor(cell)}
+            title={disabled?.has(cell.symbol) ? (disabledReason ?? "No cross-section data for the current projectile/library") : undefined}
             aria-describedby={tooltip && focusedZ === cell.Z ? tooltipId : undefined}
             aria-selected={selected === cell.symbol ? true : undefined}
             onclick={() => handleClick(cell)}

@@ -25,11 +25,11 @@ fi
 mkdir -p "$DEST/meta" "$DEST/stopping" "$DEST/xs"
 
 # Option 1: copy from local submodule
-if [ -z "${1:-}" ] && [ -d "$SUBMODULE/tendl-2024/xs" ]; then
+if [ -z "${1:-}" ] && [ -d "$SUBMODULE/tendl-2025/xs" ]; then
   echo "Copying nuclear data from submodule ($SUBMODULE) ..."
   cp "$SUBMODULE/meta/abundances.parquet" "$SUBMODULE/meta/decay.parquet" "$SUBMODULE/meta/elements.parquet" "$DEST/meta/"
   cp "$SUBMODULE/stopping/stopping.parquet" "$DEST/stopping/"
-  cp "$SUBMODULE/tendl-2024/xs/"*.parquet "$DEST/xs/"
+  cp "$SUBMODULE/tendl-2025/xs/"*.parquet "$DEST/xs/"
   echo "Done. $(find "$DEST" -name '*.parquet' | wc -l | tr -d ' ') parquet files in $DEST"
   exit 0
 fi

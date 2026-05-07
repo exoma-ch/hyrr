@@ -227,7 +227,7 @@ fn py_compute_thickness(
 /// Implements `hyrr fetch-data`. Exactly one of the four mutually-exclusive
 /// modes is selected by the caller:
 ///
-/// - `library=Some("tendl-2024")` — fetch a specific library
+/// - `library=Some("tendl-2025")` — fetch a specific library
 /// - `all_libs=true` — fetch every library (~400 MB)
 /// - `offline_bundle=Some("/tmp/hyrr.tar.zst")` — repack the existing cache
 ///   into a portable archive (cache must already be complete)
