@@ -789,6 +789,86 @@ mod tests {
         assert!(!is_cache_complete());
     }
 
+    /// Build a tarball at `out` containing one regular file and one
+    /// symlink entry (`data/meta/evil` -> `/etc/passwd`). Used to
+    /// verify that `extract_tarball` refuses to materialise the
+    /// symlink rather than silently honouring it. See #122.
+    fn make_symlink_tarball(out: &Path) {
+        let file = fs::File::create(out).unwrap();
+        let encoder = zstd::stream::Encoder::new(file, 0).unwrap().auto_finish();
+        let mut tar = tar::Builder::new(encoder);
+
+        // One regular file so the archive isn't degenerate.
+        let mut h1 = tar::Header::new_gnu();
+        let payload = b"ok";
+        h1.set_size(payload.len() as u64);
+        h1.set_mode(0o644);
+        h1.set_cksum();
+        tar.append_data(&mut h1, "data/meta/marker", payload.as_slice())
+            .unwrap();
+
+        // The hostile symlink: data/meta/evil -> /etc/passwd
+        let mut h2 = tar::Header::new_gnu();
+        h2.set_size(0);
+        h2.set_mode(0o644);
+        h2.set_entry_type(tar::EntryType::Symlink);
+        h2.set_link_name("/etc/passwd").unwrap();
+        h2.set_cksum();
+        tar.append_data(&mut h2, "data/meta/evil", std::io::empty())
+            .unwrap();
+
+        tar.finish().unwrap();
+    }
+
+    /// `extract_tarball` must refuse symlink entries — a malicious
+    /// upstream could otherwise smuggle `data/meta/foo -> /etc/passwd`
+    /// into the cache. See #122.
+    #[test]
+    fn extract_tarball_rejects_symlink_entries() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("hostile.tar.zst");
+        make_symlink_tarball(&archive);
+
+        let dest = td.path().join("dest");
+        let err = extract_tarball(&archive, &dest, &[]).unwrap_err();
+        match err {
+            FetchError::UnsafeTarballEntry { kind, path } => {
+                assert!(
+                    kind.contains("Symlink"),
+                    "expected kind to mention Symlink, got {kind:?}"
+                );
+                assert_eq!(path, PathBuf::from("data/meta/evil"));
+            }
+            other => panic!("expected UnsafeTarballEntry, got {other:?}"),
+        }
+        // The symlink must NOT have been materialised.
+        assert!(!dest.join("data/meta/evil").exists());
+        assert!(!dest.join("data/meta/evil").is_symlink());
+    }
+
+    /// Regression: a vanilla tarball (regular files + directories
+    /// only) must still extract cleanly through the new entry-type
+    /// filter. The existing `install_from_tarball_writes_sentinel_last`
+    /// test covers the install path; this one exercises
+    /// `extract_tarball` directly so a future refactor that pulls
+    /// the type-check up the call chain stays honest.
+    #[test]
+    fn extract_tarball_accepts_regular_files() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("ok.tar.zst");
+        make_test_tarball(&archive);
+
+        let dest = td.path().join("dest");
+        extract_tarball(&archive, &dest, &[]).unwrap();
+        assert_eq!(
+            fs::read(dest.join("data/meta/marker")).unwrap(),
+            b"test-marker"
+        );
+        assert!(dest.join("data/tendl-test/xs/p_Cu.parquet").exists());
+    }
+
     /// Stale partial dirs (left by SIGKILL'd previous runs) must be
     /// swept by `install_tarball_atomic`. Without the sweep these
     /// accumulate at ~400 MB per crash forever.
