@@ -304,6 +304,16 @@ fn py_data_version() -> &'static str {
     data_fetch::DATA_VERSION
 }
 
+/// Prune old `v{N.N.N}/` cache siblings, keeping only the current
+/// `DATA_VERSION` plus the `keep` most-recent historical versions.
+/// Returns the number of directories removed.
+#[pyfunction]
+#[pyo3(signature = (keep=2))]
+fn py_prune_old_versions(keep: usize) -> PyResult<usize> {
+    data_fetch::prune_old_versions(keep)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
+}
+
 // ---------------------------------------------------------------------------
 // Internal types for JSON deserialization
 // ---------------------------------------------------------------------------
@@ -376,5 +386,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_cache_data_dir, m)?)?;
     m.add_function(wrap_pyfunction!(py_cache_is_complete, m)?)?;
     m.add_function(wrap_pyfunction!(py_data_version, m)?)?;
+    m.add_function(wrap_pyfunction!(py_prune_old_versions, m)?)?;
     Ok(())
 }
