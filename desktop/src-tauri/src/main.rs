@@ -54,6 +54,11 @@ fn main() {
             commands::compute_depth_preview,
             commands::ensure_data,
             commands::data_ready,
+            commands::data_release_url,
+            commands::data_release_base_url,
+            commands::data_version,
+            commands::data_tarball_filename,
+            commands::data_cache_root_pattern,
             commands::updater_enabled,
         ])
         .run(tauri::generate_context!())
