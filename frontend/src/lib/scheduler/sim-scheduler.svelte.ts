@@ -18,6 +18,7 @@ import {
   setResultErrored,
   type SimStatus,
 } from "../stores/results.svelte";
+import { getDataMode } from "../stores/data-mode.svelte";
 import { parseComputeError } from "../compute/parse-error";
 import { configHash } from "./config-hash";
 import { DataStore } from "@hyrr/compute";
@@ -125,6 +126,24 @@ async function runSimulation(hash: string): Promise<void> {
   // getConfig() returns already-expanded flat layers (groups resolved by config store)
   const config = getConfig();
   cancelled = false;
+
+  // #118 — in limited mode (user clicked "Use bundled data only" on
+  // the recovery card) the cache has meta/stopping/catalog only; XS
+  // data for *any* library is missing, so a real run would error
+  // deep inside the data backend. Short-circuit with a typed error
+  // that the existing #142 / #143 recovery surfaces render cleanly.
+  if (getDataMode() === "limited") {
+    state = "error";
+    const err = {
+      kind: "Unknown" as const,
+      message:
+        "Limited mode — fetch full nuclear data to enable yield computation. Depth preview still works.",
+    };
+    setResultErrored(new Error(err.message));
+    setComputeError(err);
+    lastHash = hash;
+    return;
+  }
 
   try {
     if (!backendReady) {
