@@ -65,11 +65,15 @@
   import WelcomeScreen from "./lib/components/WelcomeScreen.svelte";
   import DownloadLinks from "./lib/components/DownloadLinks.svelte";
   import UpdatePrompt from "./lib/components/UpdatePrompt.svelte";
+  import DataFetchSplash from "./lib/components/DataFetchSplash.svelte";
   import { checkForUpdate, type PendingUpdate } from "./lib/updater";
 
   let loadingState = $state("Initializing...");
   let loadingProgress = $state(0);
-  let loadingError = $state("");
+  // `loadingError` accepts the raw thrown value (string from Tauri,
+  // Error from JS) so `FetchErrorCard` / `parseFetchError` can
+  // classify it. `null` = no error yet.
+  let loadingError = $state<unknown>(null);
   let ready = $state(false);
   let pendingUpdate = $state<PendingUpdate | null>(null);
 
@@ -101,6 +105,96 @@
   initScheduler();
   initDepthPreview();
 
+  async function runInitialDataLoad(): Promise<boolean> {
+    loadingState = "Loading nuclear data...";
+    loadingProgress = 0;
+    loadingError = null;
+
+    // 5-minute ceiling. Covers first-launch downloads (~50 MB at hotel-wifi
+    // speeds is up to 5 min per the #52 spike bench). The progress callback
+    // keeps the user informed during any wait — a hard timeout is the
+    // backstop if something is genuinely wedged, not a snappiness signal.
+    const TIMEOUT_MS = 300_000;
+    try {
+      const loadPromise = initDataStore(
+        "./data/parquet",
+        (msg: string, fraction?: number) => {
+          loadingState = msg;
+          if (fraction !== undefined) loadingProgress = fraction;
+        },
+      );
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("Data loading timed out after 5 min")),
+          TIMEOUT_MS,
+        ),
+      );
+      await Promise.race([loadPromise, timeoutPromise]);
+      return true;
+    } catch (e: unknown) {
+      // Keep the raw thrown value — FetchErrorCard / parseFetchError
+      // tolerate strings, Errors, or already-structured payloads.
+      loadingError = e ?? new Error("Failed to load nuclear data");
+      return false;
+    }
+  }
+
+  /** Retry the cold-cache fetch from the recovery card. Re-runs the
+   *  full post-load init only if the data load succeeds. */
+  async function retryDataLoad(): Promise<void> {
+    const ok = await runInitialDataLoad();
+    if (!ok) return;
+    await finishPostDataLoad();
+  }
+
+  async function finishPostDataLoad(): Promise<void> {
+    // Check URL for shared config — URL hash takes priority over session restore
+    const urlConfig = decodeSerializableConfigFromHash();
+    await restoreSessions();
+    if (urlConfig) restoreSerializableConfig(urlConfig);
+
+    await loadCustomMaterials();
+    try {
+      const seen = localStorage.getItem("hyrr.notice.materialSchemaBreak");
+      if (!seen) showSchemaBreakBanner = true;
+    } catch { /* no-op */ }
+
+    const densityFn = (identifier: string): number | null => {
+      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
+      return cm ? cm.density : null;
+    };
+    const compositionFn = (identifier: string): Record<string, number> | null => {
+      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
+      return cm?.massFractions ?? null;
+    };
+    setCustomDensityLookup(densityFn);
+    setCustomCompositionLookup(compositionFn);
+    setPkgCustomDensityLookup(densityFn);
+    setPkgCustomCompositionLookup(compositionFn);
+    setCustomMaterialExpander((name) => {
+      const cm = getCustomMaterials().find((m) => m.name === name);
+      return cm ? cm.formula : null;
+    });
+    setCustomMaterialResolver((identifier) => {
+      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
+      if (!cm || !cm.massFractions) return null;
+      return { density: cm.density, massFractions: cm.massFractions };
+    });
+
+    loadingState = "Ready";
+    loadingProgress = 1;
+    ready = true;
+
+    // Preload Plotly for faster popup opening
+    import("plotly.js-dist-min").catch(() => {});
+
+    // Auto-updater check — runs *after* the splash clears so a fresh
+    // install doesn't get two blocking modals at once.
+    checkForUpdate().then((u) => {
+      if (u) pendingUpdate = u;
+    });
+  }
+
   onMount(async () => {
     // Keyboard shortcuts: Cmd/Ctrl+Z = undo, Cmd/Ctrl+Shift+Z = redo
     function onKeyDown(e: KeyboardEvent) {
@@ -119,92 +213,9 @@
 
     await registerServiceWorker();
 
-    loadingState = "Loading nuclear data...";
-    loadingProgress = 0;
-
-    // 5-minute ceiling. Covers first-launch downloads (~50 MB at hotel-wifi
-    // speeds is up to 5 min per the #52 spike bench). The progress callback
-    // keeps the user informed during any wait — a hard timeout is the
-    // backstop if something is genuinely wedged, not a snappiness signal.
-    const TIMEOUT_MS = 300_000;
-    try {
-      const loadPromise = initDataStore("./data/parquet", (msg: string, fraction?: number) => {
-        loadingState = msg;
-        if (fraction !== undefined) loadingProgress = fraction;
-      });
-
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Data loading timed out after 5 min")), TIMEOUT_MS),
-      );
-
-      await Promise.race([loadPromise, timeoutPromise]);
-    } catch (e: unknown) {
-      loadingError = e instanceof Error ? e.message : "Failed to load nuclear data";
-      return;
-    }
-
-    // Check URL for shared config — URL hash takes priority over session restore
-    const urlConfig = decodeSerializableConfigFromHash();
-
-    // Restore persisted session tabs from IndexedDB
-    await restoreSessions();
-
-    // Apply URL config AFTER session restore so it isn't overwritten (#29)
-    if (urlConfig) {
-      restoreSerializableConfig(urlConfig);
-    }
-
-    // Load custom materials and register density+composition lookups on
-    // both resolvers — `./lib/compute/materials` is the older local one
-    // and `@hyrr/compute` is the shared package that components use.
-    // The 0.x material schema break (#92) drops any legacy entries that
-    // don't map cleanly; surface a one-time banner so users notice their
-    // saved customs may be gone after this deploy.
-    await loadCustomMaterials();
-    try {
-      const seen = localStorage.getItem("hyrr.notice.materialSchemaBreak");
-      if (!seen) showSchemaBreakBanner = true;
-    } catch { /* no-op */ }
-    const densityFn = (identifier: string): number | null => {
-      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
-      return cm ? cm.density : null;
-    };
-    const compositionFn = (identifier: string): Record<string, number> | null => {
-      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
-      return cm?.massFractions ?? null;
-    };
-    setCustomDensityLookup(densityFn);
-    setCustomCompositionLookup(compositionFn);
-    setPkgCustomDensityLookup(densityFn);
-    setPkgCustomCompositionLookup(compositionFn);
-    // Rust/WASM engine doesn't know custom materials — expand to formula.
-    setCustomMaterialExpander((name) => {
-      const cm = getCustomMaterials().find((m) => m.name === name);
-      return cm ? cm.formula : null;
-    });
-    // #96: when encoding share URLs, embed the layer's full composition
-    // inline so the receiver can resolve density + per-element fractions
-    // without first re-defining the custom locally.
-    setCustomMaterialResolver((identifier) => {
-      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
-      if (!cm || !cm.massFractions) return null;
-      return { density: cm.density, massFractions: cm.massFractions };
-    });
-
-    loadingState = "Ready";
-    loadingProgress = 1;
-    ready = true;
-
-    // Preload Plotly for faster popup opening
-    import("plotly.js-dist-min").catch(() => {});
-
-    // Auto-updater check — runs *after* the splash clears so a fresh
-    // install doesn't get two blocking modals at once (the data-fetch
-    // splash and the update prompt). On dev/web/.deb/.rpm the check
-    // short-circuits silently inside `checkForUpdate`.
-    checkForUpdate().then((u) => {
-      if (u) pendingUpdate = u;
-    });
+    const ok = await runInitialDataLoad();
+    if (!ok) return;
+    await finishPostDataLoad();
   });
 
   // Update URL hash when config changes (debounced) — includes groups
@@ -347,17 +358,12 @@
   {/if}
 
   {#if !ready}
-    <div class="loading">
-      {#if loadingError}
-        <p class="loading-error">{loadingError}</p>
-        <button class="retry-btn" onclick={() => location.reload()}>Retry</button>
-      {:else}
-        <p>{loadingState}</p>
-        <div class="progress-bar">
-          <div class="progress-fill" style="width: {loadingProgress * 100}%"></div>
-        </div>
-      {/if}
-    </div>
+    <DataFetchSplash
+      {loadingState}
+      fallbackFraction={loadingProgress}
+      {loadingError}
+      onretry={retryDataLoad}
+    />
   {:else}
     <div class="app-flow">
       <div class="config-row">
@@ -639,48 +645,8 @@
     padding: 0.5rem 1rem 2rem;
   }
 
-  .loading {
-    text-align: center;
-    padding: 4rem;
-    color: var(--c-text-muted);
-  }
-
-  .progress-bar {
-    width: 300px;
-    height: 6px;
-    background: var(--c-border);
-    border-radius: 3px;
-    margin: 1rem auto 0;
-    overflow: hidden;
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--c-accent);
-    border-radius: 3px;
-    transition: width 0.3s ease;
-  }
-
-  .loading-error {
-    color: var(--c-red);
-    font-weight: 500;
-  }
-
-  .retry-btn {
-    margin-top: 1rem;
-    padding: 0.5rem 1.5rem;
-    background: var(--c-bg-muted);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text);
-    cursor: pointer;
-    font-size: 0.9rem;
-  }
-
-  .retry-btn:hover {
-    border-color: var(--c-accent);
-    background: var(--c-bg-hover);
-  }
+  /* `.loading` / `.progress-bar` / `.progress-fill` / `.loading-error`
+     / `.retry-btn` styles moved to DataFetchSplash.svelte (#118). */
 
   .app-flow {
     display: flex;
