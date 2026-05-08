@@ -53,6 +53,7 @@ fn main() {
             commands::run_compute_stack,
             commands::compute_depth_preview,
             commands::ensure_data,
+            commands::install_from_local_tarball,
             commands::data_ready,
             commands::data_release_url,
             commands::data_release_base_url,
