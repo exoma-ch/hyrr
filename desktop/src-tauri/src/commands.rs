@@ -262,12 +262,15 @@ pub fn install_from_local_tarball(app: AppHandle, path: String) -> Result<String
 
 /// Build a closure that emits each [`FetchProgress`] event onto
 /// `hyrr://data-fetch-progress`, but rate-limits to ≤1 emit per
-/// 256 KiB of progress *or* ≤1 emit per 100 ms — whichever is rarer
-/// (the data_fetch comment on #118 calls this out explicitly to avoid
-/// flooding the IPC channel during a 400 MB download). Stage-change
-/// and final-byte events bypass the throttle so the UI snaps cleanly
-/// from "Downloading" → "Extracting" → "Verifying" without waiting
-/// for the next 100 ms tick.
+/// 100 ms *and* a min-step of 256 KiB on byte-progress events (so a
+/// 64 KiB chunk loop emits roughly every 4th chunk during download).
+/// The download-stage gate is `bytes_step ≥ 256 KiB AND interval ≥
+/// 100 ms` — both must be satisfied to emit. The non-byte stages
+/// (extract entry counts, verifying) drop the bytes gate and use
+/// the 100 ms interval alone, otherwise the UI would freeze on
+/// "Extracting" with no updates between stage transitions. Stage
+/// changes and the final-byte event bypass the throttle so the
+/// progress bar snaps cleanly between phases.
 fn throttled_emit(app: &AppHandle) -> impl FnMut(FetchProgress) + '_ {
     use hyrr_core::data_fetch::FetchStage;
 
@@ -294,13 +297,30 @@ fn throttled_emit(app: &AppHandle) -> impl FnMut(FetchProgress) + '_ {
             .map(|t| now.saturating_duration_since(t) >= min_interval)
             .unwrap_or(true);
 
-        let bytes_step_ok = p
-            .bytes_done
-            .checked_sub(last_bytes)
-            .map(|d| d >= min_bytes_step)
-            .unwrap_or(true);
+        // Reset the bytes counter on stage transition — bytes_done
+        // means different things across stages (compressed bytes vs.
+        // entry count) so the carry-over check is meaningless.
+        let bytes_step_ok = match (last_stage, p.stage) {
+            (Some(prev), curr) if !same_stage(prev, curr) => true,
+            _ => p
+                .bytes_done
+                .checked_sub(last_bytes)
+                .map(|d| d >= min_bytes_step)
+                .unwrap_or(true),
+        };
 
-        let should_emit = stage_changed || final_byte || (interval_ok && bytes_step_ok);
+        // Only the Downloading stage carries reliable byte counts in
+        // 256-KiB-meaningful units. Other stages emit on the 100 ms
+        // interval alone — prevents Extracting from going silent
+        // because entry counts never tick by 256 KiB.
+        let should_emit = stage_changed
+            || final_byte
+            || match p.stage {
+                FetchStage::Downloading => interval_ok && bytes_step_ok,
+                FetchStage::Connecting
+                | FetchStage::Extracting
+                | FetchStage::Verifying => interval_ok,
+            };
         if !should_emit {
             return;
         }
