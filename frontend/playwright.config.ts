@@ -1,11 +1,18 @@
 import { defineConfig } from "@playwright/test";
 
+const chromiumExecutable = process.env.CHROMIUM_EXECUTABLE_PATH;
+const noSandbox = process.env.PLAYWRIGHT_NO_SANDBOX === "1";
+const launchOptions: Record<string, unknown> = {};
+if (chromiumExecutable) launchOptions.executablePath = chromiumExecutable;
+if (noSandbox) launchOptions.args = ["--no-sandbox", "--disable-dev-shm-usage"];
+
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "./e2e/results",
   use: {
     baseURL: "http://localhost:4173/hyrr",
     browserName: "chromium",
+    ...(Object.keys(launchOptions).length ? { launchOptions } : {}),
   },
   webServer: {
     command: "npm run build && npm run preview -- --port 4173",

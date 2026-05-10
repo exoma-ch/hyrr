@@ -1,0 +1,438 @@
+name: E2E (Playwright cross-platform)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "wasm/**"
+      - ".github/workflows/e2e.yml"
+  workflow_dispatch:
+  # Uncomment to run nightly:
+  # schedule:
+  #   - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - windows-2022
+          - windows-2025
+          - macos-15
+        # To also cover ARM Linux on public repos:
+        #   - ubuntu-24.04-arm
+        # To cover other Linux distros, add a separate job that runs the
+        # same steps inside a `container:` (archlinux, fedora, debian, alpine).
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set \
+            data/meta \
+            data/stopping \
+            data/tendl-2024/xs \
+            data/hi-xs-prod/xs \
+            data/endfb-8.1/xs
+
+      - name: Copy nuclear data for frontend
+        run: |
+          mkdir -p frontend/public/data/parquet/{meta,stopping,xs,hi-xs-prod,neutron-xs}
+          cp nucl-parquet/data/meta/abundances.parquet \
+             nucl-parquet/data/meta/decay.parquet \
+             nucl-parquet/data/meta/elements.parquet \
+             frontend/public/data/parquet/meta/
+          cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp -f nucl-parquet/data/meta/spectrum_xs.parquet   frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp nucl-parquet/data/stopping/PSTAR.parquet \
+             nucl-parquet/data/stopping/ASTAR.parquet \
+             nucl-parquet/data/stopping/dSTAR.parquet \
+             nucl-parquet/data/stopping/tSTAR.parquet \
+             nucl-parquet/data/stopping/He3STAR.parquet \
+             frontend/public/data/parquet/stopping/
+          cp nucl-parquet/data/stopping/catima_C12.parquet \
+             nucl-parquet/data/stopping/catima_O16.parquet \
+             nucl-parquet/data/stopping/catima_Ne20.parquet \
+             nucl-parquet/data/stopping/catima_Si28.parquet \
+             nucl-parquet/data/stopping/catima_Ar40.parquet \
+             nucl-parquet/data/stopping/catima_Fe56.parquet \
+             frontend/public/data/parquet/stopping/
+          cp nucl-parquet/data/tendl-2024/xs/*.parquet  frontend/public/data/parquet/xs/
+          cp nucl-parquet/data/hi-xs-prod/xs/*.parquet  frontend/public/data/parquet/hi-xs-prod/
+          cp nucl-parquet/data/endfb-8.1/xs/n_*.parquet frontend/public/data/parquet/neutron-xs/
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          # Pin: macOS "latest" sometimes resolves to a 0.12.x build
+          # that doesn't recognise --no-opt. 0.13.1 is the first stable
+          # release with that flag.
+          version: "v0.13.1"
+
+      - name: Build WASM compute engine
+        # --no-opt skips wasm-opt; the cached binaryen wasm-pack ships is too
+        # old for multi-table output on macOS. Tests don't care about size,
+        # and deploy-frontend.yml still optimizes for production.
+        run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Fix rollup native bindings (Linux only)
+        if: runner.os == 'Linux'
+        working-directory: frontend
+        run: npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~\AppData\Local\ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json', 'package-lock.json') }}
+
+      - name: Install Playwright browsers (Linux — with system deps)
+        if: runner.os == 'Linux'
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright browsers (Windows / macOS)
+        if: runner.os != 'Linux'
+        working-directory: frontend
+        run: npx playwright install chromium
+
+      - name: Run Playwright tests
+        working-directory: frontend
+        run: npx playwright test --reporter=list,html
+        env:
+          CI: "1"
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: frontend/playwright-report
+          retention-days: 7
+
+      - name: Upload Playwright traces & screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results-${{ matrix.os }}
+          path: frontend/e2e/results
+          retention-days: 7
+
+  # Cross-distro Linux coverage. Runs each distro in its own container on a
+  # plain ubuntu-latest runner. Uses the distro's *system* Chromium (not
+  # Playwright's bundled binary) because the bundled one is glibc/Debian-built
+  # and not officially supported on Arch/Fedora/Alpine. Alpine (musl) is left
+  # out for now — bundled chromium is unsupported there and system chromium
+  # under musl is its own adventure.
+  e2e-linux-distros:
+    name: e2e-linux (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.image }}
+      options: --user root
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: arch
+            image: archlinux:latest
+            chromium_path: /usr/bin/chromium
+            setup: |
+              set -euxo pipefail
+              pacman -Syu --noconfirm
+              pacman -S --noconfirm --needed git curl base-devel nodejs npm rustup chromium jq
+              rustup default stable
+              rustup target add wasm32-unknown-unknown
+              cargo install wasm-pack --locked
+              echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          - distro: fedora
+            image: fedora:41
+            chromium_path: /usr/bin/chromium-browser
+            setup: |
+              set -euxo pipefail
+              # Fedora's `rust` rpm ships without the wasm32 target stdlib;
+              # use rustup instead so we can `rustup target add wasm32-…`.
+              dnf install -y git curl gcc gcc-c++ make nodejs npm chromium jq tar findutils
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+                sh -s -- -y --profile minimal --default-toolchain stable --target wasm32-unknown-unknown
+              echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+              . "$HOME/.cargo/env"
+              cargo install wasm-pack --locked
+          - distro: debian
+            image: debian:12
+            chromium_path: /usr/bin/chromium
+            setup: |
+              set -euxo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y git curl ca-certificates build-essential chromium jq xz-utils
+              curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+              apt-get install -y nodejs
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+                sh -s -- -y --profile minimal --default-toolchain stable --target wasm32-unknown-unknown
+              echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+              . "$HOME/.cargo/env"
+              cargo install wasm-pack --locked
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Install distro packages
+        run: ${{ matrix.setup }}
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Mark workspace safe for git
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/nucl-parquet"
+
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set \
+            data/meta \
+            data/stopping \
+            data/tendl-2024/xs \
+            data/hi-xs-prod/xs \
+            data/endfb-8.1/xs
+
+      - name: Copy nuclear data for frontend
+        run: |
+          mkdir -p frontend/public/data/parquet/{meta,stopping,xs,hi-xs-prod,neutron-xs}
+          cp nucl-parquet/data/meta/abundances.parquet \
+             nucl-parquet/data/meta/decay.parquet \
+             nucl-parquet/data/meta/elements.parquet \
+             frontend/public/data/parquet/meta/
+          cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp -f nucl-parquet/data/meta/spectrum_xs.parquet   frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp nucl-parquet/data/stopping/PSTAR.parquet \
+             nucl-parquet/data/stopping/ASTAR.parquet \
+             nucl-parquet/data/stopping/dSTAR.parquet \
+             nucl-parquet/data/stopping/tSTAR.parquet \
+             nucl-parquet/data/stopping/He3STAR.parquet \
+             frontend/public/data/parquet/stopping/
+          cp nucl-parquet/data/stopping/catima_C12.parquet \
+             nucl-parquet/data/stopping/catima_O16.parquet \
+             nucl-parquet/data/stopping/catima_Ne20.parquet \
+             nucl-parquet/data/stopping/catima_Si28.parquet \
+             nucl-parquet/data/stopping/catima_Ar40.parquet \
+             nucl-parquet/data/stopping/catima_Fe56.parquet \
+             frontend/public/data/parquet/stopping/
+          cp nucl-parquet/data/tendl-2024/xs/*.parquet  frontend/public/data/parquet/xs/
+          cp nucl-parquet/data/hi-xs-prod/xs/*.parquet  frontend/public/data/parquet/hi-xs-prod/
+          cp nucl-parquet/data/endfb-8.1/xs/n_*.parquet frontend/public/data/parquet/neutron-xs/
+
+      - name: Build WASM compute engine
+        run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+
+      - name: npm install
+        working-directory: frontend
+        run: npm install
+
+      - name: Verify chromium exists
+        run: |
+          ls -la "${{ matrix.chromium_path }}" || (which chromium chromium-browser; exit 1)
+          "${{ matrix.chromium_path }}" --version || true
+
+      - name: Run Playwright tests (system chromium, no-sandbox)
+        working-directory: frontend
+        env:
+          CHROMIUM_EXECUTABLE_PATH: ${{ matrix.chromium_path }}
+          PLAYWRIGHT_NO_SANDBOX: "1"
+          CI: "1"
+        run: npx playwright test --reporter=list,html
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-linux-${{ matrix.distro }}
+          path: frontend/playwright-report
+          retention-days: 7
+
+      - name: Upload Playwright traces & screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results-linux-${{ matrix.distro }}
+          path: frontend/e2e/results
+          retention-days: 7
+
+  # Static-host smoke: serves the production `dist/` via plain `npx serve`
+  # (no Vite middleware) under the same `/hyrr/` base-path that GitHub Pages
+  # uses, then runs Playwright against it. Catches base-path / asset-URL /
+  # service-worker scope regressions that the `vite preview` jobs don't see.
+  e2e-static-host:
+    name: e2e-static-host (linux, prod-like)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set \
+            data/meta \
+            data/stopping \
+            data/tendl-2024/xs \
+            data/hi-xs-prod/xs \
+            data/endfb-8.1/xs
+
+      - name: Copy nuclear data for frontend
+        run: |
+          mkdir -p frontend/public/data/parquet/{meta,stopping,xs,hi-xs-prod,neutron-xs}
+          cp nucl-parquet/data/meta/abundances.parquet \
+             nucl-parquet/data/meta/decay.parquet \
+             nucl-parquet/data/meta/elements.parquet \
+             frontend/public/data/parquet/meta/
+          cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp -f nucl-parquet/data/meta/spectrum_xs.parquet   frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp nucl-parquet/data/stopping/PSTAR.parquet \
+             nucl-parquet/data/stopping/ASTAR.parquet \
+             nucl-parquet/data/stopping/dSTAR.parquet \
+             nucl-parquet/data/stopping/tSTAR.parquet \
+             nucl-parquet/data/stopping/He3STAR.parquet \
+             frontend/public/data/parquet/stopping/
+          cp nucl-parquet/data/stopping/catima_C12.parquet \
+             nucl-parquet/data/stopping/catima_O16.parquet \
+             nucl-parquet/data/stopping/catima_Ne20.parquet \
+             nucl-parquet/data/stopping/catima_Si28.parquet \
+             nucl-parquet/data/stopping/catima_Ar40.parquet \
+             nucl-parquet/data/stopping/catima_Fe56.parquet \
+             frontend/public/data/parquet/stopping/
+          cp nucl-parquet/data/tendl-2024/xs/*.parquet  frontend/public/data/parquet/xs/
+          cp nucl-parquet/data/hi-xs-prod/xs/*.parquet  frontend/public/data/parquet/hi-xs-prod/
+          cp nucl-parquet/data/endfb-8.1/xs/n_*.parquet frontend/public/data/parquet/neutron-xs/
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          # Pin: macOS "latest" sometimes resolves to a 0.12.x build
+          # that doesn't recognise --no-opt. 0.13.1 is the first stable
+          # release with that flag.
+          version: "v0.13.1"
+
+      - name: Build WASM compute engine
+        run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Fix rollup native bindings
+        working-directory: frontend
+        run: npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
+
+      - name: Build frontend (production)
+        working-directory: frontend
+        run: npm run build
+
+      - name: Stage dist under /hyrr/ to mirror GitHub Pages layout
+        run: |
+          mkdir -p _site
+          ln -s "$PWD/frontend/dist" _site/hyrr
+          ls -la _site/hyrr/ | head -5
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-static-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Install Playwright chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Start static server (npx serve)
+        run: |
+          npx --yes serve _site -l 4173 --no-clipboard &
+          # Wait for the server to be reachable on /hyrr/
+          for i in {1..30}; do
+            if curl -fsS http://localhost:4173/hyrr/ -o /dev/null; then
+              echo "server up after $i tries"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server failed to start" >&2
+          exit 1
+
+      - name: Run Playwright tests against static server
+        working-directory: frontend
+        env:
+          # Tells playwright.config to skip its own webServer (vite preview)
+          # and reuse the already-running static server we started above.
+          CI: "1"
+        run: npx playwright test --reporter=list,html
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-static-host
+          path: frontend/playwright-report
+          retention-days: 7
+
+      - name: Upload Playwright traces & screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results-static-host
+          path: frontend/e2e/results
+          retention-days: 7
