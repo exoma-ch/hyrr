@@ -212,11 +212,43 @@ impl FetchErrorPayload {
     }
 }
 
+/// Replace the leading `$HOME` of `p` with the literal `~`. Used at the
+/// Tauri/IPC boundary to keep the OS username out of payloads that
+/// might end up in bug reports (see #173, #159 privacy contract).
+///
+/// Behaviour:
+/// - If `home::home_dir()` returns `Some(home)` and `p` starts with that
+///   prefix, the prefix is replaced with `~` (e.g.
+///   `/Users/alice/.hyrr/...` → `~/.hyrr/...`).
+/// - Otherwise the path is returned unchanged via `Display`. This covers
+///   the absent-`$HOME`, `$HOME=""`, and "path is outside home" cases —
+///   none of which leak the username because by definition no username
+///   prefix is present to redact.
+///
+/// Defensive note: a degenerate `$HOME=/` (or `$HOME=""` resolving to
+/// the empty string on some platforms) would otherwise rewrite every
+/// path to `~/...`. We guard against the empty case explicitly; the
+/// `/` case still strips a single byte and yields `~/etc/passwd` for
+/// `/etc/passwd`, which is harmless — no user info is leaked, just an
+/// unusual rendering.
+fn redact_home(p: &Path) -> String {
+    let s = p.display().to_string();
+    if let Some(home) = home::home_dir() {
+        let home_s = home.display().to_string();
+        if !home_s.is_empty() {
+            if let Some(rest) = s.strip_prefix(&home_s) {
+                return format!("~{rest}");
+            }
+        }
+    }
+    s
+}
+
 impl From<&FetchError> for FetchErrorPayload {
     fn from(err: &FetchError) -> Self {
         let url = release_url();
         let cache_dir_str = cache_dir()
-            .map(|p| p.display().to_string())
+            .map(|p| redact_home(&p))
             .unwrap_or_else(|_| cache_root_pattern());
         let message = err.to_string();
         match err {
@@ -243,7 +275,13 @@ impl From<&FetchError> for FetchErrorPayload {
             FetchError::UnsafeTarballEntry { kind, path } => {
                 FetchErrorPayload::UnsafeTarballEntry {
                     entry_kind: kind.clone(),
-                    entry_path: path.display().to_string(),
+                    // `path` is the tarball-entry path (relative to the
+                    // archive root, e.g. `data/meta/evil`) so today it
+                    // can't carry `$HOME`. Routed through `redact_home`
+                    // defensively per the #173 acceptance bullet — if a
+                    // future refactor surfaces an absolute path here
+                    // the redaction is already in place.
+                    entry_path: redact_home(path),
                     cache_dir: cache_dir_str,
                     message,
                 }
@@ -1873,5 +1911,133 @@ mod tests {
         assert!(v["url"].is_string());
         assert!(v["cache_dir"].is_string());
         assert!(v["message"].is_string());
+    }
+
+    // ----- #173 redact_home unit tests ---------------------------------
+    //
+    // These cover the boundary helper directly so a future refactor that
+    // moves the call site can't silently drop redaction. The
+    // `FetchErrorPayload` regression test in the next test asserts the
+    // end-to-end JSON has no $HOME literal.
+
+    #[test]
+    fn redact_home_strips_home_prefix() {
+        let _g = SERIAL.lock().unwrap();
+        // We can't rely on `isolated_home()` here because `home_dir()`
+        // on macOS/Linux reads `$HOME` directly, which is what we want
+        // for this test — but we need a stable, known prefix.
+        std::env::set_var("HOME", "/tmp/fakehome");
+        let p = PathBuf::from("/tmp/fakehome/.hyrr/nucl-parquet/v0.10.0");
+        let got = redact_home(&p);
+        assert_eq!(got, "~/.hyrr/nucl-parquet/v0.10.0");
+    }
+
+    #[test]
+    fn redact_home_passthrough_for_non_home_paths() {
+        let _g = SERIAL.lock().unwrap();
+        std::env::set_var("HOME", "/tmp/fakehome");
+        let p = PathBuf::from("/etc/passwd");
+        let got = redact_home(&p);
+        assert_eq!(got, "/etc/passwd");
+    }
+
+    #[test]
+    fn redact_home_handles_empty_home_env() {
+        let _g = SERIAL.lock().unwrap();
+        // Empty $HOME would otherwise rewrite every path to `~/...` via
+        // a zero-length strip_prefix match. We guard against that.
+        std::env::set_var("HOME", "");
+        let p = PathBuf::from("/etc/passwd");
+        let got = redact_home(&p);
+        assert_eq!(got, "/etc/passwd");
+    }
+
+    #[test]
+    fn redact_home_handles_missing_home_env() {
+        let _g = SERIAL.lock().unwrap();
+        std::env::remove_var("HOME");
+        let p = PathBuf::from("/etc/passwd");
+        let got = redact_home(&p);
+        // With $HOME unset `home::home_dir()` may consult passwd / SHGetFolderPathW.
+        // The contract is "no panic, sensible string out" — exact equality
+        // depends on the platform's fallback, so just assert the path
+        // doesn't gain a spurious `~` prefix when it didn't match home.
+        assert!(
+            got == "/etc/passwd" || !got.starts_with("~/etc"),
+            "unexpected rewrite of non-home path: {got:?}"
+        );
+    }
+
+    /// #173 regression guard: the structured `cache_dir` / `entry_path`
+    /// fields of the JSON wire-form MUST NOT contain the user's `$HOME`
+    /// literal. This pins the redaction at the IPC boundary so a future
+    /// refactor that re-routes a path through `.display()` without
+    /// `redact_home` gets caught at CI time rather than in a bug-report
+    /// comment thread.
+    ///
+    /// Scope note (#173 issue body, "Out of scope" bullet): the
+    /// per-variant `message` string is built from
+    /// `FetchError::to_string()`, which today re-emits absolute paths
+    /// via the thiserror `Display` impl (e.g.
+    /// `unsafe tarball entry Symlink at /Users/alice/...`). Redacting
+    /// those error strings is tracked under the broader #159 privacy
+    /// contract, so this regression test deliberately asserts only on
+    /// the structured fields — not on the full payload body.
+    #[test]
+    fn fetch_error_payload_json_redacts_home() {
+        let _g = SERIAL.lock().unwrap();
+        // Use a marker `$HOME` that's trivially identifiable in the
+        // output so the assert is unambiguous.
+        let td = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", td.path());
+        let home_str = td.path().display().to_string();
+
+        // Variant 1: Io carries cache_dir, which is built from
+        // cache_dir() → $HOME/.hyrr/nucl-parquet/v{V}.
+        let err = FetchError::Io(io::Error::other("disk full"));
+        let payload = FetchErrorPayload::from(&err);
+        let s = payload.to_json_string();
+        let v: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
+        let cache_dir = v["cache_dir"].as_str().expect("cache_dir is a string");
+        assert!(
+            !cache_dir.contains(&home_str),
+            "cache_dir leaked $HOME ({home_str:?}): {cache_dir}"
+        );
+        assert!(
+            cache_dir.starts_with("~/.hyrr/nucl-parquet"),
+            "cache_dir should be redacted to ~/.hyrr/..., got {cache_dir}"
+        );
+        // Also assert no platform-shaped username prefix snuck in via
+        // some other transform.
+        for needle in &["/Users/", "/home/", "C:\\Users\\"] {
+            assert!(
+                !cache_dir.contains(needle),
+                "cache_dir contained suspicious path prefix {needle:?}: {cache_dir}"
+            );
+        }
+
+        // Variant 2: UnsafeTarballEntry with an absolute path that
+        // happens to live under $HOME. Today this can't arise through
+        // production code (tarball paths are relative), but we exercise
+        // the defensive routing the issue body calls out.
+        let evil = td.path().join("evil");
+        let err2 = FetchError::UnsafeTarballEntry {
+            kind: "Symlink".to_string(),
+            path: evil,
+        };
+        let payload2 = FetchErrorPayload::from(&err2);
+        let s2 = payload2.to_json_string();
+        let v2: serde_json::Value = serde_json::from_str(&s2).expect("valid JSON");
+        let entry_path = v2["entry_path"].as_str().expect("entry_path is a string");
+        let cache_dir2 = v2["cache_dir"].as_str().expect("cache_dir is a string");
+        assert!(
+            !entry_path.contains(&home_str),
+            "entry_path leaked $HOME ({home_str:?}): {entry_path}"
+        );
+        assert_eq!(entry_path, "~/evil", "entry_path should redact to ~/evil");
+        assert!(
+            !cache_dir2.contains(&home_str),
+            "cache_dir leaked $HOME in UnsafeTarballEntry variant ({home_str:?}): {cache_dir2}"
+        );
     }
 }

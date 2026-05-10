@@ -28,6 +28,10 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 tar = "0.4"
 zstd = "0.13"
 fs2 = "0.4"
+# `home` is the platform-correct way to resolve $HOME for redacting paths
+# at the Tauri/IPC boundary (#173). Pure-Rust, tiny, no transitive
+# baggage. Native-only because wasm32 has no filesystem.
+home = "0.5"
 
 [dev-dependencies]
 approx = "0.5"
