@@ -87,7 +87,10 @@ jobs:
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
         with:
-          version: latest
+          # Pin: macOS "latest" sometimes resolves to a 0.12.x build
+          # that doesn't recognise --no-opt. 0.13.1 is the first stable
+          # release with that flag.
+          version: "v0.13.1"
 
       - name: Build WASM compute engine
         # --no-opt skips wasm-opt; the cached binaryen wasm-pack ships is too
@@ -356,7 +359,10 @@ jobs:
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
         with:
-          version: latest
+          # Pin: macOS "latest" sometimes resolves to a 0.12.x build
+          # that doesn't recognise --no-opt. 0.13.1 is the first stable
+          # release with that flag.
+          version: "v0.13.1"
 
       - name: Build WASM compute engine
         run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
