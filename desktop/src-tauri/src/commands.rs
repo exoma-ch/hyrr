@@ -3,6 +3,7 @@
 use std::sync::Mutex;
 
 use hyrr_core::compute::compute_stack;
+use hyrr_core::data_fetch::{FetchErrorPayload, FetchProgress};
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::materials::resolve_material;
 use hyrr_core::production::generate_depth_profile;
@@ -12,7 +13,9 @@ use hyrr_core::stopping::{
 use hyrr_core::types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tauri::State;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, State};
 
 // ---------------------------------------------------------------------------
 // Managed state
@@ -216,17 +219,133 @@ pub fn init_data_store(
 /// `meta/`+`stopping/` are present (e.g. for a depth preview that doesn't
 /// need cross-sections).
 #[tauri::command]
-pub fn ensure_data(library: String) -> Result<String, String> {
-    if library.is_empty() {
-        hyrr_core::data_fetch::ensure_meta_stopping()
-            .map_err(|e| format!("ensure_meta_stopping: {e}"))?;
+pub fn ensure_data(app: AppHandle, library: String) -> Result<String, String> {
+    let result = if library.is_empty() {
+        hyrr_core::data_fetch::ensure_meta_stopping_with_progress(
+            &mut throttled_emit(&app),
+        )
     } else {
-        hyrr_core::data_fetch::ensure_library(&library)
-            .map_err(|e| format!("ensure_library({library}): {e}"))?;
+        hyrr_core::data_fetch::ensure_library_with_progress(
+            &library,
+            &mut throttled_emit(&app),
+        )
+    };
+
+    if let Err(e) = result {
+        return Err(FetchErrorPayload::from(&e).to_json_string());
     }
     let cache = hyrr_core::data_fetch::cache_dir()
-        .map_err(|e| format!("cache_dir: {e}"))?;
+        .map_err(|e| FetchErrorPayload::from(&e).to_json_string())?;
     Ok(cache.join("data").to_string_lossy().to_string())
+}
+
+/// Install a `.tar.zst` previously downloaded to a local path. Wraps
+/// `data_fetch::install_from_tarball_with_progress` and emits the same
+/// `hyrr://data-fetch-progress` events so the splash bar updates while
+/// the (potentially slow) extraction runs.
+///
+/// Returns the resolved data dir on success, or a JSON-encoded
+/// [`FetchErrorPayload`] on failure (same wire shape as `ensure_data`).
+#[tauri::command]
+pub fn install_from_local_tarball(app: AppHandle, path: String) -> Result<String, String> {
+    let archive = PathBuf::from(&path);
+    if let Err(e) = hyrr_core::data_fetch::install_from_tarball_with_progress(
+        &archive,
+        &mut throttled_emit(&app),
+    ) {
+        return Err(FetchErrorPayload::from(&e).to_json_string());
+    }
+    let cache = hyrr_core::data_fetch::cache_dir()
+        .map_err(|e| FetchErrorPayload::from(&e).to_json_string())?;
+    Ok(cache.join("data").to_string_lossy().to_string())
+}
+
+/// Build a closure that emits each [`FetchProgress`] event onto
+/// `hyrr://data-fetch-progress`, but rate-limits to ≤1 emit per
+/// 100 ms *and* a min-step of 256 KiB on byte-progress events (so a
+/// 64 KiB chunk loop emits roughly every 4th chunk during download).
+/// The download-stage gate is `bytes_step ≥ 256 KiB AND interval ≥
+/// 100 ms` — both must be satisfied to emit. The non-byte stages
+/// (extract entry counts, verifying) drop the bytes gate and use
+/// the 100 ms interval alone, otherwise the UI would freeze on
+/// "Extracting" with no updates between stage transitions. Stage
+/// changes and the final-byte event bypass the throttle so the
+/// progress bar snaps cleanly between phases.
+fn throttled_emit(app: &AppHandle) -> impl FnMut(FetchProgress) + '_ {
+    use hyrr_core::data_fetch::FetchStage;
+
+    let mut last_emit_at: Option<Instant> = None;
+    let mut last_bytes: u64 = 0;
+    let mut last_stage: Option<FetchStage> = None;
+    let min_interval = Duration::from_millis(100);
+    let min_bytes_step: u64 = 256 * 1024;
+
+    move |p: FetchProgress| {
+        let now = Instant::now();
+
+        let stage_changed = match last_stage {
+            None => true,
+            Some(prev) => !same_stage(prev, p.stage),
+        };
+
+        let final_byte = match p.bytes_total {
+            Some(total) => p.bytes_done >= total && total > 0,
+            None => false,
+        };
+
+        let interval_ok = last_emit_at
+            .map(|t| now.saturating_duration_since(t) >= min_interval)
+            .unwrap_or(true);
+
+        // Reset the bytes counter on stage transition — bytes_done
+        // means different things across stages (compressed bytes vs.
+        // entry count) so the carry-over check is meaningless.
+        let bytes_step_ok = match (last_stage, p.stage) {
+            (Some(prev), curr) if !same_stage(prev, curr) => true,
+            _ => p
+                .bytes_done
+                .checked_sub(last_bytes)
+                .map(|d| d >= min_bytes_step)
+                .unwrap_or(true),
+        };
+
+        // Only the Downloading stage carries reliable byte counts in
+        // 256-KiB-meaningful units. Other stages emit on the 100 ms
+        // interval alone — prevents Extracting from going silent
+        // because entry counts never tick by 256 KiB.
+        let should_emit = stage_changed
+            || final_byte
+            || match p.stage {
+                FetchStage::Downloading => interval_ok && bytes_step_ok,
+                FetchStage::Connecting
+                | FetchStage::Extracting
+                | FetchStage::Verifying => interval_ok,
+            };
+        if !should_emit {
+            return;
+        }
+
+        last_emit_at = Some(now);
+        last_bytes = p.bytes_done;
+        last_stage = Some(p.stage);
+        // Failure to emit means the window has closed or no listener
+        // is attached — both are recoverable from the user's
+        // perspective, so log and proceed.
+        if let Err(e) = app.emit("hyrr://data-fetch-progress", &p) {
+            eprintln!("emit data-fetch-progress: {e}");
+        }
+    }
+}
+
+fn same_stage(a: hyrr_core::data_fetch::FetchStage, b: hyrr_core::data_fetch::FetchStage) -> bool {
+    use hyrr_core::data_fetch::FetchStage::*;
+    matches!(
+        (a, b),
+        (Connecting, Connecting)
+            | (Downloading, Downloading)
+            | (Extracting, Extracting)
+            | (Verifying, Verifying)
+    )
 }
 
 /// SSoT accessors for the data-fetch path. Each command is a thin

@@ -25,10 +25,12 @@
 
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fs2::FileExt;
+use serde::Serialize;
 
 /// Version of the `nucl-parquet` data this build expects.
 ///
@@ -93,6 +95,166 @@ pub fn release_url_for(version: &str) -> String {
 /// need an actual filesystem path should use [`cache_dir`] instead.
 pub fn cache_root_pattern() -> String {
     format!("~/.hyrr/nucl-parquet/v{DATA_VERSION}/data")
+}
+
+/// Stage of the cache-fetch pipeline. Surfaced through
+/// [`FetchProgress`] so the splash UI can label the progress bar.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FetchStage {
+    /// HTTP connection establishment / DNS lookup (pre-200 response).
+    Connecting,
+    /// Body bytes streaming from the response into the on-disk tarball.
+    Downloading,
+    /// Tar extraction (`extract_tarball` per-entry progress).
+    Extracting,
+    /// Sentinel write + post-extract bookkeeping. Brief — primarily
+    /// surfaced so the splash can show "almost done" rather than
+    /// snapping from 99% straight to "Ready".
+    Verifying,
+}
+
+/// Push-based progress callback payload.
+///
+/// `bytes_total` is `None` when the upstream HTTP `Content-Length` is
+/// missing (rare but legal for `Transfer-Encoding: chunked`); the splash
+/// renders an indeterminate `<progress>` bar in that case.
+#[derive(Debug, Clone, Serialize)]
+pub struct FetchProgress {
+    pub stage: FetchStage,
+    pub bytes_done: u64,
+    pub bytes_total: Option<u64>,
+}
+
+/// Type alias for the progress-callback parameter passed through every
+/// `ensure_*` / `extract_*` entry point. `&mut dyn FnMut(...)` keeps the
+/// closure's captured state mutable (the desktop command throttles emits
+/// using a `last_emit_at` field), and the `'_` lifetime lets the caller
+/// own the closure on the stack.
+pub type ProgressFn<'a> = &'a mut dyn FnMut(FetchProgress);
+
+/// Convenience: a no-op progress callback for callers that don't need
+/// progress (CLI, MCP, tests). Spelled as a fresh closure rather than a
+/// `static` because the trait object signature requires `FnMut`.
+fn no_op_progress() -> impl FnMut(FetchProgress) {
+    |_| {}
+}
+
+/// Wire-shape of a [`FetchError`] for the Tauri / IPC boundary.
+///
+/// Mirrors the StoppingError chain shipped in #142: every payload is
+/// `kind: "FetchError"` + a `variant` discriminator; variant-specific
+/// fields are serialised flat. The `url` and `cache_dir` fields are
+/// always present so the recovery card can render them — both are
+/// derived from the SSoT helpers ([`release_url`], [`cache_dir`]) so a
+/// drift between "URL we tried" and "URL we render" is impossible by
+/// construction.
+///
+/// Privacy: `cache_dir` is always under `~/.hyrr/...`, never an
+/// arbitrary path; `url` is the canonical GH-Releases URL. No env vars,
+/// no auth tokens, nothing the user can't already see in
+/// `hyrr fetch-data --help`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "variant")]
+pub enum FetchErrorPayload {
+    HttpStatus {
+        status: u16,
+        url: String,
+        cache_dir: String,
+        message: String,
+    },
+    Network {
+        detail: String,
+        url: String,
+        cache_dir: String,
+        message: String,
+    },
+    Decompress {
+        cache_dir: String,
+        message: String,
+    },
+    Extract {
+        cache_dir: String,
+        message: String,
+    },
+    UnsafeTarballEntry {
+        entry_kind: String,
+        entry_path: String,
+        cache_dir: String,
+        message: String,
+    },
+    Io {
+        cache_dir: String,
+        message: String,
+    },
+    NoHome {
+        message: String,
+    },
+}
+
+impl FetchErrorPayload {
+    /// Wrap as a top-level discriminator object — the wire shape the
+    /// frontend actually sees. Equivalent to manually emitting
+    /// `{"kind": "FetchError", "variant": ..., ...}`.
+    pub fn to_json_string(&self) -> String {
+        let inner = serde_json::to_value(self).unwrap_or_else(|_| {
+            serde_json::json!({"variant": "Io", "message": "serialise failed"})
+        });
+        let mut obj = serde_json::Map::new();
+        obj.insert("kind".to_string(), serde_json::Value::String("FetchError".to_string()));
+        if let serde_json::Value::Object(m) = inner {
+            for (k, v) in m {
+                obj.insert(k, v);
+            }
+        }
+        serde_json::to_string(&serde_json::Value::Object(obj))
+            .unwrap_or_else(|_| "{\"kind\":\"FetchError\",\"variant\":\"Io\",\"message\":\"serialise failed\"}".to_string())
+    }
+}
+
+impl From<&FetchError> for FetchErrorPayload {
+    fn from(err: &FetchError) -> Self {
+        let url = release_url();
+        let cache_dir_str = cache_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| cache_root_pattern());
+        let message = err.to_string();
+        match err {
+            FetchError::HttpStatus(status) => FetchErrorPayload::HttpStatus {
+                status: *status,
+                url,
+                cache_dir: cache_dir_str,
+                message,
+            },
+            FetchError::Network(detail) => FetchErrorPayload::Network {
+                detail: detail.clone(),
+                url,
+                cache_dir: cache_dir_str,
+                message,
+            },
+            FetchError::Decompress(_) => FetchErrorPayload::Decompress {
+                cache_dir: cache_dir_str,
+                message,
+            },
+            FetchError::Extract(_) => FetchErrorPayload::Extract {
+                cache_dir: cache_dir_str,
+                message,
+            },
+            FetchError::UnsafeTarballEntry { kind, path } => {
+                FetchErrorPayload::UnsafeTarballEntry {
+                    entry_kind: kind.clone(),
+                    entry_path: path.display().to_string(),
+                    cache_dir: cache_dir_str,
+                    message,
+                }
+            }
+            FetchError::Io(_) => FetchErrorPayload::Io {
+                cache_dir: cache_dir_str,
+                message,
+            },
+            FetchError::NoHome => FetchErrorPayload::NoHome { message },
+        }
+    }
 }
 
 /// Errors surfaced by the data-fetch path.
@@ -228,8 +390,19 @@ impl Drop for TmpFileGuard {
 /// Download the full nucl-parquet data tarball into `out`.
 ///
 /// Streams the response to disk — does not buffer the full ~400 MB in RAM.
-pub fn fetch_full_tarball_to(out: &Path) -> Result<()> {
+///
+/// `progress` is invoked at least once with [`FetchStage::Connecting`]
+/// before the request flies, and then per-chunk with
+/// [`FetchStage::Downloading`] as bytes land on disk. Callers that don't
+/// need progress (CLI, tests) can pass `&mut |_| {}` (or use the
+/// no-progress sibling [`fetch_full_tarball_to`]). The throttling
+/// (≤1 emit per 256 KiB / 100 ms) lives in the *caller's* closure — the
+/// library always emits unconditionally so the consumer chooses the
+/// rate.
+pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>) -> Result<()> {
     let url = release_url();
+    progress(FetchProgress { stage: FetchStage::Connecting, bytes_done: 0, bytes_total: None });
+
     let client = build_http_client().map_err(|e| FetchError::Network(e.to_string()))?;
     let resp = client
         .get(&url)
@@ -238,13 +411,49 @@ pub fn fetch_full_tarball_to(out: &Path) -> Result<()> {
     if !resp.status().is_success() {
         return Err(FetchError::HttpStatus(resp.status().as_u16()));
     }
+    let bytes_total = resp.content_length();
+
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent)?;
     }
     let mut file = fs::File::create(out)?;
+    progress(FetchProgress {
+        stage: FetchStage::Downloading,
+        bytes_done: 0,
+        bytes_total,
+    });
+
+    // 64 KiB chunks balance syscall overhead against responsiveness — at
+    // 100 Mbit/s a chunk fills in ~5 ms which is well under the 100 ms
+    // throttle window the desktop closure enforces.
     let mut reader = io::BufReader::new(resp);
-    io::copy(&mut reader, &mut file)?;
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut bytes_done: u64 = 0;
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        io::Write::write_all(&mut file, &buf[..n])?;
+        bytes_done += n as u64;
+        progress(FetchProgress {
+            stage: FetchStage::Downloading,
+            bytes_done,
+            bytes_total,
+        });
+    }
     Ok(())
+}
+
+/// Back-compat wrapper for callers that don't need progress events.
+///
+/// Production callers should prefer
+/// [`fetch_full_tarball_to_with_progress`] and pass an explicit closure;
+/// this thin wrapper exists for the CLI / py / MCP entry points where
+/// progress reporting is not yet wired up.
+pub fn fetch_full_tarball_to(out: &Path) -> Result<()> {
+    let mut noop = no_op_progress();
+    fetch_full_tarball_to_with_progress(out, &mut noop)
 }
 
 /// Conservative pre-flight free-space check before downloading the
@@ -289,12 +498,34 @@ pub fn extract_tarball(
     dest: &Path,
     prefixes: &[&str],
 ) -> Result<()> {
+    let mut noop = no_op_progress();
+    extract_tarball_with_progress(archive, dest, prefixes, &mut noop)
+}
+
+/// Progress-aware variant of [`extract_tarball`]. Emits one
+/// [`FetchStage::Extracting`] event per accepted (post-filter) entry,
+/// with `bytes_done` carrying the count of entries unpacked so far.
+/// `bytes_total` is left as `None` because we'd have to walk the tar
+/// twice to count entries up-front, and the splash uses an
+/// indeterminate bar for this phase anyway.
+pub fn extract_tarball_with_progress(
+    archive: &Path,
+    dest: &Path,
+    prefixes: &[&str],
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     let file = fs::File::open(archive)?;
     let decoder = zstd::stream::Decoder::new(file)
         .map_err(|e| FetchError::Decompress(e.to_string()))?;
     let mut tar = tar::Archive::new(decoder);
 
     fs::create_dir_all(dest)?;
+    let mut entries_done: u64 = 0;
+    progress(FetchProgress {
+        stage: FetchStage::Extracting,
+        bytes_done: 0,
+        bytes_total: None,
+    });
     for entry in tar
         .entries()
         .map_err(|e| FetchError::Extract(e.to_string()))?
@@ -351,6 +582,12 @@ pub fn extract_tarball(
         entry
             .unpack_in(dest)
             .map_err(|e| FetchError::Extract(e.to_string()))?;
+        entries_done += 1;
+        progress(FetchProgress {
+            stage: FetchStage::Extracting,
+            bytes_done: entries_done,
+            bytes_total: None,
+        });
     }
     Ok(())
 }
@@ -374,7 +611,11 @@ pub fn extract_tarball(
 /// entry point in this module already does, and re-acquiring here
 /// would deadlock the in-process mutex paired with the on-disk
 /// `flock` (see `process_lock`).
-fn install_tarball_atomic(archive: &Path, prefixes: &[&str]) -> Result<()> {
+fn install_tarball_atomic(
+    archive: &Path,
+    prefixes: &[&str],
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     let cache = cache_dir()?;
     let root = cache_root()?;
     let pid = std::process::id();
@@ -398,13 +639,19 @@ fn install_tarball_atomic(archive: &Path, prefixes: &[&str]) -> Result<()> {
         fs::remove_dir_all(&partial)?;
     }
 
-    extract_tarball(archive, &partial, prefixes)?;
+    extract_tarball_with_progress(archive, &partial, prefixes, progress)?;
 
     // Test-only seam: between partial-dir build and the
     // atomic-rename promotion, give tests a chance to simulate a
     // SIGKILL. Production builds compile this away entirely.
     #[cfg(test)]
     test_hooks::run_pre_promote_hook()?;
+
+    progress(FetchProgress {
+        stage: FetchStage::Verifying,
+        bytes_done: 0,
+        bytes_total: None,
+    });
 
     // If `cache` already exists but is incomplete, blow it away — its
     // contents are by definition stale (the sentinel would be present
@@ -476,6 +723,12 @@ const MANDATORY_PREFIXES: &[&str] = &[
 /// ~54 MB even though the download itself is the full ~400 MB until
 /// upstream ships per-library tarballs.
 pub fn ensure_meta_stopping() -> Result<()> {
+    let mut noop = no_op_progress();
+    ensure_meta_stopping_with_progress(&mut noop)
+}
+
+/// Progress-aware variant of [`ensure_meta_stopping`].
+pub fn ensure_meta_stopping_with_progress(progress: ProgressFn<'_>) -> Result<()> {
     if is_cache_complete() {
         return Ok(());
     }
@@ -486,22 +739,23 @@ pub fn ensure_meta_stopping() -> Result<()> {
     require_free_space(1024 * 1024 * 1024)?;
     let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
-    fetch_full_tarball_with_seam(&tmp)?;
-    install_tarball_atomic(&tmp, MANDATORY_PREFIXES)?;
+    fetch_full_tarball_with_seam(&tmp, progress)?;
+    install_tarball_atomic(&tmp, MANDATORY_PREFIXES, progress)?;
     Ok(())
 }
 
 /// Indirection for the network fetch so tests can inject a local-file
 /// "fetcher" without touching production behaviour. In a non-test
-/// build this is a one-line forwarder to [`fetch_full_tarball_to`].
-fn fetch_full_tarball_with_seam(out: &Path) -> Result<()> {
+/// build this is a one-line forwarder to
+/// [`fetch_full_tarball_to_with_progress`].
+fn fetch_full_tarball_with_seam(out: &Path, progress: ProgressFn<'_>) -> Result<()> {
     #[cfg(test)]
     {
         if let Some(()) = test_hooks::try_test_fetch(out)? {
             return Ok(());
         }
     }
-    fetch_full_tarball_to(out)
+    fetch_full_tarball_to_with_progress(out, progress)
 }
 
 /// Ensure the given library's data is present in the cache.
@@ -516,6 +770,12 @@ fn fetch_full_tarball_with_seam(out: &Path) -> Result<()> {
 /// library subtree is absent (the bundled-resources-on-installer case),
 /// fetches and merges only that library into the cache.
 pub fn ensure_library(library: &str) -> Result<()> {
+    let mut noop = no_op_progress();
+    ensure_library_with_progress(library, &mut noop)
+}
+
+/// Progress-aware variant of [`ensure_library`].
+pub fn ensure_library_with_progress(library: &str, progress: ProgressFn<'_>) -> Result<()> {
     if is_cache_complete() && cache_dir()?.join("data").join(library).exists() {
         return Ok(());
     }
@@ -526,11 +786,11 @@ pub fn ensure_library(library: &str) -> Result<()> {
     require_free_space(1024 * 1024 * 1024)?;
     let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
-    fetch_full_tarball_to(&tmp)?;
+    fetch_full_tarball_to_with_progress(&tmp, progress)?;
     let lib_prefix = format!("data/{library}/");
     let mut prefixes: Vec<&str> = MANDATORY_PREFIXES.to_vec();
     prefixes.push(&lib_prefix);
-    install_tarball_atomic(&tmp, &prefixes)?;
+    install_tarball_atomic(&tmp, &prefixes, progress)?;
     Ok(())
 }
 
@@ -543,12 +803,18 @@ pub fn ensure_library(library: &str) -> Result<()> {
 /// reading the catalog, so we trust the sentinel + a no-op merge: the
 /// re-extraction overwrites identical bytes which is harmless.)
 pub fn ensure_all() -> Result<()> {
+    let mut noop = no_op_progress();
+    ensure_all_with_progress(&mut noop)
+}
+
+/// Progress-aware variant of [`ensure_all`].
+pub fn ensure_all_with_progress(progress: ProgressFn<'_>) -> Result<()> {
     let _lock = acquire_lock()?;
     require_free_space(1024 * 1024 * 1024)?;
     let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
-    fetch_full_tarball_to(&tmp)?;
-    install_tarball_atomic(&tmp, &[])?;
+    fetch_full_tarball_to_with_progress(&tmp, progress)?;
+    install_tarball_atomic(&tmp, &[], progress)?;
     Ok(())
 }
 
@@ -674,6 +940,15 @@ pub fn export_offline_bundle(out: &Path) -> Result<()> {
 /// downloaded manually from a GitHub Release). Atomic + sentinel-protected
 /// just like the network path.
 pub fn install_from_tarball(archive: &Path) -> Result<()> {
+    let mut noop = no_op_progress();
+    install_from_tarball_with_progress(archive, &mut noop)
+}
+
+/// Progress-aware variant of [`install_from_tarball`].
+pub fn install_from_tarball_with_progress(
+    archive: &Path,
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     if !archive.exists() {
         return Err(FetchError::Io(io::Error::new(
             io::ErrorKind::NotFound,
@@ -681,7 +956,7 @@ pub fn install_from_tarball(archive: &Path) -> Result<()> {
         )));
     }
     let _lock = acquire_lock()?;
-    install_tarball_atomic(archive, &["data"])
+    install_tarball_atomic(archive, &["data"], progress)
 }
 
 /// Parse a `v{N}.{N}.{N}` directory name into a sortable tuple. Returns
@@ -1450,5 +1725,153 @@ mod tests {
         assert_eq!(count_partial_dirs(), 0);
 
         test_hooks::clear_fetch_source();
+    }
+
+    // ---------------------------------------------------------------------
+    // #118 — progress callback + FetchErrorPayload tests
+    // ---------------------------------------------------------------------
+
+    /// `extract_tarball_with_progress` must invoke the callback at least
+    /// once with `Extracting` per accepted entry, and the entry counter
+    /// (`bytes_done`) must monotonically advance. Reaches the same
+    /// progress code path that `install_from_tarball_with_progress`
+    /// uses on the cache fill.
+    #[test]
+    fn progress_callback_fires_on_extract() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("test.tar.zst");
+        make_test_tarball(&archive);
+        let dest = td.path().join("dest");
+
+        let mut events: Vec<FetchProgress> = Vec::new();
+        extract_tarball_with_progress(&archive, &dest, &[], &mut |p| events.push(p)).unwrap();
+
+        assert!(
+            !events.is_empty(),
+            "extract_tarball_with_progress did not emit any progress events"
+        );
+        // At least one Extracting event with bytes_done > 0.
+        let max_done = events
+            .iter()
+            .filter(|e| matches!(e.stage, FetchStage::Extracting))
+            .map(|e| e.bytes_done)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_done >= 1,
+            "expected ≥1 Extracting event with bytes_done ≥ 1, got events: {events:?}"
+        );
+
+        // Monotonic non-decreasing entry count.
+        let extracting: Vec<u64> = events
+            .iter()
+            .filter(|e| matches!(e.stage, FetchStage::Extracting))
+            .map(|e| e.bytes_done)
+            .collect();
+        for w in extracting.windows(2) {
+            assert!(
+                w[1] >= w[0],
+                "Extracting progress went backwards: {w:?}"
+            );
+        }
+    }
+
+    /// `install_from_tarball_with_progress` must emit at least one
+    /// `Extracting` and one `Verifying` event. Production-shape: this
+    /// is what the desktop `ensure_data` command calls on a warm cache
+    /// without a network round trip.
+    #[test]
+    fn progress_callback_emits_extracting_and_verifying() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("test.tar.zst");
+        make_test_tarball(&archive);
+
+        let mut stages: Vec<FetchStage> = Vec::new();
+        install_from_tarball_with_progress(&archive, &mut |p| stages.push(p.stage)).unwrap();
+
+        assert!(
+            stages.iter().any(|s| matches!(s, FetchStage::Extracting)),
+            "no Extracting stage observed: {stages:?}"
+        );
+        assert!(
+            stages.iter().any(|s| matches!(s, FetchStage::Verifying)),
+            "no Verifying stage observed: {stages:?}"
+        );
+        assert!(is_cache_complete());
+    }
+
+    /// `FetchErrorPayload::from(&FetchError)` must always populate
+    /// `url` and `cache_dir` for the variants that carry them, and
+    /// the JSON wire-form must include the `kind: "FetchError"` tag.
+    #[test]
+    fn fetch_error_payload_serializes_with_url_and_cache_dir() {
+        let _g = SERIAL.lock().unwrap();
+        let _td = isolated_home();
+
+        let cases: Vec<FetchError> = vec![
+            FetchError::HttpStatus(404),
+            FetchError::Network("dns lookup failed".to_string()),
+            FetchError::Decompress("zstd: bad magic".to_string()),
+            FetchError::Extract("unexpected eof".to_string()),
+            FetchError::Io(io::Error::other("disk full")),
+            FetchError::UnsafeTarballEntry {
+                kind: "Symlink".to_string(),
+                path: PathBuf::from("data/meta/evil"),
+            },
+            FetchError::NoHome,
+        ];
+
+        for err in &cases {
+            let payload = FetchErrorPayload::from(err);
+            let s = payload.to_json_string();
+            // Every variant carries the top-level kind.
+            assert!(
+                s.contains("\"kind\":\"FetchError\""),
+                "missing kind discriminator for {err:?}: {s}"
+            );
+
+            // Variants that should expose the canonical URL.
+            let needs_url = matches!(
+                err,
+                FetchError::HttpStatus(_) | FetchError::Network(_)
+            );
+            if needs_url {
+                let url = release_url();
+                assert!(
+                    s.contains(&url),
+                    "variant {err:?} should embed release URL {url:?}, got {s}"
+                );
+            }
+
+            // Variants that should expose the cache_dir (everything except NoHome).
+            let needs_cache_dir = !matches!(err, FetchError::NoHome);
+            if needs_cache_dir {
+                assert!(
+                    s.contains("\"cache_dir\":"),
+                    "variant {err:?} should embed cache_dir, got {s}"
+                );
+            }
+        }
+    }
+
+    /// JSON wire-form for an HttpStatus error must round-trip into a
+    /// shape the frontend `parseFetchError` parser expects: top-level
+    /// kind/variant + flat fields.
+    #[test]
+    fn fetch_error_payload_http_status_wire_shape() {
+        let _g = SERIAL.lock().unwrap();
+        let _td = isolated_home();
+
+        let payload = FetchErrorPayload::from(&FetchError::HttpStatus(404));
+        let s = payload.to_json_string();
+        let v: serde_json::Value = serde_json::from_str(&s).expect("payload is valid JSON");
+        assert_eq!(v["kind"], "FetchError");
+        assert_eq!(v["variant"], "HttpStatus");
+        assert_eq!(v["status"], 404);
+        assert!(v["url"].is_string());
+        assert!(v["cache_dir"].is_string());
+        assert!(v["message"].is_string());
     }
 }
