@@ -6,10 +6,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use hyrr_core::bateman::bateman_activity as rust_bateman;
 use hyrr_core::compute::compute_stack;
 use hyrr_core::data_fetch;
+use hyrr_core::data_fetch::{FetchProgress, FetchStage};
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::formula::parse_formula;
 use hyrr_core::materials::resolve_material;
@@ -17,6 +19,7 @@ use hyrr_core::production::saturation_yield as rust_sat_yield;
 use hyrr_core::stopping;
 use hyrr_core::types::*;
 use pyo3::prelude::*;
+use pyo3::types::{PyAny, PyDict};
 
 // ---------------------------------------------------------------------------
 // PyDataStore — wraps ParquetDataStore with interior mutability for XS loading
@@ -171,7 +174,8 @@ fn py_dedx_mev_per_cm(
     })?;
     let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    Ok(stopping::dedx_mev_per_cm(&db, &proj, &composition, density, &energies))
+    stopping::dedx_mev_per_cm(&db, &proj, &composition, density, &energies)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
 /// Compute exit energy [MeV] after traversing a thickness.
@@ -194,7 +198,8 @@ fn py_compute_energy_out(
     })?;
     let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    Ok(stopping::compute_energy_out(&db, &proj, &composition, density, e_in, thickness, n_points))
+    stopping::compute_energy_out(&db, &proj, &composition, density, e_in, thickness, n_points)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
 /// Compute target thickness [cm] from energy loss.
@@ -217,12 +222,112 @@ fn py_compute_thickness(
     })?;
     let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    Ok(stopping::compute_thickness_from_energy(&db, &proj, &composition, density, e_in, e_out, n_points))
+    stopping::compute_thickness_from_energy(&db, &proj, &composition, density, e_in, e_out, n_points)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
 // ---------------------------------------------------------------------------
 // Data-fetch CLI surface (#52)
 // ---------------------------------------------------------------------------
+
+/// Stage name as the lowercase string the Python side switches on. Kept in
+/// lockstep with `FetchStage`'s `#[serde(rename_all = "lowercase")]` so the
+/// CLI's stage-label table doesn't have to track an enum drift here.
+fn stage_str(stage: FetchStage) -> &'static str {
+    match stage {
+        FetchStage::Connecting => "connecting",
+        FetchStage::Downloading => "downloading",
+        FetchStage::Extracting => "extracting",
+        FetchStage::Verifying => "verifying",
+    }
+}
+
+/// Build a closure that throttles `FetchProgress` events and forwards them
+/// to a Python callable. The throttle matches the desktop's
+/// `throttled_emit` (≤1 emit per 100 ms *and* ≥256 KiB byte-step on the
+/// Downloading stage; stage transitions and the final-byte event always
+/// pass through). Without it a 100 MB download crosses the GIL ~thousands
+/// of times during the chunk loop, which destroys both throughput and the
+/// CLI's render budget.
+///
+/// Exception safety: if the Python callable raises, we **swallow** the
+/// exception (logging it via `PyErr::print`) and return — propagating it
+/// would unwind through the Rust fetch state machine and abort the
+/// download. The progress bar is cosmetic; never let it crash the install.
+fn make_py_progress(progress_obj: Py<PyAny>) -> impl FnMut(FetchProgress) {
+    let mut last_emit_at: Option<Instant> = None;
+    let mut last_bytes: u64 = 0;
+    let mut last_stage: Option<FetchStage> = None;
+    let min_interval = Duration::from_millis(100);
+    let min_bytes_step: u64 = 256 * 1024;
+
+    move |p: FetchProgress| {
+        let now = Instant::now();
+
+        let stage_changed = match last_stage {
+            None => true,
+            Some(prev) => !same_stage(prev, p.stage),
+        };
+
+        let final_byte = match p.bytes_total {
+            Some(total) => p.bytes_done >= total && total > 0,
+            None => false,
+        };
+
+        let interval_ok = last_emit_at
+            .map(|t| now.saturating_duration_since(t) >= min_interval)
+            .unwrap_or(true);
+
+        let bytes_step_ok = match (last_stage, p.stage) {
+            (Some(prev), curr) if !same_stage(prev, curr) => true,
+            _ => p
+                .bytes_done
+                .checked_sub(last_bytes)
+                .map(|d| d >= min_bytes_step)
+                .unwrap_or(true),
+        };
+
+        let should_emit = stage_changed
+            || final_byte
+            || match p.stage {
+                FetchStage::Downloading => interval_ok && bytes_step_ok,
+                FetchStage::Connecting
+                | FetchStage::Extracting
+                | FetchStage::Verifying => interval_ok,
+            };
+        if !should_emit {
+            return;
+        }
+
+        last_emit_at = Some(now);
+        last_bytes = p.bytes_done;
+        last_stage = Some(p.stage);
+
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            // Best-effort population — set_item only fails on OOM, which
+            // we can't recover from here anyway.
+            let _ = dict.set_item("stage", stage_str(p.stage));
+            let _ = dict.set_item("bytes_done", p.bytes_done);
+            let _ = dict.set_item("bytes_total", p.bytes_total);
+            if let Err(err) = progress_obj.call1(py, (&dict,)) {
+                // Swallow + log: don't let a misbehaving Python callable
+                // crash the install. The bar is cosmetic.
+                err.print(py);
+            }
+        });
+    }
+}
+
+fn same_stage(a: FetchStage, b: FetchStage) -> bool {
+    matches!(
+        (a, b),
+        (FetchStage::Connecting, FetchStage::Connecting)
+            | (FetchStage::Downloading, FetchStage::Downloading)
+            | (FetchStage::Extracting, FetchStage::Extracting)
+            | (FetchStage::Verifying, FetchStage::Verifying)
+    )
+}
 
 /// Implements `hyrr fetch-data`. Exactly one of the four mutually-exclusive
 /// modes is selected by the caller:
@@ -236,13 +341,20 @@ fn py_compute_thickness(
 /// With all four left default, fetches the always-needed `meta/`+`stopping/`
 /// (the "default library" path — caller is expected to specify a library
 /// for the actual XS data).
+///
+/// `progress`, if provided, is a Python callable invoked with a `dict`
+/// `{"stage": str, "bytes_done": int, "bytes_total": Optional[int]}` per
+/// throttled `FetchProgress` event. The offline-bundle path is a pure
+/// filesystem walk with no progress wiring upstream — the callback is
+/// ignored for that mode.
 #[pyfunction]
-#[pyo3(signature = (library=None, all_libs=false, offline_bundle=None, from_tarball=None))]
+#[pyo3(signature = (library=None, all_libs=false, offline_bundle=None, from_tarball=None, progress=None))]
 fn py_fetch_data(
     library: Option<&str>,
     all_libs: bool,
     offline_bundle: Option<&str>,
     from_tarball: Option<&str>,
+    progress: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     let active = [
         library.is_some(),
@@ -259,25 +371,35 @@ fn py_fetch_data(
         ));
     }
 
+    // The fetch entry points all accept `&mut dyn FnMut(FetchProgress)`.
+    // Build *one* boxed closure and reuse it for whichever branch fires —
+    // avoids duplicating the `with_progress` vs. no-arg fork four times.
+    let mut cb: Box<dyn FnMut(FetchProgress)> = match progress {
+        Some(obj) => Box::new(make_py_progress(obj)),
+        None => Box::new(|_| {}),
+    };
+
     if let Some(path) = from_tarball {
-        return data_fetch::install_from_tarball(&PathBuf::from(path))
+        return data_fetch::install_from_tarball_with_progress(&PathBuf::from(path), &mut *cb)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
     }
     if let Some(path) = offline_bundle {
+        // `export_offline_bundle` has no progress-aware variant — it's a
+        // pure filesystem walk with no network step. Ignore the callback.
         return data_fetch::export_offline_bundle(&PathBuf::from(path))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
     }
     if all_libs {
-        return data_fetch::ensure_all()
+        return data_fetch::ensure_all_with_progress(&mut *cb)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
     }
     if let Some(name) = library {
-        return data_fetch::ensure_library(name)
+        return data_fetch::ensure_library_with_progress(name, &mut *cb)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
     }
     // Default mode: ensure meta/+stopping/. Library-specific fetch is the
     // caller's responsibility because we don't know their default here.
-    data_fetch::ensure_meta_stopping()
+    data_fetch::ensure_meta_stopping_with_progress(&mut *cb)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 

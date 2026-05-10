@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+import io
 import json
+import os
+import subprocess
+import sys
+import tarfile
 from pathlib import Path
 
 import pytest
 
-from hyrr.cli import _extract_isotopes, _pct_diff, _toml_to_config, main
+from hyrr.cli import (
+    _extract_isotopes,
+    _make_progress_callback,
+    _pct_diff,
+    _toml_to_config,
+    main,
+)
 
 
 class TestTomlToConfig:
@@ -349,3 +360,123 @@ class TestImportSmoke:
         from hyrr.cli import main
 
         assert callable(main)
+
+
+def _make_test_tarball(path: Path) -> None:
+    """Build a minimal `data/` tarball compatible with `install_from_tarball`.
+
+    Mirrors the `make_test_tarball` Rust fixture in
+    `core/src/data_fetch.rs` tests: one entry under `data/meta/marker`
+    and one under `data/tendl-test/xs/p_Cu.parquet`. Compressed with
+    zstd so the install path's decompressor accepts it.
+    """
+    import zstandard
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for entry, payload in [
+            ("data/meta/marker", b"test-marker"),
+            ("data/tendl-test/xs/p_Cu.parquet", b"xs-marker"),
+        ]:
+            info = tarfile.TarInfo(name=entry)
+            info.size = len(payload)
+            info.mode = 0o644
+            tar.addfile(info, io.BytesIO(payload))
+
+    tar_bytes = buf.getvalue()
+    cctx = zstandard.ZstdCompressor()
+    path.write_bytes(cctx.compress(tar_bytes))
+
+
+class TestFetchDataProgressCallback:
+    """Unit tests for `_make_progress_callback`.
+
+    The bar-rendering path is hard to test without a PTY harness; we
+    verify the non-TTY fallback emits exactly one line per stage on
+    stderr — the contract the test below exercises end-to-end via
+    `subprocess`.
+    """
+
+    def test_non_tty_emits_one_line_per_stage(
+        self, monkeypatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Force the non-TTY path. The TTY check looks at stderr.isatty();
+        # pytest's capsys already gives us a non-TTY stderr, but be
+        # explicit so this stays robust under -s.
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: False, raising=False)
+
+        on_progress, finalize = _make_progress_callback()
+        for stage in ("connecting", "downloading", "extracting", "verifying"):
+            # Emit each stage twice — only the first should print.
+            on_progress({"stage": stage, "bytes_done": 0, "bytes_total": None})
+            on_progress({"stage": stage, "bytes_done": 50, "bytes_total": 100})
+        finalize()
+
+        err = capsys.readouterr().err
+        for label in ("[Connecting]", "[Downloading]", "[Extracting]", "[Verifying]"):
+            assert err.count(label) == 1, f"expected one {label} line in stderr={err!r}"
+
+    def test_non_tty_handles_unknown_stage(
+        self, monkeypatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Unknown stages still emit (defensive — protects against an
+        enum-rename drift between Rust and Python)."""
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: False, raising=False)
+        on_progress, _ = _make_progress_callback()
+        on_progress({"stage": "future-stage", "bytes_done": 0, "bytes_total": None})
+        err = capsys.readouterr().err
+        assert "[future-stage]" in err
+
+
+class TestFetchDataNonTtyIntegration:
+    """End-to-end: spawn `python -m hyrr.cli fetch-data --from FIXTURE`
+    in a subprocess and assert the non-TTY surface emits one line per
+    stage transition. Requires the native PyO3 extension to be built.
+    """
+
+    def test_install_from_tarball_emits_stage_lines(self, tmp_path: Path) -> None:
+        pytest.importorskip("hyrr._native")
+
+        # Isolate the cache to a temp HOME so we don't clobber the
+        # user's real `~/.hyrr/`.
+        archive = tmp_path / "test.tar.zst"
+        try:
+            _make_test_tarball(archive)
+        except ImportError:
+            pytest.skip("zstandard not available — wheel build is incomplete")
+
+        env = os.environ.copy()
+        env["HOME"] = str(tmp_path)
+        env["NO_COLOR"] = "1"
+        env["TERM"] = "dumb"
+
+        # No `hyrr/__main__.py` is shipped — go through the console-script
+        # entry point that the wheel exposes (`hyrr.cli:main`). Using
+        # `python -c` keeps the test independent of PATH layout (the
+        # generated `hyrr` shim in `.venv/bin` isn't always on PATH for
+        # subprocess.run).
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; from hyrr.cli import main; sys.exit(main(sys.argv[1:]))",
+                "fetch-data",
+                "--from",
+                str(archive),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+
+        assert result.returncode == 0, (
+            f"fetch-data exited with {result.returncode}\n"
+            f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+        )
+        # The from-tarball path skips Connecting + Downloading (no
+        # network step), so only Extracting + Verifying should appear.
+        # Make the assertion exact rather than "any-of" so a regression
+        # to "no progress events" gets caught.
+        assert "[Extracting]" in result.stderr, result.stderr
+        assert "[Verifying]" in result.stderr, result.stderr
