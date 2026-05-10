@@ -171,7 +171,8 @@ fn py_dedx_mev_per_cm(
     })?;
     let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    Ok(stopping::dedx_mev_per_cm(&db, &proj, &composition, density, &energies))
+    stopping::dedx_mev_per_cm(&db, &proj, &composition, density, &energies)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
 /// Compute exit energy [MeV] after traversing a thickness.
@@ -194,7 +195,8 @@ fn py_compute_energy_out(
     })?;
     let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    Ok(stopping::compute_energy_out(&db, &proj, &composition, density, e_in, thickness, n_points))
+    stopping::compute_energy_out(&db, &proj, &composition, density, e_in, thickness, n_points)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
 /// Compute target thickness [cm] from energy loss.
@@ -217,7 +219,8 @@ fn py_compute_thickness(
     })?;
     let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    Ok(stopping::compute_thickness_from_energy(&db, &proj, &composition, density, e_in, e_out, n_points))
+    stopping::compute_thickness_from_energy(&db, &proj, &composition, density, e_in, e_out, n_points)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
 // ---------------------------------------------------------------------------
