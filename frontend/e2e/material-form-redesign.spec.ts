@@ -15,7 +15,7 @@ test.describe("Material-form redesign (#92)", () => {
     await waitReady(page);
   });
 
-  test("paste 'SiO2 80%, H2O 20%' → mode flips to Mass mixture, rows materialize", async ({ page }) => {
+  test("paste 'SiO2 80%, H2O 20%' → mode flips to wt %, rows materialize", async ({ page }) => {
     await page.locator(".material-name").first().click();
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
     await page.getByRole("button", { name: /Define.*save material/ }).click();
@@ -25,8 +25,8 @@ test.describe("Material-form redesign (#92)", () => {
     await paste.fill("SiO2 80%, H2O 20%");
     await paste.blur();
 
-    // Mode chip flips to Mass mixture.
-    await expect(page.getByRole("button", { name: /Mass mixture/i })).toBeVisible();
+    // Mode chip flips to wt % (mass mixture).
+    await expect(page.getByRole("button", { name: /^wt %/ })).toBeVisible();
 
     // Two rows: SiO2 + H2O.
     const rowItems = page.locator('[role="row"][data-row-id]');
@@ -51,9 +51,9 @@ test.describe("Material-form redesign (#92)", () => {
     // (Mass mode hides the bottom paste field, so the form switches back
     // to picker-as-text-path; for this fixture we exercise the contract
     // by re-opening single mode.)
-    // Switch back to single by clicking the chip → pick Single formula.
-    await page.getByRole("button", { name: /Mass mixture/ }).click();
-    await page.getByRole("menuitem", { name: /Single formula/ }).click();
+    // Switch back to single by clicking the chip → pick Formula.
+    await page.getByRole("button", { name: /^wt %/ }).click();
+    await page.getByRole("menuitem", { name: /^Formula$/ }).click();
 
     // Bottom paste field is now visible again. Clear it and blur.
     const paste2 = page.getByPlaceholder(/Al2O3/);
@@ -74,7 +74,7 @@ test.describe("Material-form redesign (#92)", () => {
     await paste.blur();
 
     // Chip text contains a "?" suffix when low-confidence.
-    const chip = page.getByRole("button", { name: /Mass mixture\?/ });
+    const chip = page.getByRole("button", { name: /^wt %\?/ });
     await expect(chip).toBeVisible();
     // Nudge mentions mol%.
     await expect(page.getByText(/mol%/i)).toBeVisible();
