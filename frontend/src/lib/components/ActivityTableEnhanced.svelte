@@ -1,11 +1,19 @@
 <script lang="ts">
   import type { SimulationResult } from "../types";
   import { formatHalfLife } from "../plotting/plotly-helpers";
-  import { fmtActivity, fmtYield, fmtDoseRate, nucHtml } from "@hyrr/compute";
+  import { nucHtml } from "@hyrr/compute";
   import { getDoseConstant, type DoseSource } from "../utils/dose-constants";
   import { toggleIsotope, isSelected, clearSelection, getSelectedIsotopes } from "../stores/selection.svelte";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
   import { formatReaction } from "../format";
+  import {
+    getDisplayMode,
+    setDisplayMode,
+    getThresholds,
+    type DisplayMode,
+  } from "../stores/display-thresholds.svelte";
+  import { formatWithThresholdEx } from "../utils/threshold-format";
+  import SettingsModal from "./SettingsModal.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -50,6 +58,19 @@
   /** Default: one row per isotope across all layers. Toggle expands to per-layer rows. */
   let groupByIsotope = $state<boolean>(true);
   let saveOpen = $state(false);
+  let settingsOpen = $state(false);
+
+  let displayMode = $derived(getDisplayMode());
+  let thresholds = $derived(getThresholds());
+  function fmtAct(v: number) { return formatWithThresholdEx(v, "activity", displayMode, thresholds); }
+  function fmtRate(v: number) { return formatWithThresholdEx(v, "activity_rate", displayMode, thresholds); }
+  function fmtDose(v: number) { return formatWithThresholdEx(v, "dose_rate", displayMode, thresholds); }
+
+  const MODE_LABELS: Array<{ id: DisplayMode; label: string; title: string }> = [
+    { id: "indicator", label: "~0", title: "Below threshold: render compact indicator (e.g. '< 1 nBq')" },
+    { id: "zero", label: "0", title: "Below threshold: collapse to 0" },
+    { id: "all", label: "all", title: "No clamping — render every value" },
+  ];
 
   function getEobActivity(iso: { time_grid_s?: number[]; activity_vs_time_Bq?: number[]; activity_Bq: number }, irrS: number): number {
     if (!iso.time_grid_s || !iso.activity_vs_time_Bq || iso.time_grid_s.length === 0) {
@@ -344,6 +365,31 @@
 <div class="activity-table-enhanced">
   <div class="toolbar">
     <span class="row-count">{rows.length}/{allRows.length} isotopes</span>
+    <div class="mode-chip-group" role="radiogroup" aria-label="Below-threshold display">
+      {#each MODE_LABELS as opt}
+        <button
+          type="button"
+          role="radio"
+          aria-checked={displayMode === opt.id}
+          class="chip"
+          class:active={displayMode === opt.id}
+          title={opt.title}
+          onclick={() => setDisplayMode(opt.id)}
+        >{opt.label}</button>
+      {/each}
+      <button
+        type="button"
+        class="chip chip-gear"
+        title="Threshold settings…"
+        aria-label="Threshold settings"
+        onclick={() => (settingsOpen = true)}
+      >
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 4.754a3.246 3.246 0 100 6.492 3.246 3.246 0 000-6.492zM5.754 8a2.246 2.246 0 114.492 0 2.246 2.246 0 01-4.492 0z"/>
+          <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 01-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 01-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 01.52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 011.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 011.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 01.52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 01-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 01-1.255-.52l-.094-.319zm-2.633.283c.246-.835 1.428-.835 1.674 0l.094.319a1.873 1.873 0 002.693 1.115l.291-.16c.764-.415 1.6.42 1.184 1.185l-.159.292a1.873 1.873 0 001.116 2.692l.318.094c.835.246.835 1.428 0 1.674l-.319.094a1.873 1.873 0 00-1.115 2.693l.16.291c.415.764-.42 1.6-1.185 1.184l-.291-.159a1.873 1.873 0 00-2.693 1.116l-.094.318c-.246.835-1.428.835-1.674 0l-.094-.319a1.873 1.873 0 00-2.692-1.115l-.292.16c-.764.415-1.6-.42-1.184-1.185l.159-.291A1.873 1.873 0 001.945 8.93l-.319-.094c-.835-.246-.835-1.428 0-1.674l.319-.094A1.873 1.873 0 003.06 4.377l-.16-.292c-.415-.764.42-1.6 1.185-1.184l.292.159a1.873 1.873 0 002.692-1.115l.094-.319z"/>
+        </svg>
+      </button>
+    </div>
     <div class="toolbar-actions">
       <button
         class="action-btn"
@@ -403,6 +449,12 @@
       </thead>
       <tbody>
         {#each rows as row}
+          {@const eob = fmtAct(row.activity_eob_Bq)}
+          {@const eoc = fmtAct(row.activity_Bq)}
+          {@const direct = fmtAct(row.activity_direct_Bq)}
+          {@const ingrowth = fmtAct(row.activity_ingrowth_Bq)}
+          {@const sat = fmtRate(row.saturation_yield_Bq_uA)}
+          {@const dose = row.dose_uSv_h !== null ? fmtDose(row.dose_uSv_h) : null}
           <tr
             class:zero={row.activity_Bq === 0}
             class:selected={isSelected(row.name)}
@@ -433,14 +485,14 @@
               {#each [...row.reactions, ...row.decayNotations] as rxn, i}{#if i > 0}, {/if}{formatReaction(rxn)}{/each}
               {#if row.reactions.length === 0 && row.decayNotations.length === 0 && row.source === "daughter"}decay{/if}
             </td>
-            <td class="col-act">{fmtActivity(row.activity_eob_Bq)}</td>
-            <td class="col-act">{fmtActivity(row.activity_Bq)}</td>
-            <td class="col-act">{fmtActivity(row.activity_direct_Bq)}</td>
-            <td class="col-act">{fmtActivity(row.activity_ingrowth_Bq)}</td>
-            <td class="col-yield">{row.source === "daughter" ? "—" : fmtYield(row.saturation_yield_Bq_uA)}</td>
+            <td class="col-act" class:clamped={eob.clamped}>{eob.text}</td>
+            <td class="col-act" class:clamped={eoc.clamped}>{eoc.text}</td>
+            <td class="col-act" class:clamped={direct.clamped}>{direct.text}</td>
+            <td class="col-act" class:clamped={ingrowth.clamped}>{ingrowth.text}</td>
+            <td class="col-yield" class:clamped={row.source !== "daughter" && sat.clamped}>{row.source === "daughter" ? "—" : sat.text}</td>
             <td class="col-rnp">{row.rnp_eob_pct < 0.01 ? "<0.01" : row.rnp_eob_pct.toFixed(2)}%</td>
             <td class="col-rnp">{row.rnp_pct < 0.01 ? "<0.01" : row.rnp_pct.toFixed(2)}%</td>
-            <td class="col-dose" class:dose-approx={row.dose_source === "it-approx"}>{#if row.dose_uSv_h !== null}{row.dose_source === "it-approx" ? "~" : ""}{fmtDoseRate(row.dose_uSv_h)}{:else}&mdash;{/if}</td>
+            <td class="col-dose" class:dose-approx={row.dose_source === "it-approx"} class:clamped={dose?.clamped ?? false}>{#if dose !== null}{row.dose_source === "it-approx" ? "~" : ""}{dose.text}{:else}&mdash;{/if}</td>
           </tr>
         {/each}
       </tbody>
@@ -451,6 +503,8 @@
 <svelte:window onclick={(e: MouseEvent) => {
   if (saveOpen && !(e.target as HTMLElement)?.closest?.(".save-wrap")) saveOpen = false;
 }} />
+
+<SettingsModal open={settingsOpen} onclose={() => (settingsOpen = false)} />
 
 <style>
   .save-wrap { position: relative; display: inline-flex; }
@@ -522,104 +576,10 @@
     color: var(--c-text);
   }
 
-  .action-btn.has-filters {
-    border-color: var(--c-accent);
-    color: var(--c-accent);
-  }
-
   .row-count {
     font-size: 0.65rem;
     color: var(--c-text-subtle);
     font-variant-numeric: tabular-nums;
-  }
-
-  /* Filter panel */
-  .filter-panel {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 1rem;
-    padding: 0.5rem;
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    align-items: center;
-  }
-
-  .filter-section {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-  }
-
-  .filter-section-wide {
-    flex-basis: 100%;
-  }
-
-  .filter-label {
-    font-size: 0.65rem;
-    color: var(--c-text-subtle);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    white-space: nowrap;
-  }
-
-  .filter-input {
-    width: 90px;
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text);
-    padding: 0.2rem 0.35rem;
-    font-size: 0.7rem;
-  }
-
-  .filter-input:focus {
-    outline: none;
-    border-color: var(--c-accent);
-  }
-
-  .filter-num {
-    width: 38px;
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text);
-    padding: 0.2rem 0.3rem;
-    font-size: 0.7rem;
-    text-align: center;
-  }
-
-  .filter-num:focus {
-    outline: none;
-    border-color: var(--c-accent);
-  }
-
-  .filter-num-wide {
-    width: 60px;
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text);
-    padding: 0.2rem 0.3rem;
-    font-size: 0.7rem;
-    text-align: right;
-  }
-
-  .filter-num-wide:focus {
-    outline: none;
-    border-color: var(--c-accent);
-  }
-
-  .filter-sep {
-    color: var(--c-text-faint);
-    font-size: 0.7rem;
-  }
-
-
-  .chip-group {
-    display: flex;
-    gap: 0.2rem;
-    flex-wrap: wrap;
   }
 
   .chip {
@@ -643,19 +603,6 @@
     background: var(--c-bg-active);
     border-color: var(--c-accent);
     color: var(--c-accent);
-  }
-
-  .clear-btn {
-    background: none;
-    border: none;
-    color: var(--c-red);
-    font-size: 0.65rem;
-    cursor: pointer;
-    padding: 0.2rem 0.35rem;
-  }
-
-  .clear-btn:hover {
-    text-decoration: underline;
   }
 
   /* Table */
@@ -711,6 +658,18 @@
   tr.selected td { border-left: 2px solid var(--c-accent); }
   tr.selected td:first-child { border-left: 3px solid var(--c-accent); }
   tr.zero td { opacity: 0.35; }
+  td.clamped { color: var(--c-text-faint); font-style: italic; }
+
+  .mode-chip-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+    margin-left: 0.4rem;
+  }
+  .mode-chip-group .chip-gear {
+    padding: 0.15rem 0.3rem;
+    line-height: 0;
+  }
 
   .isotope-link {
     background: none;
@@ -765,15 +724,6 @@
     .action-btn {
       padding: 0.35rem 0.6rem;
       font-size: 0.75rem;
-    }
-
-    .filter-panel {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .filter-section {
-      width: 100%;
     }
   }
 </style>

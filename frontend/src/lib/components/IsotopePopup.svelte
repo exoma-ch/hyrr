@@ -42,10 +42,13 @@
   let depthPlotDiv = $state<HTMLDivElement | null>(null);
   let actPlotDiv = $state<HTMLDivElement | null>(null);
 
-  // CSV export state — updated by each plot's render function.
-  let xsExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
-  let depthExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
-  let actExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
+  // CSV export state — updated by each plot's render function. $state so
+  // the SaveMenu xLabel/yLabel bindings invalidate when render() reruns
+  // (e.g. user changes time-unit or projectile); plain `let` left them
+  // stale on subsequent saves.
+  let xsExport = $state<{ traces: CsvTrace[]; xLabel: string; yLabel: string } | null>(null);
+  let depthExport = $state<{ traces: CsvTrace[]; xLabel: string; yLabel: string } | null>(null);
+  let actExport = $state<{ traces: CsvTrace[]; xLabel: string; yLabel: string } | null>(null);
 
   /** Determine reaction notation, e.g. "(p,n)", "(p,γ)", "(p,2n)" */
   function reactionNotation(proj: string, targetZ: number, targetA: number, residualZ: number, residualA: number): string {

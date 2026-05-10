@@ -45,7 +45,7 @@ jobs:
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
-          git sparse-checkout set data/meta data/stopping data/tendl-2024/xs
+          git sparse-checkout set data/meta data/stopping data/tendl-2025/xs
 
       - name: Copy parquet data to frontend public dir
         shell: bash

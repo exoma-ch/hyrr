@@ -102,6 +102,22 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="Install from a local .tar.zst (use after --offline-bundle on a connected machine)",
     )
+    fd_group.add_argument(
+        "--gc",
+        action="store_true",
+        help=(
+            "Garbage-collect older v{V}/ siblings in the cache. Keeps the current "
+            "DATA_VERSION + the N most recent historical versions (default N=2; "
+            "override with --keep). Opt-in only — never runs automatically."
+        ),
+    )
+    fd_parser.add_argument(
+        "--keep",
+        type=int,
+        default=2,
+        metavar="N",
+        help="With --gc: number of historical versions to retain (default: 2)",
+    )
 
     # hyrr download-data — deprecated alias retained for legacy docs
     dl_parser = subparsers.add_parser(
@@ -521,6 +537,15 @@ def _cmd_fetch_data(args: argparse.Namespace) -> int:
         return 1
 
     try:
+        if getattr(args, "gc", False):
+            keep = max(0, int(getattr(args, "keep", 2)))
+            removed = _native.py_prune_old_versions(keep)
+            print(
+                f"Pruned {removed} old cache version(s) "
+                f"(kept current v{_native.py_data_version()} + up to {keep} historical)."
+            )
+            return 0
+
         if args.from_tarball is not None:
             print(f"Installing from {args.from_tarball} ...")
             _native.py_fetch_data(from_tarball=str(args.from_tarball))
@@ -576,6 +601,8 @@ def _cmd_download_data(args: argparse.Namespace) -> int:
         library=None,
         offline_bundle=None,
         from_tarball=None,
+        gc=False,
+        keep=2,
     )
     return _cmd_fetch_data(new_args)
 

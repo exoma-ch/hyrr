@@ -1,15 +1,18 @@
 <script lang="ts">
   import { getConfig, getSerializableConfig } from "../stores/config.svelte";
-  import { getResult } from "../stores/results.svelte";
+  import { getResult, getResultError } from "../stores/results.svelte";
+  import { buildBugReportBody } from "./bug-report-body";
   import { getShareableUrl } from "../config-url";
   import { getBugReportOpen, closeBugReport } from "../stores/bugreport.svelte";
   import { isTauri } from "../utils/platform";
   import { openExternalUrl } from "../utils/open-url";
+  import { buildIssueTitle } from "./bug-report-title";
 
   let open = $derived(getBugReportOpen());
 
   let name = $state("");
   let email = $state("");
+  let title = $state("");
   let description = $state("");
   let screenshot = $state<Blob | null>(null);
   let screenshotPreview = $state<string | null>(null);
@@ -62,8 +65,7 @@
 
   function openMailto() {
     if (!canOpenGitHub) return;
-    const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
-    const subj = `${prefix} ${description.slice(0, 70)}`;
+    const subj = buildIssueTitle(reportType, title, description);
     const body = buildBody();
     const qs = new URLSearchParams({ subject: subj, body }).toString();
     const to = MAILTO_TARGET;
@@ -211,41 +213,23 @@
   }
 
   function buildBody(screenshotUrl?: string): string {
-    const config = getConfig();
-    const result = getResult();
     // getShareableUrl requires SerializableConfig (with `items`, group-aware);
     // getConfig returns SimulationConfig (flat `layers`). Use the right shape
     // for the URL, keep the flat shape for the human-readable debug summary.
-    const configUrl = getShareableUrl(getSerializableConfig());
-
-    const sections: string[] = [];
-
-    sections.push(reportType === "bug" ? `## Bug Report` : `## Feature Request`);
-    sections.push(`**Reporter:** ${name || "Anonymous"}${email ? ` (${email})` : ""}`);
-    sections.push(`## Description\n\n${description}`);
-
-    if (screenshotUrl) {
-      sections.push(`## Screenshot\n\n![screenshot](${screenshotUrl})`);
-    }
-
-    sections.push(`## Debug Context`);
-    sections.push(`**[Reproduce this config](${configUrl})**`);
-    sections.push(`**Beam:** ${config.beam?.projectile ?? "?"} @ ${config.beam?.energy_MeV ?? "?"} MeV, ${config.beam?.current_mA ?? "?"} mA`);
-    const layerNames = (config.layers ?? []).map((l: any) => l.material).join(" → ");
-    sections.push(`**Stack:** ${layerNames || "empty"} (${config.layers?.length ?? 0} layers)`);
-
-    if (result) {
-      const nIso = result.layers.reduce((n: number, l: any) => n + (l.isotopes?.length ?? 0), 0);
-      sections.push(`**Result:** ${nIso} isotopes produced`);
-    } else {
-      sections.push(`**Result:** No simulation result available`);
-    }
-
-    sections.push(`**Version:** ${__APP_VERSION__}`);
-    sections.push(`**Browser:** ${navigator.userAgent}`);
-    sections.push(`**Timestamp:** ${new Date().toISOString()}`);
-
-    return sections.join("\n\n");
+    return buildBugReportBody({
+      reportType,
+      title,
+      name,
+      email,
+      description,
+      screenshotUrl,
+      config: getConfig(),
+      configUrl: getShareableUrl(getSerializableConfig()),
+      result: getResult(),
+      computeError: getResultError(),
+      appVersion: __APP_VERSION__,
+      userAgent: navigator.userAgent,
+    });
   }
 
   /** Submit via worker (requires email + Turnstile). */
@@ -259,8 +243,7 @@
     // Get Turnstile token (renders widget on demand, waits for challenge)
     const token = await getTurnstileToken();
 
-    const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
-    const title = `${prefix} ${description.slice(0, 70)}`;
+    const issueTitle = buildIssueTitle(reportType, title, description);
 
     try {
       let screenshotUrl: string | undefined;
@@ -274,7 +257,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title,
+          title: issueTitle,
           body,
           labels: [reportType === "bug" ? "bug" : "enhancement"],
           email,
@@ -299,12 +282,11 @@
   /** Open on GitHub directly (user authenticates via their GH session). */
   function openOnGitHub() {
     if (!canOpenGitHub) return;
-    const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
-    const title = `${prefix} ${description.slice(0, 70)}`;
+    const issueTitle = buildIssueTitle(reportType, title, description);
     const body = buildBody();
 
     const url = `https://github.com/${REPO}/issues/new?` + new URLSearchParams({
-      title,
+      title: issueTitle,
       body,
       labels: reportType === "bug" ? "bug" : "enhancement",
     }).toString();
@@ -336,9 +318,8 @@
       if (!reportPath) { submitting = false; return; }
 
       const body = buildBody();
-      const prefix = reportType === "bug" ? "[Bug]" : "[Feature]";
-      const title = `${prefix} ${description.slice(0, 70)}`;
-      const content = `# ${title}\n\n${body}`;
+      const issueTitle = buildIssueTitle(reportType, title, description);
+      const content = `# ${issueTitle}\n\n${body}`;
       await writeTextFile(reportPath, content);
 
       // Save screenshot alongside the report if present
@@ -359,6 +340,7 @@
   }
 
   function resetForm() {
+    title = "";
     description = "";
     screenshot = null;
     screenshotPreview = null;
@@ -391,8 +373,8 @@
       </div>
 
       <div class="field">
-        <label for="bug-name">Name <span class="optional">(optional)</span></label>
-        <input id="bug-name" type="text" bind:value={name} placeholder="Your name" />
+        <label for="bug-name">Your name <span class="optional">(optional, for follow-up — leave blank for anonymous)</span></label>
+        <input id="bug-name" type="text" bind:value={name} placeholder="leave blank for anonymous" />
       </div>
 
       {#if !desktop}
@@ -412,6 +394,17 @@
       {/if}
 
       <div class="field">
+        <label for="bug-title">Title <span class="optional">(optional — auto-generated from description if blank)</span></label>
+        <input
+          id="bug-title"
+          type="text"
+          bind:value={title}
+          placeholder="Short summary, e.g. 'Heavy ions crash compute'"
+          maxlength="70"
+        />
+      </div>
+
+      <div class="field">
         <label for="bug-desc">Description <span class="required">*</span></label>
         <textarea
           id="bug-desc"
@@ -422,7 +415,7 @@
       </div>
 
       <div class="field">
-        <label>Screenshot <span class="optional">(optional)</span></label>
+        <span class="field-label">Screenshot <span class="optional">(optional)</span></span>
         {#if screenshotPreview}
           <div class="preview-wrap">
             <img src={screenshotPreview} alt="Screenshot preview" class="preview-img" />
@@ -627,7 +620,7 @@
     gap: 0.2rem;
   }
 
-  label {
+  label, .field-label {
     font-size: 0.75rem;
     color: var(--c-text-label);
   }

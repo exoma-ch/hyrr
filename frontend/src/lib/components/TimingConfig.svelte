@@ -72,9 +72,10 @@
 
 <div class="timing-config">
   <div class="time-row">
-    <label>Irradiation</label>
+    <label for="tc-irrad">Irradiation</label>
     <div class="time-controls">
       <input
+        id="tc-irrad"
         type="number"
         value={irradValue}
         min={0}
@@ -82,7 +83,7 @@
         onchange={onIrradChange}
         class="time-input"
       />
-      <select value={irradUnit} onchange={onIrradUnitChange} class="unit-select">
+      <select value={irradUnit} onchange={onIrradUnitChange} class="unit-select" aria-label="Irradiation unit">
         {#each UNITS as u}
           <option value={u.value}>{u.label}</option>
         {/each}
@@ -91,9 +92,10 @@
   </div>
 
   <div class="time-row">
-    <label>Cooling</label>
+    <label for="tc-cool">Cooling</label>
     <div class="time-controls">
       <input
+        id="tc-cool"
         type="number"
         value={coolValue}
         min={0}
@@ -101,7 +103,7 @@
         onchange={onCoolChange}
         class="time-input"
       />
-      <select value={coolUnit} onchange={onCoolUnitChange} class="unit-select">
+      <select value={coolUnit} onchange={onCoolUnitChange} class="unit-select" aria-label="Cooling unit">
         {#each UNITS as u}
           <option value={u.value}>{u.label}</option>
         {/each}

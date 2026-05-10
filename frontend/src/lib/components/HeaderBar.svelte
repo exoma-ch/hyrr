@@ -8,6 +8,7 @@
   import { cycleTheme, getThemeMode, getResolvedTheme } from "../stores/theme.svelte";
   import { getResult, setResult } from "../stores/results.svelte";
   import { buildSessionFile, downloadSessionFile, pickSessionFile } from "../session-io";
+  import { getDisplayThresholds, setDisplayThresholds } from "../stores/display-thresholds.svelte";
   import { openExternalUrl } from "../utils/open-url";
   import logoUrl from "/logo.svg?url";
 
@@ -31,7 +32,7 @@
     saveMenuOpen = false;
     const cfg = getSerializableConfig();
     const res = includeResult ? getResult() : null;
-    const file = buildSessionFile(cfg, res);
+    const file = buildSessionFile(cfg, res, undefined, getDisplayThresholds());
     downloadSessionFile(file);
   }
 
@@ -43,6 +44,7 @@
       if (f.result) {
         setResult(f.result);
       }
+      if (f.display) setDisplayThresholds(f.display);
     } catch (e: any) {
       if (!/No file selected/.test(String(e?.message ?? e))) {
         // eslint-disable-next-line no-alert

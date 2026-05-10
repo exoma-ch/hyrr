@@ -73,12 +73,12 @@ For machines without internet (Faraday-cage labs, isolated networks):
    hyrr fetch-data --from hyrr-data.tar.zst
    ```
 
-Both machines must run matching `hyrr` versions for the bundle to apply cleanly — the cache is version-pinned, so a v0.9 bundle won't be picked up by a v0.10 install. Alternatively, drop the upstream GitHub Releases tarball directly:
+Both machines must run matching `hyrr` versions for the bundle to apply cleanly — the cache is version-pinned, so a v0.9 bundle won't be picked up by a v0.10 install. Alternatively, drop the upstream GitHub Releases tarball directly. The release URL pattern — host, path layout, tarball filename — is defined by `hyrr_core::data_fetch::release_url()` / `tarball_filename()`. Read your installed version from Python with `python -c "import hyrr._native as n; print(n.py_data_version())"` and substitute it for `<V>` below:
 
 ```bash
-# On a connected machine
-curl -LO https://github.com/exoma-ch/nucl-parquet/releases/download/v0.9.0/nucl-parquet-data-v0.9.0.tar.zst
+# On a connected machine — substitute <V> with the version printed above
+curl -LO "https://github.com/exoma-ch/nucl-parquet/releases/download/v<V>/nucl-parquet-data-v<V>.tar.zst"
 
 # On the air-gapped machine
-hyrr fetch-data --from nucl-parquet-data-v0.9.0.tar.zst
+hyrr fetch-data --from "nucl-parquet-data-v<V>.tar.zst"
 ```

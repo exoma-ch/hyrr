@@ -18,8 +18,10 @@
   } from "./lib/stores/config.svelte";
   import {
     getResult,
+    getResultError,
     getStatus,
     getProgress,
+    getComputeError,
   } from "./lib/stores/results.svelte";
   import {
     getHistoryOpen,
@@ -40,6 +42,8 @@
   } from "@hyrr/compute";
   import { setCustomMaterialExpander } from "./lib/compute/backend";
   import { getCustomMaterials, loadCustomMaterials } from "./lib/stores/custom-materials.svelte";
+  import { setProjectile } from "./lib/stores/config.svelte";
+  import { openBugReport } from "./lib/stores/bugreport.svelte";
 
   // New components
   import HeaderBar from "./lib/components/HeaderBar.svelte";
@@ -53,6 +57,7 @@
   import ActivityTableEnhanced from "./lib/components/ActivityTableEnhanced.svelte";
   import HistoryPanel from "./lib/components/HistoryPanel.svelte";
   import HistoryImportExport from "./lib/components/HistoryImportExport.svelte";
+  import ComputeErrorCard from "./lib/components/ComputeErrorCard.svelte";
   import MaterialPopup from "./lib/components/MaterialPopup.svelte";
   import ElementPopup from "./lib/components/ElementPopup.svelte";
   import IsotopePopup from "./lib/components/IsotopePopup.svelte";
@@ -74,6 +79,8 @@
   let hasLayers = $derived(layers.length > 0);
   let status = $derived(getStatus());
   let result = $derived(getResult());
+  let computeError = $derived(getComputeError());
+  let resultError = $derived(getResultError());
   let historyOpen = $derived(getHistoryOpen());
 
   // Popup state
@@ -359,6 +366,20 @@
 
       <LayerStackHorizontal onmaterialclick={openMaterialPopup} onelementclick={openElementPopup} />
 
+      {#if computeError && !result}
+        <ComputeErrorCard
+          error={computeError}
+          projectile={config.beam.projectile}
+          energyMev={config.beam.energy_MeV}
+          onSwitchProjectile={(suggestion) => setProjectile(suggestion)}
+          onEditBeam={() => {
+            const el = document.querySelector(".config-row");
+            if (el && "scrollIntoView" in el) el.scrollIntoView({ behavior: "smooth" });
+          }}
+          onReportGap={openBugReport}
+        />
+      {/if}
+
       {#if hasLayers}
         <PlotDepthProfileLive />
 
@@ -379,6 +400,10 @@
           <IsotopeFilterBar {result} />
           <PlotActivityCurve {result} />
           <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
+        {:else if resultError}
+          <p class="compute-error-placeholder">
+            Compute failed: <code>{String(resultError)}</code>
+          </p>
         {/if}
       {:else}
         <WelcomeScreen onstart={forceRun} />
@@ -386,8 +411,12 @@
     </div>
 
     {#if historyOpen}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="history-overlay" onclick={() => setHistoryOpen(false)}></div>
+      <div
+        class="history-overlay"
+        role="presentation"
+        onclick={() => setHistoryOpen(false)}
+        onkeydown={(e) => { if (e.key === "Escape") setHistoryOpen(false); }}
+      ></div>
       <div class="history-drawer">
         <div class="panel">
           <div class="panel-header">

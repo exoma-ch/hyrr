@@ -753,8 +753,12 @@
 </div>
 
 {#if elementPickerOpen}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="picker-overlay" onclick={(e) => { if (e.target === e.currentTarget) closePicker(); }}>
+  <div
+    class="picker-overlay"
+    role="presentation"
+    onclick={(e) => { if (e.target === e.currentTarget) closePicker(); }}
+    onkeydown={(e) => { if (e.key === "Escape") closePicker(); }}
+  >
     <div
       class="picker-modal compose-mixture"
       role="dialog"
@@ -786,9 +790,9 @@
             {/if}
           </label>
 
-          <div class="compose-chips" role="list" aria-label="Common compounds">
+          <div class="compose-chips" role="group" aria-label="Common compounds">
             {#each COMMON_COMPOUNDS as c}
-              <button type="button" class="compose-chip" role="listitem" onclick={() => appendRow(c)}>{c}</button>
+              <button type="button" class="compose-chip" onclick={() => appendRow(c)}>{c}</button>
             {/each}
           </div>
 
@@ -1033,8 +1037,6 @@
   }
 
   .compose-chip:hover { color: var(--c-accent); border-color: var(--c-accent); }
-
-  .compose-pt { /* PT renders its own inner styling */ }
 
   .compose-side {
     border-left: 1px solid var(--c-border);

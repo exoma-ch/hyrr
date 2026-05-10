@@ -26,6 +26,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fs2::FileExt;
 
@@ -39,7 +40,60 @@ use fs2::FileExt;
 pub const DATA_VERSION: &str = env!("HYRR_DATA_VERSION");
 
 /// GitHub Releases base URL for nucl-parquet data tarballs.
-const RELEASE_BASE: &str = "https://github.com/exoma-ch/nucl-parquet/releases/download";
+///
+/// This is the SSoT for the release host. All other call sites (Tauri
+/// commands, frontend, docs) MUST flow through [`release_base_url`] /
+/// [`release_url`] / [`release_url_for`] rather than re-spelling the
+/// string.
+pub const RELEASE_BASE: &str = "https://github.com/exoma-ch/nucl-parquet/releases/download";
+
+/// Canonical GitHub-Releases base URL. Prefer this over the `RELEASE_BASE`
+/// const when crossing a module/crate/FFI boundary — it pins downstream
+/// callers on a function rather than on the literal.
+pub fn release_base_url() -> &'static str {
+    RELEASE_BASE
+}
+
+/// Canonical [`DATA_VERSION`] accessor. Same SSoT motivation as
+/// [`release_base_url`] — function-shaped so non-Rust callers (Tauri,
+/// pyo3, MCP) can re-export without reaching into a `pub const`.
+pub fn data_version() -> &'static str {
+    DATA_VERSION
+}
+
+/// Tarball filename for the current [`DATA_VERSION`], e.g.
+/// `nucl-parquet-data-v0.10.0.tar.zst`. Single source of truth for the
+/// pattern — `ensure_*` and the install path consume this.
+pub fn tarball_filename() -> String {
+    tarball_filename_for(DATA_VERSION)
+}
+
+/// Tarball filename for an arbitrary version. Exposed for offline-bundle
+/// docs/tooling that need to spell a non-current version.
+pub fn tarball_filename_for(version: &str) -> String {
+    format!("nucl-parquet-data-v{version}.tar.zst")
+}
+
+/// Full release-tarball URL for the current [`DATA_VERSION`].
+pub fn release_url() -> String {
+    release_url_for(DATA_VERSION)
+}
+
+/// Full release-tarball URL for an arbitrary version.
+pub fn release_url_for(version: &str) -> String {
+    format!(
+        "{RELEASE_BASE}/v{version}/{filename}",
+        filename = tarball_filename_for(version),
+    )
+}
+
+/// Human-readable cache-root pattern for diagnostics / UX, e.g.
+/// `~/.hyrr/nucl-parquet/v0.10.0/data`. The literal returned here is
+/// always interpolated against the live [`DATA_VERSION`]; callers that
+/// need an actual filesystem path should use [`cache_dir`] instead.
+pub fn cache_root_pattern() -> String {
+    format!("~/.hyrr/nucl-parquet/v{DATA_VERSION}/data")
+}
 
 /// Errors surfaced by the data-fetch path.
 #[derive(Debug, thiserror::Error)]
@@ -54,6 +108,14 @@ pub enum FetchError {
     Decompress(String),
     #[error("tar extraction error: {0}")]
     Extract(String),
+    /// Tarball entry was not a regular file or directory. We refuse
+    /// symlinks, hardlinks, char/block/fifo devices, GNU sparse, etc.
+    /// to avoid materialising read-side surprises (e.g. a malicious
+    /// `data/meta/foo -> /etc/passwd` symlink) inside the cache. See
+    /// #122. If a real upstream change ever trips this, that's a bug
+    /// to investigate at the source — not something to silently skip.
+    #[error("unsafe tarball entry {kind} at {path}")]
+    UnsafeTarballEntry { kind: String, path: PathBuf },
     #[error("HOME environment variable not set")]
     NoHome,
 }
@@ -82,20 +144,50 @@ pub fn is_cache_complete() -> bool {
     sentinel_path().map(|p| p.exists()).unwrap_or(false)
 }
 
-/// Acquire an exclusive lock on `<cache_root>/.lock`. Blocks the current
-/// thread until competing fetch attempts release. Drops on `Drop`.
-fn acquire_lock() -> Result<fs::File> {
+/// Process-wide mutex that pairs with the on-disk `flock`. Two threads
+/// in the same process opening `<cache_root>/.lock` independently and
+/// both calling `flock(LOCK_EX)` is unreliable on macOS — the kernel
+/// can leave both threads parked when neither holds the lock. The
+/// in-process mutex makes the intra-process race deterministic; the
+/// file lock continues to handle the inter-process case (the GUI
+/// process and a separately-spawned `--mcp` process).
+fn process_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Combined cross-thread + cross-process lock guard. Holds the
+/// in-process mutex *and* the on-disk `flock` for as long as it lives.
+/// Both are released on `Drop` in field-declaration order: file lock
+/// first, then the mutex, which matches the order they were acquired
+/// in reverse.
+struct CacheLock {
+    _file: fs::File,
+    _guard: MutexGuard<'static, ()>,
+}
+
+/// Acquire the cross-thread + cross-process cache lock. Blocks the
+/// current thread until competing fetch attempts release. Drops on
+/// `Drop`.
+fn acquire_lock() -> Result<CacheLock> {
+    // In-process mutex first — see `process_lock` for the macOS
+    // rationale. Poisoning means a previous holder panicked mid-op;
+    // we recover and proceed because the file lock + sentinel-based
+    // recovery handle the on-disk consistency story.
+    let guard = process_lock()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     let root = cache_root()?;
     fs::create_dir_all(&root)?;
-    let lock = fs::OpenOptions::new()
+    let file = fs::OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
         .truncate(false)
         .open(root.join(".lock"))?;
-    lock.lock_exclusive()
+    file.lock_exclusive()
         .map_err(|e| FetchError::Io(io::Error::other(format!("lock: {e}"))))?;
-    Ok(lock)
+    Ok(CacheLock { _file: file, _guard: guard })
 }
 
 /// Build a configured reqwest client for cache fetches.
@@ -137,9 +229,7 @@ impl Drop for TmpFileGuard {
 ///
 /// Streams the response to disk — does not buffer the full ~400 MB in RAM.
 pub fn fetch_full_tarball_to(out: &Path) -> Result<()> {
-    let url = format!(
-        "{RELEASE_BASE}/v{DATA_VERSION}/nucl-parquet-data-v{DATA_VERSION}.tar.zst"
-    );
+    let url = release_url();
     let client = build_http_client().map_err(|e| FetchError::Network(e.to_string()))?;
     let resp = client
         .get(&url)
@@ -242,6 +332,22 @@ pub fn extract_tarball(
             }
         }
 
+        // Refuse anything that isn't a plain file or directory. Symlinks,
+        // hardlinks, char/block/fifo devices, GNU sparse, etc. have no
+        // legitimate place in our data cache: a malicious upstream could
+        // smuggle in `data/meta/foo -> /etc/passwd` and any later code
+        // that follows symlinks would read out-of-cache content. We
+        // surface this loudly via `FetchError::UnsafeTarballEntry`
+        // rather than silently skipping — if a real-world tarball ever
+        // trips this it's worth investigating upstream. See #122.
+        let etype = entry.header().entry_type();
+        if !(etype.is_file() || etype.is_dir()) {
+            return Err(FetchError::UnsafeTarballEntry {
+                kind: format!("{etype:?}"),
+                path,
+            });
+        }
+
         entry
             .unpack_in(dest)
             .map_err(|e| FetchError::Extract(e.to_string()))?;
@@ -263,9 +369,12 @@ pub fn extract_tarball(
 ///
 /// `prefixes`: same semantics as `extract_tarball` — empty extracts
 /// everything, a list of strings filters by `starts_with`.
+///
+/// **Caller must hold the cache lock** (`acquire_lock`) — every public
+/// entry point in this module already does, and re-acquiring here
+/// would deadlock the in-process mutex paired with the on-disk
+/// `flock` (see `process_lock`).
 fn install_tarball_atomic(archive: &Path, prefixes: &[&str]) -> Result<()> {
-    let _lock = acquire_lock()?;
-
     let cache = cache_dir()?;
     let root = cache_root()?;
     let pid = std::process::id();
@@ -290,6 +399,12 @@ fn install_tarball_atomic(archive: &Path, prefixes: &[&str]) -> Result<()> {
     }
 
     extract_tarball(archive, &partial, prefixes)?;
+
+    // Test-only seam: between partial-dir build and the
+    // atomic-rename promotion, give tests a chance to simulate a
+    // SIGKILL. Production builds compile this away entirely.
+    #[cfg(test)]
+    test_hooks::run_pre_promote_hook()?;
 
     // If `cache` already exists but is incomplete, blow it away — its
     // contents are by definition stale (the sentinel would be present
@@ -369,11 +484,24 @@ pub fn ensure_meta_stopping() -> Result<()> {
         return Ok(());
     }
     require_free_space(1024 * 1024 * 1024)?;
-    let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
+    let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
-    fetch_full_tarball_to(&tmp)?;
+    fetch_full_tarball_with_seam(&tmp)?;
     install_tarball_atomic(&tmp, MANDATORY_PREFIXES)?;
     Ok(())
+}
+
+/// Indirection for the network fetch so tests can inject a local-file
+/// "fetcher" without touching production behaviour. In a non-test
+/// build this is a one-line forwarder to [`fetch_full_tarball_to`].
+fn fetch_full_tarball_with_seam(out: &Path) -> Result<()> {
+    #[cfg(test)]
+    {
+        if let Some(()) = test_hooks::try_test_fetch(out)? {
+            return Ok(());
+        }
+    }
+    fetch_full_tarball_to(out)
 }
 
 /// Ensure the given library's data is present in the cache.
@@ -396,7 +524,7 @@ pub fn ensure_library(library: &str) -> Result<()> {
         return Ok(());
     }
     require_free_space(1024 * 1024 * 1024)?;
-    let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
+    let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
     fetch_full_tarball_to(&tmp)?;
     let lib_prefix = format!("data/{library}/");
@@ -417,7 +545,7 @@ pub fn ensure_library(library: &str) -> Result<()> {
 pub fn ensure_all() -> Result<()> {
     let _lock = acquire_lock()?;
     require_free_space(1024 * 1024 * 1024)?;
-    let tmp = cache_root()?.join(format!("nucl-parquet-data-v{DATA_VERSION}.tar.zst"));
+    let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
     fetch_full_tarball_to(&tmp)?;
     install_tarball_atomic(&tmp, &[])?;
@@ -552,7 +680,191 @@ pub fn install_from_tarball(archive: &Path) -> Result<()> {
             format!("tarball not found: {}", archive.display()),
         )));
     }
+    let _lock = acquire_lock()?;
     install_tarball_atomic(archive, &["data"])
+}
+
+/// Parse a `v{N}.{N}.{N}` directory name into a sortable tuple. Returns
+/// `None` for anything that doesn't match — the directory is treated as
+/// not-a-version-cache and left alone.
+///
+/// We roll our own rather than pull in `semver` because the cache layout
+/// only ever produces strict 3-part numeric versions (the data tarballs
+/// are pinned to nucl-parquet's pyproject version, which is a 3-tuple).
+fn parse_version_dir(name: &str) -> Option<(u64, u64, u64)> {
+    let s = name.strip_prefix('v')?;
+    let mut parts = s.split('.');
+    let major = parts.next()?.parse::<u64>().ok()?;
+    let minor = parts.next()?.parse::<u64>().ok()?;
+    let patch = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+/// Prune older `v{N.N.N}/` cache directories, keeping only the `keep`
+/// most recent (by semver order) plus the current `DATA_VERSION` dir.
+///
+/// Returns the number of directories removed. Idempotent: a second call
+/// with the same `keep` returns `0`.
+///
+/// The cache lock is held for the whole sweep so a concurrent
+/// `ensure_library` cannot promote a partial dir we're about to delete,
+/// and we cannot delete a sibling that another process is mid-extracting.
+///
+/// `v{V}.partial-*` partial dirs and any non-version entries (`.lock`,
+/// `.tmp` tarballs, the user's stray notes) are ignored.
+pub fn prune_old_versions(keep: usize) -> Result<usize> {
+    let _lock = acquire_lock()?;
+    let root = cache_root()?;
+    if !root.exists() {
+        return Ok(0);
+    }
+
+    let current = parse_version_dir(&format!("v{DATA_VERSION}"));
+
+    let mut versioned: Vec<(PathBuf, (u64, u64, u64))> = Vec::new();
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        // Don't follow symlinks — a chmod / move accident could otherwise
+        // wipe data outside the cache.
+        let ft = entry.file_type()?;
+        if !ft.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if let Some(ver) = parse_version_dir(&name_str) {
+            versioned.push((entry.path(), ver));
+        }
+    }
+
+    // Newest first.
+    versioned.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Keep set = {current} ∪ {`keep` most recent versions not equal to current}.
+    // The current pin is always preserved (the user might be mid-fetch);
+    // `keep` controls how many historical siblings to preserve on top of
+    // that. So `keep=2` with current=v0.10.0 and siblings v0.0.1..v0.0.5
+    // preserves {v0.10.0, v0.0.5, v0.0.4} = 3 dirs.
+    let mut kept: std::collections::HashSet<(u64, u64, u64)> =
+        std::collections::HashSet::new();
+    if let Some(c) = current {
+        kept.insert(c);
+    }
+    let mut historical_taken = 0usize;
+    for (_, ver) in &versioned {
+        if historical_taken == keep {
+            break;
+        }
+        if Some(*ver) == current {
+            continue;
+        }
+        kept.insert(*ver);
+        historical_taken += 1;
+    }
+
+    let mut removed = 0usize;
+    for (path, ver) in &versioned {
+        if kept.contains(ver) {
+            continue;
+        }
+        fs::remove_dir_all(path)?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// Test-only seams for concurrency / interrupted-merge coverage (#123).
+///
+/// These hooks exist purely to let tests simulate failure modes that
+/// are otherwise impossible to reproduce deterministically (SIGKILL
+/// mid-merge, double-fetch under contention). Production builds compile
+/// the module away entirely (`#[cfg(test)]`).
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    /// Action to run inside `install_tarball_atomic` after the partial
+    /// dir is built but before promotion. `None` (the default) means
+    /// the hook is inert.
+    #[allow(dead_code)]
+    pub(crate) enum PrePromoteAction {
+        /// Panic — simulates a `SIGKILL` mid-install. Reserved for
+        /// future tests that exercise the unwind path; current tests
+        /// use `FailOnce` which produces the same on-disk recovery
+        /// state without needing `catch_unwind`.
+        PanicOnce,
+        /// Return a synthetic IO error from the hook — equivalent
+        /// on-disk effect to `PanicOnce` (partial dir survives,
+        /// sentinel does not get written) but propagates as `Err(_)`
+        /// through the normal `?` chain so tests can `assert!(_.is_err())`
+        /// without `catch_unwind`.
+        FailOnce,
+    }
+
+    static PRE_PROMOTE_ACTION: Mutex<Option<PrePromoteAction>> = Mutex::new(None);
+
+    pub(crate) fn arm_pre_promote(action: PrePromoteAction) {
+        *PRE_PROMOTE_ACTION.lock().unwrap() = Some(action);
+    }
+
+    pub(crate) fn clear_pre_promote() {
+        *PRE_PROMOTE_ACTION.lock().unwrap() = None;
+    }
+
+    pub(crate) fn run_pre_promote_hook() -> Result<()> {
+        let action = PRE_PROMOTE_ACTION.lock().unwrap().take();
+        match action {
+            None => Ok(()),
+            Some(PrePromoteAction::PanicOnce) => {
+                panic!("test_hooks: simulated SIGKILL mid-install");
+            }
+            Some(PrePromoteAction::FailOnce) => Err(FetchError::Io(io::Error::other(
+                "test_hooks: simulated mid-install failure",
+            ))),
+        }
+    }
+
+    /// When `Some(path)`, `ensure_meta_stopping`'s fetch step copies
+    /// `path` to `out` instead of hitting the network. The counter
+    /// tracks how many times the seam fired across all threads — used
+    /// by the lock-contention test to assert no double-fetch.
+    static FETCH_SOURCE: Mutex<Option<PathBuf>> = Mutex::new(None);
+    static FETCH_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    pub(crate) fn arm_fetch_source(src: PathBuf) {
+        *FETCH_SOURCE.lock().unwrap() = Some(src);
+        FETCH_COUNT.store(0, Ordering::SeqCst);
+    }
+
+    pub(crate) fn clear_fetch_source() {
+        *FETCH_SOURCE.lock().unwrap() = None;
+        FETCH_COUNT.store(0, Ordering::SeqCst);
+    }
+
+    pub(crate) fn fetch_count() -> usize {
+        FETCH_COUNT.load(Ordering::SeqCst)
+    }
+
+    /// If a test fetcher is armed, copy the local archive into `out`,
+    /// bump the counter, and report `Some(())`. Otherwise return
+    /// `None` to let the production fetcher run.
+    pub(crate) fn try_test_fetch(out: &Path) -> Result<Option<()>> {
+        let guard = FETCH_SOURCE.lock().unwrap();
+        let Some(src) = guard.as_ref() else {
+            return Ok(None);
+        };
+        if let Some(parent) = out.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(src, out)?;
+        FETCH_COUNT.fetch_add(1, Ordering::SeqCst);
+        Ok(Some(()))
+    }
 }
 
 #[cfg(test)]
@@ -607,6 +919,32 @@ mod tests {
     /// fallback `"0.0.0-unknown"` ships, which would silently 404 on
     /// every fetch. Catch that in CI by asserting the version parses
     /// as N.N.N. The fallback `0.0.0-unknown` fails the dot-count check.
+    /// SSoT pattern for the release URL. Pins the host/path shape so a
+    /// silent string-edit elsewhere in the tree gets caught here. Don't
+    /// remove without also updating the `data-fetch-meta.ts` consumer
+    /// and any docs/CI that grep for the URL.
+    #[test]
+    fn release_url_pattern_is_canonical() {
+        let url = release_url();
+        assert!(
+            url.starts_with("https://github.com/exoma-ch/nucl-parquet/releases/download/v"),
+            "release_url() = {url:?} drifted from the canonical host/path"
+        );
+        assert!(
+            url.ends_with(".tar.zst"),
+            "release_url() = {url:?} should end with .tar.zst"
+        );
+        let fname = tarball_filename();
+        assert!(
+            fname.starts_with("nucl-parquet-data-v") && fname.ends_with(".tar.zst"),
+            "tarball_filename() = {fname:?} drifted"
+        );
+        assert!(
+            url.ends_with(&fname),
+            "release_url() = {url:?} does not end in tarball_filename() = {fname:?}"
+        );
+    }
+
     #[test]
     fn data_version_is_resolved_from_submodule() {
         assert_ne!(DATA_VERSION, "0.0.0-unknown",
@@ -765,6 +1103,86 @@ mod tests {
         assert!(!is_cache_complete());
     }
 
+    /// Build a tarball at `out` containing one regular file and one
+    /// symlink entry (`data/meta/evil` -> `/etc/passwd`). Used to
+    /// verify that `extract_tarball` refuses to materialise the
+    /// symlink rather than silently honouring it. See #122.
+    fn make_symlink_tarball(out: &Path) {
+        let file = fs::File::create(out).unwrap();
+        let encoder = zstd::stream::Encoder::new(file, 0).unwrap().auto_finish();
+        let mut tar = tar::Builder::new(encoder);
+
+        // One regular file so the archive isn't degenerate.
+        let mut h1 = tar::Header::new_gnu();
+        let payload = b"ok";
+        h1.set_size(payload.len() as u64);
+        h1.set_mode(0o644);
+        h1.set_cksum();
+        tar.append_data(&mut h1, "data/meta/marker", payload.as_slice())
+            .unwrap();
+
+        // The hostile symlink: data/meta/evil -> /etc/passwd
+        let mut h2 = tar::Header::new_gnu();
+        h2.set_size(0);
+        h2.set_mode(0o644);
+        h2.set_entry_type(tar::EntryType::Symlink);
+        h2.set_link_name("/etc/passwd").unwrap();
+        h2.set_cksum();
+        tar.append_data(&mut h2, "data/meta/evil", std::io::empty())
+            .unwrap();
+
+        tar.finish().unwrap();
+    }
+
+    /// `extract_tarball` must refuse symlink entries — a malicious
+    /// upstream could otherwise smuggle `data/meta/foo -> /etc/passwd`
+    /// into the cache. See #122.
+    #[test]
+    fn extract_tarball_rejects_symlink_entries() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("hostile.tar.zst");
+        make_symlink_tarball(&archive);
+
+        let dest = td.path().join("dest");
+        let err = extract_tarball(&archive, &dest, &[]).unwrap_err();
+        match err {
+            FetchError::UnsafeTarballEntry { kind, path } => {
+                assert!(
+                    kind.contains("Symlink"),
+                    "expected kind to mention Symlink, got {kind:?}"
+                );
+                assert_eq!(path, PathBuf::from("data/meta/evil"));
+            }
+            other => panic!("expected UnsafeTarballEntry, got {other:?}"),
+        }
+        // The symlink must NOT have been materialised.
+        assert!(!dest.join("data/meta/evil").exists());
+        assert!(!dest.join("data/meta/evil").is_symlink());
+    }
+
+    /// Regression: a vanilla tarball (regular files + directories
+    /// only) must still extract cleanly through the new entry-type
+    /// filter. The existing `install_from_tarball_writes_sentinel_last`
+    /// test covers the install path; this one exercises
+    /// `extract_tarball` directly so a future refactor that pulls
+    /// the type-check up the call chain stays honest.
+    #[test]
+    fn extract_tarball_accepts_regular_files() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("ok.tar.zst");
+        make_test_tarball(&archive);
+
+        let dest = td.path().join("dest");
+        extract_tarball(&archive, &dest, &[]).unwrap();
+        assert_eq!(
+            fs::read(dest.join("data/meta/marker")).unwrap(),
+            b"test-marker"
+        );
+        assert!(dest.join("data/tendl-test/xs/p_Cu.parquet").exists());
+    }
+
     /// Stale partial dirs (left by SIGKILL'd previous runs) must be
     /// swept by `install_tarball_atomic`. Without the sweep these
     /// accumulate at ~400 MB per crash forever.
@@ -788,5 +1206,249 @@ mod tests {
 
         assert!(!stale.exists(), "stale partial-99999 was not swept");
         assert!(is_cache_complete());
+    }
+
+    /// Plant `v0.1.0..v0.5.0` directories with `.complete` sentinels.
+    /// `prune_old_versions(2)` keeps the 2 newest plus the current
+    /// DATA_VERSION pin. Idempotency: a second call returns 0. A keep
+    /// value larger than the population removes nothing.
+    fn plant_version_dirs(root: &Path, versions: &[&str]) {
+        for v in versions {
+            let dir = root.join(format!("v{v}"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(".complete"), v).unwrap();
+        }
+    }
+
+    #[test]
+    fn prune_keeps_newest_n_plus_current() {
+        let _g = SERIAL.lock().unwrap();
+        let _td = isolated_home();
+        let root = cache_root().unwrap();
+        fs::create_dir_all(&root).unwrap();
+
+        // Plant 5 ancient versions all guaranteed strictly older than
+        // any plausible DATA_VERSION. This keeps the test invariant
+        // independent of the actual current pin.
+        let planted = ["0.0.1", "0.0.2", "0.0.3", "0.0.4", "0.0.5"];
+        plant_version_dirs(&root, &planted);
+        // Plant the current DATA_VERSION dir too.
+        plant_version_dirs(&root, &[DATA_VERSION]);
+
+        let removed = prune_old_versions(2).unwrap();
+
+        // Expected: keep v0.0.5, v0.0.4 (newest 2 of the planted set;
+        // DATA_VERSION sorts newer than all of them and is also kept by
+        // the current-pin rule). 5 planted + 1 current = 6 dirs total,
+        // minus 3 kept = 3 removed.
+        assert_eq!(removed, 3);
+        assert!(root.join("v0.0.5").exists());
+        assert!(root.join("v0.0.4").exists());
+        assert!(root.join(format!("v{DATA_VERSION}")).exists());
+        assert!(!root.join("v0.0.1").exists());
+        assert!(!root.join("v0.0.2").exists());
+        assert!(!root.join("v0.0.3").exists());
+
+        // Idempotency.
+        let removed2 = prune_old_versions(2).unwrap();
+        assert_eq!(removed2, 0);
+    }
+
+    #[test]
+    fn prune_with_large_keep_removes_nothing() {
+        let _g = SERIAL.lock().unwrap();
+        let _td = isolated_home();
+        let root = cache_root().unwrap();
+        fs::create_dir_all(&root).unwrap();
+        plant_version_dirs(&root, &["0.1.0", "0.2.0", "0.3.0"]);
+
+        let removed = prune_old_versions(10).unwrap();
+        assert_eq!(removed, 0);
+        for v in &["0.1.0", "0.2.0", "0.3.0"] {
+            assert!(root.join(format!("v{v}")).exists());
+        }
+    }
+
+    /// Non-version directories (e.g. `data/`, `notes/`) and stray files
+    /// are left untouched by prune.
+    #[test]
+    fn prune_ignores_non_version_entries() {
+        let _g = SERIAL.lock().unwrap();
+        let _td = isolated_home();
+        let root = cache_root().unwrap();
+        fs::create_dir_all(&root).unwrap();
+        plant_version_dirs(&root, &["0.1.0", "0.2.0"]);
+        fs::create_dir_all(root.join("not-a-version")).unwrap();
+        fs::create_dir_all(root.join(format!("v{DATA_VERSION}.partial-1234"))).unwrap();
+        fs::write(root.join(".lock"), b"").unwrap();
+
+        let _ = prune_old_versions(0).unwrap();
+        assert!(root.join("not-a-version").exists());
+        assert!(
+            root.join(format!("v{DATA_VERSION}.partial-1234")).exists(),
+            "partial dirs are install_tarball_atomic's responsibility, not prune's"
+        );
+        assert!(root.join(".lock").exists());
+    }
+
+    /// `prune_old_versions` must acquire the cache lock; verify it doesn't
+    /// deadlock against itself when called sequentially in the same test.
+    #[test]
+    fn prune_is_lock_safe_when_called_sequentially() {
+        let _g = SERIAL.lock().unwrap();
+        let _td = isolated_home();
+        let root = cache_root().unwrap();
+        fs::create_dir_all(&root).unwrap();
+        plant_version_dirs(&root, &["0.1.0", "0.2.0", "0.3.0", "0.4.0"]);
+
+        // Two sequential calls — the lock guard from the first call must
+        // be dropped before the second acquires.
+        let _ = prune_old_versions(1).unwrap();
+        let removed = prune_old_versions(1).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    /// Helper: count `v{V}.partial-*` directories left under
+    /// `cache_root()`. Used by the concurrency / interruption tests
+    /// to assert no orphaned partials survive a recovery cycle.
+    fn count_partial_dirs() -> usize {
+        let root = cache_root().unwrap();
+        let prefix = format!("v{DATA_VERSION}.partial-");
+        match fs::read_dir(&root) {
+            Ok(it) => it
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+                .count(),
+            Err(_) => 0,
+        }
+    }
+
+    /// #123 — doc-comment claim:
+    /// "the user can kill the process at any moment and the next
+    /// invocation finds either (a) a fully-populated cache, or (b) a
+    /// missing/incomplete cache that gets re-fetched cleanly."
+    ///
+    /// Two threads race `install_from_tarball` against the same cache
+    /// root. The `<cache_root>/.lock` file lock must serialise them so
+    /// neither sees a half-merged cache and neither deadlocks. Both
+    /// invocations are expected to succeed (the second merges into a
+    /// populated cache and re-writes the sentinel); at minimum one
+    /// must succeed and the final state must be consistent.
+    #[test]
+    fn concurrent_install_from_tarball_serialises() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("test.tar.zst");
+        make_test_tarball(&archive);
+
+        let archive_ref = &archive;
+        let (r1, r2) = std::thread::scope(|s| {
+            let h1 = s.spawn(|| install_from_tarball(archive_ref));
+            let h2 = s.spawn(|| install_from_tarball(archive_ref));
+            (h1.join().expect("t1 panicked"), h2.join().expect("t2 panicked"))
+        });
+
+        // Neither thread deadlocked (we got here) and at least one
+        // succeeded. A second-mover may legitimately succeed too via
+        // the merge path; what's not allowed is *both* failing.
+        assert!(
+            r1.is_ok() || r2.is_ok(),
+            "both threads failed: r1={r1:?} r2={r2:?}"
+        );
+
+        // Final state is consistent: sentinel + payload present, no
+        // stray partial dirs.
+        assert!(is_cache_complete(), "sentinel missing after both threads finished");
+        let marker = cache_dir().unwrap().join("data/meta/marker");
+        assert!(marker.exists(), "payload missing after concurrent install");
+        assert_eq!(fs::read(&marker).unwrap(), b"test-marker");
+        assert_eq!(count_partial_dirs(), 0, "stray partial dirs left behind");
+    }
+
+    /// #123 — recovery half of the doc-comment claim. Simulate a
+    /// SIGKILL between partial-dir build and atomic-rename via the
+    /// test-only `FailOnce` hook. The first invocation must error and
+    /// leave the cache visibly incomplete; the next invocation must
+    /// observe `is_cache_complete() == false`, sweep the orphan
+    /// partial, and finish cleanly.
+    #[test]
+    fn interrupted_merge_recovers_on_next_invocation() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("test.tar.zst");
+        make_test_tarball(&archive);
+
+        // Arm the seam, run the interrupted install. We expect Err.
+        test_hooks::arm_pre_promote(test_hooks::PrePromoteAction::FailOnce);
+        let interrupted = install_from_tarball(&archive);
+        assert!(interrupted.is_err(), "armed hook did not fire");
+        // Hook is single-shot but clear defensively in case of test
+        // re-entry.
+        test_hooks::clear_pre_promote();
+
+        // After the interrupted install: cache must be incomplete and
+        // an orphan partial-{pid} should be visible to the sweep.
+        assert!(!is_cache_complete(), "sentinel written despite interruption");
+        assert!(
+            count_partial_dirs() >= 1,
+            "expected an orphan partial dir from the interrupted install"
+        );
+
+        // Second invocation: clean run. The orphan partial must be
+        // swept, the cache promoted, and the sentinel re-asserted.
+        install_from_tarball(&archive).expect("clean re-run failed");
+        assert!(is_cache_complete(), "sentinel not written on retry");
+        let marker = cache_dir().unwrap().join("data/meta/marker");
+        assert!(marker.exists(), "payload missing after recovery");
+        assert_eq!(count_partial_dirs(), 0, "orphan partial was not swept");
+    }
+
+    /// #123 — N-thread lock contention on `ensure_meta_stopping`. With
+    /// the network fetch redirected to a local file via the test seam,
+    /// N=4 threads racing against an empty cache must end in exactly
+    /// ONE fetch (the rest see the sentinel after the lock-holder
+    /// finishes and short-circuit). All threads must succeed.
+    #[test]
+    fn ensure_meta_stopping_serialises_and_dedupes_fetches() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("test.tar.zst");
+        make_test_tarball(&archive);
+
+        test_hooks::arm_fetch_source(archive.clone());
+        // Defensive cleanup if a previous test scribbled state.
+        let starting_count = test_hooks::fetch_count();
+        assert_eq!(starting_count, 0, "fetch counter should reset on arm");
+
+        const N: usize = 4;
+        let results = std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(N);
+            for _ in 0..N {
+                handles.push(s.spawn(|| ensure_meta_stopping()));
+            }
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("worker panicked"))
+                .collect::<Vec<_>>()
+        });
+
+        // Every thread succeeded — the lock made them serial, not
+        // failed.
+        for (i, r) in results.iter().enumerate() {
+            assert!(r.is_ok(), "thread {i} failed: {r:?}");
+        }
+        // Exactly one thread actually performed the fetch; the rest
+        // observed the sentinel after acquiring the lock and bailed.
+        assert_eq!(
+            test_hooks::fetch_count(),
+            1,
+            "expected exactly one fetch under contention"
+        );
+        assert!(is_cache_complete());
+        let marker = cache_dir().unwrap().join("data/meta/marker");
+        assert!(marker.exists(), "meta/marker missing after ensure_meta_stopping race");
+        assert_eq!(count_partial_dirs(), 0);
+
+        test_hooks::clear_fetch_source();
     }
 }

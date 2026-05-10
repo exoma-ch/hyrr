@@ -9,6 +9,7 @@
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
   import { aggregateByIsotopeName } from "../plotting/aggregate-isotopes";
+  import { getThresholds } from "../stores/display-thresholds.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -34,9 +35,11 @@
   // When true, fall back to one trace per (layer, isotope) pair. (#54)
   let expandPerLayer = $state<boolean>(false);
 
-  // Populated by render() — captured for CSV/Parquet export. Never read
-  // inside $derived to avoid reactivity loops; only read by save handlers.
-  let lastExport: { traces: CsvTrace[]; xLabel: string; yLabel: string } | null = null;
+  // Populated by render() — captured for CSV/Parquet export. Wrapped in
+  // $state so the SaveMenu's xLabel/yLabel bindings invalidate when the
+  // user toggles RNP / EOB / time-unit; previously a plain `let` left the
+  // export header stale on subsequent saves.
+  let lastExport = $state<{ traces: CsvTrace[]; xLabel: string; yLabel: string } | null>(null);
 
   function toggleRnpIso(name: string) {
     const next = new Set(rnpIsotopes);
@@ -323,6 +326,17 @@
         title: `Activity (${actLabel})`,
         gridcolor: tc.border,
         type: logY ? "log" : "linear",
+        // On log scale, clamp the lower bound to the activity threshold
+        // (in plot units) so a single 1e-15 Bq straggler doesn't dominate
+        // the y-range. See #130 P1. Display-only; trace data is unmodified.
+        ...(logY
+          ? {
+              range: [
+                Math.log10(Math.max(getThresholds().activity / actDiv, 1e-30)),
+                Math.log10(Math.max(globalMax / actDiv, getThresholds().activity / actDiv * 10)),
+              ],
+            }
+          : {}),
       },
       shapes,
       annotations,
@@ -819,29 +833,6 @@
   }
 
   .rnp-clear:hover { color: var(--c-red); border-color: var(--c-red); }
-
-  .layer-chips {
-    display: flex;
-    gap: 0.3rem;
-    padding: 0.15rem 0.5rem;
-    overflow-x: auto;
-  }
-
-  .chip {
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 12px;
-    color: var(--c-text-muted);
-    padding: 0.15rem 0.5rem;
-    font-size: 0.65rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .chip.active {
-    border-color: var(--c-accent);
-    color: var(--c-text);
-  }
 
   .plot {
     width: 100%;

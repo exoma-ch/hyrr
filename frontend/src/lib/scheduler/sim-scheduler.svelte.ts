@@ -12,11 +12,13 @@ import {
   setResult,
   setLoading,
   setRunning,
-  setError,
   setIdle,
+  setComputeError,
   clearResult,
+  setResultErrored,
   type SimStatus,
 } from "../stores/results.svelte";
+import { parseComputeError } from "../compute/parse-error";
 import { configHash } from "./config-hash";
 import { DataStore } from "@hyrr/compute";
 import type { SimulationConfig, SimulationResult } from "@hyrr/compute";
@@ -150,8 +152,13 @@ async function runSimulation(hash: string): Promise<void> {
   } catch (e: unknown) {
     if (cancelled) return;
     state = "error";
-    const msg = e instanceof Error ? e.message : "Simulation failed";
-    setError(msg);
+    const parsed = parseComputeError(e);
+    // #143 clears the stale result + captures the raw error for the
+    // bug-report fallback; #142 layers the typed error for the recovery
+    // card on top. Both fields are read by different consumers, so set
+    // both atomically.
+    setResultErrored(e);
+    setComputeError(parsed);
   }
 }
 
