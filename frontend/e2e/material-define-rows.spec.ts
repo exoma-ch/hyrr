@@ -25,32 +25,34 @@ test.describe("DefineForm — rows-based UI (Phase 3 of #64)", () => {
 
     // First "+ element" → PT modal.
     await page.getByRole("button", { name: "+ element" }).click();
-    await expect(page.getByRole("dialog", { name: "Pick an element" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Compose mixture" })).toBeVisible();
 
-    // Click Fe (Z=26).
+    // Click Fe (Z=26). Picker is stays-open (#92) — close it via Done.
     await page.locator('[data-z="26"]').click();
-    await expect(page.getByRole("dialog", { name: "Pick an element" })).toBeHidden();
+    await page.getByRole("button", { name: /^Done$/ }).click();
+    await expect(page.getByRole("dialog", { name: "Compose mixture" })).toBeHidden();
 
-    // §3.4 contract: focus lands on the new row's value input.
+    // Fill 50 in the Fe row's value input.
     const feValueInput = page
       .locator('[role="row"][data-row-id]')
       .filter({ hasText: "Fe" })
       .locator(".value-input");
-    await expect(feValueInput).toBeFocused();
-    await page.keyboard.type("50");
+    await feValueInput.fill("50");
 
-    // Second "+ element" → PT modal → pick Cu (Z=29).
+    // Second "+ element" → PT modal → pick Cu (Z=29) → Done.
     await page.getByRole("button", { name: "+ element" }).click();
     await page.locator('[data-z="29"]').click();
-    await expect(page.getByRole("dialog", { name: "Pick an element" })).toBeHidden();
+    await page.getByRole("button", { name: /^Done$/ }).click();
+    await expect(page.getByRole("dialog", { name: "Compose mixture" })).toBeHidden();
 
-    // Mark the Cu row as balance.
+    // Mark the Cu row as balance (checkbox per #92 redesign).
     const cuRow = page.locator('[role="row"][data-row-id]').filter({ hasText: "Cu" });
-    await cuRow.getByRole("radio").check();
+    await cuRow.getByRole("checkbox").check();
 
-    // Density auto-fills from the mass-ratio computation; just verify the
-    // Save button is enabled and click it.
-    const saveBtn = page.getByRole("button", { name: /Save & Use/ });
+    // Density renders as a suggestion (#92) — accept it via "Use n.nn".
+    const saveBtn = page.getByRole("button", { name: /^Save & Use$/ });
+    await expect(saveBtn).toBeDisabled();
+    await page.getByRole("button", { name: /Use \d/ }).click();
     await expect(saveBtn).toBeEnabled();
     await saveBtn.click();
 
@@ -64,14 +66,14 @@ test.describe("DefineForm — rows-based UI (Phase 3 of #64)", () => {
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
     await page.getByRole("button", { name: /Define.*save material/ }).click();
 
-    const paste = page.getByPlaceholder(/Al2O3.*Al 80/);
+    const paste = page.getByPlaceholder(/Al2O3/);
     await paste.fill("Al 80%, Cu 5%, Zn %");
     await paste.blur();
 
     // Expect three rows.
     await expect(page.locator('[role="row"][data-row-id]')).toHaveCount(3);
-    // Zn row should be marked as balance (radio checked).
+    // Zn row should be marked as balance (checkbox checked per #92 redesign).
     const znRow = page.locator('[role="row"][data-row-id]').filter({ hasText: "Zn" });
-    await expect(znRow.getByRole("radio")).toBeChecked();
+    await expect(znRow.getByRole("checkbox")).toBeChecked();
   });
 });

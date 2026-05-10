@@ -38,7 +38,7 @@ test.describe("Soda-lime mass mixture walkthrough (#97)", () => {
     await paste.blur();
 
     // Mode chip flips amber with the mol% nudge.
-    await expect(page.getByRole("button", { name: /Mass mixture\?/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^wt %\?/ })).toBeVisible();
     await expect(page.getByText(/mol%/i)).toBeVisible();
 
     // Three rows materialize.
