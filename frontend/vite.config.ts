@@ -1,9 +1,16 @@
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { svelteTesting } from "@testing-library/svelte/vite";
 import pkg from "./package.json" with { type: "json" };
 
 export default defineConfig({
-  plugins: [svelte()],
+  // `svelteTesting()` is a no-op outside `VITEST` — it flips the
+  // `resolve.conditions` order (browser ahead of node) so svelte's
+  // browser entry is loaded under jsdom and adds an auto-cleanup
+  // afterEach hook. Without it, `render()` blows up with
+  // `mount(...) is not available on the server` because Vite would
+  // serve svelte's SSR build to tests.
+  plugins: [svelte(), svelteTesting()],
   base: process.env.TAURI_ENV_PLATFORM ? "./" : "/hyrr/",
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
