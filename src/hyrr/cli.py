@@ -517,6 +517,103 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+_STAGE_LABELS = {
+    "connecting": "Connecting",
+    "downloading": "Downloading",
+    "extracting": "Extracting",
+    "verifying": "Verifying",
+}
+
+
+def _make_progress_callback():
+    """Build a `(callback, finalize)` pair for `py_fetch_data(progress=...)`.
+
+    Uses tqdm (already a hard runtime dep) so we don't add a new package
+    just for the CLI bar. Falls back to a stage-transition logger when
+    stdout isn't a TTY *or* tqdm isn't importable — both yield one line
+    per stage so non-interactive consumers (CI, pipes) get a stable
+    machine-greppable trace instead of escape-code spam.
+
+    The callback signature matches what the PyO3 binding emits:
+    `{"stage": str, "bytes_done": int, "bytes_total": Optional[int]}`.
+    Throttling is enforced on the Rust side (≤1 emit per 100 ms /
+    256 KiB byte-step) so we don't have to worry about render budget
+    here.
+    """
+    use_tqdm = sys.stderr.isatty()
+    if use_tqdm:
+        try:
+            from tqdm import tqdm
+        except ImportError:
+            use_tqdm = False
+
+    if not use_tqdm:
+        # Non-TTY / no-tqdm path: emit one line per stage transition on
+        # stderr. Keeps `hyrr fetch-data | tee` and CI logs sane, and
+        # the test suite asserts exactly this surface.
+        seen_stages: set[str] = set()
+
+        def on_progress(event):
+            stage = event.get("stage", "")
+            if stage in seen_stages:
+                return
+            seen_stages.add(stage)
+            label = _STAGE_LABELS.get(stage, stage)
+            print(f"[{label}]", file=sys.stderr, flush=True)
+
+        def finalize():
+            pass
+
+        return on_progress, finalize
+
+    # TTY + tqdm path: single bar that re-keys per stage. Downloading
+    # is the only stage with reliable byte totals; the others tick at
+    # the throttle interval, so we leave them indeterminate.
+    from tqdm import tqdm
+
+    state = {"bar": None, "stage": None}
+
+    def on_progress(event):
+        stage = event.get("stage", "")
+        bytes_done = int(event.get("bytes_done", 0) or 0)
+        bytes_total = event.get("bytes_total")
+        bytes_total = int(bytes_total) if bytes_total is not None else None
+        label = _STAGE_LABELS.get(stage, stage)
+
+        if state["stage"] != stage:
+            if state["bar"] is not None:
+                state["bar"].close()
+            state["bar"] = tqdm(
+                total=bytes_total,
+                desc=label,
+                unit="B" if stage == "downloading" else "it",
+                unit_scale=True,
+                dynamic_ncols=True,
+                leave=False,
+                file=sys.stderr,
+            )
+            state["stage"] = stage
+
+        bar = state["bar"]
+        if bar is None:
+            return
+        if bytes_total is not None and bar.total != bytes_total:
+            bar.total = bytes_total
+            bar.refresh()
+        # tqdm's `update()` is incremental; we have absolute bytes_done,
+        # so update by the delta.
+        delta = bytes_done - bar.n
+        if delta > 0:
+            bar.update(delta)
+
+    def finalize():
+        if state["bar"] is not None:
+            state["bar"].close()
+            state["bar"] = None
+
+    return on_progress, finalize
+
+
 def _cmd_fetch_data(args: argparse.Namespace) -> int:
     """Fetch nuclear data into the managed cache (#52).
 
@@ -524,6 +621,9 @@ def _cmd_fetch_data(args: argparse.Namespace) -> int:
     `data_fetch` module. The cache lives at `~/.hyrr/nucl-parquet/v{V}/`
     with a `.complete` sentinel and atomic install semantics — partial
     downloads can't masquerade as a usable cache.
+
+    Progress events from the PyO3 binding drive a tqdm bar on TTY stderr
+    or a one-line-per-stage logger otherwise (#172).
     """
     try:
         from hyrr import _native
@@ -536,8 +636,11 @@ def _cmd_fetch_data(args: argparse.Namespace) -> int:
         )
         return 1
 
+    on_progress, finalize = _make_progress_callback()
+
     try:
         if getattr(args, "gc", False):
+            # GC is a directory-prune — no fetch, no progress UI.
             keep = max(0, int(getattr(args, "keep", 2)))
             removed = _native.py_prune_old_versions(keep)
             print(
@@ -548,11 +651,14 @@ def _cmd_fetch_data(args: argparse.Namespace) -> int:
 
         if args.from_tarball is not None:
             print(f"Installing from {args.from_tarball} ...")
-            _native.py_fetch_data(from_tarball=str(args.from_tarball))
+            _native.py_fetch_data(
+                from_tarball=str(args.from_tarball), progress=on_progress
+            )
             print(f"Installed to ~/.hyrr/nucl-parquet/v{_native.py_data_version()}/")
             return 0
 
         if args.offline_bundle is not None:
+            # No progress wiring upstream — pure filesystem walk.
             if not _native.py_cache_is_complete():
                 print(
                     "Cache is not complete; run `hyrr fetch-data --all` (or "
@@ -570,21 +676,23 @@ def _cmd_fetch_data(args: argparse.Namespace) -> int:
                 f"Fetching all nucl-parquet libraries (v{_native.py_data_version()}, "
                 "~400 MB) ..."
             )
-            _native.py_fetch_data(all_libs=True)
+            _native.py_fetch_data(all_libs=True, progress=on_progress)
         elif args.library:
             print(
                 f"Fetching library `{args.library}` (v{_native.py_data_version()}) ..."
             )
-            _native.py_fetch_data(library=args.library)
+            _native.py_fetch_data(library=args.library, progress=on_progress)
         else:
             print(f"Fetching meta + stopping (v{_native.py_data_version()}) ...")
-            _native.py_fetch_data()
+            _native.py_fetch_data(progress=on_progress)
 
         print(f"Cached at: {_native.py_cache_data_dir()}\n(set HYRR_DATA to override)")
         return 0
     except Exception as e:
         print(f"fetch-data failed: {e}", file=sys.stderr)
         return 1
+    finally:
+        finalize()
 
 
 def _cmd_download_data(args: argparse.Namespace) -> int:
