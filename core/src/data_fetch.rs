@@ -1967,4 +1967,77 @@ mod tests {
             "unexpected rewrite of non-home path: {got:?}"
         );
     }
+
+    /// #173 regression guard: the structured `cache_dir` / `entry_path`
+    /// fields of the JSON wire-form MUST NOT contain the user's `$HOME`
+    /// literal. This pins the redaction at the IPC boundary so a future
+    /// refactor that re-routes a path through `.display()` without
+    /// `redact_home` gets caught at CI time rather than in a bug-report
+    /// comment thread.
+    ///
+    /// Scope note (#173 issue body, "Out of scope" bullet): the
+    /// per-variant `message` string is built from
+    /// `FetchError::to_string()`, which today re-emits absolute paths
+    /// via the thiserror `Display` impl (e.g.
+    /// `unsafe tarball entry Symlink at /Users/alice/...`). Redacting
+    /// those error strings is tracked under the broader #159 privacy
+    /// contract, so this regression test deliberately asserts only on
+    /// the structured fields — not on the full payload body.
+    #[test]
+    fn fetch_error_payload_json_redacts_home() {
+        let _g = SERIAL.lock().unwrap();
+        // Use a marker `$HOME` that's trivially identifiable in the
+        // output so the assert is unambiguous.
+        let td = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", td.path());
+        let home_str = td.path().display().to_string();
+
+        // Variant 1: Io carries cache_dir, which is built from
+        // cache_dir() → $HOME/.hyrr/nucl-parquet/v{V}.
+        let err = FetchError::Io(io::Error::other("disk full"));
+        let payload = FetchErrorPayload::from(&err);
+        let s = payload.to_json_string();
+        let v: serde_json::Value = serde_json::from_str(&s).expect("valid JSON");
+        let cache_dir = v["cache_dir"].as_str().expect("cache_dir is a string");
+        assert!(
+            !cache_dir.contains(&home_str),
+            "cache_dir leaked $HOME ({home_str:?}): {cache_dir}"
+        );
+        assert!(
+            cache_dir.starts_with("~/.hyrr/nucl-parquet"),
+            "cache_dir should be redacted to ~/.hyrr/..., got {cache_dir}"
+        );
+        // Also assert no platform-shaped username prefix snuck in via
+        // some other transform.
+        for needle in &["/Users/", "/home/", "C:\\Users\\"] {
+            assert!(
+                !cache_dir.contains(needle),
+                "cache_dir contained suspicious path prefix {needle:?}: {cache_dir}"
+            );
+        }
+
+        // Variant 2: UnsafeTarballEntry with an absolute path that
+        // happens to live under $HOME. Today this can't arise through
+        // production code (tarball paths are relative), but we exercise
+        // the defensive routing the issue body calls out.
+        let evil = td.path().join("evil");
+        let err2 = FetchError::UnsafeTarballEntry {
+            kind: "Symlink".to_string(),
+            path: evil,
+        };
+        let payload2 = FetchErrorPayload::from(&err2);
+        let s2 = payload2.to_json_string();
+        let v2: serde_json::Value = serde_json::from_str(&s2).expect("valid JSON");
+        let entry_path = v2["entry_path"].as_str().expect("entry_path is a string");
+        let cache_dir2 = v2["cache_dir"].as_str().expect("cache_dir is a string");
+        assert!(
+            !entry_path.contains(&home_str),
+            "entry_path leaked $HOME ({home_str:?}): {entry_path}"
+        );
+        assert_eq!(entry_path, "~/evil", "entry_path should redact to ~/evil");
+        assert!(
+            !cache_dir2.contains(&home_str),
+            "cache_dir leaked $HOME in UnsafeTarballEntry variant ({home_str:?}): {cache_dir2}"
+        );
+    }
 }
