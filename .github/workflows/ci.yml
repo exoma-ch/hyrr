@@ -70,6 +70,26 @@ jobs:
           HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
         run: cargo test --test projectile_matrix -- --include-ignored
 
+  hyrr-py-check:
+    # Catches PyO3 binding type drift against hyrr-core (Refs: #181).
+    # The py/ crate is excluded from the default workspace because the
+    # pyo3 extension-module feature gate breaks linking under `cargo test`,
+    # so signature changes in core (e.g. #150's Result-returning stopping
+    # functions) can break the wheel silently. `cargo check` doesn't link
+    # libpython, so it's safe to run here.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: py
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: cargo check py/ (PyO3 bindings)
+        run: cargo check --manifest-path py/Cargo.toml
+
   data-fetch-ssot:
     runs-on: ubuntu-latest
     steps:
