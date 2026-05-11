@@ -138,7 +138,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-${{ matrix.os }}
           path: frontend/playwright-report
@@ -146,7 +146,7 @@ jobs:
 
       - name: Upload Playwright traces & screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-results-${{ matrix.os }}
           path: frontend/e2e/results
@@ -284,7 +284,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-linux-${{ matrix.distro }}
           path: frontend/playwright-report
@@ -292,7 +292,7 @@ jobs:
 
       - name: Upload Playwright traces & screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-results-linux-${{ matrix.distro }}
           path: frontend/e2e/results
@@ -423,7 +423,7 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-static-host
           path: frontend/playwright-report
@@ -431,7 +431,7 @@ jobs:
 
       - name: Upload Playwright traces & screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-results-static-host
           path: frontend/e2e/results
