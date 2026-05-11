@@ -40,7 +40,7 @@ jobs:
           - { name: macos-arm64,   runner: macos-14,       rust-target: aarch64-apple-darwin,        maturin-target: aarch64, manylinux: "" }
           - { name: windows-x86_64, runner: windows-latest, rust-target: x86_64-pc-windows-msvc,     maturin-target: x64,     manylinux: "" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
         with:
@@ -87,7 +87,7 @@ jobs:
     name: sdist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -117,7 +117,7 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: false
       - name: Init nucl-parquet submodule (sparse)
