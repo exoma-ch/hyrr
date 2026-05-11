@@ -38,7 +38,7 @@ jobs:
         shell: bash
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -216,7 +216,7 @@ jobs:
       - name: Install distro packages
         run: ${{ matrix.setup }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -310,7 +310,7 @@ jobs:
         shell: bash
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: false
 
