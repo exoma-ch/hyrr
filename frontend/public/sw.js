@@ -11,7 +11,18 @@
  */
 
 const APP_VERSION = new URL(self.location).searchParams.get("v") || "0";
-const CACHE_NAME = `hyrr-${APP_VERSION}`;
+
+// Cache Storage is partitioned by origin, not by SW scope — so prod
+// (`/hyrr/`) and staging (`/hyrr/tst/`) share the same cache namespace
+// even though their SW registrations are scoped separately. Mix the
+// scope into the cache prefix so the activation-time prune (below)
+// can't nuke the other slot's caches.
+const SCOPE_SLUG = new URL(self.registration.scope).pathname
+  .replace(/^\/hyrr\//, "")
+  .replace(/\/$/, "")
+  .replace(/\//g, "-");
+const CACHE_PREFIX = SCOPE_SLUG ? `hyrr-${SCOPE_SLUG}` : "hyrr";
+const CACHE_NAME = `${CACHE_PREFIX}-${APP_VERSION}`;
 
 /** Patterns for assets that should be cached aggressively (immutable content). */
 const IMMUTABLE_PATTERNS = [
@@ -37,7 +48,7 @@ self.addEventListener("activate", (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((key) => key.startsWith("hyrr-") && key !== CACHE_NAME)
+          .filter((key) => key.startsWith(`${CACHE_PREFIX}-`) && key !== CACHE_NAME)
           .map((key) => caches.delete(key)),
       ),
     ).then(() => self.clients.claim()),

@@ -1,38 +1,54 @@
-name: Deploy frontend (staging slot)
+name: Promote to prod
 
-# Every push to main lands in /hyrr/tst/ — never directly to /hyrr/.
-# Promotion to prod is gated behind the staging smoke (deploy-staging-smoke.yml)
-# and explicit dispatch of promote-to-prod.yml. This means broken main pushes
-# can't land on the user-facing URL anymore — they fail the smoke and the
-# previous prod stays live.
+# Manually-triggered promotion: rebuilds the given SHA with VITE_BASE_PATH=/hyrr/
+# and deploys to the root of gh-pages. This is *not* a folder rename — the
+# SW scope, manifest scope, and Vite-baked absolute paths all need to be the
+# prod path, which only happens at build time. Rebuild is ~3 minutes and gives
+# a clear audit trail (one commit per promotion).
+#
+# Default input is `main` HEAD; supply an explicit SHA to promote anything
+# from history (e.g., to roll back after a bad promotion).
 on:
-  push:
-    branches: [main]
-    paths:
-      - "frontend/**"
-      - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA to promote (default: latest main)"
+        required: false
+        default: ""
 
 permissions:
-  contents: write # needed to push to gh-pages branch
+  contents: write
   pages: read
 
-# Serialize against the prod promotion workflow — they both write the same branch.
 concurrency:
   group: gh-pages-branch
   cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
+  promote:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve target SHA
+        id: target
+        run: |
+          if [ -n "${{ inputs.sha }}" ]; then
+            echo "sha=${{ inputs.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
         with:
+          ref: ${{ steps.target.outputs.sha }}
           submodules: false
 
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Init nucl-parquet submodule (sparse)
         run: |
@@ -72,20 +88,29 @@ jobs:
         working-directory: frontend
         run: npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
 
-      - name: Build frontend (base=/hyrr/tst/)
+      - name: Build frontend (base=/hyrr/)
         working-directory: frontend
         env:
-          VITE_BASE_PATH: /hyrr/tst/
+          VITE_BASE_PATH: /hyrr/
         run: npm run build
 
-      - name: Deploy to gh-pages /tst/
+      - name: Build docs into frontend/dist/docs/
+        run: |
+          pip install -e ".[docs]"
+          mkdocs build -d frontend/dist/docs
+
+      - name: Deploy to gh-pages root
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           branch: gh-pages
           folder: frontend/dist
-          target-folder: tst
-          # `clean` removes files inside `tst/` that aren't in `frontend/dist`.
-          # It doesn't touch sibling folders like `/` (prod) or `/preview/*/`.
+          target-folder: .
           clean: true
-          # Record the source SHA so promote-to-prod can reproduce this build.
-          commit-message: "deploy(staging): tst/ from ${{ github.sha }}"
+          # Without this, deploying to root would nuke the /tst/ slot and any
+          # /preview/* slots. The action's globs are evaluated *inside* the
+          # target folder, so these patterns refer to top-level subdirs in
+          # gh-pages, which is exactly what we want to preserve.
+          clean-exclude: |
+            tst/**
+            preview/**
+          commit-message: "deploy(prod): / from ${{ steps.target.outputs.sha }}"

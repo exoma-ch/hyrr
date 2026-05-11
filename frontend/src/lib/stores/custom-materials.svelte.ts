@@ -6,6 +6,7 @@
  */
 
 import { parseFormula, SYMBOL_TO_Z } from "@hyrr/compute";
+import { nsDbName } from "../base-path";
 
 export interface CustomMaterial {
   id: string;
@@ -21,7 +22,7 @@ export interface CustomMaterial {
   enrichment?: Record<string, Record<number, number>>;
 }
 
-const DB_NAME = "hyrr-custom-materials";
+const DB_NAME = nsDbName("hyrr-custom-materials");
 const DB_VERSION = 1;
 const STORE_NAME = "materials";
 

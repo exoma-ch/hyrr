@@ -6,6 +6,7 @@ declare module "*.svg?url" {
 }
 
 interface ImportMetaEnv {
+  readonly BASE_URL: string;
   readonly VITE_ISSUE_WORKER_URL?: string;
   readonly VITE_TURNSTILE_SITE_KEY?: string;
 }
