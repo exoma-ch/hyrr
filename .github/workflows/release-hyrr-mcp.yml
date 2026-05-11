@@ -77,7 +77,7 @@ jobs:
             python -m zipfile -l "$w" | head -25
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.target.name }}
           path: py-mcp/dist/*.whl
@@ -106,7 +106,7 @@ jobs:
               exit 1
             fi
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: py-mcp/dist/*.tar.gz
