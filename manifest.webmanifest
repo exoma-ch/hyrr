@@ -1,0 +1,30 @@
+{
+  "name": "HYRR — Radioisotope Production Calculator",
+  "short_name": "HYRR",
+  "description": "Browser-based calculator for radioisotope production yields in stacked target assemblies. Cross-sections from TENDL, stopping powers from PSTAR/ASTAR, Bateman decay chains. Runs entirely in your browser — no server, no data upload.",
+  "start_url": "/hyrr/",
+  "scope": "/hyrr/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0f1117",
+  "background_color": "#0f1117",
+  "categories": [
+    "education",
+    "science",
+    "utilities"
+  ],
+  "icons": [
+    {
+      "src": "/hyrr/hyrr-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/hyrr/hyrr-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
