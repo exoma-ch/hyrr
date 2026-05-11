@@ -9,6 +9,7 @@
     removeGroup,
     updateGroup,
     moveGroup,
+    clearLayers,
     type InternalGroup,
   } from "../stores/config.svelte";
   import type { LayerConfig } from "../types";
@@ -192,6 +193,14 @@
   <div class="add-buttons">
     <button class="add-btn" onclick={handleAddLayer} title="Add layer">+</button>
     <button class="add-btn add-group" onclick={handleAddGroup} title="Add repeat group">⟳</button>
+    {#if items.length > 0}
+      <button
+        class="add-btn clear-btn"
+        onclick={clearLayers}
+        title="Clear all layers"
+        aria-label="Clear all layers"
+      >×</button>
+    {/if}
   </div>
 </div>
 
@@ -373,6 +382,11 @@
   .add-group:hover {
     border-color: var(--c-accent);
     color: var(--c-accent);
+  }
+
+  .clear-btn:hover {
+    border-color: var(--c-red);
+    color: var(--c-red);
   }
 
   .element-badges {
