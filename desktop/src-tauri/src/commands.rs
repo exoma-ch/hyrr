@@ -13,7 +13,7 @@ use hyrr_core::stopping::{
 use hyrr_core::types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
@@ -199,8 +199,14 @@ pub fn init_data_store(
     } else {
         data_dir
     };
+    // Redact `$HOME` before letting `resolved` reach the IPC error string —
+    // on the empty-`data_dir` branch this comes from `data_dir::resolve()`
+    // which returns paths under `~/.hyrr/...` (sibling leak to #173, see
+    // #176). The frontend-supplied branch also gets redacted defensively
+    // in case a future caller routes a literal home path through here.
+    let resolved_display = hyrr_core::data_fetch::redact_home(Path::new(&resolved));
     let store = ParquetDataStore::new(&resolved, &library)
-        .map_err(|e| format!("Failed to init DB at {resolved}: {e}"))?;
+        .map_err(|e| format!("Failed to init DB at {resolved_display}: {e}"))?;
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
     *guard = Some(store);
     Ok(())

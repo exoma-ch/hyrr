@@ -231,7 +231,7 @@ impl FetchErrorPayload {
 /// `/` case still strips a single byte and yields `~/etc/passwd` for
 /// `/etc/passwd`, which is harmless — no user info is leaked, just an
 /// unusual rendering.
-fn redact_home(p: &Path) -> String {
+pub fn redact_home(p: &Path) -> String {
     let s = p.display().to_string();
     if let Some(home) = home::home_dir() {
         let home_s = home.display().to_string();
@@ -2038,6 +2038,67 @@ mod tests {
         assert!(
             !cache_dir2.contains(&home_str),
             "cache_dir leaked $HOME in UnsafeTarballEntry variant ({home_str:?}): {cache_dir2}"
+        );
+    }
+
+    /// #176 regression guard: the `init_data_store` Tauri command in
+    /// `desktop/src-tauri/src/commands.rs` formats its `resolved` data
+    /// directory into the error string it returns over IPC. When
+    /// `resolved` is produced by `data_dir::resolve()` (the empty-
+    /// `data_dir` branch) the path lives under `~/.hyrr/...` — i.e.
+    /// `/Users/<name>/.hyrr/...` on macOS, leaking the OS username.
+    ///
+    /// The desktop crate has no `[dev-dependencies]` test harness and
+    /// `init_data_store` requires a Tauri runtime to drive end-to-end,
+    /// so we mirror the formatter inline and exercise the same boundary
+    /// the production code uses (`redact_home(Path::new(&resolved))`).
+    /// If a future refactor of `commands.rs` drops the `redact_home`
+    /// call, this test still passes — but the partner assertion that
+    /// `redact_home` _itself_ keeps producing `~/...` for the home-
+    /// prefixed input is what catches the regression class.
+    #[test]
+    fn init_data_store_error_string_redacts_home() {
+        let _g = SERIAL.lock().unwrap();
+        let td = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", td.path());
+        let home_str = td.path().display().to_string();
+
+        // Shape that `data_dir::resolve()` returns when the managed
+        // cache is the resolution winner — i.e. the path the issue
+        // body singles out as the leak source. We don't call
+        // `resolve()` directly because it consults the live cache;
+        // the literal shape is what we're pinning.
+        let resolved = format!("{home_str}/.hyrr/nucl-parquet/v0.10.0/data");
+
+        // Mirror the formatter in `init_data_store` exactly. The fake
+        // inner error stands in for `ParquetDataStore::new`'s Err —
+        // we only care that the path interpolation is redacted, not
+        // the wrapped error's content.
+        let resolved_display = redact_home(Path::new(&resolved));
+        let inner_err = "missing file: meta/abundances.parquet";
+        let err_string = format!("Failed to init DB at {resolved_display}: {inner_err}");
+
+        // Primary assertion: no literal `$HOME` in the error string.
+        assert!(
+            !err_string.contains(&home_str),
+            "init_data_store error leaked $HOME ({home_str:?}): {err_string}"
+        );
+        // The redaction should also avoid platform-shaped username
+        // prefixes (defensive — `home_dir()` could return one of these
+        // under exotic environments).
+        for needle in &["/Users/", "/home/", "C:\\Users\\"] {
+            assert!(
+                !err_string.contains(needle),
+                "init_data_store error contained suspicious path prefix \
+                 {needle:?}: {err_string}"
+            );
+        }
+        // And the positive shape — the redacted form should appear so
+        // we know the helper actually fired (not "passed because the
+        // path was empty").
+        assert!(
+            err_string.contains("~/.hyrr/nucl-parquet"),
+            "expected ~/.hyrr/... shape in error, got: {err_string}"
         );
     }
 }
