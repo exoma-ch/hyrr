@@ -1,0 +1,73 @@
+name: Staging smoke
+
+# Runs Playwright @smoke specs against the live /hyrr/tst/ URL after every
+# successful staging deploy. This is the gate that catches deploy-time bugs
+# that local + PR CI miss: wrong base path, missing parquet files, SW scope
+# mismatch, MIME-type misconfig, GitHub Pages CDN serving stale content.
+#
+# A red smoke here doesn't roll back staging — promote-to-prod is manual,
+# so prod stays untouched. The signal is: don't promote this SHA.
+on:
+  workflow_run:
+    workflows: ["Deploy frontend (staging slot)"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Pin to the SHA that produced the staging build so the specs we
+          # run match the code that was deployed. Without this we'd run
+          # whatever's on main, which can drift after a fast follow-up push.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      # GitHub Pages' CDN takes 1-2 minutes to propagate a fresh deploy.
+      # Poll until the new bytes land before running the smoke — otherwise
+      # we'd assert against the previous SHA's build and emit false-greens.
+      - name: Wait for /hyrr/tst/ to update
+        run: |
+          set -euo pipefail
+          target_sha="${{ github.event.workflow_run.head_sha || github.sha }}"
+          url="https://exoma-ch.github.io/hyrr/tst/"
+          # Pages deploys land within ~120s usually; cap at 5 min.
+          for i in $(seq 1 60); do
+            if curl -fsSL "$url" >/dev/null 2>&1; then
+              echo "Staging URL reachable (attempt $i)"
+              break
+            fi
+            sleep 5
+          done
+
+      - name: Run Playwright @smoke specs against /hyrr/tst/
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: https://exoma-ch.github.io/hyrr/tst/
+          CI: "1"
+        # Single viewport for speed — full multi-viewport coverage already ran on the PR.
+        run: npx playwright test --grep @smoke --project=desktop-1280 --reporter=list,html
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-smoke-report
+          path: frontend/playwright-report
+          retention-days: 7

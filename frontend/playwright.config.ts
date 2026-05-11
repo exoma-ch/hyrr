@@ -6,20 +6,34 @@ const launchOptions: Record<string, unknown> = {};
 if (chromiumExecutable) launchOptions.executablePath = chromiumExecutable;
 if (noSandbox) launchOptions.args = ["--no-sandbox", "--disable-dev-shm-usage"];
 
+// Two modes:
+//   - default: spin up a local preview server and hit `/hyrr/`. Local dev + PR CI.
+//   - PLAYWRIGHT_BASE_URL set: skip the preview server, run against a live
+//     deploy (e.g. `https://exoma-ch.github.io/hyrr/tst/`) for post-deploy
+//     staging smokes. Tests tagged `@smoke` are the canonical subset for this.
+const liveBaseURL = process.env.PLAYWRIGHT_BASE_URL;
+// Trailing slash matters for relative `./` resolution — without it,
+// `new URL("./", "…/hyrr")` collapses to the origin root.
+const baseURL = liveBaseURL ?? "http://localhost:4173/hyrr/";
+
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "./e2e/results",
   use: {
-    baseURL: "http://localhost:4173/hyrr",
+    baseURL,
     browserName: "chromium",
     ...(Object.keys(launchOptions).length ? { launchOptions } : {}),
   },
-  webServer: {
-    command: "npm run build && npm run preview -- --port 4173",
-    port: 4173,
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
+  ...(liveBaseURL
+    ? {}
+    : {
+        webServer: {
+          command: "npm run build && npm run preview -- --port 4173",
+          port: 4173,
+          reuseExistingServer: true,
+          timeout: 120_000,
+        },
+      }),
   projects: [
     {
       name: "desktop-1280",

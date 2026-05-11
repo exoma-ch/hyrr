@@ -5,7 +5,9 @@
  * one object store, no framework dependencies.
  */
 
-const DB_NAME = "hyrr-sessions";
+import { nsDbName } from "./base-path";
+
+const DB_NAME = nsDbName("hyrr-sessions");
 const DB_VERSION = 1;
 const STORE_NAME = "sessions";
 

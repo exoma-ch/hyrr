@@ -6,8 +6,9 @@
  */
 
 import type { HistoryEntry, SimulationConfig, SimulationResult } from "./types";
+import { nsDbName } from "./base-path";
 
-const DB_NAME = "hyrr-history";
+const DB_NAME = nsDbName("hyrr-history");
 const DB_VERSION = 1;
 const STORE_NAME = "runs";
 

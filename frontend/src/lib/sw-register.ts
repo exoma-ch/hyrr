@@ -15,9 +15,13 @@ export async function registerServiceWorker(): Promise<void> {
   }
 
   try {
-    const swUrl = `/hyrr/sw.js?v=${__APP_VERSION__}`;
+    // Use the deploy-time base so staging (`/hyrr/tst/`) registers a SW
+    // scoped to `/hyrr/tst/` and prod (`/hyrr/`) keeps its own. The browser
+    // partitions SW registrations by scope, so the two never collide.
+    const base = import.meta.env.BASE_URL;
+    const swUrl = `${base}sw.js?v=${__APP_VERSION__}`;
     const registration = await navigator.serviceWorker.register(swUrl, {
-      scope: "/hyrr/",
+      scope: base,
     });
 
     // Check for updates on every page load

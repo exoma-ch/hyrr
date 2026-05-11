@@ -1,7 +1,49 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { svelteTesting } from "@testing-library/svelte/vite";
 import pkg from "./package.json" with { type: "json" };
+
+// Web base path resolution:
+//   - Tauri bundle  → "./"               (relative; bundled webview)
+//   - VITE_BASE_PATH→ honored verbatim   (CI uses "/hyrr/tst/" for staging, "/hyrr/" to promote)
+//   - default       → "/hyrr/"           (GitHub Pages prod, also local `npm run preview`)
+const webBase = process.env.VITE_BASE_PATH ?? "/hyrr/";
+const resolvedBase = process.env.TAURI_ENV_PLATFORM ? "./" : webBase;
+
+// Emit manifest.webmanifest at build time with paths baked from `resolvedBase`.
+// Lives here (not `public/`) so staging and prod builds get different bytes —
+// `start_url`, `scope`, and icon paths must match the deploy path or the PWA
+// install prompt fails and iOS standalone mode opens the wrong scope.
+function manifestPlugin(): Plugin {
+  return {
+    name: "hyrr-manifest",
+    generateBundle() {
+      const base = resolvedBase.endsWith("/") ? resolvedBase : `${resolvedBase}/`;
+      const manifest = {
+        name: "HYRR — Radioisotope Production Calculator",
+        short_name: "HYRR",
+        description:
+          "Browser-based calculator for radioisotope production yields in stacked target assemblies. Cross-sections from TENDL, stopping powers from PSTAR/ASTAR, Bateman decay chains. Runs entirely in your browser — no server, no data upload.",
+        start_url: base,
+        scope: base,
+        display: "standalone",
+        orientation: "any",
+        theme_color: "#0f1117",
+        background_color: "#0f1117",
+        categories: ["education", "science", "utilities"],
+        icons: [
+          { src: `${base}hyrr-icon-192.png`, sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: `${base}hyrr-icon-512.png`, sizes: "512x512", type: "image/png", purpose: "any" },
+        ],
+      };
+      this.emitFile({
+        type: "asset",
+        fileName: "manifest.webmanifest",
+        source: JSON.stringify(manifest, null, 2),
+      });
+    },
+  };
+}
 
 export default defineConfig({
   // `svelteTesting()` is a no-op outside `VITEST` — it flips the
@@ -10,8 +52,8 @@ export default defineConfig({
   // afterEach hook. Without it, `render()` blows up with
   // `mount(...) is not available on the server` because Vite would
   // serve svelte's SSR build to tests.
-  plugins: [svelte(), svelteTesting()],
-  base: process.env.TAURI_ENV_PLATFORM ? "./" : "/hyrr/",
+  plugins: [svelte(), svelteTesting(), manifestPlugin()],
+  base: resolvedBase,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
