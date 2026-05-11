@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use hyrr_core::bateman::bateman_activity as rust_bateman;
 use hyrr_core::compute::compute_stack;
@@ -242,67 +241,20 @@ fn stage_str(stage: FetchStage) -> &'static str {
     }
 }
 
-/// Build a closure that throttles `FetchProgress` events and forwards them
-/// to a Python callable. The throttle matches the desktop's
-/// `throttled_emit` (≤1 emit per 100 ms *and* ≥256 KiB byte-step on the
-/// Downloading stage; stage transitions and the final-byte event always
-/// pass through). Without it a 100 MB download crosses the GIL ~thousands
-/// of times during the chunk loop, which destroys both throughput and the
-/// CLI's render budget.
+/// Build a closure that forwards `FetchProgress` events to a Python
+/// callable, throttled by the canonical policy in
+/// [`hyrr_core::data_fetch::throttle`] (≤1 emit per 100 ms + 256 KiB
+/// byte-step on Downloading; stage transitions and final-byte events
+/// bypass the throttle). Without throttling a 100 MB download crosses
+/// the GIL ~thousands of times during the chunk loop, which destroys
+/// both throughput and the CLI's render budget.
 ///
 /// Exception safety: if the Python callable raises, we **swallow** the
 /// exception (logging it via `PyErr::print`) and return — propagating it
 /// would unwind through the Rust fetch state machine and abort the
 /// download. The progress bar is cosmetic; never let it crash the install.
 fn make_py_progress(progress_obj: Py<PyAny>) -> impl FnMut(FetchProgress) {
-    let mut last_emit_at: Option<Instant> = None;
-    let mut last_bytes: u64 = 0;
-    let mut last_stage: Option<FetchStage> = None;
-    let min_interval = Duration::from_millis(100);
-    let min_bytes_step: u64 = 256 * 1024;
-
-    move |p: FetchProgress| {
-        let now = Instant::now();
-
-        let stage_changed = match last_stage {
-            None => true,
-            Some(prev) => !same_stage(prev, p.stage),
-        };
-
-        let final_byte = match p.bytes_total {
-            Some(total) => p.bytes_done >= total && total > 0,
-            None => false,
-        };
-
-        let interval_ok = last_emit_at
-            .map(|t| now.saturating_duration_since(t) >= min_interval)
-            .unwrap_or(true);
-
-        let bytes_step_ok = match (last_stage, p.stage) {
-            (Some(prev), curr) if !same_stage(prev, curr) => true,
-            _ => p
-                .bytes_done
-                .checked_sub(last_bytes)
-                .map(|d| d >= min_bytes_step)
-                .unwrap_or(true),
-        };
-
-        let should_emit = stage_changed
-            || final_byte
-            || match p.stage {
-                FetchStage::Downloading => interval_ok && bytes_step_ok,
-                FetchStage::Connecting
-                | FetchStage::Extracting
-                | FetchStage::Verifying => interval_ok,
-            };
-        if !should_emit {
-            return;
-        }
-
-        last_emit_at = Some(now);
-        last_bytes = p.bytes_done;
-        last_stage = Some(p.stage);
-
+    data_fetch::throttle(move |p: FetchProgress| {
         Python::attach(|py| {
             let dict = PyDict::new(py);
             // Best-effort population — set_item only fails on OOM, which
@@ -316,17 +268,7 @@ fn make_py_progress(progress_obj: Py<PyAny>) -> impl FnMut(FetchProgress) {
                 err.print(py);
             }
         });
-    }
-}
-
-fn same_stage(a: FetchStage, b: FetchStage) -> bool {
-    matches!(
-        (a, b),
-        (FetchStage::Connecting, FetchStage::Connecting)
-            | (FetchStage::Downloading, FetchStage::Downloading)
-            | (FetchStage::Extracting, FetchStage::Extracting)
-            | (FetchStage::Verifying, FetchStage::Verifying)
-    )
+    })
 }
 
 /// Implements `hyrr fetch-data`. Exactly one of the four mutually-exclusive

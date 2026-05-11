@@ -14,7 +14,6 @@ use hyrr_core::types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 // ---------------------------------------------------------------------------
@@ -267,91 +266,21 @@ pub fn install_from_local_tarball(app: AppHandle, path: String) -> Result<String
 }
 
 /// Build a closure that emits each [`FetchProgress`] event onto
-/// `hyrr://data-fetch-progress`, but rate-limits to ≤1 emit per
-/// 100 ms *and* a min-step of 256 KiB on byte-progress events (so a
-/// 64 KiB chunk loop emits roughly every 4th chunk during download).
-/// The download-stage gate is `bytes_step ≥ 256 KiB AND interval ≥
-/// 100 ms` — both must be satisfied to emit. The non-byte stages
-/// (extract entry counts, verifying) drop the bytes gate and use
-/// the 100 ms interval alone, otherwise the UI would freeze on
-/// "Extracting" with no updates between stage transitions. Stage
-/// changes and the final-byte event bypass the throttle so the
-/// progress bar snaps cleanly between phases.
+/// `hyrr://data-fetch-progress`, throttled by the canonical policy in
+/// [`hyrr_core::data_fetch::throttle`] (100 ms interval + 256 KiB
+/// byte-step on Downloading; stage transitions and final-byte events
+/// bypass the throttle). See the throttle's docs for the full gate
+/// matrix — this site is just the IPC sink.
 fn throttled_emit(app: &AppHandle) -> impl FnMut(FetchProgress) + '_ {
-    use hyrr_core::data_fetch::FetchStage;
-
-    let mut last_emit_at: Option<Instant> = None;
-    let mut last_bytes: u64 = 0;
-    let mut last_stage: Option<FetchStage> = None;
-    let min_interval = Duration::from_millis(100);
-    let min_bytes_step: u64 = 256 * 1024;
-
-    move |p: FetchProgress| {
-        let now = Instant::now();
-
-        let stage_changed = match last_stage {
-            None => true,
-            Some(prev) => !same_stage(prev, p.stage),
-        };
-
-        let final_byte = match p.bytes_total {
-            Some(total) => p.bytes_done >= total && total > 0,
-            None => false,
-        };
-
-        let interval_ok = last_emit_at
-            .map(|t| now.saturating_duration_since(t) >= min_interval)
-            .unwrap_or(true);
-
-        // Reset the bytes counter on stage transition — bytes_done
-        // means different things across stages (compressed bytes vs.
-        // entry count) so the carry-over check is meaningless.
-        let bytes_step_ok = match (last_stage, p.stage) {
-            (Some(prev), curr) if !same_stage(prev, curr) => true,
-            _ => p
-                .bytes_done
-                .checked_sub(last_bytes)
-                .map(|d| d >= min_bytes_step)
-                .unwrap_or(true),
-        };
-
-        // Only the Downloading stage carries reliable byte counts in
-        // 256-KiB-meaningful units. Other stages emit on the 100 ms
-        // interval alone — prevents Extracting from going silent
-        // because entry counts never tick by 256 KiB.
-        let should_emit = stage_changed
-            || final_byte
-            || match p.stage {
-                FetchStage::Downloading => interval_ok && bytes_step_ok,
-                FetchStage::Connecting
-                | FetchStage::Extracting
-                | FetchStage::Verifying => interval_ok,
-            };
-        if !should_emit {
-            return;
-        }
-
-        last_emit_at = Some(now);
-        last_bytes = p.bytes_done;
-        last_stage = Some(p.stage);
+    let app = app.clone();
+    hyrr_core::data_fetch::throttle(move |p: FetchProgress| {
         // Failure to emit means the window has closed or no listener
         // is attached — both are recoverable from the user's
         // perspective, so log and proceed.
         if let Err(e) = app.emit("hyrr://data-fetch-progress", &p) {
             eprintln!("emit data-fetch-progress: {e}");
         }
-    }
-}
-
-fn same_stage(a: hyrr_core::data_fetch::FetchStage, b: hyrr_core::data_fetch::FetchStage) -> bool {
-    use hyrr_core::data_fetch::FetchStage::*;
-    matches!(
-        (a, b),
-        (Connecting, Connecting)
-            | (Downloading, Downloading)
-            | (Extracting, Extracting)
-            | (Verifying, Verifying)
-    )
+    })
 }
 
 /// SSoT accessors for the data-fetch path. Each command is a thin

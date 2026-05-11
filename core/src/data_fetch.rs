@@ -28,6 +28,7 @@ use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
 use fs2::FileExt;
 use serde::Serialize;
@@ -132,6 +133,156 @@ pub struct FetchProgress {
 /// using a `last_emit_at` field), and the `'_` lifetime lets the caller
 /// own the closure on the stack.
 pub type ProgressFn<'a> = &'a mut dyn FnMut(FetchProgress);
+
+/// Sink-agnostic rate-limiter for [`FetchProgress`] events.
+///
+/// Both the desktop Tauri command and the PyO3 CLI binding need to
+/// forward progress events to a slow sink (`AppHandle::emit` /
+/// `Python::attach` + GIL acquire). A 100 MB download fires the
+/// per-chunk progress callback ~thousands of times; without throttling
+/// every chunk would cross the IPC/GIL boundary and destroy both
+/// throughput and the UI render budget.
+///
+/// The throttle's policy (see [`FetchProgressThrottle::default_policy`]):
+///
+/// 1. **Stage change** — always emit. Lets the consumer relabel the
+///    progress bar instantly when transitioning Connecting →
+///    Downloading → Extracting → Verifying.
+/// 2. **Final-byte event** — always emit when `bytes_done >= bytes_total`
+///    (and `bytes_total > 0`). Guarantees the bar snaps to 100% before
+///    the stage flips, regardless of the byte-step gate.
+/// 3. **Downloading stage** — emit only if **both** ≥ 100 ms has elapsed
+///    since the last emit *and* ≥ 256 KiB of new bytes have been
+///    reported. Byte counts on this stage are real on-disk bytes and
+///    meaningfully tick by 256 KiB.
+/// 4. **Other stages** (Connecting, Extracting, Verifying) — emit only
+///    on the 100 ms interval. The bytes_done field on these stages is
+///    an entry count or sentinel state; 256-KiB gating would silence
+///    Extracting for the entire stage on small libraries.
+///
+/// The bytes counter resets on stage transitions because `bytes_done`
+/// means different things across stages (compressed bytes vs. entry
+/// count) — carrying the old value into the new stage's byte-step
+/// check would compare apples to oranges.
+///
+/// Construct via [`FetchProgressThrottle::default_policy`] or wrap a
+/// sink closure with [`throttle`] (the higher-order combinator form
+/// used by both the desktop and CLI call sites).
+#[derive(Debug)]
+pub struct FetchProgressThrottle {
+    last_emit_at: Option<Instant>,
+    last_bytes: u64,
+    last_stage: Option<FetchStage>,
+    min_interval: Duration,
+    min_bytes_step: u64,
+}
+
+impl FetchProgressThrottle {
+    /// Construct with the canonical policy: 100 ms minimum interval,
+    /// 256 KiB minimum byte-step (Downloading stage only). Inherited
+    /// verbatim from the original desktop `throttled_emit` (#160) and
+    /// the CLI `make_py_progress` (#179) — both implementations had the
+    /// same constants and gates by construction.
+    pub fn default_policy() -> Self {
+        Self {
+            last_emit_at: None,
+            last_bytes: 0,
+            last_stage: None,
+            min_interval: Duration::from_millis(100),
+            min_bytes_step: 256 * 1024,
+        }
+    }
+
+    /// Decide whether `p` should be forwarded to the sink. Mutates
+    /// internal state (`last_emit_at`, `last_bytes`, `last_stage`)
+    /// only when the answer is `true` — callers that don't pump the
+    /// event do not leak it into the throttle history.
+    pub fn should_emit(&mut self, p: &FetchProgress) -> bool {
+        let now = Instant::now();
+
+        let stage_changed = match self.last_stage {
+            None => true,
+            Some(prev) => !same_stage(prev, p.stage),
+        };
+
+        let final_byte = match p.bytes_total {
+            Some(total) => p.bytes_done >= total && total > 0,
+            None => false,
+        };
+
+        let interval_ok = self
+            .last_emit_at
+            .map(|t| now.saturating_duration_since(t) >= self.min_interval)
+            .unwrap_or(true);
+
+        // Reset the bytes counter on stage transition — bytes_done
+        // means different things across stages (compressed bytes vs.
+        // entry count) so the carry-over check is meaningless.
+        let bytes_step_ok = match (self.last_stage, p.stage) {
+            (Some(prev), curr) if !same_stage(prev, curr) => true,
+            _ => p
+                .bytes_done
+                .checked_sub(self.last_bytes)
+                .map(|d| d >= self.min_bytes_step)
+                .unwrap_or(true),
+        };
+
+        // Only the Downloading stage carries reliable byte counts in
+        // 256-KiB-meaningful units. Other stages emit on the 100 ms
+        // interval alone — prevents Extracting from going silent
+        // because entry counts never tick by 256 KiB.
+        let should_emit = stage_changed
+            || final_byte
+            || match p.stage {
+                FetchStage::Downloading => interval_ok && bytes_step_ok,
+                FetchStage::Connecting
+                | FetchStage::Extracting
+                | FetchStage::Verifying => interval_ok,
+            };
+
+        if !should_emit {
+            return false;
+        }
+
+        self.last_emit_at = Some(now);
+        self.last_bytes = p.bytes_done;
+        self.last_stage = Some(p.stage);
+        true
+    }
+}
+
+/// Wrap a [`FetchProgress`] sink closure with the default throttle
+/// policy. Returns a closure with the same signature that drops events
+/// failing the throttle gate; surviving events flow through to `sink`
+/// unchanged.
+///
+/// Both the desktop emit-to-AppHandle and the CLI emit-to-Python sinks
+/// are slow (cross IPC/GIL boundaries); use this to collapse the
+/// per-chunk progress firehose into a UI-friendly cadence without
+/// duplicating the throttle policy at every call site.
+pub fn throttle(mut sink: impl FnMut(FetchProgress)) -> impl FnMut(FetchProgress) {
+    let mut t = FetchProgressThrottle::default_policy();
+    move |p: FetchProgress| {
+        if t.should_emit(&p) {
+            sink(p);
+        }
+    }
+}
+
+/// Pattern-match helper: `true` iff `a` and `b` are the same
+/// [`FetchStage`] variant. Could be replaced by deriving
+/// `PartialEq`, but the explicit `matches!` keeps the discriminator
+/// surface obvious (every stage transition pair is named) and avoids
+/// committing to a derived trait on a wire type.
+fn same_stage(a: FetchStage, b: FetchStage) -> bool {
+    matches!(
+        (a, b),
+        (FetchStage::Connecting, FetchStage::Connecting)
+            | (FetchStage::Downloading, FetchStage::Downloading)
+            | (FetchStage::Extracting, FetchStage::Extracting)
+            | (FetchStage::Verifying, FetchStage::Verifying)
+    )
+}
 
 /// Convenience: a no-op progress callback for callers that don't need
 /// progress (CLI, MCP, tests). Spelled as a fresh closure rather than a
@@ -2100,5 +2251,133 @@ mod tests {
             err_string.contains("~/.hyrr/nucl-parquet"),
             "expected ~/.hyrr/... shape in error, got: {err_string}"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // FetchProgressThrottle — sink-agnostic rate-limiter (issue #180)
+    // -----------------------------------------------------------------
+
+    fn dl(bytes_done: u64, bytes_total: Option<u64>) -> FetchProgress {
+        FetchProgress { stage: FetchStage::Downloading, bytes_done, bytes_total }
+    }
+
+    fn ev(stage: FetchStage, bytes_done: u64, bytes_total: Option<u64>) -> FetchProgress {
+        FetchProgress { stage, bytes_done, bytes_total }
+    }
+
+    /// First-ever event always emits (stage-changed bypass: last_stage
+    /// is `None`). Then a Downloading→Extracting transition immediately
+    /// emits, even though only nanoseconds have passed — the stage
+    /// change bypasses both the 100 ms interval and the 256 KiB
+    /// byte-step gate.
+    #[test]
+    fn throttle_emits_on_stage_change() {
+        let mut t = FetchProgressThrottle::default_policy();
+
+        // First event ever — stage_changed=true (None → Some).
+        assert!(t.should_emit(&dl(0, Some(1_000_000))));
+
+        // Second Downloading event arrives immediately and < 256 KiB
+        // later — should be dropped on the byte gate.
+        assert!(!t.should_emit(&dl(1_024, Some(1_000_000))));
+
+        // Stage flips to Extracting — should emit immediately,
+        // bypassing the 100 ms interval that hasn't elapsed.
+        assert!(t.should_emit(&ev(FetchStage::Extracting, 0, Some(10))));
+
+        // And Extracting → Verifying flips immediately too.
+        assert!(t.should_emit(&ev(FetchStage::Verifying, 0, None)));
+    }
+
+    /// On non-Downloading stages (where the byte-step gate is
+    /// dropped), events arriving inside the 100 ms window are
+    /// suppressed; events arriving after ≥100 ms pass through.
+    #[test]
+    fn throttle_respects_100ms_interval() {
+        let mut t = FetchProgressThrottle::default_policy();
+
+        // Seed: first Extracting event always emits.
+        assert!(t.should_emit(&ev(FetchStage::Extracting, 1, Some(100))));
+
+        // Immediate follow-up — within 100 ms, no stage change, so
+        // dropped on the interval gate (byte-step doesn't apply).
+        assert!(!t.should_emit(&ev(FetchStage::Extracting, 2, Some(100))));
+
+        // After ≥100 ms, the next event passes.
+        std::thread::sleep(Duration::from_millis(120));
+        assert!(t.should_emit(&ev(FetchStage::Extracting, 3, Some(100))));
+    }
+
+    /// On the Downloading stage, the 256 KiB byte-step gate ANDs with
+    /// the 100 ms interval gate — a small byte delta is dropped even
+    /// after the interval elapses.
+    #[test]
+    fn throttle_respects_256kib_byte_step_on_downloading() {
+        let mut t = FetchProgressThrottle::default_policy();
+
+        // Seed at 0 bytes.
+        assert!(t.should_emit(&dl(0, Some(10_000_000))));
+
+        // Wait past the interval gate so only the byte gate can block.
+        std::thread::sleep(Duration::from_millis(120));
+
+        // Δ = 64 KiB < 256 KiB — dropped on the byte gate even
+        // though the 100 ms window has elapsed.
+        assert!(!t.should_emit(&dl(64 * 1024, Some(10_000_000))));
+
+        // Δ = 256 KiB exactly — meets the threshold, emits.
+        assert!(t.should_emit(&dl(256 * 1024, Some(10_000_000))));
+    }
+
+    /// The final-byte event (`bytes_done >= bytes_total`, with
+    /// `bytes_total > 0`) bypasses both gates so the progress bar
+    /// snaps cleanly to 100% before the stage flips.
+    #[test]
+    fn throttle_emits_final_byte_event_regardless_of_throttle() {
+        let mut t = FetchProgressThrottle::default_policy();
+        let total: u64 = 1_000_000;
+
+        // Seed with the first chunk; stage-changed bypass fires.
+        assert!(t.should_emit(&dl(0, Some(total))));
+
+        // Immediate follow-up at the final byte — would normally be
+        // suppressed (interval < 100 ms, byte gate could fail too),
+        // but the final_byte bypass forces an emit.
+        assert!(t.should_emit(&dl(total, Some(total))));
+
+        // bytes_total = None means we can't compute "final" — those
+        // events fall through the normal gates. With no time elapsed
+        // and a small byte delta, the second event drops.
+        let mut t2 = FetchProgressThrottle::default_policy();
+        assert!(t2.should_emit(&dl(0, None)));
+        assert!(!t2.should_emit(&dl(1, None)));
+    }
+
+    /// `bytes_done` carries different semantics across stages
+    /// (compressed download bytes vs. entry counts), so on a stage
+    /// transition the bytes counter resets — the next event in the
+    /// new stage must not be measured against the old stage's
+    /// `last_bytes`.
+    #[test]
+    fn throttle_resets_bytes_on_stage_transition() {
+        let mut t = FetchProgressThrottle::default_policy();
+
+        // Walk through a download up to 10 MiB.
+        assert!(t.should_emit(&dl(0, Some(10 * 1024 * 1024))));
+        std::thread::sleep(Duration::from_millis(120));
+        assert!(t.should_emit(&dl(10 * 1024 * 1024, Some(10 * 1024 * 1024))));
+
+        // Now the stage flips to Extracting with bytes_done=1
+        // (entry index, not a 10 MiB regression). Stage-change
+        // bypass fires.
+        assert!(t.should_emit(&ev(FetchStage::Extracting, 1, Some(100))));
+
+        // Wait past the interval. The next Extracting event at
+        // bytes_done=2 must emit — last_bytes was reset to 1 on the
+        // transition, so the byte gate (which Extracting doesn't even
+        // apply, but the internal reset matters) doesn't compare 2
+        // against the old 10 MiB value.
+        std::thread::sleep(Duration::from_millis(120));
+        assert!(t.should_emit(&ev(FetchStage::Extracting, 2, Some(100))));
     }
 }
