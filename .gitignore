@@ -228,3 +228,12 @@ data/*.sqlite
 # Tauri
 desktop/src-tauri/target/
 hyrr-*.png
+
+# Local dev screenshots/scratch (separate from hyrr-*.png export naming)
+rnp-*.png
+
+# Playwright MCP scratch — snapshot / page / screencap output (Apr 2026 onwards)
+.playwright-mcp/
+
+# Claude Code runtime locks
+.claude/scheduled_tasks.lock
