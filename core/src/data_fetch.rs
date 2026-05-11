@@ -231,7 +231,7 @@ impl FetchErrorPayload {
 /// `/` case still strips a single byte and yields `~/etc/passwd` for
 /// `/etc/passwd`, which is harmless — no user info is leaked, just an
 /// unusual rendering.
-fn redact_home(p: &Path) -> String {
+pub fn redact_home(p: &Path) -> String {
     let s = p.display().to_string();
     if let Some(home) = home::home_dir() {
         let home_s = home.display().to_string();
