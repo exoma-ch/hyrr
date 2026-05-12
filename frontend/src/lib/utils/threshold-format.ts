@@ -54,7 +54,12 @@ export interface FormatResult {
   clamped: boolean;
 }
 
-/** Threshold-aware formatter result with a CSS hook for de-emphasis. */
+/** Threshold-aware formatter result with a CSS hook for de-emphasis.
+ *
+ *  True zero always renders as the unit-aware "0" label regardless of mode —
+ *  only sub-threshold non-zero values (typically `e-XY` Bateman residuals) are
+ *  affected by the mode. NaN / ±Infinity pass through raw so bugs stay visible.
+ */
 export function formatWithThresholdEx(
   value: number,
   quantity: Quantity,
@@ -62,6 +67,7 @@ export function formatWithThresholdEx(
   thresholds: Thresholds,
 ): FormatResult {
   const raw = RAW_FORMATTERS[quantity];
+  if (value === 0) return { text: ZERO_LABEL[quantity], clamped: false };
   if (mode === "all" || isAboveThreshold(value, thresholds[quantity])) {
     return { text: raw(value), clamped: false };
   }
