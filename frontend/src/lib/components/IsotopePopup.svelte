@@ -23,7 +23,12 @@
   import type { DecayMode, CrossSectionData, ProjectileType } from "@hyrr/compute";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import type { CsvTrace } from "../plotting/csv-export";
-  import { formatDecayMode } from "../format";
+  import {
+    aggregateDecayModes,
+    dedupeDecayChain,
+    formatDecayChainTooltip,
+    formatDecayMode,
+  } from "../format";
   import SaveMenu from "./SaveMenu.svelte";
 
   interface Props {
@@ -905,12 +910,13 @@
     {#if decayInfo}
       <div class="properties">
         {#if decayInfo.decayModes.length > 0}
+          {@const aggregatedModes = aggregateDecayModes(decayInfo.decayModes)}
           <div class="prop-row">
             <span class="prop-label">Decay</span>
             <span class="prop-value">
-              {#each decayInfo.decayModes as mode, i}
+              {#each aggregatedModes as mode, i}
                 {#if i > 0}<span class="prop-sep">, </span>{/if}
-                <span title={mode.mode}>{formatDecayMode(mode.mode)}</span>{#if mode.branching < 1 && mode.branching > 0}
+                <span title={mode.sources.length > 1 ? mode.sources.join(", ") : mode.mode}>{formatDecayMode(mode.mode)}</span>{#if mode.branching < 1 && mode.branching > 0}
                   <span class="branching"> ({(mode.branching * 100).toFixed(1)}%)</span>
                 {/if}
               {/each}
@@ -922,24 +928,34 @@
 
     <!-- Decay chain -->
     {#if parentDecays.length > 0 || (decayInfo && decayInfo.decayModes.some(m => m.daughterZ !== null))}
+      {@const dedupedParents = dedupeDecayChain(
+        parentDecays,
+        (p) => `${p.Z}|${p.A}|${p.state ?? ""}`,
+      )}
+      {@const dedupedDaughters = decayInfo
+        ? dedupeDecayChain(
+            decayInfo.decayModes.filter((m) => m.daughterZ !== null),
+            (m) => `${m.daughterZ}|${m.daughterA}|${m.daughterState ?? ""}`,
+          )
+        : []}
       <div class="decay-chain">
         <div class="chain-flow">
-          {#if parentDecays.length > 0}
+          {#if dedupedParents.length > 0}
             <div class="chain-group">
-              {#each parentDecays as p}
-                <span class="chain-nuc parent" title="{formatDecayMode(p.mode)} ({(p.branching * 100).toFixed(1)}%) [{p.mode}]">{@html nucHtml(p.name)}</span>
+              {#each dedupedParents as p}
+                <span class="chain-nuc parent" title={formatDecayChainTooltip(p.sources)}>{@html nucHtml(p.name)}</span>
               {/each}
             </div>
             <span class="chain-arrow">&rarr;</span>
           {/if}
           <span class="chain-nuc current">{@html nucHtml(name)}</span>
-          {#if decayInfo && decayInfo.decayModes.some(m => m.daughterZ !== null)}
+          {#if dedupedDaughters.length > 0}
             <span class="chain-arrow">&rarr;</span>
             <div class="chain-group">
-              {#each decayInfo.decayModes.filter(m => m.daughterZ !== null) as mode}
-                {@const dSym = Z_TO_SYMBOL[mode.daughterZ!] ?? `Z${mode.daughterZ}`}
-                <span class="chain-nuc daughter" title="{formatDecayMode(mode.mode)} ({(mode.branching * 100).toFixed(1)}%) [{mode.mode}]">
-                  {@html nucHtml(`${dSym}-${mode.daughterA}${mode.daughterState || ""}`)}
+              {#each dedupedDaughters as d}
+                {@const dSym = Z_TO_SYMBOL[d.daughterZ!] ?? `Z${d.daughterZ}`}
+                <span class="chain-nuc daughter" title={formatDecayChainTooltip(d.sources)}>
+                  {@html nucHtml(`${dSym}-${d.daughterA}${d.daughterState || ""}`)}
                 </span>
               {/each}
             </div>
