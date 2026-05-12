@@ -1,5 +1,11 @@
-# Docs are now built as part of deploy-frontend.yml and served at /docs/
-# This workflow only validates the docs build (no deploy).
+# Docs deploy lives in `promote-to-prod.yml` (manual workflow_dispatch):
+# mkdocs builds into `frontend/dist/docs/` and the whole tree ships to the
+# gh-pages branch root, served at https://exoma-ch.github.io/hyrr/docs/.
+# `deploy-frontend.yml` (auto on push to main) only deploys the frontend to
+# /hyrr/tst/ — docs are NOT in the staging slot.
+#
+# This workflow is PR-time validation only: catches docs breakage before
+# merge so a future promote-to-prod doesn't fail half-way through.
 name: Validate docs
 
 on:
