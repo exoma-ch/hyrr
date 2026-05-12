@@ -276,11 +276,11 @@
 
     const layout = darkLayout({
       xaxis: {
-        title: "Depth (mm)",
+        title: { text: "Depth (mm)" },
         gridcolor: tc.border,
       },
       yaxis: {
-        title: "Production rate (atoms/s/cm)",
+        title: { text: "Production rate (atoms/s/cm)" },
         gridcolor: tc.border,
         type: logY ? "log" : "linear",
       },

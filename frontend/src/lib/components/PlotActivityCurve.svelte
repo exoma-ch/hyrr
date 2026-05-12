@@ -319,11 +319,11 @@
 
     const layout = darkLayout({
       xaxis: {
-        title: `Time ${useEOBTime ? "from EOB" : ""} (${timeLabel})`,
+        title: { text: `Time ${useEOBTime ? "from EOB" : ""} (${timeLabel})` },
         gridcolor: tc.border,
       },
       yaxis: {
-        title: `Activity (${actLabel})`,
+        title: { text: `Activity (${actLabel})` },
         gridcolor: tc.border,
         type: logY ? "log" : "linear",
         // On log scale, clamp the lower bound to the activity threshold
@@ -546,12 +546,12 @@
 
     const layout = darkLayout({
       xaxis: {
-        title: `Time ${useEOBTime ? "from EOB" : ""} (${timeLabel})`,
+        title: { text: `Time ${useEOBTime ? "from EOB" : ""} (${timeLabel})` },
         gridcolor: tc.border,
       },
-      yaxis: { title: "RNP (%)", gridcolor: tc.border, range: [0, 105] },
+      yaxis: { title: { text: "RNP (%)" }, gridcolor: tc.border, range: [0, 105] },
       yaxis2: {
-        title: `Total Activity (${actLabel})`,
+        title: { text: `Total Activity (${actLabel})` },
         overlaying: "y",
         side: "right",
         gridcolor: tc.border,
