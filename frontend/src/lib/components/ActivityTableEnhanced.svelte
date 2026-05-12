@@ -13,6 +13,7 @@
     type DisplayMode,
   } from "../stores/display-thresholds.svelte";
   import { formatWithThresholdEx } from "../utils/threshold-format";
+  import { Save, Settings } from "lucide-svelte";
   import SettingsModal from "./SettingsModal.svelte";
 
   interface Props {
@@ -58,6 +59,7 @@
   /** Default: one row per isotope across all layers. Toggle expands to per-layer rows. */
   let groupByIsotope = $state<boolean>(true);
   let saveOpen = $state(false);
+  let cogOpen = $state(false);
   let settingsOpen = $state(false);
 
   let displayMode = $derived(getDisplayMode());
@@ -67,9 +69,9 @@
   function fmtDose(v: number) { return formatWithThresholdEx(v, "dose_rate", displayMode, thresholds); }
 
   const MODE_LABELS: Array<{ id: DisplayMode; label: string; title: string }> = [
-    { id: "indicator", label: "~0", title: "Below threshold: render compact indicator (e.g. '< 1 nBq')" },
-    { id: "zero", label: "0", title: "Below threshold: collapse to 0" },
-    { id: "all", label: "all", title: "No clamping — render every value" },
+    { id: "indicator", label: "<X", title: "Sub-threshold non-zero values render as a compact '< X' indicator (e.g. '< 1 nBq'). True zero always renders as 0." },
+    { id: "zero", label: "0", title: "Sub-threshold non-zero values collapse to 0." },
+    { id: "all", label: "all", title: "No clamping — render every value verbatim." },
   ];
 
   function getEobActivity(iso: { time_grid_s?: number[]; activity_vs_time_Bq?: number[]; activity_Bq: number }, irrS: number): number {
@@ -365,31 +367,6 @@
 <div class="activity-table-enhanced">
   <div class="toolbar">
     <span class="row-count">{rows.length}/{allRows.length} isotopes</span>
-    <div class="mode-chip-group" role="radiogroup" aria-label="Below-threshold display">
-      {#each MODE_LABELS as opt}
-        <button
-          type="button"
-          role="radio"
-          aria-checked={displayMode === opt.id}
-          class="chip"
-          class:active={displayMode === opt.id}
-          title={opt.title}
-          onclick={() => setDisplayMode(opt.id)}
-        >{opt.label}</button>
-      {/each}
-      <button
-        type="button"
-        class="chip chip-gear"
-        title="Threshold settings…"
-        aria-label="Threshold settings"
-        onclick={() => (settingsOpen = true)}
-      >
-        <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M8 4.754a3.246 3.246 0 100 6.492 3.246 3.246 0 000-6.492zM5.754 8a2.246 2.246 0 114.492 0 2.246 2.246 0 01-4.492 0z"/>
-          <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 01-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 01-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 01.52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 011.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 011.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 01.52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 01-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 01-1.255-.52l-.094-.319zm-2.633.283c.246-.835 1.428-.835 1.674 0l.094.319a1.873 1.873 0 002.693 1.115l.291-.16c.764-.415 1.6.42 1.184 1.185l-.159.292a1.873 1.873 0 001.116 2.692l.318.094c.835.246.835 1.428 0 1.674l-.319.094a1.873 1.873 0 00-1.115 2.693l.16.291c.415.764-.42 1.6-1.185 1.184l-.291-.159a1.873 1.873 0 00-2.693 1.116l-.094.318c-.246.835-1.428.835-1.674 0l-.094-.319a1.873 1.873 0 00-2.692-1.115l-.292.16c-.764.415-1.6-.42-1.184-1.185l.159-.291A1.873 1.873 0 001.945 8.93l-.319-.094c-.835-.246-.835-1.428 0-1.674l.319-.094A1.873 1.873 0 003.06 4.377l-.16-.292c-.415-.764.42-1.6 1.185-1.184l.292.159a1.873 1.873 0 002.692-1.115l.094-.319z"/>
-        </svg>
-      </button>
-    </div>
     <div class="toolbar-actions">
       <button
         class="action-btn"
@@ -404,14 +381,12 @@
         <button
           class="action-btn save-btn"
           class:active={saveOpen}
-          onclick={(e: MouseEvent) => { e.stopPropagation(); saveOpen = !saveOpen; }}
+          onclick={(e: MouseEvent) => { e.stopPropagation(); saveOpen = !saveOpen; cogOpen = false; }}
           title="Save / download table"
           aria-haspopup="menu"
           aria-expanded={saveOpen}
         >
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-            <path d="M2 1.75C2 .784 2.784 0 3.75 0h8.5c.966 0 1.75.784 1.75 1.75v12.5A1.75 1.75 0 0112.25 16h-8.5A1.75 1.75 0 012 14.25V1.75zm1.75-.25a.25.25 0 00-.25.25v12.5c0 .138.112.25.25.25h.75v-3.25c0-.966.784-1.75 1.75-1.75h3.5c.966 0 1.75.784 1.75 1.75v3.25h.75a.25.25 0 00.25-.25V1.75a.25.25 0 00-.25-.25h-.75v1.5c0 .966-.784 1.75-1.75 1.75h-3.5A1.75 1.75 0 015 3V1.5h-.75zm3.5 13v-3.25a.25.25 0 00-.25-.25h-3.5a.25.25 0 00-.25.25V14.5h4zM6.5 1.5v1.5a.25.25 0 00.25.25h3.5a.25.25 0 00.25-.25V1.5h-4z"></path>
-          </svg>
+          <Save size={13} aria-hidden="true" />
         </button>
         {#if saveOpen}
           <div class="save-menu" role="menu">
@@ -420,6 +395,44 @@
             </button>
             <button class="menu-item" role="menuitem" onclick={() => { saveOpen = false; exportParquet(); }}>
               Parquet <span class="menu-hint">typed columns, polars/duckdb</span>
+            </button>
+          </div>
+        {/if}
+      </span>
+      <span class="cog-wrap">
+        <button
+          class="action-btn cog-btn"
+          class:active={cogOpen}
+          onclick={(e: MouseEvent) => { e.stopPropagation(); cogOpen = !cogOpen; saveOpen = false; }}
+          title="Display settings"
+          aria-haspopup="menu"
+          aria-expanded={cogOpen}
+        >
+          <Settings size={13} aria-hidden="true" />
+        </button>
+        {#if cogOpen}
+          <div class="cog-menu" role="menu">
+            <div class="menu-section-label">Sub-threshold display</div>
+            <div role="radiogroup" aria-label="Below-threshold display" class="mode-radio-group">
+              {#each MODE_LABELS as opt}
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={displayMode === opt.id}
+                  class="menu-item mode-item"
+                  class:active={displayMode === opt.id}
+                  title={opt.title}
+                  onclick={() => setDisplayMode(opt.id)}
+                >
+                  <span class="mode-radio" aria-hidden="true">{displayMode === opt.id ? "●" : "○"}</span>
+                  <span class="mode-label">{opt.label}</span>
+                  <span class="menu-hint">{opt.title.split(".")[0]}</span>
+                </button>
+              {/each}
+            </div>
+            <div class="menu-divider" role="separator"></div>
+            <button class="menu-item" role="menuitem" onclick={() => { cogOpen = false; settingsOpen = true; }}>
+              Threshold values… <span class="menu-hint">configure floors</span>
             </button>
           </div>
         {/if}
@@ -501,14 +514,16 @@
 </div>
 
 <svelte:window onclick={(e: MouseEvent) => {
-  if (saveOpen && !(e.target as HTMLElement)?.closest?.(".save-wrap")) saveOpen = false;
+  const t = e.target as HTMLElement;
+  if (saveOpen && !t?.closest?.(".save-wrap")) saveOpen = false;
+  if (cogOpen && !t?.closest?.(".cog-wrap")) cogOpen = false;
 }} />
 
 <SettingsModal open={settingsOpen} onclose={() => (settingsOpen = false)} />
 
 <style>
-  .save-wrap { position: relative; display: inline-flex; }
-  .save-menu {
+  .save-wrap, .cog-wrap { position: relative; display: inline-flex; }
+  .save-menu, .cog-menu {
     position: absolute;
     top: calc(100% + 4px);
     right: 0;
@@ -538,7 +553,35 @@
   }
   .menu-item:hover { background: var(--c-bg-muted); }
   .menu-hint { color: var(--c-text-muted); font-size: 0.7rem; }
-  .save-btn { line-height: 0; padding: 0.15rem 0.35rem; }
+  .save-btn, .cog-btn { line-height: 0; padding: 0.15rem 0.35rem; }
+  .menu-section-label {
+    padding: 4px 10px 2px;
+    font-size: 0.65rem;
+    color: var(--c-text-subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .mode-radio-group { display: flex; flex-direction: column; }
+  .mode-item { justify-content: flex-start; }
+  .mode-item .mode-radio {
+    width: 12px;
+    color: var(--c-text-muted);
+    font-size: 0.7rem;
+    line-height: 1;
+  }
+  .mode-item.active .mode-radio { color: var(--c-accent); }
+  .mode-item .mode-label {
+    min-width: 30px;
+    font-variant-numeric: tabular-nums;
+    color: var(--c-text);
+  }
+  .mode-item.active .mode-label { color: var(--c-accent); }
+  .mode-item .menu-hint { margin-left: auto; }
+  .menu-divider {
+    height: 1px;
+    background: var(--c-border);
+    margin: 4px 6px;
+  }
   .activity-table-enhanced {
     background: var(--c-bg-subtle);
     border: 1px solid var(--c-border);
@@ -659,17 +702,6 @@
   tr.selected td:first-child { border-left: 3px solid var(--c-accent); }
   tr.zero td { opacity: 0.35; }
   td.clamped { color: var(--c-text-faint); font-style: italic; }
-
-  .mode-chip-group {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.15rem;
-    margin-left: 0.4rem;
-  }
-  .mode-chip-group .chip-gear {
-    padding: 0.15rem 0.3rem;
-    line-height: 0;
-  }
 
   .isotope-link {
     background: none;

@@ -4,6 +4,7 @@
    * to open a menu of export options (CSV, Parquet, etc.). Each option
    * triggers a callback passed in by the parent.
    */
+  import { Save } from "lucide-svelte";
   import {
     tracesToCsv,
     triggerDownload,
@@ -70,9 +71,7 @@
     aria-haspopup="menu"
     aria-expanded={open}
   >
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path d="M2 1.75C2 .784 2.784 0 3.75 0h8.5c.966 0 1.75.784 1.75 1.75v12.5A1.75 1.75 0 0112.25 16h-8.5A1.75 1.75 0 012 14.25V1.75zm1.75-.25a.25.25 0 00-.25.25v12.5c0 .138.112.25.25.25h.75v-3.25c0-.966.784-1.75 1.75-1.75h3.5c.966 0 1.75.784 1.75 1.75v3.25h.75a.25.25 0 00.25-.25V1.75a.25.25 0 00-.25-.25h-.75v1.5c0 .966-.784 1.75-1.75 1.75h-3.5A1.75 1.75 0 015 3V1.5h-.75zm3.5 13v-3.25a.25.25 0 00-.25-.25h-3.5a.25.25 0 00-.25.25V14.5h4zM6.5 1.5v1.5a.25.25 0 00.25.25h3.5a.25.25 0 00.25-.25V1.5h-4z"></path>
-    </svg>
+    <Save size={13} aria-hidden="true" />
   </button>
   {#if open}
     <div class="menu" role="menu">

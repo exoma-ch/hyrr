@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { Bug } from "lucide-svelte";
   import { openBugReport } from "../stores/bugreport.svelte";
 
   interface Props {
@@ -44,9 +45,7 @@
         {/if}
         <div class="header-actions">
           <button class="bug-btn" onclick={openBugReport} title="Report a bug">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <path d="M4.72.22a.75.75 0 011.06 0l1 1a.75.75 0 01-1.06 1.06l-.293-.293A3.5 3.5 0 008 5.5h.001A3.5 3.5 0 0010.56 1.99l-.293.293a.75.75 0 01-1.06-1.06l1-1a.75.75 0 011.06 0l1 1a.75.75 0 11-1.06 1.06l-.294-.294A4.992 4.992 0 0112.993 5H13.5a.75.75 0 010 1.5h-.333A5.02 5.02 0 0113 7.25v.25h1.25a.75.75 0 010 1.5H13v.25c0 .37-.04.736-.117 1.086l.36.07a.75.75 0 01-.294 1.472l-.36-.07A5.003 5.003 0 018 16a5.003 5.003 0 01-4.589-4.192l-.36.07a.75.75 0 11-.294-1.472l.36-.07A5.02 5.02 0 013 9.25V9H1.75a.75.75 0 010-1.5H3v-.25c0-.263.023-.522.067-.775H2.75a.75.75 0 010-1.5h.743a4.992 4.992 0 012.24-3.012L5.44 1.67l-.293.293A.75.75 0 014.08 1.28l.22-.22zM4.5 7.25V9.5a3.5 3.5 0 107 0V7.25a3.5 3.5 0 00-7 0z"></path>
-            </svg>
+            <Bug size={14} aria-hidden="true" />
           </button>
           <button class="close-btn" onclick={onclose}>&times;</button>
         </div>

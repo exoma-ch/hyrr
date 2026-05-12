@@ -10,6 +10,7 @@
   import { buildSessionFile, downloadSessionFile, pickSessionFile } from "../session-io";
   import { getDisplayThresholds, setDisplayThresholds } from "../stores/display-thresholds.svelte";
   import { openExternalUrl } from "../utils/open-url";
+  import { Bug, CircleHelp, History, Monitor, Moon, Save, Sun } from "lucide-svelte";
   import logoUrl from "/logo.svg?url";
 
   let historyOpen = $derived(getHistoryOpen());
@@ -74,17 +75,11 @@
       title="Theme: {themeMode} ({resolved})"
     >
       {#if themeMode === "auto"}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M8 1a7 7 0 100 14A7 7 0 008 1zM0 8a8 8 0 1116 0A8 8 0 010 8zm8-5.5v11a5.5 5.5 0 000-11z"></path>
-        </svg>
+        <Monitor size={16} aria-hidden="true" />
       {:else if resolved === "light"}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M8 12a4 4 0 100-8 4 4 0 000 8zm0 1A5 5 0 108 3a5 5 0 000 10zm5.657-9.657a.75.75 0 010 1.06l-.707.707a.75.75 0 11-1.06-1.06l.707-.707a.75.75 0 011.06 0zM3.404 11.89a.75.75 0 010 1.06l-.707.707a.75.75 0 01-1.06-1.06l.707-.707a.75.75 0 011.06 0zM8 0a.75.75 0 01.75.75v1a.75.75 0 01-1.5 0v-1A.75.75 0 018 0zm0 13a.75.75 0 01.75.75v1a.75.75 0 01-1.5 0v-1A.75.75 0 018 13zm7-5a.75.75 0 01-.75.75h-1a.75.75 0 010-1.5h1A.75.75 0 0115 8zM2 8a.75.75 0 01-.75.75h-1a.75.75 0 010-1.5h1A.75.75 0 012 8zm10.596-4.596a.75.75 0 010 1.06l-.707.707a.75.75 0 01-1.06-1.06l.707-.707a.75.75 0 011.06 0z"></path>
-        </svg>
+        <Sun size={16} aria-hidden="true" />
       {:else}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M9.598 1.591a.749.749 0 01.785-.175 7.001 7.001 0 01-.785 13.168.748.748 0 01-.785-.175.748.748 0 01.175-.786A5.5 5.5 0 009.5 8a5.5 5.5 0 00-.512-2.323.749.749 0 01.61-1.086z"></path>
-        </svg>
+        <Moon size={16} aria-hidden="true" />
       {/if}
     </button>
 
@@ -95,9 +90,7 @@
         class:active={saveMenuOpen}
         title="Save / load session"
       >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0113.25 16H3.75A1.75 1.75 0 012 14.25V1.75zm1.75-.25a.25.25 0 00-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 00.25-.25V6h-2.75A1.75 1.75 0 019 4.25V1.5H3.75zm6.75.62v2.13c0 .138.112.25.25.25h2.13L10.5 2.12zM4.5 7.75A.75.75 0 015.25 7h5.5a.75.75 0 010 1.5h-5.5a.75.75 0 01-.75-.75zm0 3A.75.75 0 015.25 10h5.5a.75.75 0 010 1.5h-5.5a.75.75 0 01-.75-.75z"></path>
-        </svg>
+        <Save size={16} aria-hidden="true" />
       </button>
       {#if saveMenuOpen}
         <div class="save-menu" role="menu">
@@ -116,9 +109,7 @@
     </div>
 
     <button class="icon-btn" onclick={() => helpOpen = true} title="Help">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-        <path d="M0 8a8 8 0 1116 0A8 8 0 010 8zm8-6.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM6.92 6.085h.001a.749.749 0 11-1.342-.67c.169-.339.436-.701.849-.977C6.845 4.16 7.369 4 8 4a2.756 2.756 0 011.637.525c.503.377.863.965.863 1.725 0 .448-.115.83-.329 1.15-.205.307-.478.513-.708.662-.04.027-.08.049-.118.07h-.001l-.001.001v.001L9 8.5l-.343.356a.756.756 0 01-.214.468.751.751 0 01-.788.103.751.751 0 01-.453-.685v-.399c0-.199.079-.39.22-.53.14-.14.332-.22.53-.22h.001l.003-.002.005-.003.025-.016a1.514 1.514 0 00.21-.159c.163-.142.252-.296.252-.478 0-.263-.128-.467-.335-.623A1.26 1.26 0 008 5.5c-.369 0-.626.1-.806.224a1.132 1.132 0 00-.358.447l-.002.005zM9 11a1 1 0 11-2 0 1 1 0 012 0z"></path>
-      </svg>
+      <CircleHelp size={16} aria-hidden="true" />
     </button>
 
     <a
@@ -142,15 +133,11 @@
     </a>
 
     <button class="icon-btn" onclick={openBugReport} title="Report a bug">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-        <path d="M4.72.22a.75.75 0 011.06 0l1 1a.75.75 0 01-1.06 1.06l-.293-.293A3.5 3.5 0 008 5.5h.001A3.5 3.5 0 0010.56 1.99l-.293.293a.75.75 0 01-1.06-1.06l1-1a.75.75 0 011.06 0l1 1a.75.75 0 11-1.06 1.06l-.294-.294A4.992 4.992 0 0112.993 5H13.5a.75.75 0 010 1.5h-.333A5.02 5.02 0 0113 7.25v.25h1.25a.75.75 0 010 1.5H13v.25c0 .37-.04.736-.117 1.086l.36.07a.75.75 0 01-.294 1.472l-.36-.07A5.003 5.003 0 018 16a5.003 5.003 0 01-4.589-4.192l-.36.07a.75.75 0 11-.294-1.472l.36-.07A5.02 5.02 0 013 9.25V9H1.75a.75.75 0 010-1.5H3v-.25c0-.263.023-.522.067-.775H2.75a.75.75 0 010-1.5h.743a4.992 4.992 0 012.24-3.012L5.44 1.67l-.293.293A.75.75 0 014.08 1.28l.22-.22zM4.5 7.25V9.5a3.5 3.5 0 107 0V7.25a3.5 3.5 0 00-7 0z"></path>
-      </svg>
+      <Bug size={16} aria-hidden="true" />
     </button>
 
     <button class="icon-btn" onclick={toggleHistory} class:active={historyOpen} title="History">
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-        <path d="M1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0zM8 0a8 8 0 100 16A8 8 0 008 0zm.5 4.75a.75.75 0 00-1.5 0v3.5a.75.75 0 00.37.65l2.5 1.5a.75.75 0 10.76-1.3L8.5 7.94V4.75z"></path>
-      </svg>
+      <History size={16} aria-hidden="true" />
     </button>
   </div>
 </header>

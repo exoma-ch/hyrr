@@ -30,6 +30,7 @@
     formatDecayMode,
   } from "../format";
   import SaveMenu from "./SaveMenu.svelte";
+  import { ExternalLink } from "lucide-svelte";
 
   interface Props {
     open: boolean;
@@ -1099,11 +1100,11 @@
     <!-- Links -->
     <div class="links">
       <a href={nudatUrl(Z, A, nuclearState)} target="_blank" rel="noopener noreferrer" class="ext-link">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854.22a.75.75 0 011.396-.04L14 5.5a.75.75 0 01-1.5 0V4.56l-3.97 3.97a.75.75 0 01-1.06-1.06L11.44 3.5H10.5a.75.75 0 010-1.5h.104z"></path></svg>
+        <ExternalLink size={12} aria-hidden="true" />
         NuDat 3.0
       </a>
       <a href={janisUrl()} target="_blank" rel="noopener noreferrer" class="ext-link">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2h3.5a.75.75 0 010 1.5h-3.5a.25.25 0 00-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 00.25-.25v-3.5a.75.75 0 011.5 0v3.5A1.75 1.75 0 0112.25 14h-8.5A1.75 1.75 0 012 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854.22a.75.75 0 011.396-.04L14 5.5a.75.75 0 01-1.5 0V4.56l-3.97 3.97a.75.75 0 01-1.06-1.06L11.44 3.5H10.5a.75.75 0 010-1.5h.104z"></path></svg>
+        <ExternalLink size={12} aria-hidden="true" />
         JANIS (NEA)
       </a>
     </div>
