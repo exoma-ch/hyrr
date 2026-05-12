@@ -97,10 +97,10 @@
     }));
 
     const layout = darkLayout({
-      xaxis: { title: "Depth (mm)", gridcolor: tc.border, range: [0, cumulativeDepth] },
-      yaxis: { title: "Energy (MeV)", gridcolor: tc.border },
+      xaxis: { title: { text: "Depth (mm)" }, gridcolor: tc.border, range: [0, cumulativeDepth] },
+      yaxis: { title: { text: "Energy (MeV)" }, gridcolor: tc.border },
       yaxis2: {
-        title: "Heat (W/mm)",
+        title: { text: "Heat (W/mm)" },
         overlaying: "y",
         side: "right",
         gridcolor: tc.border,

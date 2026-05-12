@@ -421,11 +421,11 @@
       const yTitle = scaled ? "σ × abundance (mb)" : "Cross section (mb)";
       const layout = darkLayout({
         xaxis: {
-          title: "Energy (MeV)",
+          title: { text: "Energy (MeV)" },
           gridcolor: tc.border,
           range: rangeMinE !== undefined && rangeMaxE !== undefined ? [rangeMinE, rangeMaxE] : undefined,
         },
-        yaxis: { title: yTitle, gridcolor: tc.border },
+        yaxis: { title: { text: yTitle }, gridcolor: tc.border },
         margin: { t: 20, r: 20, b: 40, l: 55 },
         height: 220,
         showlegend: traces.length > 1,
@@ -542,9 +542,9 @@
 
     const { shapes, annotations } = layerMarkers(boundaries, tc);
     const layout = darkLayout({
-      xaxis: { title: "Depth (mm)", gridcolor: tc.border, range: [0, cumulativeDepth] },
-      yaxis: { title: "σ (mb)", gridcolor: tc.border },
-      yaxis2: { title: "Energy (MeV)", overlaying: "y", side: "right", gridcolor: tc.border },
+      xaxis: { title: { text: "Depth (mm)" }, gridcolor: tc.border, range: [0, cumulativeDepth] },
+      yaxis: { title: { text: "σ (mb)" }, gridcolor: tc.border },
+      yaxis2: { title: { text: "Energy (MeV)" }, overlaying: "y", side: "right", gridcolor: tc.border },
       margin: { t: 20, r: 55, b: 40, l: 55 },
       height: 220, showlegend: true,
       legend: { x: 1, xanchor: "right", y: 0.95, bgcolor: "rgba(0,0,0,0)" },
@@ -645,8 +645,8 @@
 
     const { shapes, annotations } = layerMarkers(boundaries, tc);
     const layout = darkLayout({
-      xaxis: { title: "Depth (mm)", gridcolor: tc.border, range: [0, cumulativeDepth] },
-      yaxis: { title: "Production rate (atoms/s/cm)", gridcolor: tc.border },
+      xaxis: { title: { text: "Depth (mm)" }, gridcolor: tc.border, range: [0, cumulativeDepth] },
+      yaxis: { title: { text: "Production rate (atoms/s/cm)" }, gridcolor: tc.border },
       margin: { t: 20, r: 20, b: 40, l: 70 },
       height: 220, showlegend: traces.length > 1,
       legend: { x: 1, xanchor: "right", y: 0.95, bgcolor: "rgba(0,0,0,0)" },
@@ -800,10 +800,10 @@
       });
 
       const layout = darkLayout({
-        xaxis: { title: `Time (${timeLabel})`, gridcolor: tc.border },
-        yaxis: { title: "RNP (%)", gridcolor: tc.border, range: [0, 105] },
+        xaxis: { title: { text: `Time (${timeLabel})` }, gridcolor: tc.border },
+        yaxis: { title: { text: "RNP (%)" }, gridcolor: tc.border, range: [0, 105] },
         yaxis2: {
-          title: `Activity (${actLabel})`,
+          title: { text: `Activity (${actLabel})` },
           overlaying: "y",
           side: "right",
           gridcolor: tc.border,
@@ -844,8 +844,8 @@
       });
 
       const layout = darkLayout({
-        xaxis: { title: `Time (${timeLabel})`, gridcolor: tc.border },
-        yaxis: { title: `Activity (${actLabel})`, gridcolor: tc.border },
+        xaxis: { title: { text: `Time (${timeLabel})` }, gridcolor: tc.border },
+        yaxis: { title: { text: `Activity (${actLabel})` }, gridcolor: tc.border },
         margin: { t: 10, r: 20, b: 40, l: 55 },
         height: 200,
         showlegend: false,
