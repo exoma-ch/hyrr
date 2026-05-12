@@ -20,12 +20,12 @@ vi.mock("../utils/platform", () => ({
 // (non-existent in jsdom) Tauri invoke surface.
 vi.mock("../compute/data-fetch-meta", () => ({
   getReleaseUrl: vi.fn(async () =>
-    "https://github.com/exoma-ch/nucl-parquet/releases/download/v0.10.0/nucl-parquet-data-v0.10.0.tar.zst",
+    "https://github.com/exoma-ch/nucl-parquet/releases/download/data-2026.5.0/nucl-parquet-data-2026.5.0.tar.zst",
   ),
   getCacheRootPattern: vi.fn(async () => "~/.hyrr/nucl-parquet/<version>"),
-  getTarballFilename: vi.fn(async () => "nucl-parquet-data-v0.10.0.tar.zst"),
+  getTarballFilename: vi.fn(async () => "nucl-parquet-data-2026.5.0.tar.zst"),
   getReleaseBaseUrl: vi.fn(async () => "https://github.com/exoma-ch/nucl-parquet"),
-  getDataVersion: vi.fn(async () => "v0.10.0"),
+  getDataVersion: vi.fn(async () => "2026.5.0"),
   DEFAULT_LIBRARY: "tendl-2025",
 }));
 
@@ -43,8 +43,8 @@ import { isTauri } from "../utils/platform";
 
 const mockedIsTauri = vi.mocked(isTauri);
 
-const CACHE = "/Users/x/.hyrr/nucl-parquet/v0.10.0";
-const URL_ = "https://github.com/exoma-ch/nucl-parquet/releases/download/v0.10.0/nucl-parquet-data-v0.10.0.tar.zst";
+const CACHE = "/Users/x/.hyrr/nucl-parquet/v2026.5.0";
+const URL_ = "https://github.com/exoma-ch/nucl-parquet/releases/download/data-2026.5.0/nucl-parquet-data-2026.5.0.tar.zst";
 
 /** One representative payload per parsed-error variant. Seven entries. */
 const variants: Array<{ name: string; payload: ParsedFetchError; carriesUrl: boolean }> = [

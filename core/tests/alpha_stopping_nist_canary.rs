@@ -10,12 +10,10 @@
 //!
 //! This test pins the EXPECTED NIST values (verified against
 //! `https://physics.nist.gov/PhysRefData/Star/Text/ASTAR.html`, Aluminum,
-//! 2026-05-05) within ±5%. It will FAIL today against the broken parquet
-//! and PASS once the data is regenerated from a correct upstream
-//! (libdEdx PSTAR/ASTAR or a fresh NIST scrape).
-//!
-//! Marked `#[ignore]` so default CI stays green; run with
-//! `cargo test --include-ignored alpha_stopping_nist_canary`.
+//! 2026-05-05) within ±5%. It now PASSES against the corrected
+//! `ASTAR.parquet` shipped in the `data-2026.5.0` nucl-parquet release
+//! (nucl-parquet PR #143 — α routes through real NIST ASTAR, no
+//! Z²-scaled proton-energy garbage).
 
 use hyrr_core::db::{DatabaseProtocol, ParquetDataStore};
 use hyrr_core::stopping::elemental_dedx;
@@ -94,13 +92,11 @@ fn check_alpha_against_nist(label: &str, target_z: u32, expected: &[(f64, f64)])
 }
 
 #[test]
-#[ignore = "regression canary for #63 — fails today against broken bundled ASTAR.parquet"]
 fn alpha_on_al_matches_nist_within_5pct() {
     check_alpha_against_nist("Al(Z=13)", 13, NIST_ASTAR_AL);
 }
 
 #[test]
-#[ignore = "regression canary for #63 — fails today against broken bundled ASTAR.parquet"]
 fn alpha_on_cu_matches_nist_within_5pct() {
     check_alpha_against_nist("Cu(Z=29)", 29, NIST_ASTAR_CU);
 }
