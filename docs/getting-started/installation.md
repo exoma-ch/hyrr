@@ -77,8 +77,9 @@ Both machines must run matching `hyrr` versions for the bundle to apply cleanly 
 
 ```bash
 # On a connected machine — substitute <V> with the version printed above
-curl -LO "https://github.com/exoma-ch/nucl-parquet/releases/download/v<V>/nucl-parquet-data-v<V>.tar.zst"
+# (data version is CalVer YYYY.MM.MICRO, e.g. 2026.5.0; no `v` prefix)
+curl -LO "https://github.com/exoma-ch/nucl-parquet/releases/download/data-<V>/nucl-parquet-data-<V>.tar.zst"
 
 # On the air-gapped machine
-hyrr fetch-data --from "nucl-parquet-data-v<V>.tar.zst"
+hyrr fetch-data --from "nucl-parquet-data-<V>.tar.zst"
 ```

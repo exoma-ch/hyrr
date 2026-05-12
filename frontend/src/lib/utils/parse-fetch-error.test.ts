@@ -11,8 +11,8 @@ describe("parseFetchError — every Rust variant round-trips", () => {
       kind: "FetchError",
       variant: "HttpStatus",
       status: 404,
-      url: "https://github.com/exoma-ch/nucl-parquet/releases/download/v0.10.0/nucl-parquet-data-v0.10.0.tar.zst",
-      cache_dir: "/Users/x/.hyrr/nucl-parquet/v0.10.0",
+      url: "https://github.com/exoma-ch/nucl-parquet/releases/download/data-2026.5.0/nucl-parquet-data-2026.5.0.tar.zst",
+      cache_dir: "/Users/x/.hyrr/nucl-parquet/v2026.5.0",
       message: "HTTP 404",
     };
     const result = parseFetchError(payload);
@@ -21,7 +21,7 @@ describe("parseFetchError — every Rust variant round-trips", () => {
       throw new Error("expected HttpStatus variant");
     }
     expect(result.status).toBe(404);
-    expect(result.url).toContain("nucl-parquet-data-v0.10.0.tar.zst");
+    expect(result.url).toContain("nucl-parquet-data-2026.5.0.tar.zst");
     expect(result.cache_dir).toContain(".hyrr");
   });
 
@@ -31,7 +31,7 @@ describe("parseFetchError — every Rust variant round-trips", () => {
       variant: "Network",
       detail: "dns lookup failed",
       url: "https://example.com/x.tar.zst",
-      cache_dir: "/home/x/.hyrr/nucl-parquet/v0.10.0",
+      cache_dir: "/home/x/.hyrr/nucl-parquet/v2026.5.0",
       message: "network error: dns lookup failed",
     };
     const result = parseFetchError(payload);

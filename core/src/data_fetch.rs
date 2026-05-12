@@ -2,7 +2,18 @@
 //!
 //! Populates `~/.hyrr/nucl-parquet/v{DATA_VERSION}/` from GitHub Releases on
 //! demand. Hardened against the known failure modes of the simpler upstream
-//! pattern (see #52 spike review):
+//! pattern (see #52 spike review).
+//!
+//! Wire-format note (nucl-parquet PR #151 — "Path A"): the upstream
+//! release tag is `data-{V}` (CalVer YYYY.MM.MICRO, e.g.
+//! `data-2026.5.0`) and the tarball asset is
+//! `nucl-parquet-data-{V}.tar.zst` — note no leading `v` on either,
+//! since the data version is no longer SemVer. The local cache
+//! directory keeps its `v{V}/` prefix (`~/.hyrr/nucl-parquet/v2026.5.0/`)
+//! intentionally: it's our internal layout, not an upstream-naming
+//! contract, and the `v` prefix is what the cache-dir parser
+//! ([`parse_version_dir`]) and prune logic key off. Changing the
+//! cache layout would invalidate every user's cache for no gain.
 //!
 //! - **Concurrent invocations**: an exclusive `fs2` file-lock on
 //!   `<cache_root>/.lock` serialises competing extract attempts, so the
@@ -65,8 +76,10 @@ pub fn data_version() -> &'static str {
 }
 
 /// Tarball filename for the current [`DATA_VERSION`], e.g.
-/// `nucl-parquet-data-v0.10.0.tar.zst`. Single source of truth for the
-/// pattern — `ensure_*` and the install path consume this.
+/// `nucl-parquet-data-2026.5.0.tar.zst`. Single source of truth for the
+/// pattern — `ensure_*` and the install path consume this. Note: no `v`
+/// prefix on the version since nucl-parquet PR #151 (Path A) moved data
+/// versioning to CalVer.
 pub fn tarball_filename() -> String {
     tarball_filename_for(DATA_VERSION)
 }
@@ -74,26 +87,33 @@ pub fn tarball_filename() -> String {
 /// Tarball filename for an arbitrary version. Exposed for offline-bundle
 /// docs/tooling that need to spell a non-current version.
 pub fn tarball_filename_for(version: &str) -> String {
-    format!("nucl-parquet-data-v{version}.tar.zst")
+    format!("nucl-parquet-data-{version}.tar.zst")
 }
 
-/// Full release-tarball URL for the current [`DATA_VERSION`].
+/// Full release-tarball URL for the current [`DATA_VERSION`], e.g.
+/// `https://github.com/exoma-ch/nucl-parquet/releases/download/data-2026.5.0/nucl-parquet-data-2026.5.0.tar.zst`.
 pub fn release_url() -> String {
     release_url_for(DATA_VERSION)
 }
 
-/// Full release-tarball URL for an arbitrary version.
+/// Full release-tarball URL for an arbitrary version. Upstream tag
+/// shape is `data-{V}` (no `v` prefix) per nucl-parquet PR #151.
 pub fn release_url_for(version: &str) -> String {
     format!(
-        "{RELEASE_BASE}/v{version}/{filename}",
+        "{RELEASE_BASE}/data-{version}/{filename}",
         filename = tarball_filename_for(version),
     )
 }
 
 /// Human-readable cache-root pattern for diagnostics / UX, e.g.
-/// `~/.hyrr/nucl-parquet/v0.10.0/data`. The literal returned here is
+/// `~/.hyrr/nucl-parquet/v2026.5.0/data`. The literal returned here is
 /// always interpolated against the live [`DATA_VERSION`]; callers that
 /// need an actual filesystem path should use [`cache_dir`] instead.
+///
+/// Note: the `v` prefix on the cache dir is deliberate — it's our
+/// internal layout (matches [`parse_version_dir`] / prune logic) and
+/// is decoupled from the upstream release-tag shape (`data-{V}`, no
+/// `v`) since nucl-parquet PR #151 split data versioning to CalVer.
 pub fn cache_root_pattern() -> String {
     format!("~/.hyrr/nucl-parquet/v{DATA_VERSION}/data")
 }
@@ -1391,7 +1411,7 @@ mod tests {
     fn release_url_pattern_is_canonical() {
         let url = release_url();
         assert!(
-            url.starts_with("https://github.com/exoma-ch/nucl-parquet/releases/download/v"),
+            url.starts_with("https://github.com/exoma-ch/nucl-parquet/releases/download/data-"),
             "release_url() = {url:?} drifted from the canonical host/path"
         );
         assert!(
@@ -1400,8 +1420,14 @@ mod tests {
         );
         let fname = tarball_filename();
         assert!(
-            fname.starts_with("nucl-parquet-data-v") && fname.ends_with(".tar.zst"),
+            fname.starts_with("nucl-parquet-data-") && fname.ends_with(".tar.zst"),
             "tarball_filename() = {fname:?} drifted"
+        );
+        // The new wire format has no `v` prefix on the version segment
+        // of the filename (nucl-parquet#151 — Path A, data on CalVer).
+        assert!(
+            !fname.starts_with("nucl-parquet-data-v"),
+            "tarball_filename() = {fname:?} retained the legacy `v` prefix"
         );
         assert!(
             url.ends_with(&fname),
