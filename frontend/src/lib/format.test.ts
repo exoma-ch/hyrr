@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { formatDecayMode, formatProjectile, formatReaction, reactionFilterMatches } from "./format";
+import {
+  aggregateDecayModes,
+  formatDecayMode,
+  formatProjectile,
+  formatReaction,
+  isShellEC,
+  reactionFilterMatches,
+} from "./format";
 
 describe("formatDecayMode", () => {
   it("maps beta_plus / beta+ / positron to β⁺", () => {
@@ -114,5 +121,82 @@ describe("reactionFilterMatches (round-trip aliases)", () => {
 
   it("empty needle matches anything", () => {
     expect(reactionFilterMatches("anything", "")).toBe(true);
+  });
+});
+
+describe("isShellEC", () => {
+  it("matches Kshell/Lshell/Mshell EC in any case", () => {
+    expect(isShellEC("KshellEC")).toBe(true);
+    expect(isShellEC("LshellEC")).toBe(true);
+    expect(isShellEC("MshellEC")).toBe(true);
+    expect(isShellEC("kshellec")).toBe(true);
+    expect(isShellEC("L_shell_EC")).toBe(true);
+  });
+
+  it("does not match plain EC, beta+, or other modes", () => {
+    expect(isShellEC("EC")).toBe(false);
+    expect(isShellEC("ec")).toBe(false);
+    expect(isShellEC("beta+")).toBe(false);
+    expect(isShellEC("alpha")).toBe(false);
+    expect(isShellEC("")).toBe(false);
+  });
+});
+
+describe("aggregateDecayModes", () => {
+  it("collapses K/L/M shell EC into a single ec bucket with summed branching", () => {
+    const out = aggregateDecayModes([
+      { mode: "KshellEC", branching: 0.892 },
+      { mode: "LshellEC", branching: 0.093 },
+      { mode: "MshellEC", branching: 0.015 },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].mode).toBe("ec");
+    expect(out[0].branching).toBeCloseTo(1.0, 6);
+    expect(out[0].sources).toEqual(["KshellEC", "LshellEC", "MshellEC"]);
+  });
+
+  it("renders the bucket label via formatDecayMode as EC", () => {
+    const out = aggregateDecayModes([
+      { mode: "KshellEC", branching: 0.5 },
+      { mode: "LshellEC", branching: 0.5 },
+    ]);
+    expect(formatDecayMode(out[0].mode)).toBe("EC");
+  });
+
+  it("aggregates EC only — keeps β⁺ and other modes as their own buckets", () => {
+    const out = aggregateDecayModes([
+      { mode: "KshellEC", branching: 0.025 },
+      { mode: "LshellEC", branching: 0.003 },
+      { mode: "MshellEC", branching: 0.0005 },
+      { mode: "beta+", branching: 0.9715 },
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out[0].mode).toBe("ec");
+    expect(out[0].branching).toBeCloseTo(0.0285, 6);
+    expect(out[1].mode).toBe("beta+");
+    expect(out[1].branching).toBeCloseTo(0.9715, 6);
+  });
+
+  it("is a passthrough when no shell-EC entries are present", () => {
+    const out = aggregateDecayModes([
+      { mode: "beta-", branching: 1.0 },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].mode).toBe("beta-");
+    expect(out[0].branching).toBe(1.0);
+    expect(out[0].sources).toEqual(["beta-"]);
+  });
+
+  it("preserves first-occurrence order of distinct modes", () => {
+    const out = aggregateDecayModes([
+      { mode: "beta+", branching: 0.5 },
+      { mode: "KshellEC", branching: 0.4 },
+      { mode: "alpha", branching: 0.1 },
+    ]);
+    expect(out.map((m) => m.mode)).toEqual(["beta+", "ec", "alpha"]);
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(aggregateDecayModes([])).toEqual([]);
   });
 });

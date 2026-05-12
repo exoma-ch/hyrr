@@ -23,7 +23,7 @@
   import type { DecayMode, CrossSectionData, ProjectileType } from "@hyrr/compute";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import type { CsvTrace } from "../plotting/csv-export";
-  import { formatDecayMode } from "../format";
+  import { aggregateDecayModes, formatDecayMode } from "../format";
   import SaveMenu from "./SaveMenu.svelte";
 
   interface Props {
@@ -905,12 +905,13 @@
     {#if decayInfo}
       <div class="properties">
         {#if decayInfo.decayModes.length > 0}
+          {@const aggregatedModes = aggregateDecayModes(decayInfo.decayModes)}
           <div class="prop-row">
             <span class="prop-label">Decay</span>
             <span class="prop-value">
-              {#each decayInfo.decayModes as mode, i}
+              {#each aggregatedModes as mode, i}
                 {#if i > 0}<span class="prop-sep">, </span>{/if}
-                <span title={mode.mode}>{formatDecayMode(mode.mode)}</span>{#if mode.branching < 1 && mode.branching > 0}
+                <span title={mode.sources.length > 1 ? mode.sources.join(", ") : mode.mode}>{formatDecayMode(mode.mode)}</span>{#if mode.branching < 1 && mode.branching > 0}
                   <span class="branching"> ({(mode.branching * 100).toFixed(1)}%)</span>
                 {/if}
               {/each}

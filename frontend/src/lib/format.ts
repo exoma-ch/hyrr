@@ -23,6 +23,7 @@ const DECAY_MODE_MAP: Record<string, string> = {
   "a": "α",
   "gamma": "γ",
   "g": "γ",
+  "ec": "EC",
 };
 
 const PROJECTILE_MAP: Record<string, string> = {
@@ -45,6 +46,57 @@ export function formatDecayMode(mode: string): string {
   if (!mode) return mode;
   const key = mode.trim().toLowerCase();
   return DECAY_MODE_MAP[key] ?? mode;
+}
+
+/** True if a raw decay-mode identifier is a shell-resolved electron-capture entry
+ * (e.g. `KshellEC`, `LshellEC`, `MshellEC`, `K_shell_EC`). The K/L/M atomic-shell
+ * distinction is physically meaningful, but for the decay-mode chip and decay-chain
+ * presentation we collapse them all into a single `EC` bucket (see #198). */
+export function isShellEC(mode: string): boolean {
+  if (!mode) return false;
+  const key = mode.trim().toLowerCase().replace(/_/g, "");
+  return /^[klm]shellec$/.test(key);
+}
+
+export interface AggregatedDecayMode {
+  /** Canonical display key — `"ec"` for any K/L/M-shell EC, otherwise the original mode string. */
+  mode: string;
+  /** Summed branching ratio across all merged entries. */
+  branching: number;
+  /** Original wire identifiers that were folded into this bucket (in input order). */
+  sources: string[];
+}
+
+/**
+ * Aggregate a list of `{mode, branching}` entries so that K/L/M shell-resolved
+ * electron-capture rows collapse into a single `"ec"` bucket whose branching is
+ * the sum of its parts. All other modes pass through untouched (and keep their
+ * original wire-form `mode` string). Order of first occurrence is preserved.
+ *
+ * The `sources` array on each output entry retains the original mode strings so
+ * a tooltip can still surface the K/L/M breakdown if desired.
+ */
+export function aggregateDecayModes<T extends { mode: string; branching: number }>(
+  modes: readonly T[],
+): AggregatedDecayMode[] {
+  const buckets = new Map<string, AggregatedDecayMode>();
+  for (const m of modes) {
+    const isEC = isShellEC(m.mode);
+    const key = isEC ? "ec" : m.mode;
+    const displayMode = isEC ? "ec" : m.mode;
+    const existing = buckets.get(key);
+    if (existing) {
+      existing.branching += m.branching;
+      existing.sources.push(m.mode);
+    } else {
+      buckets.set(key, {
+        mode: displayMode,
+        branching: m.branching,
+        sources: [m.mode],
+      });
+    }
+  }
+  return Array.from(buckets.values());
 }
 
 /** Map a projectile/particle identifier to its render form. */
