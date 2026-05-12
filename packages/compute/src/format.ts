@@ -4,39 +4,57 @@
 
 import { Z_TO_SYMBOL } from "./formula";
 
+/** SI prefix table — descending so the first row ≤ |v| wins. */
+const SI_PREFIXES: ReadonlyArray<readonly [number, string]> = [
+  [1e12, "T"], [1e9, "G"], [1e6, "M"], [1e3, "k"],
+  [1, ""],
+  [1e-3, "m"], [1e-6, "µ"], [1e-9, "n"], [1e-12, "p"],
+];
+
+/**
+ * Format a value with the best SI-prefixed unit. `precision` is passed to
+ * `toPrecision`. Falls back to scientific notation outside the prefix range.
+ * Returns `"—"` for non-finite input and `"0"` for exact zero.
+ */
+function fmtSI(value: number, baseUnit: string, precision: number): string {
+  if (typeof value !== "number" || !isFinite(value)) return "—";
+  if (value === 0) return "0";
+  const abs = Math.abs(value);
+  for (const [factor, prefix] of SI_PREFIXES) {
+    if (abs >= factor) return `${(value / factor).toPrecision(precision)} ${prefix}${baseUnit}`;
+  }
+  return `${value.toExponential(2)} ${baseUnit}`;
+}
+
+/** Pick the SI prefix label + divisor for a magnitude (for plot axes / column headers). */
+function bestSIUnit(maxAbs: number, baseUnit: string): { label: string; divisor: number } {
+  for (const [factor, prefix] of SI_PREFIXES) {
+    if (maxAbs >= factor) return { label: `${prefix}${baseUnit}`, divisor: factor };
+  }
+  return { label: baseUnit, divisor: 1 };
+}
+
 /** Auto-scale activity to the best human-readable unit. */
 export function fmtActivity(bq: number): string {
-  if (typeof bq !== "number" || !isFinite(bq)) return "—";
-  const abs = Math.abs(bq);
-  if (abs === 0) return "0";
-  if (abs >= 1e12) return (bq / 1e12).toPrecision(4) + " TBq";
-  if (abs >= 1e9) return (bq / 1e9).toPrecision(4) + " GBq";
-  if (abs >= 1e6) return (bq / 1e6).toPrecision(4) + " MBq";
-  if (abs >= 1e3) return (bq / 1e3).toPrecision(4) + " kBq";
-  if (abs >= 1) return bq.toPrecision(4) + " Bq";
-  return bq.toExponential(2) + " Bq";
+  return fmtSI(bq, "Bq", 4);
 }
 
 /** Auto-scale saturation yield. */
 export function fmtYield(val: number): string {
-  if (typeof val !== "number" || !isFinite(val)) return "—";
-  if (val === 0) return "0";
-  const abs = Math.abs(val);
-  if (abs >= 1e12) return (val / 1e12).toPrecision(3) + " TBq/µA";
-  if (abs >= 1e9) return (val / 1e9).toPrecision(3) + " GBq/µA";
-  if (abs >= 1e6) return (val / 1e6).toPrecision(3) + " MBq/µA";
-  if (abs >= 1e3) return (val / 1e3).toPrecision(3) + " kBq/µA";
-  if (abs >= 1) return val.toPrecision(3) + " Bq/µA";
-  return val.toExponential(2) + " Bq/µA";
+  return fmtSI(val, "Bq/µA", 3);
+}
+
+/** Auto-scale dose rate (µSv/h input) to the best human-readable unit. */
+export function fmtDoseRate(uSvPerH: number): string {
+  if (typeof uSvPerH !== "number" || !isFinite(uSvPerH)) return "—";
+  if (uSvPerH === 0) return "0";
+  // Input arrives in µSv/h; rebase to Sv/h so the SI prefix table picks the right rung.
+  return fmtSI(uSvPerH * 1e-6, "Sv/h", 3);
 }
 
 /** Find the best unit and divisor for a set of activity values. */
 export function bestActivityUnit(maxBq: number): { label: string; divisor: number } {
-  if (maxBq >= 1e12) return { label: "TBq", divisor: 1e12 };
-  if (maxBq >= 1e9) return { label: "GBq", divisor: 1e9 };
-  if (maxBq >= 1e6) return { label: "MBq", divisor: 1e6 };
-  if (maxBq >= 1e3) return { label: "kBq", divisor: 1e3 };
-  return { label: "Bq", divisor: 1 };
+  return bestSIUnit(maxBq, "Bq");
 }
 
 /** Pick best time unit for display. */
@@ -45,18 +63,6 @@ export function bestTimeUnit(maxS: number): { label: string; divisor: number } {
   if (maxS >= 3600 * 2) return { label: "h", divisor: 3600 };
   if (maxS >= 120) return { label: "min", divisor: 60 };
   return { label: "s", divisor: 1 };
-}
-
-/** Auto-scale dose rate (µSv/h input) to the best human-readable unit. */
-export function fmtDoseRate(uSvPerH: number): string {
-  if (typeof uSvPerH !== "number" || !isFinite(uSvPerH)) return "—";
-  const abs = Math.abs(uSvPerH);
-  if (abs === 0) return "0";
-  if (abs >= 1e6) return (uSvPerH / 1e6).toPrecision(3) + " Sv/h";
-  if (abs >= 1e3) return (uSvPerH / 1e3).toPrecision(3) + " mSv/h";
-  if (abs >= 1) return uSvPerH.toPrecision(3) + " µSv/h";
-  if (abs >= 1e-3) return (uSvPerH * 1e3).toPrecision(3) + " nSv/h";
-  return uSvPerH.toExponential(2) + " µSv/h";
 }
 
 /** Build NuDat 3.0 URL for an isotope. */

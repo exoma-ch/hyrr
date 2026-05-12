@@ -34,6 +34,15 @@ describe("formatDecayMode", () => {
     expect(formatDecayMode("EC")).toBe("EC");
   });
 
+  it("collapses K/L/M-shell EC variants to plain EC", () => {
+    expect(formatDecayMode("KshellEC")).toBe("EC");
+    expect(formatDecayMode("LshellEC")).toBe("EC");
+    expect(formatDecayMode("MshellEC")).toBe("EC");
+    expect(formatDecayMode("K_shell_EC")).toBe("EC");
+    expect(formatDecayMode("L_shell_EC")).toBe("EC");
+    expect(formatDecayMode("M_shell_EC")).toBe("EC");
+  });
+
   it("passes unknown / empty modes through", () => {
     expect(formatDecayMode("")).toBe("");
     expect(formatDecayMode("unknown_mode")).toBe("unknown_mode");
@@ -86,6 +95,12 @@ describe("formatReaction", () => {
   it("is idempotent on already-Greek input", () => {
     expect(formatReaction("(α,γ)")).toBe("(α,γ)");
     expect(formatReaction("²⁷Al(p,αn)²²Na")).toBe("²⁷Al(p,αn)²²Na");
+  });
+
+  it("collapses K/L/M-shell EC notations to (EC)", () => {
+    expect(formatReaction("⁵¹Mn(KshellEC)")).toBe("⁵¹Mn(EC)");
+    expect(formatReaction("⁵¹Mn(LshellEC)")).toBe("⁵¹Mn(EC)");
+    expect(formatReaction("⁵¹Mn(MshellEC)")).toBe("⁵¹Mn(EC)");
   });
 
   it("maps decay-arrow notation", () => {
