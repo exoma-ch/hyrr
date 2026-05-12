@@ -495,7 +495,7 @@
             <td class="col-a">{row.A}</td>
             <td class="col-hl">{formatHalfLife(row.half_life_s)}</td>
             <td class="col-reaction">
-              {#each [...row.reactions, ...row.decayNotations] as rxn, i}{#if i > 0}, {/if}{formatReaction(rxn)}{/each}
+              {#each [...new Set([...row.reactions, ...row.decayNotations].map(formatReaction))] as rxn, i}{#if i > 0}, {/if}{rxn}{/each}
               {#if row.reactions.length === 0 && row.decayNotations.length === 0 && row.source === "daughter"}decay{/if}
             </td>
             <td class="col-act" class:clamped={eob.clamped}>{eob.text}</td>
@@ -625,28 +625,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .chip {
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text-subtle);
-    padding: 0.15rem 0.35rem;
-    font-size: 0.65rem;
-    cursor: pointer;
-    white-space: nowrap;
-    line-height: 1.2;
-  }
-
-  .chip:hover {
-    border-color: var(--c-accent);
-    color: var(--c-text-muted);
-  }
-
-  .chip.active {
-    background: var(--c-bg-active);
-    border-color: var(--c-accent);
-    color: var(--c-accent);
-  }
 
   /* Table */
   .table-wrapper {

@@ -669,19 +669,21 @@
       </div>
     {/if}
 
-    <SaveMenu
-      filenamePrefix="hyrr-activity"
-      xLabel={lastExport?.xLabel ?? "Time"}
-      yLabel={lastExport?.yLabel ?? "Activity"}
-      getTraces={() => lastExport?.traces ?? []}
-      notes={() => [`HYRR activity plot export`, `generated ${new Date().toISOString()}`]}
-      title="Save / download plot data"
-    />
-    {#if selected.size > 0}
-      <button class="ctrl-btn clear" onclick={clearSelection}>
-        Clear ({selected.size})
-      </button>
-    {/if}
+    <span class="right-actions">
+      {#if selected.size > 0}
+        <button class="ctrl-btn clear" onclick={clearSelection}>
+          Clear ({selected.size})
+        </button>
+      {/if}
+      <SaveMenu
+        filenamePrefix="hyrr-activity"
+        xLabel={lastExport?.xLabel ?? "Time"}
+        yLabel={lastExport?.yLabel ?? "Activity"}
+        getTraces={() => lastExport?.traces ?? []}
+        notes={() => [`HYRR activity plot export`, `generated ${new Date().toISOString()}`]}
+        title="Save / download plot data"
+      />
+    </span>
   </div>
 
   <div bind:this={plotDiv} class="plot"></div>
@@ -701,6 +703,13 @@
     gap: 0.4rem;
     padding: 0.25rem 0.5rem;
     flex-wrap: wrap;
+  }
+
+  .right-actions {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
   }
 
   .separator {

@@ -24,6 +24,12 @@ const DECAY_MODE_MAP: Record<string, string> = {
   "gamma": "γ",
   "g": "γ",
   "ec": "EC",
+  "kshellec": "EC",
+  "lshellec": "EC",
+  "mshellec": "EC",
+  "k_shell_ec": "EC",
+  "l_shell_ec": "EC",
+  "m_shell_ec": "EC",
 };
 
 const PROJECTILE_MAP: Record<string, string> = {
