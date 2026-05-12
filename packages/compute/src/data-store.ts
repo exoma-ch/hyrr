@@ -118,8 +118,14 @@ export class DataStore implements DatabaseProtocol {
     }
 
     onProgress?.("Loading stopping power data...", 0.75);
-    // Load per-source light-ion stopping files (PSTAR, ASTAR, dSTAR, tSTAR, He3STAR)
-    const lightIonSources = ["PSTAR", "ASTAR", "dSTAR", "tSTAR", "He3STAR"];
+    // Load per-source light-ion stopping files (PSTAR, ASTAR, dSTAR, tSTAR).
+    // He3STAR removed in nucl-parquet data-2026.5.0 — ³He routes through
+    // ASTAR with velocity-scaling at lookup time (see _energy-loss.ts: Z=2
+    // uses ASTAR for both α and ³He; ³He uses E × 4/3 to match α at same
+    // MeV/u). The He3STAR.parquet file was a redundant precomputed cache
+    // that this compute path never queried; this list also never queried
+    // it. Removing matches the upstream layout.
+    const lightIonSources = ["PSTAR", "ASTAR", "dSTAR", "tSTAR"];
     const stoppingFiles = await Promise.all(
       lightIonSources.map((src) =>
         readParquetRows(`${this.baseUrl}/stopping/${src}.parquet`).catch(() => [] as ParquetRow[]),
