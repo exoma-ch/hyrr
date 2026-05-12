@@ -58,6 +58,69 @@ export function isShellEC(mode: string): boolean {
   return /^[klm]shellec$/.test(key);
 }
 
+export interface DecayChainEntry {
+  mode: string;
+  branching: number;
+}
+
+export interface DedupedDecayChainEntry<K> extends DecayChainEntry {
+  key: K;
+  /** All original mode/branching pairs that collapsed into this entry, in input order. */
+  sources: DecayChainEntry[];
+}
+
+/**
+ * Deduplicate decay-chain entries by a caller-supplied identity key — typically
+ * `(Z, A, state)` for a parent or `(daughterZ, daughterA, daughterState)` for a
+ * daughter. Mode strings inside each bucket are first aggregated via
+ * {@link aggregateDecayModes} (so K/L/M shell-EC collapses into `EC`), then the
+ * largest-branching surviving mode is chosen as the bucket's display mode.
+ *
+ * Branchings within a bucket are SUMMED (the bucket represents the total
+ * probability of arriving at — or departing to — that nuclide regardless of
+ * mode). Original entries are preserved on `sources[]` for tooltip rendering.
+ */
+export function dedupeDecayChain<T extends DecayChainEntry, K>(
+  entries: readonly T[],
+  keyOf: (entry: T) => K,
+  keyToString: (key: K) => string = (k) => JSON.stringify(k),
+): Array<DedupedDecayChainEntry<K> & Omit<T, keyof DecayChainEntry>> {
+  type Bucket = DedupedDecayChainEntry<K> & Omit<T, keyof DecayChainEntry>;
+  const buckets = new Map<string, Bucket>();
+  for (const entry of entries) {
+    const key = keyOf(entry);
+    const ks = keyToString(key);
+    const existing = buckets.get(ks);
+    if (existing) {
+      existing.sources.push({ mode: entry.mode, branching: entry.branching });
+    } else {
+      // Capture all fields from the original entry (including extras like name,
+      // daughterZ, etc.) so consumers don't have to thread them through manually.
+      const { mode: _mode, branching: _branching, ...rest } = entry as T & Record<string, unknown>;
+      buckets.set(ks, {
+        ...(rest as Omit<T, keyof DecayChainEntry>),
+        key,
+        mode: entry.mode,
+        branching: 0,
+        sources: [{ mode: entry.mode, branching: entry.branching }],
+      } as Bucket);
+    }
+  }
+  // Finalize each bucket: aggregate K/L/M shell-EC inside the bucket, pick the
+  // dominant mode as the display label, and sum branchings.
+  const result: Bucket[] = [];
+  for (const bucket of buckets.values()) {
+    const aggregated = aggregateDecayModes(bucket.sources);
+    const dominant = aggregated.reduce((best, m) =>
+      m.branching > best.branching ? m : best,
+    );
+    bucket.mode = dominant.mode;
+    bucket.branching = aggregated.reduce((s, m) => s + m.branching, 0);
+    result.push(bucket);
+  }
+  return result;
+}
+
 export interface AggregatedDecayMode {
   /** Canonical display key — `"ec"` for any K/L/M-shell EC, otherwise the original mode string. */
   mode: string;
@@ -135,6 +198,33 @@ function mapParticleToken(token: string): string {
       ? formatDecayMode(rest)
       : rest;
   return `${prefix}${mapped}`;
+}
+
+/**
+ * Build a tooltip for a deduped decay-chain entry that summarizes the dominant
+ * mode and its total branching, with the K/L/M shell breakdown (if any) and any
+ * additional modes appended in brackets. Example output:
+ *
+ *   `EC (100.0%) [KshellEC 89.2%, LshellEC 9.3%, MshellEC 1.5%]`
+ *   `β⁺ (97.1%), EC (2.9%)`
+ */
+export function formatDecayChainTooltip(
+  sources: readonly DecayChainEntry[],
+): string {
+  if (sources.length === 0) return "";
+  const aggregated = aggregateDecayModes(sources);
+  const parts = aggregated.map((m) => {
+    const label = `${formatDecayMode(m.mode)} (${(m.branching * 100).toFixed(1)}%)`;
+    // Only annotate when more than one wire identifier folded into this bucket
+    // (i.e. K/L/M shell-EC collapsed into "ec").
+    if (m.sources.length <= 1) return label;
+    const breakdown = sources
+      .filter((s) => m.sources.includes(s.mode))
+      .map((s) => `${s.mode} ${(s.branching * 100).toFixed(1)}%`)
+      .join(", ");
+    return `${label} [${breakdown}]`;
+  });
+  return parts.join(", ");
 }
 
 /**
