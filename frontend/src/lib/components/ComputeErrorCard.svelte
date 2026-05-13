@@ -147,14 +147,17 @@
 </div>
 
 <style>
+  /* SSoT theme tokens defined in App.svelte (`--c-*`). The card lives inside
+     both light + dark themes and must not invent its own color scale — using
+     the project tokens keeps contrast correct without theme-specific overrides. */
   .error-card {
-    border: 1px solid var(--color-error, #d23f3f);
+    border: 1px solid var(--c-red);
     border-radius: 6px;
     padding: 1rem 1.25rem;
-    background: var(--color-error-bg, rgba(210, 63, 63, 0.06));
+    background: var(--c-red-tint-subtle);
     margin: 1rem 0;
     font-size: 0.95rem;
-    color: var(--color-fg, #1a1a1a);
+    color: var(--c-text);
   }
 
   .error-card-header {
@@ -166,18 +169,18 @@
 
   .badge {
     font-weight: 600;
-    color: var(--color-error, #d23f3f);
+    color: var(--c-red);
     font-size: 1rem;
   }
 
   .variant-tag {
     font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
     font-size: 0.8rem;
-    background: var(--color-bg-elevated, #fff);
-    border: 1px solid var(--color-border, rgba(0, 0, 0, 0.12));
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border-muted);
     padding: 0.05rem 0.4rem;
     border-radius: 3px;
-    color: var(--color-fg-muted, #555);
+    color: var(--c-text-muted);
   }
 
   .data-points dl {
@@ -188,24 +191,27 @@
   }
   .data-points dt {
     font-weight: 500;
-    color: var(--color-fg-muted, #555);
+    color: var(--c-text-muted);
   }
   .data-points dd {
     margin: 0;
     font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+    color: var(--c-text);
   }
 
   .explanation .message {
     margin: 0.5rem 0;
     line-height: 1.4;
+    color: var(--c-text);
   }
   .available-line {
     margin: 0.4rem 0;
+    color: var(--c-text);
   }
   .consequence {
     margin: 0.4rem 0 0;
     font-size: 0.85rem;
-    color: var(--color-fg-muted, #555);
+    color: var(--c-text-muted);
     font-style: italic;
   }
 
@@ -218,18 +224,22 @@
 
   .actions button {
     padding: 0.35rem 0.85rem;
-    border: 1px solid var(--color-border, rgba(0, 0, 0, 0.18));
+    border: 1px solid var(--c-border);
     border-radius: 4px;
-    background: var(--color-bg-elevated, #fff);
+    background: var(--c-bg-subtle);
+    color: var(--c-text);
     cursor: pointer;
     font-size: 0.9rem;
   }
   .actions button.primary {
-    background: var(--color-accent, #2c6ed5);
-    color: #fff;
+    background: var(--c-accent);
+    color: var(--c-bg-default);
     border-color: transparent;
   }
   .actions button:hover {
-    filter: brightness(0.95);
+    background: var(--c-bg-hover);
+  }
+  .actions button.primary:hover {
+    background: var(--c-accent-hover);
   }
 </style>
