@@ -279,7 +279,11 @@ impl WasmDataStore {
                     }
                 };
 
-                let n_pts = 50;
+                // Linear-in-E sampling → uneven depth steps (sparse near beam
+                // entry, tight at Bragg peak). 200 pts keeps the visible
+                // stair-step below pixel-scale at typical plot widths. Proper
+                // fix (uniform-in-depth grid) tracked separately.
+                let n_pts = 200;
                 let e_min = e_out.max(0.01);
                 let energies: Vec<f64> = (0..n_pts)
                     .map(|i| e_min + (energy_in - e_min) * (i as f64) / ((n_pts - 1) as f64))

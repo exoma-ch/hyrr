@@ -169,9 +169,12 @@ fn compute_layer(
     // Pre-compute the layer's energy grid + stopping power once — shared across all
     // target isotopes (neither depends on the target). Used for integrated production
     // (inside compute_production_rate) and for the depth profile + per-isotope depth
-    // rates. Same linspace size (100) keeps both paths bit-identical.
+    // rates. Same linspace size keeps both paths bit-identical. Linear-in-E sampling
+    // produces uneven depth steps (sparse near beam entry, tight at Bragg peak); 300
+    // pts keeps the visible stair-step well below pixel-scale at typical plot widths.
+    // Proper fix tracked separately — uniform-in-depth grid via dE/dx back-solve.
     let layer_e_low = energy_out.max(0.01);
-    let layer_energies = linspace(layer_e_low, energy_in, 100);
+    let layer_energies = linspace(layer_e_low, energy_in, 300);
     let layer_dedx = dedx_fn(&layer_energies);
 
     // Generate depth profile once (index 0 = beam entry, highest E).
@@ -629,7 +632,7 @@ fn compute_layer_stopping_only(
     // Same energy grid + dE/dx the full path uses, so heat values are
     // bit-identical to the activation path's output.
     let layer_e_low = energy_out.max(0.01);
-    let layer_energies = linspace(layer_e_low, energy_in, 100);
+    let layer_energies = linspace(layer_e_low, energy_in, 300);
     let layer_dedx = dedx_mev_per_cm(db, projectile, &composition, density, &layer_energies)?;
 
     let depth_raw =
