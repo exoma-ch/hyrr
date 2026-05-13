@@ -98,14 +98,30 @@
     rows = newRows;
   });
 
-  /** Effective enrichment: use set value or natural abundance for display. */
+  let setSum = $derived(rows.reduce((s, r) => s + (r.enrichment ?? 0), 0));
+  let unsetNatSum = $derived(
+    rows.filter((r) => r.enrichment === null).reduce((s, r) => s + r.naturalAbundance, 0),
+  );
+  let hasUnset = $derived(rows.some((r) => r.enrichment === null));
+
+  /**
+   * Effective composition shown to the user. For unset rows we distribute the
+   * `100 − setSum` remainder proportionally to natural abundance — same
+   * semantics the compute layer applies (see [[hyrr-architecture]] /
+   * normalizeIsotopeVector). This keeps the Effective column summing to 100%
+   * for partial vectors (#217) instead of double-counting natural + custom.
+   */
   function effective(row: IsotopeRow): number {
-    return row.enrichment ?? row.naturalAbundance;
+    if (row.enrichment !== null) return row.enrichment;
+    const remainder = Math.max(0, 100 - setSum);
+    if (unsetNatSum <= 0) return 0;
+    return (row.naturalAbundance / unsetNatSum) * remainder;
   }
 
   let total = $derived(rows.reduce((s, r) => s + effective(r), 0));
-  let setTotal = $derived(rows.reduce((s, r) => s + (r.enrichment ?? 0), 0));
-  let hasUnset = $derived(rows.some((r) => r.enrichment === null));
+
+  /** Valid if the displayed composition sums to 100% and no row overshoots. */
+  let isValid = $derived(setSum <= 100.1 && Math.abs(total - 100) < 0.1);
 
   /**
    * Normalize: set rows fill the remainder to 100% by scaling unset rows
@@ -155,26 +171,30 @@
   }
 
   function apply() {
-    // If all unset (natural), return undefined
+    if (!isValid) return;
+
+    // All unset → natural composition.
     if (rows.every((r) => r.enrichment === null)) {
       onchange(undefined);
       onclose();
       return;
     }
-    // Resolve all values
-    const resolved = rows.map((r) => ({ ...r, enrichment: effective(r) }));
-    const isNatural = resolved.every((r) => Math.abs(r.enrichment - r.naturalAbundance) < 0.01);
-    if (isNatural) {
-      onchange(undefined);
-    } else {
-      const result: Record<number, number> = {};
-      for (const row of resolved) {
-        if (row.enrichment > 0) {
-          result[row.A] = row.enrichment / 100;
-        }
+
+    // Emit only the explicitly-set rows. The compute layer natural-fills the
+    // remainder (see normalizeIsotopeVector in @hyrr/compute materials.ts).
+    // For a fully-specified vector this is just the normalize() result.
+    const result: Record<number, number> = {};
+    for (const row of rows) {
+      if (row.enrichment !== null && row.enrichment > 0) {
+        result[row.A] = row.enrichment / 100;
       }
-      onchange(result);
     }
+
+    // Effective view matches natural within tolerance → no override needed.
+    const isNatural = rows.every(
+      (r) => Math.abs(effective(r) - r.naturalAbundance) < 0.01,
+    );
+    onchange(isNatural ? undefined : result);
     onclose();
   }
 </script>
@@ -229,21 +249,27 @@
     </table>
 
     <div class="summary-row">
-      <span class="total" class:warn={Math.abs(total - 100) > 0.1}>
+      <span class="total" class:warn={!isValid}>
         Total: {total.toFixed(2)}%
-        {#if hasUnset}
-          <span class="total-hint">(unset rows use natural)</span>
+        {#if hasUnset && isValid}
+          <span class="total-hint">(unset rows fill from natural)</span>
         {/if}
       </span>
       <div class="actions">
-        <button class="btn" onclick={normalize} title="Fill unset rows from natural ratios to reach 100%">Normalize</button>
+        <button class="btn" class:hint={!isValid} onclick={normalize} title="Fill unset rows from natural ratios to reach 100%">Normalize</button>
         <button class="btn" onclick={resetToNatural}>Natural</button>
       </div>
     </div>
 
     <div class="bottom-actions">
       <button class="btn cancel" onclick={onclose}>Cancel</button>
-      <button class="btn apply" onclick={apply}>Apply</button>
+      <button
+        class="btn apply"
+        class:invalid={!isValid}
+        disabled={!isValid}
+        title={isValid ? "" : "Sum must equal 100% — click Normalize first"}
+        onclick={apply}
+      >Apply</button>
     </div>
   </div>
 </Modal>
@@ -429,5 +455,21 @@
 
   .btn.apply:hover {
     background: var(--c-green-emphasis);
+  }
+
+  .btn.apply.invalid {
+    background: var(--c-red);
+    border-color: var(--c-red);
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .btn.apply.invalid:hover {
+    background: var(--c-red);
+  }
+
+  .btn.hint {
+    border-color: var(--c-gold);
+    color: var(--c-gold);
   }
 </style>
