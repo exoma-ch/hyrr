@@ -197,3 +197,62 @@ fn thick_target_residual_below_table_min_returns_typed_error_not_panic() {
         Ok(_) => panic!("expected EnergyOutOfRange for thick C-12 stack, got Ok"),
     }
 }
+
+/// Regression for #211. A stack of `[Ti(thin), Al(o=1MeV degrader), Ti, Al]`
+/// at 18 MeV protons stops the beam in the third (Ti) layer. The fourth
+/// layer (Al, t=0.01 cm) then enters compute_layer with `energy_in = 0`,
+/// which used to query dE/dx at 0 MeV and surface as a fatal
+/// `EnergyOutOfRange`. Beam already stopped is not a *compute* error — the
+/// downstream layers must come back as empty-but-valid LayerResults.
+#[test]
+#[ignore = "requires bundled nucl-parquet data; run with --include-ignored after submodule init"]
+fn beam_stopped_upstream_yields_empty_downstream_layers_not_error() {
+    let Some(mut db) = make_db("tendl-2025") else {
+        eprintln!("skipping: no nucl-parquet data dir found");
+        return;
+    };
+    let _ = db.load_xs("p", 22); // Ti
+    let _ = db.load_xs("p", 13); // Al
+
+    let ti = resolve_material(&db, "Ti", None);
+    let al = resolve_material(&db, "Al", None);
+
+    let mk = |elems: &Vec<(Element, f64)>, dens: f64, t: Option<f64>, eo: Option<f64>| -> Layer {
+        Layer {
+            density_g_cm3: dens,
+            elements: elems.clone(),
+            thickness_cm: t,
+            areal_density_g_cm2: None,
+            energy_out_mev: eo,
+            is_monitor: false,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        }
+    };
+
+    let mut stack = TargetStack {
+        beam: Beam::new(ProjectileType::Proton, 18.0, 0.01),
+        layers: vec![
+            mk(&ti.elements, ti.density, Some(0.0025), None),
+            mk(&al.elements, al.density, None, Some(1.0)),
+            mk(&ti.elements, ti.density, Some(0.04), None),
+            mk(&al.elements, al.density, Some(0.01), None),
+        ],
+        irradiation_time_s: 3600.0,
+        cooling_time_s: 28800.0,
+        area_cm2: 1.0,
+        current_profile: None,
+    };
+
+    let result = compute_stack(&db, &mut stack, true)
+        .expect("beam-stopped-upstream must return Ok, not a fatal StoppingError");
+
+    assert_eq!(result.layer_results.len(), 4);
+    // Last layer received energy_in = 0 → must be a valid empty layer.
+    let last = result.layer_results.last().unwrap();
+    assert_eq!(last.energy_in, 0.0);
+    assert_eq!(last.energy_out, 0.0);
+    assert!(last.isotope_results.is_empty(), "stopped layer must produce nothing");
+    assert!(last.depth_profile.is_empty(), "stopped layer has no depth profile");
+}

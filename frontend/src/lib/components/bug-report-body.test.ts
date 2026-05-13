@@ -72,4 +72,26 @@ describe("buildBugReportBody (#143)", () => {
     );
     expect(body).toMatch(/\*\*Compute error:\*\*.*StoppingError|object Object/);
   });
+
+  it("renders a Map error as JSON instead of '[object Map]' (#211)", () => {
+    const errMap = new Map<unknown, unknown>([
+      ["kind", "StoppingError"],
+      ["variant", "EnergyOutOfRange"],
+      ["message", "Energy 0 MeV outside PSTAR range"],
+    ]);
+    const body = buildBugReportBody(baseInput({ computeError: errMap }));
+    expect(body).not.toContain("[object Map]");
+    expect(body).toContain("Energy 0 MeV outside PSTAR range");
+  });
+
+  it("renders a structured object error using its message field", () => {
+    const errObj = {
+      kind: "StoppingError",
+      variant: "EnergyOutOfRange",
+      message: "Energy 0 MeV outside PSTAR range",
+    };
+    const body = buildBugReportBody(baseInput({ computeError: errObj }));
+    expect(body).not.toContain("[object Object]");
+    expect(body).toContain("Energy 0 MeV outside PSTAR range");
+  });
 });

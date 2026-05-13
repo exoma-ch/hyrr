@@ -28,6 +28,31 @@ export interface BugReportBodyInput {
   now?: Date;
 }
 
+/**
+ * Stringify a raw compute error for the bug-report body. The WASM backend
+ * historically returned `serde_wasm_bindgen` Map values (pre-#211) and Tauri
+ * returns JSON strings — both should render as legible JSON, never the bare
+ * `[object Map]` / `[object Object]` placeholders that #211 was filed about.
+ */
+function formatComputeError(err: unknown): string {
+  if (err == null) return "";
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return String(err);
+  if (err instanceof Map) {
+    return JSON.stringify(Object.fromEntries(err as Map<unknown, unknown>));
+  }
+  if (typeof err === "object") {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === "string" && message) return message;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return Object.prototype.toString.call(err);
+    }
+  }
+  return String(err);
+}
+
 export function buildBugReportBody(input: BugReportBodyInput): string {
   const sections: string[] = [];
 
@@ -62,7 +87,7 @@ export function buildBugReportBody(input: BugReportBodyInput): string {
   }
 
   if (input.computeError != null) {
-    sections.push(`**Compute error:** ${String(input.computeError)}`);
+    sections.push(`**Compute error:** ${formatComputeError(input.computeError)}`);
   }
 
   sections.push(`**Version:** ${input.appVersion}`);

@@ -93,6 +93,26 @@ fn compute_layer(
     enable_chains: bool,
     current_profile: Option<&CurrentProfile>,
 ) -> Result<LayerResult, StoppingError> {
+    // Beam already stopped upstream — emit a zero-production layer instead of
+    // querying dE/dx at 0 MeV (which trips EnergyOutOfRange under the table_min
+    // floor). Mirrors the depth-preview behavior so the user sees the stack as
+    // configured, with the deposited-here layers cleanly empty. See #211.
+    if energy_in <= 0.0 {
+        layer.computed_energy_in = 0.0;
+        layer.computed_energy_out = 0.0;
+        layer.computed_thickness = layer.thickness_cm.unwrap_or(0.0);
+        return Ok(LayerResult {
+            energy_in: 0.0,
+            energy_out: 0.0,
+            delta_e_mev: 0.0,
+            heat_kw: 0.0,
+            depth_profile: Vec::new(),
+            isotope_results: HashMap::new(),
+            stopping_power_sources: HashMap::new(),
+            depth_production_rates: HashMap::new(),
+        });
+    }
+
     let composition = layer_composition(layer);
     let density = layer.density_g_cm3;
 
@@ -602,6 +622,23 @@ fn compute_layer_stopping_only(
     energy_in: f64,
     area: f64,
 ) -> Result<LayerResult, StoppingError> {
+    // Beam already stopped upstream — see [`compute_layer`] for rationale (#211).
+    if energy_in <= 0.0 {
+        layer.computed_energy_in = 0.0;
+        layer.computed_energy_out = 0.0;
+        layer.computed_thickness = layer.thickness_cm.unwrap_or(0.0);
+        return Ok(LayerResult {
+            energy_in: 0.0,
+            energy_out: 0.0,
+            delta_e_mev: 0.0,
+            heat_kw: 0.0,
+            depth_profile: Vec::new(),
+            isotope_results: HashMap::new(),
+            stopping_power_sources: HashMap::new(),
+            depth_production_rates: HashMap::new(),
+        });
+    }
+
     let composition = layer_composition(layer);
     let density = layer.density_g_cm3;
 

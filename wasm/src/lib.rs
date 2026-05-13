@@ -604,11 +604,17 @@ struct MaterialElementJson {
 /// `parseComputeError` helper can deserialize. Keeps the variant tag, payload
 /// fields, and a `message` string for display fallback.
 fn stopping_error_to_jsvalue(err: StoppingError) -> JsValue {
+    use serde::Serialize;
     let mut value = err.as_json();
     if let Some(obj) = value.as_object_mut() {
         obj.insert("message".to_string(), serde_json::Value::String(err.to_string()));
     }
-    match serde_wasm_bindgen::to_value(&value) {
+    // `serde_wasm_bindgen::to_value` defaults to converting JSON objects into
+    // JS `Map`s, which the frontend's `parseComputeError` can't introspect via
+    // `obj.kind`. Force plain-object serialization so the structured error is
+    // legible end-to-end (#211).
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    match value.serialize(&serializer) {
         Ok(js) => js,
         Err(_) => JsValue::from_str(&err.to_string()),
     }

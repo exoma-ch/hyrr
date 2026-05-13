@@ -13,6 +13,17 @@
 import type { ComputeError } from "../types";
 
 export function parseComputeError(raw: unknown): ComputeError {
+  // Older WASM builds returned `serde_wasm_bindgen` `Map`s instead of plain
+  // objects — fixed in #211 by configuring `.serialize_maps_as_objects(true)`,
+  // but kept here so a cached old build / Tauri returning a Map still parses
+  // cleanly.
+  if (raw instanceof Map) {
+    const obj: Record<string, unknown> = {};
+    for (const [k, v] of raw as Map<unknown, unknown>) {
+      if (typeof k === "string") obj[k] = v;
+    }
+    raw = obj;
+  }
   const structured = tryStructured(raw);
   if (structured) return structured;
 
