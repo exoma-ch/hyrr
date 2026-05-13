@@ -1328,10 +1328,11 @@
 </code></pre></div>
 <p>Both machines must run matching <code>hyrr</code> versions for the bundle to apply cleanly — the cache is version-pinned, so a v0.9 bundle won't be picked up by a v0.10 install. Alternatively, drop the upstream GitHub Releases tarball directly. The release URL pattern — host, path layout, tarball filename — is defined by <code>hyrr_core::data_fetch::release_url()</code> / <code>tarball_filename()</code>. Read your installed version from Python with <code>python -c "import hyrr._native as n; print(n.py_data_version())"</code> and substitute it for <code>&lt;V&gt;</code> below:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># On a connected machine — substitute &lt;V&gt; with the version printed above</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>curl<span class="w"> </span>-LO<span class="w"> </span><span class="s2">&quot;https://github.com/exoma-ch/nucl-parquet/releases/download/v&lt;V&gt;/nucl-parquet-data-v&lt;V&gt;.tar.zst&quot;</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># On the air-gapped machine</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>hyrr<span class="w"> </span>fetch-data<span class="w"> </span>--from<span class="w"> </span><span class="s2">&quot;nucl-parquet-data-v&lt;V&gt;.tar.zst&quot;</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># (data version is CalVer YYYY.MM.MICRO, e.g. 2026.5.0; no `v` prefix)</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>curl<span class="w"> </span>-LO<span class="w"> </span><span class="s2">&quot;https://github.com/exoma-ch/nucl-parquet/releases/download/data-&lt;V&gt;/nucl-parquet-data-&lt;V&gt;.tar.zst&quot;</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># On the air-gapped machine</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>hyrr<span class="w"> </span>fetch-data<span class="w"> </span>--from<span class="w"> </span><span class="s2">&quot;nucl-parquet-data-&lt;V&gt;.tar.zst&quot;</span>
 </code></pre></div>
 
 
