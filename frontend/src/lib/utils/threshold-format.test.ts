@@ -111,9 +111,14 @@ describe("formatWithThreshold — exceptional values", () => {
     }
   });
 
-  it("treats exact zero as below threshold (collapses / indicates)", () => {
-    expect(formatWithThresholdEx(0, "activity", "indicator", T).clamped).toBe(true);
-    expect(formatWithThresholdEx(0, "activity", "zero", T).text).toBe("0");
+  it("renders true zero as '0' in every mode and never marks it clamped (#205)", () => {
+    // Mode-dependent rendering is reserved for *sub-threshold non-zero* values
+    // — exact zero is unambiguous and must not be hidden behind a `<X` chip.
+    for (const m of ["all", "indicator", "zero"] as const) {
+      const r = formatWithThresholdEx(0, "activity", m, T);
+      expect(r.text).toBe("0");
+      expect(r.clamped).toBe(false);
+    }
   });
 });
 

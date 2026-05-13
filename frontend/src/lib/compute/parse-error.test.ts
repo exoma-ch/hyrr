@@ -90,4 +90,24 @@ describe("parseComputeError", () => {
     const result = parseComputeError({ foo: "bar" });
     expect(result.kind).toBe("Unknown");
   });
+
+  it("handles legacy Map errors from serde_wasm_bindgen (#211)", () => {
+    const errMap = new Map<unknown, unknown>([
+      ["kind", "StoppingError"],
+      ["variant", "EnergyOutOfRange"],
+      ["source", "PSTAR"],
+      ["target_symbol", "Al"],
+      ["target_z", 13],
+      ["energy_mev", 0.0],
+      ["min_mev", 0.001],
+      ["max_mev", 10000],
+      ["message", "Energy 0 MeV outside PSTAR range for Al"],
+    ]);
+    const result = parseComputeError(errMap);
+    expect(result.kind).toBe("StoppingError");
+    if (result.kind === "StoppingError") {
+      expect(result.variant).toBe("EnergyOutOfRange");
+      expect(result.message).toContain("PSTAR range");
+    }
+  });
 });
