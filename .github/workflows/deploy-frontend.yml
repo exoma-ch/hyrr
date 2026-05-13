@@ -8,8 +8,17 @@ name: Deploy frontend (staging slot)
 on:
   push:
     branches: [main]
+    # WASM is built from wasm/** linking core/**, then bundled into
+    # frontend/dist — so a core or wasm change is functionally a
+    # frontend change for the deployed /tst bundle. Without these
+    # paths a wasm-only PR (e.g. depth-grid bump) merges to main but
+    # never reaches staging. Cargo.lock is here because dependency
+    # bumps can affect WASM size/behavior even without source changes.
     paths:
       - "frontend/**"
+      - "wasm/**"
+      - "core/**"
+      - "Cargo.lock"
       - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch:
 
