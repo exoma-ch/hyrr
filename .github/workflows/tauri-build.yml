@@ -121,6 +121,26 @@ jobs:
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
+      # Drop macOS .app bundle paths from the attest subject list. .app is a
+      # *directory* — actions/attest-build-provenance recurses into it and
+      # registers every contained file (Frameworks/, Resources/, _CodeSignature/,
+      # MainBin), easily blowing past the action's 1024-subject cap. The
+      # accompanying .dmg + .tar.gz + .sig already cover the .app contents
+      # transitively, so we lose nothing by dropping it.
+      - name: Filter artifact paths for attestation
+        id: filter_artifacts
+        if: ${{ steps.tauri_build.outputs.artifactPaths != '' }}
+        shell: bash
+        env:
+          ARTIFACT_PATHS: ${{ steps.tauri_build.outputs.artifactPaths }}
+        run: |
+          filtered=$(printf '%s' "$ARTIFACT_PATHS" | jq -c 'map(select(endswith(".app") | not))')
+          {
+            echo "paths<<EOF"
+            echo "$filtered"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # Build provenance attestation (Sigstore-keyless via GitHub OIDC).
       # Separate trust layer from the minisign updater signature: the
       # attestation proves "this binary came from this exact workflow run
@@ -131,4 +151,4 @@ jobs:
         if: ${{ steps.tauri_build.outputs.artifactPaths != '' }}
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: ${{ steps.tauri_build.outputs.artifactPaths }}
+          subject-path: ${{ steps.filter_artifacts.outputs.paths }}
