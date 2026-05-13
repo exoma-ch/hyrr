@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.0] — 2026-05-12
+## [0.8.0] — 2026-05-13
 
 The **Local-first** release. Three architectural shifts let HYRR run as an
 honest offline-first tool: a lazy nuclear-data cache that no longer ships
@@ -35,16 +35,26 @@ coverage. The MCP server is now a first-class entry point distributed via
 
 ### Changed
 
+- **BREAKING — nucl-parquet wire format split (CalVer data, SemVer code).** The release URL changed from `v{V}/nucl-parquet-data-v{V}.tar.zst` to `data-{V}/nucl-parquet-data-{V}.tar.zst`, and `DATA_VERSION` now reads from `nucl-parquet/data/catalog.json::data_version` instead of `pyproject.toml::version`. Latest data ships as `data-2026.5.0`. ³He stopping is no longer a separate table — `He3STAR.parquet` is gone and ³He routes through ASTAR with velocity scaling at lookup time. Existing caches at `~/.hyrr/nucl-parquet/v{V}/` are still readable (cache layout unchanged). (#196)
 - **nucl-parquet** bumped to v0.10.x — TENDL-2025 default across all surfaces, hi-xs-prod heavy-ion data, catima-derived stopping for Z≥6 projectiles (#91, #113, #127, #128).
 - **Default cross-section library** is `tendl-2025` everywhere; configurable via `--library`, `HYRR_LIBRARY`, or `DataStore(library=…)` (#91).
 - **Typed `StoppingError` / `FetchError` chains** replace `Result<_, String>` at all IPC boundaries. Frontend `parseStoppingError` / `parseFetchError` decode the JSON wire format into discriminated unions; recovery cards render variant-specific titles (`Couldn't download nuclear data — HTTP 404`, `Energy out of table range`, etc.) (#142, #150).
 - **Single source of truth for data-fetch constants** — `hyrr_core::data_fetch::{release_url,tarball_filename,cache_root_pattern,data_version}` plus mirror Tauri commands and frontend `data-fetch-meta.ts` getters. No more concrete `v0.10.0/nucl-parquet-data-v0.10.0.tar.zst` literals scattered across docs/CI/code (#118-contract, #157).
 - **Shared `FetchProgressThrottle`** — desktop and PyO3 binding both use one canonical 100 ms / 256 KiB combinator in `hyrr_core::data_fetch`. Replaced two ~60-LOC inline copies (#180).
 - **Activity-plot legend behaviour** — selection persists across `Plotly.react()` calls via a `Map<string, boolean | "legendonly">` instead of being clobbered on every re-render.
+- **Inline Octicon SVG paths replaced by `lucide-svelte` components** across `HeaderBar`, `ActivityTableEnhanced`, `SaveMenu`, `IsotopePopup`, `Modal`. Tree-shaken per-icon, no more hand-pasted `<path d="…"/>` blobs. GitHub mark stays inline (lucide ships no brand glyphs) (#204).
 - **`init_data_store` and `FetchErrorPayload`** redact `$HOME` to `~/…` before crossing the IPC boundary, so bug-report attachments don't leak the OS username (#173, #176).
 
 ### Fixed
 
+- **Plotly v3 axis-title API drift** — every plot's axis labels were missing on /tst after the Plotly v3 upgrade because v3 requires `xaxis.title.text` (object) instead of `xaxis.title` (string). All plots ported to the object form (#197/#199).
+- **K/L/M-shell EC duplication** — the isotope-popup decay-mode chip and decay chain displayed `EC + EC + EC + β⁺` from the K/L/M shell-resolved entries; aggregated to a single `EC` bucket with branching summed. The activity-table Reaction column applies the same collapse for the per-isotope notation (e.g. `⁵¹Mn(EC), ⁵¹Mn(β⁺)` instead of four entries) (#198/#202/#205).
+- **Activity-table cells in scientific notation below 1 Bq** — `fmtActivity` / `fmtYield` / `fmtDoseRate` only had k/M/G/T tiers, so a `7.63e-6 Bq` cell read as exponential. Refactored around a single `fmtSI` helper extending the SI prefix table down to p-Bq / p-Sv-h⁻¹ (#205).
+- **Activity-plot save icon mid-toolbar** — wrapped the save+clear cluster in a right-aligned span so it hugs the right edge, matching every other plot's layout (#205).
+- **Cog/filter UX consolidation in activity table** — the `~0` / `0` / `all` chip group moved into a cog dropdown adjacent to the save button. Indicator label `~0` → `<X`. `formatWithThresholdEx` short-circuits true zero to the unit-aware zero label in every mode so only sub-threshold non-zero cells get mode-dependent rendering (#204).
+- **Plots piecewise-linear on the high-energy front of every layer** — the depth-profile grid was linear-in-energy, which concentrates depth points at the Bragg peak (large dE/dx → small Δd) and starves the beam-entry side (small dE/dx → large Δd). `generate_depth_profile` now resamples to a uniform-in-depth grid via dE/dx back-solve; per-layer adjacent Δd varies by <2 % regardless of where on the curve. New `depth_grid_is_uniform_in_depth` regression test; conservation invariant `depth_rate_integrates_to_production_rate` unchanged (#206 stop-gap → #210 proper fix, closes #208).
+- **macOS desktop builds aborted in attest step** — `actions/attest-build-provenance@v4` recurses into directories, and a Tauri `.app` is a directory with >1024 contained files. Filter step strips `.app` entries from the subject list before attest; the `.dmg` and `.tar.gz`/`.sig` pair cover the contents transitively (#207).
+- **Staging deploy missed wasm-only/core-only PRs** — `deploy-frontend.yml` only watched `frontend/**` paths, but the deployed bundle includes WASM built from `wasm/**` linking `core/**`. Added `wasm/**`, `core/**`, `Cargo.lock` to the path filter (#209).
 - **Heavy-ion crashes** — `compute_stack` for C-12 / O-16 / Ne-20 / Si-28 / Ar-40 / Fe-56 hit a catima parquet-key mismatch (`catima_O-16` vs `catima_O16`); fixed by stripping the dash in the source-key construction and adding a typed-error path when the table lookup misses (#137-fix, #141, #142, #150, #161).
 - **Stale results displayed after compute failure** — the previous successful run's stats no longer mask a freshly-failed run; both `setResultErrored` and `setComputeError` fire from the scheduler's single funnel (#143).
 - **Activity clamp too loose** — `R × λt` allowed 40× spurious peaks mid-irradiation; replaced with the analytical saturation envelope `R × (1 − exp(−λt_irr))` (closes #55).
