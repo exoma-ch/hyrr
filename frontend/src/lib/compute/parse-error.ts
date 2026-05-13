@@ -70,6 +70,7 @@ function tryStructured(raw: unknown): ComputeError | null {
   if (obj.kind !== "StoppingError") return null;
   const variant = obj.variant;
   const message = typeof obj.message === "string" ? obj.message : "";
+  const layerCtx = readLayerCtx(obj);
 
   if (variant === "NoSourceTable") {
     return {
@@ -80,6 +81,7 @@ function tryStructured(raw: unknown): ComputeError | null {
       available: arrStr(obj.available),
       available_pretty: str(obj.available_pretty),
       message,
+      ...layerCtx,
     };
   }
   if (variant === "EnergyOutOfRange") {
@@ -93,6 +95,7 @@ function tryStructured(raw: unknown): ComputeError | null {
       min_mev: num(obj.min_mev),
       max_mev: num(obj.max_mev),
       message,
+      ...layerCtx,
     };
   }
   if (variant === "NoTargetData") {
@@ -104,9 +107,21 @@ function tryStructured(raw: unknown): ComputeError | null {
       target_z: num(obj.target_z),
       available_zs: arrNum(obj.available_zs),
       message,
+      ...layerCtx,
     };
   }
   return null;
+}
+
+function readLayerCtx(obj: Record<string, unknown>): {
+  layer_index?: number;
+  layer_material?: string;
+} {
+  const out: { layer_index?: number; layer_material?: string } = {};
+  if (typeof obj.layer_index === "number") out.layer_index = obj.layer_index;
+  if (typeof obj.layer_material === "string" && obj.layer_material)
+    out.layer_material = obj.layer_material;
+  return out;
 }
 
 function str(v: unknown): string {

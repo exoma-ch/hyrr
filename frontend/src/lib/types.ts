@@ -46,8 +46,18 @@ export interface HistoryEntry {
  * classify a thrown value — keeps generic JS errors out of the typed
  * recovery card while still surfacing them to the user.
  */
+/**
+ * Layer-attribution context attached at the stack-loop site in Rust
+ * (`StoppingError::with_layer_context`). Optional because some errors
+ * surface before the loop has a layer to blame (e.g. backend init).
+ */
+export interface LayerContext {
+  layer_index?: number;
+  layer_material?: string;
+}
+
 export type ComputeError =
-  | {
+  | ({
       kind: "StoppingError";
       variant: "NoSourceTable";
       source: string;
@@ -55,8 +65,8 @@ export type ComputeError =
       available: string[];
       available_pretty: string;
       message: string;
-    }
-  | {
+    } & LayerContext)
+  | ({
       kind: "StoppingError";
       variant: "EnergyOutOfRange";
       source: string;
@@ -66,8 +76,8 @@ export type ComputeError =
       min_mev: number;
       max_mev: number;
       message: string;
-    }
-  | {
+    } & LayerContext)
+  | ({
       kind: "StoppingError";
       variant: "NoTargetData";
       source: string;
@@ -75,5 +85,5 @@ export type ComputeError =
       target_z: number;
       available_zs: number[];
       message: string;
-    }
+    } & LayerContext)
   | { kind: "Unknown"; message: string };

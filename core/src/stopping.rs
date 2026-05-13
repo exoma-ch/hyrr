@@ -38,6 +38,10 @@ pub enum StoppingError {
         projectile: String,
         available: Vec<String>,
         available_pretty: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layer_index: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layer_material: Option<String>,
     },
     #[error("Energy {energy_mev:.3} MeV out of range [{min_mev:.3}, {max_mev:.3}] for {source_name} on {target_symbol} (Z={target_z})")]
     EnergyOutOfRange {
@@ -48,6 +52,10 @@ pub enum StoppingError {
         energy_mev: f64,
         min_mev: f64,
         max_mev: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layer_index: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layer_material: Option<String>,
     },
     #[error("No {source_name} data for target {target_symbol} (Z={target_z}). Available Z: {available_zs:?}")]
     NoTargetData {
@@ -56,6 +64,10 @@ pub enum StoppingError {
         target_symbol: String,
         target_z: u32,
         available_zs: Vec<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layer_index: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layer_material: Option<String>,
     },
 }
 
@@ -69,6 +81,23 @@ impl StoppingError {
             obj.insert("kind".to_string(), serde_json::Value::String("StoppingError".to_string()));
         }
         v
+    }
+
+    /// Stamp layer-attribution context onto an error returned from a per-layer
+    /// compute step. Caller is the stack-loop orchestrator, which is the only
+    /// site that knows which layer index/material was being processed when the
+    /// error surfaced. Idempotent — overwrites any pre-existing context.
+    pub fn with_layer_context(mut self, layer_index: usize, layer_material: impl Into<String>) -> Self {
+        let mat = layer_material.into();
+        match &mut self {
+            StoppingError::NoSourceTable { layer_index: li, layer_material: lm, .. }
+            | StoppingError::EnergyOutOfRange { layer_index: li, layer_material: lm, .. }
+            | StoppingError::NoTargetData { layer_index: li, layer_material: lm, .. } => {
+                *li = Some(layer_index);
+                *lm = Some(mat);
+            }
+        }
+        self
     }
 }
 
@@ -95,6 +124,8 @@ fn get_interpolated_dedx(
             projectile: projectile.symbol_string(),
             available: available_sources_for(projectile),
             available_pretty: available_pretty_for(projectile),
+            layer_index: None,
+            layer_material: None,
         });
     }
 
@@ -104,6 +135,8 @@ fn get_interpolated_dedx(
             target_symbol: db.get_element_symbol(target_z),
             target_z,
             available_zs,
+            layer_index: None,
+            layer_material: None,
         });
     }
 
@@ -167,6 +200,8 @@ fn check_energy_range(
                 energy_mev: e,
                 min_mev,
                 max_mev,
+                layer_index: None,
+                layer_material: None,
             });
         }
     }
@@ -449,6 +484,7 @@ mod tests {
                 projectile: proj,
                 ref available,
                 ref available_pretty,
+                ..
             } => {
                 assert_eq!(source_name, "catima_O17");
                 assert_eq!(proj, "O-17");
@@ -474,6 +510,7 @@ mod tests {
                 energy_mev,
                 min_mev: _,
                 max_mev,
+                ..
             } => {
                 assert_eq!(source_name, "PSTAR");
                 assert_eq!(target_symbol, "Al");
@@ -523,10 +560,61 @@ mod tests {
             projectile: "O-17".to_string(),
             available: vec!["catima_C12".to_string()],
             available_pretty: "C-12".to_string(),
+            layer_index: None,
+            layer_material: None,
         };
         let json = err.as_json();
         assert_eq!(json["kind"], "StoppingError");
         assert_eq!(json["variant"], "NoSourceTable");
         assert_eq!(json["projectile"], "O-17");
+    }
+
+    #[test]
+    fn with_layer_context_stamps_index_and_material() {
+        let err = StoppingError::EnergyOutOfRange {
+            source_name: "PSTAR".to_string(),
+            target_symbol: "Al".to_string(),
+            target_z: 13,
+            energy_mev: 0.0,
+            min_mev: 0.001,
+            max_mev: 10_000.0,
+            layer_index: None,
+            layer_material: None,
+        };
+        let stamped = err.with_layer_context(2, "havar");
+        match stamped {
+            StoppingError::EnergyOutOfRange { layer_index, layer_material, .. } => {
+                assert_eq!(layer_index, Some(2));
+                assert_eq!(layer_material.as_deref(), Some("havar"));
+            }
+            other => panic!("expected EnergyOutOfRange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn with_layer_context_omits_fields_from_json_when_unset() {
+        let err = StoppingError::NoTargetData {
+            source_name: "PSTAR".to_string(),
+            target_symbol: "Ubn".to_string(),
+            target_z: 120,
+            available_zs: vec![1, 8, 13, 29],
+            layer_index: None,
+            layer_material: None,
+        };
+        let json = err.as_json();
+        assert!(json.get("layer_index").is_none(), "must not serialize None");
+        assert!(json.get("layer_material").is_none(), "must not serialize None");
+
+        let stamped = StoppingError::NoTargetData {
+            source_name: "PSTAR".to_string(),
+            target_symbol: "Ubn".to_string(),
+            target_z: 120,
+            available_zs: vec![1, 8, 13, 29],
+            layer_index: None,
+            layer_material: None,
+        }.with_layer_context(1, "H2O-18");
+        let json = stamped.as_json();
+        assert_eq!(json["layer_index"], 1);
+        assert_eq!(json["layer_material"], "H2O-18");
     }
 }

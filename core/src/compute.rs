@@ -53,7 +53,16 @@ pub fn compute_stack(
     let mut energy_in = beam.energy_mev;
     let mut layer_results = Vec::new();
 
-    for layer in &mut stack.layers {
+    for (idx, layer) in stack.layers.iter_mut().enumerate() {
+        // Capture material name BEFORE compute_layer mutates the layer.
+        // Layer doesn't carry a name; surface the first element's symbol
+        // (works for elementals + lets the frontend show *something* for
+        // compounds; the layer index disambiguates if material symbols repeat).
+        let material_hint = layer
+            .elements
+            .first()
+            .map(|(e, _)| e.symbol.clone())
+            .unwrap_or_default();
         let lr = compute_layer(
             db,
             projectile,
@@ -67,7 +76,8 @@ pub fn compute_stack(
             area,
             enable_chains,
             stack.current_profile.as_ref(),
-        )?;
+        )
+        .map_err(|e| e.with_layer_context(idx, material_hint))?;
         energy_in = lr.energy_out;
         layer_results.push(lr);
     }
@@ -588,7 +598,12 @@ pub fn compute_stack_stopping_only(
     let mut energy_in = beam.energy_mev;
     let mut layer_results = Vec::new();
 
-    for layer in &mut stack.layers {
+    for (idx, layer) in stack.layers.iter_mut().enumerate() {
+        let material_hint = layer
+            .elements
+            .first()
+            .map(|(e, _)| e.symbol.clone())
+            .unwrap_or_default();
         let lr = compute_layer_stopping_only(
             db,
             projectile,
@@ -597,7 +612,8 @@ pub fn compute_stack_stopping_only(
             layer,
             energy_in,
             area,
-        )?;
+        )
+        .map_err(|e| e.with_layer_context(idx, material_hint))?;
         energy_in = lr.energy_out;
         layer_results.push(lr);
     }

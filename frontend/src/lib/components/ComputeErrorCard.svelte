@@ -19,26 +19,47 @@
     onReportGap,
   }: Props = $props();
 
-  // Pretty fall-throughs derived from the structured payload.
+  // Headline is variant-specific. The previous always-on "No stopping data
+  // available" was misleading for `Unknown` errors (e.g. WASM panics — see
+  // #211 follow-up #213, where a wasm-bindgen "recursive use of an object"
+  // panic was rendered as "No stopping data available / Target —").
+  const headline = $derived(
+    error.kind !== "StoppingError"
+      ? "Compute backend error"
+      : error.variant === "NoSourceTable"
+        ? "No stopping data for this projectile"
+        : error.variant === "NoTargetData"
+          ? "No stopping data for this target"
+          : "Energy outside tabulated range",
+  );
+
+  // Layer attribution from `StoppingError::with_layer_context` (Rust side).
+  // Only set when the error surfaced inside the per-layer compute loop.
+  const layerLabel = $derived(
+    error.kind === "StoppingError" && error.layer_index != null
+      ? `L${error.layer_index + 1}${error.layer_material ? ` (${error.layer_material})` : ""}`
+      : null,
+  );
+
   const sourceLabel = $derived(
-    error.kind === "StoppingError" ? error.source : "compute backend",
+    error.kind === "StoppingError" ? error.source : null,
   );
   const projectileLabel = $derived(
     error.kind === "StoppingError" && error.variant === "NoSourceTable"
       ? error.projectile
-      : (projectile ?? "—"),
+      : (projectile ?? null),
   );
   const targetLabel = $derived(
     error.kind === "StoppingError" && error.variant !== "NoSourceTable"
       ? `${error.target_symbol} (Z=${error.target_z})`
-      : "—",
+      : null,
   );
   const energyLabel = $derived(
     error.kind === "StoppingError" && error.variant === "EnergyOutOfRange"
       ? `${error.energy_mev.toFixed(3)} MeV`
       : energyMev != null
         ? `${energyMev.toFixed(3)} MeV`
-        : "—",
+        : null,
   );
 
   // Suggested replacement when StoppingError::NoSourceTable.
@@ -49,8 +70,6 @@
   );
 
   function pickNearest(_proj: string, available: string[]): string | null {
-    // The Rust side gives us source identifiers like "catima_C-12";
-    // strip the prefix for display + dropdown values.
     const projForms = available
       .map((s) => s.replace(/^catima_/, ""))
       .filter((s) => s.length > 0);
@@ -60,7 +79,7 @@
 
 <div class="error-card" role="alert" aria-live="assertive">
   <header class="error-card-header">
-    <span class="badge">No stopping data available</span>
+    <span class="badge">{headline}</span>
     <span class="variant-tag">{
       error.kind === "StoppingError" ? error.variant : "Unknown"
     }</span>
@@ -68,10 +87,11 @@
 
   <section class="data-points">
     <dl>
-      <dt>Source</dt><dd>{sourceLabel}</dd>
-      <dt>Projectile</dt><dd>{projectileLabel}</dd>
-      <dt>Target</dt><dd>{targetLabel}</dd>
-      <dt>Energy</dt><dd>{energyLabel}</dd>
+      {#if layerLabel}<dt>Layer</dt><dd>{layerLabel}</dd>{/if}
+      {#if sourceLabel}<dt>Source</dt><dd>{sourceLabel}</dd>{/if}
+      {#if projectileLabel}<dt>Projectile</dt><dd>{projectileLabel}</dd>{/if}
+      {#if targetLabel}<dt>Target</dt><dd>{targetLabel}</dd>{/if}
+      {#if energyLabel}<dt>Energy</dt><dd>{energyLabel}</dd>{/if}
     </dl>
   </section>
 
@@ -94,10 +114,17 @@
       </p>
     {/if}
 
-    <p class="consequence">
-      Without stopping data, the depth profile, dE/dx curve, residual energy,
-      and Bragg peak cannot be computed for this stack.
-    </p>
+    {#if error.kind === "StoppingError"}
+      <p class="consequence">
+        Without stopping data, the depth profile, dE/dx curve, residual energy,
+        and Bragg peak cannot be computed for this stack.
+      </p>
+    {:else}
+      <p class="consequence">
+        The compute backend failed before producing a result. Try refreshing
+        the page if this persists — the WASM module state may be poisoned.
+      </p>
+    {/if}
   </section>
 
   <footer class="actions">

@@ -192,7 +192,15 @@ fn thick_target_residual_below_table_min_returns_typed_error_not_panic() {
         "compute_stack PANICKED on residual-below-table_min — must return typed Err (#150)",
     );
     match inner {
-        Err(StoppingError::EnergyOutOfRange { .. }) => {} // expected
+        Err(StoppingError::EnergyOutOfRange { layer_index, layer_material, .. }) => {
+            // #213: a per-layer error must arrive with layer attribution stamped
+            // by compute_stack's loop, so the recovery card can name the offending layer.
+            assert_eq!(layer_index, Some(0), "single-layer stack must report L1 / index 0");
+            assert!(
+                layer_material.as_deref() == Some("Cu"),
+                "expected layer_material=Cu, got {layer_material:?}"
+            );
+        }
         Err(other) => panic!("expected EnergyOutOfRange, got {other:?}"),
         Ok(_) => panic!("expected EnergyOutOfRange for thick C-12 stack, got Ok"),
     }

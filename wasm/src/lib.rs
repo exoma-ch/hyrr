@@ -108,7 +108,12 @@ impl WasmDataStore {
         }
 
         for (key, mut pairs) in grouped {
-            pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            // `total_cmp` doesn't panic on NaN — critical here because a
+            // partial_cmp().unwrap() panic inside this `&mut self` method
+            // would leave the WasmRefCell mutably-borrowed, poisoning every
+            // subsequent call with "recursive use of an object detected".
+            // See #211 follow-up (#213).
+            pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
             let parts: Vec<&str> = key.splitn(2, '_').collect();
             if parts.len() == 2 {
                 let source = parts[0];
@@ -145,7 +150,8 @@ impl WasmDataStore {
 
         let mut xs_list = Vec::new();
         for (_, (ta, rz, ra, state, mut pairs)) in grouped {
-            pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            // NaN-safe (see load_stopping_data above).
+            pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
             xs_list.push(CrossSectionData {
                 target_a: ta,
                 residual_z: rz,
