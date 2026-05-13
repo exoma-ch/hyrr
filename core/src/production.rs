@@ -86,8 +86,19 @@ pub struct DepthProfileResult {
     pub heat_w_cm3: Vec<f64>,
 }
 
-/// Generate depth profile from integration points.
-/// Input energies arrive as energyOut→energyIn (low→high).
+/// Generate depth profile, returning a uniform-in-depth grid.
+///
+/// Input `energies` arrive linearly-spaced from energy_out → energy_in (low→high).
+/// Step 1 integrates dE/|dE/dx| to get the depth at each energy point — that grid
+/// is non-uniform in depth (sparse near beam entry where dE/dx is small, dense at
+/// the Bragg peak where dE/dx is large). Step 2 resamples energies and dE/dx onto
+/// a uniform-depth output grid via linear interpolation, so downstream consumers
+/// (XS(E(x))-vs-depth, production-rate-vs-depth, integrate_heat) see evenly-spaced
+/// depth points regardless of the underlying energy sampling.
+///
+/// The resampling preserves the spatial integral of dE/dx (=total energy deposited
+/// = energy_in − energy_out) to interpolation precision; the
+/// `depth_rate_integrates_to_production_rate` invariant still holds.
 pub fn generate_depth_profile(
     energies: &[f64],
     dedx_values: &[f64],
@@ -97,32 +108,50 @@ pub fn generate_depth_profile(
 ) -> DepthProfileResult {
     let n = energies.len();
 
-    // Reverse so index 0 = beam entry (highest energy)
+    // Reverse so index 0 = beam entry (highest energy).
     let e_rev: Vec<f64> = energies.iter().rev().copied().collect();
     let d_rev: Vec<f64> = dedx_values.iter().rev().copied().collect();
 
-    let mut depths = vec![0.0; n];
+    // Step 1: depth at each linear-in-E grid point.
+    let mut raw_depths = vec![0.0; n];
     let de = if n > 1 {
         (e_rev[0] - e_rev[1]).abs()
     } else {
         0.0
     };
-
     for i in 1..n {
-        depths[i] = depths[i - 1] + de / d_rev[i - 1].abs();
+        raw_depths[i] = raw_depths[i - 1] + de / d_rev[i - 1].abs();
     }
 
     let beam_particles_per_s = (beam_current_ma * 1e-3) / (projectile_z as f64 * ELEMENTARY_CHARGE);
     let flux = beam_particles_per_s / area_cm2;
 
-    let heat_w_cm3: Vec<f64> = d_rev
+    // Step 2: resample to a uniform-in-depth output grid. This is what kills the
+    // visible stair-step on σ/production-vs-depth — the previous output was dense
+    // at the Bragg peak (where the curve is already smooth anyway) and starved at
+    // the high-energy front (where σ changes fastest with depth).
+    let total_depth = raw_depths[n - 1];
+    if total_depth <= 0.0 || n < 2 {
+        // Degenerate layer — pass the raw arrays through.
+        let heat_w_cm3: Vec<f64> = d_rev.iter().map(|&d| flux * d.abs() * MEV_TO_JOULE).collect();
+        return DepthProfileResult {
+            depths: raw_depths,
+            energies_ordered: e_rev,
+            heat_w_cm3,
+        };
+    }
+    let uniform_depths = linspace(0.0, total_depth, n);
+    let uniform_energies = interp(&uniform_depths, &raw_depths, &e_rev, e_rev[0], e_rev[n - 1]);
+    let uniform_dedx = interp(&uniform_depths, &raw_depths, &d_rev, d_rev[0], d_rev[n - 1]);
+
+    let heat_w_cm3: Vec<f64> = uniform_dedx
         .iter()
         .map(|&d| flux * d.abs() * MEV_TO_JOULE)
         .collect();
 
     DepthProfileResult {
-        depths,
-        energies_ordered: e_rev,
+        depths: uniform_depths,
+        energies_ordered: uniform_energies,
         heat_w_cm3,
     }
 }
@@ -222,6 +251,35 @@ mod tests {
             integrated_from_depth,
             integrated.production_rate,
             rel_err
+        );
+    }
+
+    /// Uniformity guard: generate_depth_profile must emit a depth grid with
+    /// constant Δd to interpolation precision, regardless of the input being
+    /// linear-in-E (and therefore non-uniform in depth). This is what kills
+    /// the visible stair-step on σ/production-vs-depth plots — uniform output
+    /// means each plot pixel maps to the same number of underlying points.
+    #[test]
+    fn depth_grid_is_uniform_in_depth() {
+        // Same proton-on-Al-like dE/dx the conservation test uses.
+        let energies: Vec<f64> = linspace(0.5, 100.0, 300);
+        let dedx_values: Vec<f64> = energies.iter().map(|&e| 40.0 / e.sqrt()).collect();
+
+        let dp = generate_depth_profile(&energies, &dedx_values, 1.0, 1.0, 1);
+
+        let n = dp.depths.len();
+        assert!(n >= 2);
+        // Build adjacent Δd, then verify (max − min) / mean < 1e-12.
+        let deltas: Vec<f64> = (1..n).map(|i| dp.depths[i] - dp.depths[i - 1]).collect();
+        let mean: f64 = deltas.iter().sum::<f64>() / deltas.len() as f64;
+        let max = deltas.iter().cloned().fold(f64::MIN, f64::max);
+        let min = deltas.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(
+            (max - min) / mean < 1e-12,
+            "depth grid not uniform: Δd ∈ [{:.6e}, {:.6e}], mean {:.6e}",
+            min,
+            max,
+            mean
         );
     }
 
