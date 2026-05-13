@@ -91,6 +91,42 @@ describe("parseComputeError", () => {
     expect(result.kind).toBe("Unknown");
   });
 
+  it("passes through layer_index + layer_material when present (#213)", () => {
+    const payload = {
+      kind: "StoppingError",
+      variant: "EnergyOutOfRange",
+      source: "PSTAR",
+      target_symbol: "O",
+      target_z: 8,
+      energy_mev: 0.0,
+      min_mev: 0.001,
+      max_mev: 10000,
+      message: "Energy 0 MeV out of range",
+      layer_index: 1,
+      layer_material: "H2O-18",
+    };
+    const result = parseComputeError(payload);
+    if (result.kind !== "StoppingError") throw new Error("expected StoppingError");
+    expect(result.layer_index).toBe(1);
+    expect(result.layer_material).toBe("H2O-18");
+  });
+
+  it("omits layer_* fields cleanly when the Rust side didn't stamp them", () => {
+    const payload = {
+      kind: "StoppingError",
+      variant: "NoSourceTable",
+      source: "catima_Cl-35",
+      projectile: "Cl-35",
+      available: ["catima_C-12"],
+      available_pretty: "C-12",
+      message: "no catima_Cl-35",
+    };
+    const result = parseComputeError(payload);
+    if (result.kind !== "StoppingError") throw new Error("expected StoppingError");
+    expect(result.layer_index).toBeUndefined();
+    expect(result.layer_material).toBeUndefined();
+  });
+
   it("handles legacy Map errors from serde_wasm_bindgen (#211)", () => {
     const errMap = new Map<unknown, unknown>([
       ["kind", "StoppingError"],
