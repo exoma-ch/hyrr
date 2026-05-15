@@ -1,79 +1,145 @@
 /**
- * DataStore gamma emission loading — red/green test for #201.
+ * DataStore emission data — matrix test across isotope types (#201).
  *
- * Loads the real nudex_level_gammas.parquet from the nucl-parquet
- * submodule and verifies getGammaLines returns data for Mn-52
- * (Z=25, A=52), which has 83 γ transitions in ENSDF.
+ * Parses real parquet files from the nucl-parquet submodule and verifies
+ * gamma + decay-detailed data for a representative set of isotopes covering
+ * all emission channels (α, β⁻, β⁺, EC, γ).
  */
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-// Resolve the nucl-parquet data directory
 const DATA_DIR = resolve(__dirname, "../../../nucl-parquet/data");
 const GAMMA_FILE = resolve(DATA_DIR, "meta/nudex_level_gammas.parquet");
-const HAS_DATA = existsSync(GAMMA_FILE);
+const DECAY_FILE = resolve(DATA_DIR, "meta/decay_detailed.parquet");
+const HAS_GAMMA = existsSync(GAMMA_FILE);
+const HAS_DECAY = existsSync(DECAY_FILE);
 
-describe("DataStore gamma emissions (#201)", () => {
-  it.skipIf(!HAS_DATA)("readParquetRows handles 245k-row file without stack overflow", async () => {
-    const { parquetRead } = await import("hyparquet");
-    const { compressors } = await import("hyparquet-compressors");
+async function loadParquet(path: string): Promise<any[]> {
+  const { parquetRead } = await import("hyparquet");
+  const { compressors } = await import("hyparquet-compressors");
+  const buf = readFileSync(path);
+  const arrayBuf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  let rows: any[] = [];
+  await parquetRead({
+    file: arrayBuf,
+    compressors,
+    rowFormat: "object",
+    onComplete: (data: any[]) => { rows = rows.concat(data); },
+  });
+  return rows;
+}
 
-    const buf = readFileSync(GAMMA_FILE);
-    const arrayBuf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-
-    let rows: any[] = [];
-    await parquetRead({
-      file: arrayBuf,
-      compressors,
-      rowFormat: "object",
-      onComplete: (data: any[]) => { rows = rows.concat(data); },
+function indexGammas(rows: any[]) {
+  const idx = new Map<string, any[]>();
+  for (const row of rows) {
+    const key = `${row.Z}_${row.A}`;
+    let bucket = idx.get(key);
+    if (!bucket) { bucket = []; idx.set(key, bucket); }
+    bucket.push({
+      energyKeV: Number(row.gamma_energy_MeV) * 1000,
+      intensity: Number(row.intensity),
+      totalIntensity: Number(row.total_intensity),
     });
+  }
+  return idx;
+}
 
+function indexDecays(rows: any[]) {
+  const MODE_MAP: Record<string, string | null> = {
+    alpha: "alpha", "beta-": "beta-", "beta+": "beta+",
+    KshellEC: "EC", LshellEC: "EC", MshellEC: "EC", NshellEC: "EC",
+  };
+  const idx = new Map<string, any[]>();
+  for (const row of rows) {
+    const channel = MODE_MAP[String(row.decay_mode)];
+    if (!channel) continue;
+    if (Number(row.parent_ex_kev ?? 0) > 1) continue;
+    const key = `${row.Z}_${row.A}`;
+    let bucket = idx.get(key);
+    if (!bucket) { bucket = []; idx.set(key, bucket); }
+    bucket.push({
+      channel,
+      energyKeV: Number(row.q_value_kev ?? 0),
+      intensity: Number(row.branching ?? 0),
+    });
+  }
+  return idx;
+}
+
+// --- Gamma matrix ---
+describe("Gamma emission matrix (#201)", () => {
+  const CASES = [
+    // [label, Z, A, minLines, knownLineKeV, minIntensity]
+    ["Tc-99m (IT γ workhorse)", 43, 99, 50, 141, 0.89],
+    ["Mn-52 (EC/β⁺, strong γ)", 25, 52, 50, 732, 0.9],
+    ["Co-60 (β⁻ → γγ cascade)", 27, 60, 5, 1173, 0.99],
+    ["Bi-212 (α + β⁻, mixed γ cascade)", 83, 212, 5, 39, 0.0],
+    ["Na-22 (β⁺ annihilation + 1275 γ)", 11, 22, 1, 1275, 0.99],
+    ["I-131 (thyroid therapy, 364 γ)", 53, 131, 10, 364, 0.0],
+    // Cs-137 662 keV is from Ba-137m (Z=56, A=137), not Cs-137 itself
+    ["Ba-137m (662 keV reference from Cs-137 chain)", 56, 137, 1, 662, 0.84],
+  ] as const;
+
+  let gammaIdx: Map<string, any[]>;
+
+  it.skipIf(!HAS_GAMMA)("parquet loads without stack overflow (245k+ rows)", async () => {
+    const rows = await loadParquet(GAMMA_FILE);
     expect(rows.length).toBeGreaterThan(200_000);
+    gammaIdx = indexGammas(rows);
+    expect(gammaIdx.size).toBeGreaterThan(1000);
   });
 
-  it.skipIf(!HAS_DATA)("Mn-52 (Z=25, A=52) has γ lines including 732 keV", async () => {
-    const { parquetRead } = await import("hyparquet");
-    const { compressors } = await import("hyparquet-compressors");
+  for (const [label, Z, A, minLines, knownKeV, minI] of CASES) {
+    it.skipIf(!HAS_GAMMA)(`${label} (Z=${Z}, A=${A}): ≥${minLines} lines, ${knownKeV} keV at ≥${(minI * 100).toFixed(0)}%`, async () => {
+      if (!gammaIdx) {
+        const rows = await loadParquet(GAMMA_FILE);
+        gammaIdx = indexGammas(rows);
+      }
+      const lines = gammaIdx.get(`${Z}_${A}`) ?? [];
+      expect(lines.length).toBeGreaterThanOrEqual(minLines);
 
-    const buf = readFileSync(GAMMA_FILE);
-    const arrayBuf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-
-    let rows: any[] = [];
-    await parquetRead({
-      file: arrayBuf,
-      compressors,
-      rowFormat: "object",
-      onComplete: (data: any[]) => { rows = rows.concat(data); },
+      const match = lines.find((l: any) => Math.abs(l.energyKeV - knownKeV) < 5);
+      expect(match, `expected ~${knownKeV} keV line`).toBeDefined();
+      expect(match.intensity).toBeGreaterThanOrEqual(minI);
     });
+  }
+});
 
-    // Simulate DataStore indexing
-    const gammaIndex = new Map<string, any[]>();
-    for (const row of rows) {
-      const key = `${row.Z}_${row.A}`;
-      let bucket = gammaIndex.get(key);
-      if (!bucket) { bucket = []; gammaIndex.set(key, bucket); }
-      bucket.push({
-        energyKeV: Number(row.gamma_energy_MeV) * 1000,
-        intensity: Number(row.intensity),
-        totalIntensity: Number(row.total_intensity),
-      });
-    }
+// --- Decay emission matrix ---
+describe("Decay emission matrix (#201)", () => {
+  const CASES = [
+    // [label, Z, A, expectedChannels]
+    ["Ra-226 (α decayer)", 88, 226, ["alpha"]],
+    ["Co-60 (β⁻ decayer)", 27, 60, ["beta-"]],
+    ["F-18 (β⁺ + EC)", 9, 18, ["beta+", "EC"]],
+    ["Mn-51 (β⁺ + EC)", 25, 51, ["beta+", "EC"]],
+    ["Bi-212 (α + β⁻ mixed)", 83, 212, ["alpha", "beta-"]],
+    ["At-211 (EC + α)", 85, 211, ["alpha", "EC"]],
+  ] as const;
 
-    const mn52 = gammaIndex.get("25_52") ?? [];
-    expect(mn52.length).toBeGreaterThan(50);
+  let decayIdx: Map<string, any[]>;
 
-    // 732 keV line at ~92% intensity
-    const line732 = mn52.find((l: any) => Math.abs(l.energyKeV - 732) < 5);
-    expect(line732).toBeDefined();
-    expect(line732.intensity).toBeGreaterThan(0.9);
-
-    // Tc-99m 140.5 keV at ~89.9%
-    const tc99m = gammaIndex.get("43_99") ?? [];
-    expect(tc99m.length).toBeGreaterThan(0);
-    const line141 = tc99m.find((l: any) => Math.abs(l.energyKeV - 141) < 2);
-    expect(line141).toBeDefined();
-    expect(line141.intensity).toBeGreaterThan(0.89);
+  it.skipIf(!HAS_DECAY)("decay_detailed parquet loads (62k+ rows)", async () => {
+    const rows = await loadParquet(DECAY_FILE);
+    expect(rows.length).toBeGreaterThan(50_000);
+    decayIdx = indexDecays(rows);
+    expect(decayIdx.size).toBeGreaterThan(500);
   });
+
+  for (const [label, Z, A, channels] of CASES) {
+    it.skipIf(!HAS_DECAY)(`${label} (Z=${Z}, A=${A}): has ${channels.join(" + ")}`, async () => {
+      if (!decayIdx) {
+        const rows = await loadParquet(DECAY_FILE);
+        decayIdx = indexDecays(rows);
+      }
+      const lines = decayIdx.get(`${Z}_${A}`) ?? [];
+      expect(lines.length).toBeGreaterThan(0);
+
+      for (const ch of channels) {
+        const has = lines.some((l: any) => l.channel === ch);
+        expect(has, `expected ${ch} channel for ${label}`).toBe(true);
+      }
+    });
+  }
 });
