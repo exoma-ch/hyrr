@@ -61,6 +61,7 @@
   import MaterialPopup from "./lib/components/MaterialPopup.svelte";
   import ElementPopup from "./lib/components/ElementPopup.svelte";
   import IsotopePopup from "./lib/components/IsotopePopup.svelte";
+  import EmissionPlot from "./lib/components/EmissionPlot.svelte";
   import BugReportModal from "./lib/components/BugReportModal.svelte";
   import WelcomeScreen from "./lib/components/WelcomeScreen.svelte";
   import DownloadLinks from "./lib/components/DownloadLinks.svelte";
@@ -434,6 +435,7 @@
         {#if result}
           <IsotopeFilterBar {result} />
           <PlotActivityCurve {result} />
+          <EmissionPlot {result} />
           <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
         {:else if resultError}
           <p class="compute-error-placeholder">
