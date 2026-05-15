@@ -151,6 +151,38 @@
     };
   }
 
+  /** Edit a non-catalog builtin (element or compound) as new custom. (#214) */
+  function openBuiltinEditor(formula: string, density: number) {
+    editInitial = {
+      formula,
+      name: formula,
+      density,
+      editingCustomId: "",
+    };
+  }
+
+  /** Open DefineForm for a brand-new custom material, optionally prefilled
+   *  from the search query. (#214) */
+  function openNewMaterial(prefill?: string) {
+    if (prefill) {
+      editInitial = {
+        formula: prefill,
+        name: "",
+        density: 0,
+        editingCustomId: "",
+      };
+    } else {
+      // Trigger the editInitial $effect with a minimal non-null object so
+      // DefineForm opens (defineOpen = true) with empty rows.
+      editInitial = {
+        formula: "",
+        name: "",
+        density: 0,
+        editingCustomId: "",
+      };
+    }
+  }
+
   function handleCommit(material: string, enrichment?: Record<string, Record<number, number>>) {
     onselect(material, enrichment);
     onclose();
@@ -202,6 +234,8 @@
         {materials}
         {onselect}
         oncatalogedit={openCatalogEditor}
+        onbuiltinedit={openBuiltinEditor}
+        onnewmaterial={openNewMaterial}
         {onclose}
         oneditRequest={openEditor}
       >
