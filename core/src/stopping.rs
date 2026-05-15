@@ -336,14 +336,41 @@ pub fn get_stopping_sources(
     Ok(result)
 }
 
-/// Compound stopping power via Bragg additivity [MeV·cm²/g].
-/// composition: [(Z, mass_fraction)].
+/// Compound stopping power [MeV·cm²/g].
+///
+/// If `nist_compound` is provided, tries a direct NIST compound-table
+/// lookup first (avoids Bragg-additivity errors near the Bragg peak,
+/// issue #193). Falls back to Bragg additivity when no NIST table
+/// exists for the given compound + projectile.
 pub fn compound_dedx(
     db: &dyn DatabaseProtocol,
     projectile: &ProjectileType,
     composition: &[(u32, f64)],
     energies_mev: &[f64],
 ) -> Result<Vec<f64>, StoppingError> {
+    compound_dedx_with_nist(db, projectile, composition, energies_mev, None)
+}
+
+/// Like [`compound_dedx`] but accepts an optional NIST compound name
+/// for direct table lookup (e.g. "WATER_LIQUID", "KAPTON_POLYIMIDE_FILM").
+pub fn compound_dedx_with_nist(
+    db: &dyn DatabaseProtocol,
+    projectile: &ProjectileType,
+    composition: &[(u32, f64)],
+    energies_mev: &[f64],
+    nist_compound: Option<&str>,
+) -> Result<Vec<f64>, StoppingError> {
+    // Try NIST compound table first if a compound name was provided.
+    if let Some(compound) = nist_compound {
+        let source = compound_stopping_source(projectile);
+        if let Some((table_e, table_s)) = db.get_compound_stopping_power(source, compound) {
+            if table_e.len() >= 2 {
+                let interp = make_log_log_interpolator(&table_e, &table_s);
+                return Ok(interp(energies_mev));
+            }
+        }
+    }
+    // Fallback: Bragg additivity.
     let mut result = vec![0.0; energies_mev.len()];
     for &(z, mass_frac) in composition {
         let elemental = elemental_dedx(db, projectile, z, energies_mev)?;
@@ -352,6 +379,14 @@ pub fn compound_dedx(
         }
     }
     Ok(result)
+}
+
+/// NIST compound stopping source name for a projectile type.
+fn compound_stopping_source(projectile: &ProjectileType) -> &'static str {
+    let z = projectile.z();
+    if z == 1 { "PSTAR_compound" }
+    else if z == 2 { "ASTAR_compound" }
+    else { "" } // No NIST compound tables for heavy ions
 }
 
 /// Linear stopping power [MeV/cm].

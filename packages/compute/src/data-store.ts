@@ -79,6 +79,9 @@ export class DataStore implements DatabaseProtocol {
   private spCache = new Map<string, { energiesMeV: Float64Array; dedx: Float64Array }>();
   /** Pre-indexed stopping data: "source_targetZ" -> sorted rows */
   private spIndex = new Map<string, ParquetRow[]>();
+  /** NIST compound stopping data (PSTAR/ASTAR compounds). Raw rows grouped
+   *  by "source\0compound" for transfer to WASM. (#193) */
+  compoundStoppingData: ParquetRow[] = [];
 
   private initialized = false;
 
@@ -118,16 +121,23 @@ export class DataStore implements DatabaseProtocol {
     }
 
     onProgress?.("Loading stopping power data...", 0.75);
-    // Load per-source light-ion stopping files (PSTAR, ASTAR, dSTAR, tSTAR).
-    // He3STAR removed in nucl-parquet data-2026.5.0 — ³He routes through
-    // ASTAR with velocity-scaling at lookup time (see _energy-loss.ts: Z=2
-    // uses ASTAR for both α and ³He; ³He uses E × 4/3 to match α at same
-    // MeV/u). The He3STAR.parquet file was a redundant precomputed cache
-    // that this compute path never queried; this list also never queried
-    // it. Removing matches the upstream layout.
-    const lightIonSources = ["PSTAR", "ASTAR", "dSTAR", "tSTAR"];
+    // Light-ion sources (PSTAR, ASTAR, dSTAR, tSTAR) plus heavy-ion
+    // catima pre-split tables (catima_C12, catima_O16, …). The catima
+    // files have the same (source, target_Z, energy_MeV, dedx) schema
+    // as the light-ion files — added in nucl-parquet data-2026.5.1.
+    //
+    // He3STAR removed in data-2026.5.0: ³He routes through ASTAR with
+    // velocity-scaling (E × 4/3). See _energy-loss.ts.
+    const stoppingSources = [
+      // Light ions
+      "PSTAR", "ASTAR", "dSTAR", "tSTAR",
+      // Heavy ions — pre-split catima tables (synced with
+      // BUNDLED_CATIMA_PROJECTILES in core/src/stopping.rs)
+      "catima_C12", "catima_O16", "catima_Ne20",
+      "catima_Si28", "catima_Ar40", "catima_Fe56",
+    ];
     const stoppingFiles = await Promise.all(
-      lightIonSources.map((src) =>
+      stoppingSources.map((src) =>
         readParquetRows(`${this.baseUrl}/stopping/${src}.parquet`).catch(() => [] as ParquetRow[]),
       ),
     );
@@ -141,6 +151,19 @@ export class DataStore implements DatabaseProtocol {
       let bucket = this.spIndex.get(key);
       if (!bucket) { bucket = []; this.spIndex.set(key, bucket); }
       bucket.push(row);
+    }
+
+    // Load NIST compound stopping tables (PSTAR/ASTAR compounds).
+    // Schema: { source, compound, energy_MeV, dedx } — keyed by compound
+    // name, not target_Z. (#193)
+    const compoundSources = ["compounds/PSTAR_compounds", "compounds/ASTAR_compounds"];
+    const compoundFiles = await Promise.all(
+      compoundSources.map((src) =>
+        readParquetRows(`${this.baseUrl}/stopping/${src}.parquet`).catch(() => [] as ParquetRow[]),
+      ),
+    );
+    for (const rows of compoundFiles) {
+      this.compoundStoppingData.push(...rows);
     }
 
     this.initialized = true;

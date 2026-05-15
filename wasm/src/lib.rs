@@ -114,13 +114,39 @@ impl WasmDataStore {
             // subsequent call with "recursive use of an object detected".
             // See #211 follow-up (#213).
             pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let parts: Vec<&str> = key.splitn(2, '_').collect();
-            if parts.len() == 2 {
-                let source = parts[0];
-                let target_z: u32 = parts[1].parse().unwrap_or(0);
+            // Split on the *last* underscore so catima sources with
+            // embedded underscores parse correctly: "catima_C12_6" →
+            // source="catima_C12", target_z=6. Matches the frontend's
+            // lastIndexOf("_") in backend.ts. (#215)
+            if let Some((source, z_str)) = key.rsplit_once('_') {
+                let target_z: u32 = z_str.parse().unwrap_or(0);
                 let energies: Vec<f64> = pairs.iter().map(|p| p.0).collect();
                 let dedx: Vec<f64> = pairs.iter().map(|p| p.1).collect();
                 self.inner.add_stopping_data(source, target_z, energies, dedx);
+            }
+        }
+        Ok(())
+    }
+
+    /// Load NIST compound stopping data from JSON:
+    /// `[{"source": "PSTAR_compound", "compound": "WATER_LIQUID", "energy_MeV": .., "dedx": ..}, ...]`
+    #[wasm_bindgen(js_name = loadCompoundStoppingData)]
+    pub fn load_compound_stopping_data(&mut self, json: &str) -> Result<(), JsValue> {
+        let entries: Vec<CompoundStoppingEntry> =
+            serde_json::from_str(json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        let mut grouped: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
+        for e in entries {
+            let key = format!("{}\0{}", e.source, e.compound);
+            grouped.entry(key).or_default().push((e.energy_mev, e.dedx));
+        }
+
+        for (key, mut pairs) in grouped {
+            pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((source, compound)) = key.split_once('\0') {
+                let energies: Vec<f64> = pairs.iter().map(|p| p.0).collect();
+                let dedx: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+                self.inner.add_compound_stopping_data(source, compound, energies, dedx);
             }
         }
         Ok(())
@@ -448,6 +474,15 @@ struct StoppingEntry {
     source: String,
     #[serde(alias = "target_Z")]
     target_z: u32,
+    #[serde(alias = "energy_MeV")]
+    energy_mev: f64,
+    dedx: f64,
+}
+
+#[derive(Deserialize)]
+struct CompoundStoppingEntry {
+    source: String,
+    compound: String,
     #[serde(alias = "energy_MeV")]
     energy_mev: f64,
     dedx: f64,
