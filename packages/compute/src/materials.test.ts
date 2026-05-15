@@ -121,6 +121,30 @@ describe("resolveElement", () => {
     expect(el.isotopes.get(63)).toBe(0.99);
   });
 
+  it("natural-fills a partial enrichment vector (#217)", () => {
+    // Preset shape: `{ Mo: { 100: 0.995 } }` — only Mo-100 is named.
+    // The remaining 0.5% should be distributed across other Mo isotopes
+    // proportionally to their natural abundance, so the resolved vector
+    // sums to 1 and downstream mass-density math stays correct.
+    const el = resolveElement(db, "Mo", new Map([[100, 0.995]]));
+    let sum = 0;
+    for (const v of el.isotopes.values()) sum += v;
+    expect(sum).toBeCloseTo(1.0, 9);
+    expect(el.isotopes.get(100)).toBe(0.995);
+    // Mo-92 natural = 0.1477 of the non-Mo-100 share (which sums to
+    // 1 − 0.0967 = 0.9033). Remainder = 0.005; share = 0.1477 / 0.9033.
+    const expected92 = (0.1477 / (1 - 0.0967)) * 0.005;
+    expect(el.isotopes.get(92)).toBeCloseTo(expected92, 9);
+  });
+
+  it("renormalizes an over-specified vector (sum > 1)", () => {
+    const el = resolveElement(db, "Cu", new Map([[63, 0.8], [65, 0.4]]));
+    let sum = 0;
+    for (const v of el.isotopes.values()) sum += v;
+    expect(sum).toBeCloseTo(1.0, 9);
+    expect(el.isotopes.get(63)).toBeCloseTo(0.8 / 1.2, 9);
+  });
+
   it("throws for unknown element", () => {
     expect(() => resolveElement(db, "Xx")).toThrow("Unknown element symbol");
   });

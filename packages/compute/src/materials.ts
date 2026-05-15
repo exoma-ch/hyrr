@@ -73,6 +73,85 @@ export function massToAtomFractions(
   return result;
 }
 
+/**
+ * Normalize a (possibly partial) isotope-fraction vector to sum to 1.
+ *
+ * - sum ≈ 1: pass through.
+ * - sum < 1: distribute the (1 − sum) remainder across isotopes NOT in
+ *   `override`, proportionally to their natural abundance. If every natural
+ *   isotope is already specified, scale the override values up to sum = 1.
+ * - sum > 1: scale down to sum = 1 (defensive — a UI invariant should keep
+ *   this from happening in practice).
+ */
+export function normalizeIsotopeVector(
+  override: Map<number, number>,
+  naturalAbundances: Map<number, { abundance: number; atomicMass: number }>,
+): Map<number, number> {
+  const result = new Map(override);
+  let sum = 0;
+  for (const v of result.values()) sum += v;
+
+  if (Math.abs(sum - 1) < 1e-9) return result;
+
+  if (sum > 1) {
+    for (const [a, v] of result) result.set(a, v / sum);
+    return result;
+  }
+
+  const remainder = 1 - sum;
+  let natSum = 0;
+  for (const [A, { abundance }] of naturalAbundances) {
+    if (!result.has(A)) natSum += abundance;
+  }
+
+  if (natSum > 0) {
+    for (const [A, { abundance }] of naturalAbundances) {
+      if (!result.has(A)) {
+        result.set(A, (abundance / natSum) * remainder);
+      }
+    }
+  } else if (sum > 0) {
+    for (const [a, v] of result) result.set(a, v / sum);
+  }
+  return result;
+}
+
+/**
+ * Record-flavored variant of `normalizeIsotopeVector` used by the mixture
+ * resolver. `natural` is the full natural-abundance vector (sum ≈ 1).
+ */
+export function normalizeOverrideRecord(
+  override: Record<number, number>,
+  natural: Record<number, number>,
+): Record<number, number> {
+  const result: Record<number, number> = { ...override };
+  let sum = 0;
+  for (const v of Object.values(result)) sum += v;
+
+  if (Math.abs(sum - 1) < 1e-9) return result;
+
+  if (sum > 1) {
+    for (const a of Object.keys(result)) result[Number(a)] = result[Number(a)] / sum;
+    return result;
+  }
+
+  const remainder = 1 - sum;
+  let natSum = 0;
+  for (const [a, ab] of Object.entries(natural)) {
+    if (!(Number(a) in result)) natSum += ab;
+  }
+
+  if (natSum > 0) {
+    for (const [a, ab] of Object.entries(natural)) {
+      const A = Number(a);
+      if (!(A in result)) result[A] = (ab / natSum) * remainder;
+    }
+  } else if (sum > 0) {
+    for (const a of Object.keys(result)) result[Number(a)] = result[Number(a)] / sum;
+  }
+  return result;
+}
+
 /** Resolve an element with natural or enriched isotopic composition. */
 export function resolveElement(
   db: DatabaseProtocol,
@@ -82,11 +161,12 @@ export function resolveElement(
   const Z = SYMBOL_TO_Z[symbol];
   if (Z === undefined) throw new Error(`Unknown element symbol: ${symbol}`);
 
+  const abundances = db.getNaturalAbundances(Z);
+
   if (enrichment) {
-    return { symbol, Z, isotopes: enrichment };
+    return { symbol, Z, isotopes: normalizeIsotopeVector(enrichment, abundances) };
   }
 
-  const abundances = db.getNaturalAbundances(Z);
   const isotopes = new Map<number, number>();
   for (const [A, { abundance }] of abundances) {
     isotopes.set(A, abundance);
@@ -402,9 +482,11 @@ export function resolveMixtureToElements(
       if (atomsHere === 0) continue;
       // Resolve the isotope vector for this (row, element):
       //   row.enrichment[el] → opts.layerEnrichment[el] → naturalAbundance(el)
-      const vector = rows[i].enrichment?.[el]
-        ?? opts.layerEnrichment?.[el]
-        ?? opts.naturalAbundance(el);
+      const override = rows[i].enrichment?.[el] ?? opts.layerEnrichment?.[el];
+      const natural = opts.naturalAbundance(el);
+      const vector = override
+        ? normalizeOverrideRecord(override, natural)
+        : natural;
       const share = atomsHere / totalAtoms;
       for (const [a, frac] of Object.entries(vector)) {
         const A = Number(a);
