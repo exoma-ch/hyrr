@@ -17,7 +17,13 @@
   let sortDir = $state<SortDir>("asc");
   let showAll = $state(false);
 
-  const THRESHOLD = 0.001; // 0.1% intensity
+  const THRESHOLD = 0.001; // 0.1% total intensity per decay
+
+  /** Whether the gamma parquet loaded at all (vs load failure / init incomplete). */
+  let gammaDataLoaded = $derived.by(() => {
+    const db = getDataStore();
+    return db?.gammaDataLoaded ?? false;
+  });
 
   let allLines = $derived.by((): GammaLine[] => {
     const db = getDataStore();
@@ -25,18 +31,22 @@
     return db.getGammaLines(Z, A);
   });
 
-  let filteredLines = $derived.by(() => {
-    let lines = showAll ? allLines : allLines.filter((l) => l.intensity >= THRESHOLD);
+  /** Lines above threshold, sorted per user choice. */
+  let visibleLines = $derived.by(() => {
+    const lines = showAll
+      ? allLines
+      : allLines.filter((l) => l.totalIntensity >= THRESHOLD);
     const key = sortKey;
     const dir = sortDir;
     return lines.slice().sort((a, b) => {
-      const va = key === "energy" ? a.energyKeV : a.intensity;
-      const vb = key === "energy" ? b.energyKeV : b.intensity;
+      const va = key === "energy" ? a.energyKeV : a.totalIntensity;
+      const vb = key === "energy" ? b.energyKeV : b.totalIntensity;
       return dir === "asc" ? va - vb : vb - va;
     });
   });
 
-  let aboveThreshold = $derived(allLines.filter((l) => l.intensity >= THRESHOLD).length);
+  let aboveThreshold = $derived(allLines.filter((l) => l.totalIntensity >= THRESHOLD).length);
+  let belowThreshold = $derived(allLines.length - aboveThreshold);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -67,24 +77,22 @@
   }
 </script>
 
-{#if allLines.length === 0}
-  <div class="empty-state">No emission data available for this isotope</div>
+{#if !gammaDataLoaded}
+  <!-- Gamma parquet didn't load — don't show the section at all.
+       Silent: the user didn't ask for emissions, no point showing an
+       error for an optional feature. -->
+{:else if allLines.length === 0}
+  <div class="empty-state">No ENSDF &gamma; transitions for this isotope</div>
 {:else}
   <div class="section">
     <div class="section-bar">
       <span class="section-label">Emissions</span>
       <span class="line-count">
         {aboveThreshold} &gamma; line{aboveThreshold !== 1 ? "s" : ""} above 0.1%
-        {#if filteredLines.length !== aboveThreshold && !showAll}
-          <!-- filtered count differs only when showAll changes -->
-        {/if}
-        {#if showAll && allLines.length !== aboveThreshold}
-          ({allLines.length} total)
-        {/if}
       </span>
-      {#if allLines.length !== aboveThreshold}
+      {#if belowThreshold > 0}
         <button class="scale-toggle" class:active={showAll} onclick={() => { showAll = !showAll; }}>
-          Show all
+          {showAll ? "Hide weak" : `+ ${belowThreshold} below 0.1%`}
         </button>
       {/if}
     </div>
@@ -102,20 +110,30 @@
           </tr>
         </thead>
         <tbody>
-          {#each filteredLines as line, i}
+          {#each visibleLines as line, i}
             {#if i < 50 || showAll}
               <tr>
                 <td class="et-energy">{fmtEnergy(line.energyKeV)}</td>
-                <td class="et-intensity">{fmtIntensity(line.intensity)}</td>
+                <td class="et-intensity">{fmtIntensity(line.totalIntensity)}</td>
                 <td class="et-channel">&gamma;</td>
               </tr>
             {/if}
           {/each}
+          {#if !showAll && belowThreshold > 0}
+            <tr class="grouped-row">
+              <td colspan="3">{belowThreshold} weaker line{belowThreshold !== 1 ? "s" : ""} below 0.1% not shown</td>
+            </tr>
+          {/if}
         </tbody>
       </table>
-      {#if !showAll && filteredLines.length > 50}
+      {#if !showAll && visibleLines.length > 50}
         <div class="truncation-note">
-          Showing 50 of {filteredLines.length} lines
+          Showing 50 of {visibleLines.length} lines
+        </div>
+      {/if}
+      {#if visibleLines.length === 0 && belowThreshold > 0}
+        <div class="truncation-note">
+          All {allLines.length} lines are below 0.1%
         </div>
       {/if}
     </div>
@@ -241,6 +259,15 @@
   .et-channel {
     text-align: center;
     color: var(--c-text-faint);
+  }
+
+  .grouped-row td {
+    text-align: center;
+    color: var(--c-text-faint);
+    font-style: italic;
+    font-size: 0.65rem;
+    padding: 0.3rem 0.4rem;
+    border-top: 1px dashed var(--c-border);
   }
 
   .truncation-note {

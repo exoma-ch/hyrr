@@ -48,13 +48,13 @@ async function readParquetFile(filePath: string): Promise<ParquetRow[]> {
     buffer.byteOffset,
     buffer.byteOffset + buffer.byteLength,
   );
-  const rows: ParquetRow[] = [];
+  let rows: ParquetRow[] = [];
   await parquetRead({
     file: arrayBuffer,
     compressors,
     rowFormat: "object",
     onComplete: (data: ParquetRow[]) => {
-      rows.push(...data);
+      rows = rows.concat(data);
     },
   });
   return rows;

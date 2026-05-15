@@ -58,13 +58,15 @@ async function fetchParquet(url: string): Promise<ArrayBuffer> {
 
 async function readParquetRows(url: string): Promise<ParquetRow[]> {
   const buffer = await fetchParquet(url);
-  const rows: ParquetRow[] = [];
+  let rows: ParquetRow[] = [];
   await parquetRead({
     file: buffer,
     compressors,
     rowFormat: "object",
     onComplete: (data: ParquetRow[]) => {
-      rows.push(...data);
+      // concat instead of push(...data) — spread blows the call stack
+      // on large files (245k rows in nudex_level_gammas).
+      rows = rows.concat(data);
     },
   });
   return rows;
@@ -175,7 +177,7 @@ export class DataStore implements DatabaseProtocol {
       ),
     );
     for (const rows of stoppingFiles) {
-      this.stoppingData.push(...rows);
+      this.stoppingData = this.stoppingData.concat(rows);
     }
 
     // Pre-index stopping data by source+targetZ for fast lookup
@@ -196,7 +198,7 @@ export class DataStore implements DatabaseProtocol {
       ),
     );
     for (const rows of compoundFiles) {
-      this.compoundStoppingData.push(...rows);
+      this.compoundStoppingData = this.compoundStoppingData.concat(rows);
     }
 
     this.initialized = true;
@@ -365,6 +367,13 @@ export class DataStore implements DatabaseProtocol {
 
   getGammaLines(Z: number, A: number): GammaLine[] {
     return this.gammaIndex.get(`${Z}_${A}`) ?? [];
+  }
+
+  /** Whether gamma emission data was loaded (regardless of whether a
+   *  specific isotope has lines). Returns false if the parquet failed
+   *  to load or init hasn't completed. */
+  get gammaDataLoaded(): boolean {
+    return this.gammaIndex.size > 0;
   }
 
   getElementSymbol(Z: number): string {
