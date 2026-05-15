@@ -1,1 +1,0 @@
-import{invoke as e}from"./core-D_npKI2G.js";async function t(){await e(`plugin:process|restart`)}export{t as relaunch};
