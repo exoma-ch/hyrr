@@ -42,6 +42,14 @@ interface ParquetRow {
   [key: string]: number | string | null;
 }
 
+export interface GammaLine {
+  energyKeV: number;
+  intensity: number;
+  totalIntensity: number;
+  sourceLevelIdx: number;
+  destLevelIdx: number;
+}
+
 async function fetchParquet(url: string): Promise<ArrayBuffer> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
@@ -73,6 +81,8 @@ export class DataStore implements DatabaseProtocol {
   private stoppingData: ParquetRow[] = [];
   /** Pre-indexed dose constants: "Z_A_state" -> { k, source } */
   private doseConstants = new Map<string, { k: number; source: string }>();
+  /** Pre-indexed gamma lines: "Z_A" -> sorted GammaLine[] */
+  private gammaIndex = new Map<string, GammaLine[]>();
 
   // Lazy caches
   private xsCache = new Map<string, ParquetRow[]>();
@@ -118,6 +128,29 @@ export class DataStore implements DatabaseProtocol {
       }
     } catch {
       console.warn("[DataStore] dose_constants.parquet not found, dose rates unavailable");
+    }
+
+    onProgress?.("Loading gamma emission data...", 0.7);
+    try {
+      const gammaRows = await readParquetRows(`${this.baseUrl}/meta/nudex_level_gammas.parquet`);
+      for (const row of gammaRows) {
+        const key = `${row.Z}_${row.A}`;
+        let bucket = this.gammaIndex.get(key);
+        if (!bucket) { bucket = []; this.gammaIndex.set(key, bucket); }
+        bucket.push({
+          energyKeV: Number(row.gamma_energy_MeV) * 1000,
+          intensity: Number(row.intensity),
+          totalIntensity: Number(row.total_intensity),
+          sourceLevelIdx: Number(row.source_level_idx),
+          destLevelIdx: Number(row.dest_level_idx),
+        });
+      }
+      // Sort each bucket by energy ascending
+      for (const bucket of this.gammaIndex.values()) {
+        bucket.sort((a, b) => a.energyKeV - b.energyKeV);
+      }
+    } catch {
+      console.warn("[DataStore] nudex_level_gammas.parquet not found, gamma emissions unavailable");
     }
 
     onProgress?.("Loading stopping power data...", 0.75);
@@ -328,6 +361,10 @@ export class DataStore implements DatabaseProtocol {
   getDoseConstant(Z: number, A: number, state: string = ""): { k: number; source: string } | null {
     const key = `${Z}_${A}_${state}`;
     return this.doseConstants.get(key) ?? null;
+  }
+
+  getGammaLines(Z: number, A: number): GammaLine[] {
+    return this.gammaIndex.get(`${Z}_${A}`) ?? [];
   }
 
   getElementSymbol(Z: number): string {

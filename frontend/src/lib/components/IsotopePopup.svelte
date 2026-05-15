@@ -31,6 +31,7 @@
   } from "../format";
   import SaveMenu from "./SaveMenu.svelte";
   import { ExternalLink } from "lucide-svelte";
+  import EmissionsTable from "./EmissionsTable.svelte";
 
   interface Props {
     open: boolean;
@@ -964,6 +965,9 @@
         </div>
       </div>
     {/if}
+
+    <!-- Emissions -->
+    <EmissionsTable {Z} {A} {nuclearState} />
 
     <!-- Compare table -->
     {#if activityData?.main}
