@@ -287,6 +287,18 @@ async function transferDataToWasm(
     wasm.loadStoppingData(JSON.stringify(stoppingRows));
   }
 
+  // Compound stopping (NIST tables) — separate API since keyed by
+  // compound name, not target_Z. (#193)
+  if (tsStore.compoundStoppingData?.length) {
+    const compoundRows = tsStore.compoundStoppingData.map((row: any) => ({
+      source: String(row.source),
+      compound: String(row.compound),
+      energy_MeV: Number(row.energy_MeV),
+      dedx: Number(row.dedx),
+    }));
+    wasm.loadCompoundStoppingData(JSON.stringify(compoundRows));
+  }
+
   onProgress?.("WASM backend ready", 1.0);
 }
 

@@ -7,10 +7,11 @@
  * expand-layers UI preview.
  */
 
-import { PROJECTILE_A, PROJECTILE_Z, type DatabaseProtocol } from "./types";
+import { PROJECTILE_A, PROJECTILE_Z, isHeavyIon, type DatabaseProtocol } from "./types";
 
 const SOURCE_PSTAR = "PSTAR";
 const SOURCE_ASTAR = "ASTAR";
+const SOURCE_CATIMA_PREFIX = "catima_";
 
 type InterpolatorFn = (energy: number) => number;
 
@@ -91,8 +92,13 @@ function elementalDedxScalar(
   } else if (projZ === 2) {
     source = SOURCE_ASTAR;
     lookupEnergy = energyMeV * (4 / projA);
+  } else if (isHeavyIon(projectile)) {
+    // Heavy ions: catima_<Symbol><A> table, no velocity scaling.
+    // Mirrors core/src/stopping.rs::source_for().
+    source = SOURCE_CATIMA_PREFIX + projectile.replace("-", "");
+    lookupEnergy = energyMeV;
   } else {
-    return 1.0; // heavy ions: rough fallback
+    return 1.0; // unknown projectile
   }
 
   const fn = getInterpolator(db, source, targetZ);

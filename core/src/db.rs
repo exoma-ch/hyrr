@@ -18,6 +18,16 @@ pub trait DatabaseProtocol: Send + Sync {
     /// Returns (energies_MeV, dedx_MeV_cm2_g) sorted by energy.
     fn get_stopping_power(&self, source: &str, target_z: u32) -> (Vec<f64>, Vec<f64>);
 
+    /// Get compound stopping power from NIST tables (PSTAR_compound / ASTAR_compound).
+    /// Returns None if no compound table exists for this source+compound combo.
+    fn get_compound_stopping_power(
+        &self,
+        _source: &str,
+        _compound: &str,
+    ) -> Option<(Vec<f64>, Vec<f64>)> {
+        None // default: not available
+    }
+
     /// Get natural isotopic abundances.
     /// Returns dict[A] -> (fractional_abundance, atomic_mass_u).
     fn get_natural_abundances(&self, z: u32) -> HashMap<u32, (f64, f64)>;
@@ -49,6 +59,8 @@ pub struct InMemoryDataStore {
     abundances: HashMap<u32, Vec<(u32, f64, f64)>>,
     decay_data: HashMap<String, DecayData>,
     stopping_data: HashMap<String, (Vec<f64>, Vec<f64>)>,
+    /// Compound stopping from NIST tables. Key: "source\0compound" (e.g. "PSTAR_compound\0WATER_LIQUID").
+    compound_stopping: HashMap<String, (Vec<f64>, Vec<f64>)>,
     dose_constants: HashMap<String, (f64, String)>,
     xs_cache: HashMap<String, Vec<CrossSectionData>>,
 }
@@ -62,6 +74,7 @@ impl InMemoryDataStore {
             abundances: HashMap::new(),
             decay_data: HashMap::new(),
             stopping_data: HashMap::new(),
+            compound_stopping: HashMap::new(),
             dose_constants: HashMap::new(),
             xs_cache: HashMap::new(),
         }
@@ -94,6 +107,17 @@ impl InMemoryDataStore {
         self.dose_constants.insert(key, (k, source.to_string()));
     }
 
+    pub fn add_compound_stopping_data(
+        &mut self,
+        source: &str,
+        compound: &str,
+        energies: Vec<f64>,
+        dedx: Vec<f64>,
+    ) {
+        let key = format!("{}\0{}", source, compound);
+        self.compound_stopping.insert(key, (energies, dedx));
+    }
+
     pub fn add_cross_sections(&mut self, projectile: &str, element_symbol: &str, xs_list: Vec<CrossSectionData>) {
         let key = format!("{}_{}", projectile, element_symbol);
         self.xs_cache.insert(key, xs_list);
@@ -113,6 +137,11 @@ impl DatabaseProtocol for InMemoryDataStore {
     fn get_stopping_power(&self, source: &str, target_z: u32) -> (Vec<f64>, Vec<f64>) {
         let key = format!("{}_{}", source, target_z);
         self.stopping_data.get(&key).cloned().unwrap_or_default()
+    }
+
+    fn get_compound_stopping_power(&self, source: &str, compound: &str) -> Option<(Vec<f64>, Vec<f64>)> {
+        let key = format!("{}\0{}", source, compound);
+        self.compound_stopping.get(&key).cloned()
     }
 
     fn get_natural_abundances(&self, z: u32) -> HashMap<u32, (f64, f64)> {
@@ -176,6 +205,9 @@ pub struct ParquetDataStore {
     // Lazily loaded on first use — each stopping/{source}.parquet loaded on demand.
     // Single Mutex covers both fields to avoid any lock-ordering issues.
     stopping: Mutex<(HashMap<String, (Vec<f64>, Vec<f64>)>, HashSet<String>)>,
+    /// Compound stopping from NIST tables (PSTAR_compounds, ASTAR_compounds).
+    /// Key: "source\0COMPOUND_NAME". Lazily loaded on first query.
+    compound_stopping: Mutex<(HashMap<String, (Vec<f64>, Vec<f64>)>, bool)>,
 }
 
 impl ParquetDataStore {
@@ -196,6 +228,7 @@ impl ParquetDataStore {
             dose_constants: HashMap::new(),
             xs_cache: HashMap::new(),
             stopping: Mutex::new((HashMap::new(), HashSet::new())),
+            compound_stopping: Mutex::new((HashMap::new(), false)),
         };
 
         store.load_elements()?;
@@ -244,6 +277,46 @@ impl ParquetDataStore {
             let energies: Vec<f64> = pairs.iter().map(|p| p.0).collect();
             let dedx: Vec<f64> = pairs.iter().map(|p| p.1).collect();
             guard.0.insert(key, (energies, dedx));
+        }
+    }
+
+    /// Lazily load NIST compound stopping tables from
+    /// `stopping/compounds/{PSTAR_compounds,ASTAR_compounds}.parquet`.
+    fn ensure_compound_stopping(&self) {
+        let mut guard = self.compound_stopping.lock().expect("compound_stopping mutex poisoned");
+        if guard.1 { return; }
+        guard.1 = true;
+
+        for filename in &["PSTAR_compounds.parquet", "ASTAR_compounds.parquet"] {
+            let path = self.data_dir.join("stopping").join("compounds").join(filename);
+            if !path.exists() { continue; }
+            let file = match std::fs::File::open(&path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let reader = match parquet::arrow::arrow_reader::ParquetRecordBatchReader::try_new(file, 65536) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let mut raw: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
+            for batch in reader {
+                let Ok(batch) = batch else { continue };
+                let n = batch.num_rows();
+                let source_col = get_string_or_default(&batch, "source");
+                let compound_col = get_string_or_default(&batch, "compound");
+                let e_col = get_f64(&batch, "energy_MeV");
+                let d_col = get_f64(&batch, "dedx");
+                for i in 0..n {
+                    let key = format!("{}\0{}", source_col[i], compound_col[i]);
+                    raw.entry(key).or_default().push((e_col[i], d_col[i]));
+                }
+            }
+            for (key, mut pairs) in raw {
+                pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                let energies: Vec<f64> = pairs.iter().map(|p| p.0).collect();
+                let dedx: Vec<f64> = pairs.iter().map(|p| p.1).collect();
+                guard.0.insert(key, (energies, dedx));
+            }
         }
     }
 
@@ -502,6 +575,12 @@ impl DatabaseProtocol for ParquetDataStore {
         self.ensure_stopping_source(source);
         let key = format!("{}_{}", source, target_z);
         self.stopping.lock().expect("stopping mutex poisoned").0.get(&key).cloned().unwrap_or_default()
+    }
+
+    fn get_compound_stopping_power(&self, source: &str, compound: &str) -> Option<(Vec<f64>, Vec<f64>)> {
+        self.ensure_compound_stopping();
+        let key = format!("{}\0{}", source, compound);
+        self.compound_stopping.lock().expect("compound_stopping mutex poisoned").0.get(&key).cloned()
     }
 
     fn get_natural_abundances(&self, z: u32) -> HashMap<u32, (f64, f64)> {
