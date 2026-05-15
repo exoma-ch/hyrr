@@ -8,7 +8,7 @@
 
 // --- Data store ---
 export { DataStore } from "./data-store";
-export type { GammaLine } from "./data-store";
+export type { GammaLine, DecayEmissionLine, EmissionChannel } from "./data-store";
 
 // --- Materials ---
 export {

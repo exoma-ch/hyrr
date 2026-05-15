@@ -63,6 +63,7 @@ jobs:
           cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/spectrum_xs.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/nudex_level_gammas.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp -f nucl-parquet/data/meta/decay_detailed.parquet    frontend/public/data/parquet/meta/ 2>/dev/null || true
           # He3STAR removed in nucl-parquet data-2026.5.0 — ³He routes through ASTAR with velocity-scaling at lookup time.
           cp nucl-parquet/data/stopping/PSTAR.parquet nucl-parquet/data/stopping/ASTAR.parquet nucl-parquet/data/stopping/dSTAR.parquet nucl-parquet/data/stopping/tSTAR.parquet frontend/public/data/parquet/stopping/
           cp nucl-parquet/data/stopping/catima_C12.parquet nucl-parquet/data/stopping/catima_O16.parquet nucl-parquet/data/stopping/catima_Ne20.parquet nucl-parquet/data/stopping/catima_Si28.parquet nucl-parquet/data/stopping/catima_Ar40.parquet nucl-parquet/data/stopping/catima_Fe56.parquet frontend/public/data/parquet/stopping/

@@ -63,6 +63,7 @@ jobs:
           cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/spectrum_xs.parquet            frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/nudex_level_gammas.parquet   frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp -f nucl-parquet/data/meta/decay_detailed.parquet      frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp nucl-parquet/data/stopping/PSTAR.parquet \
              nucl-parquet/data/stopping/ASTAR.parquet \
              nucl-parquet/data/stopping/dSTAR.parquet \
@@ -246,6 +247,7 @@ jobs:
           cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/spectrum_xs.parquet            frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/nudex_level_gammas.parquet   frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp -f nucl-parquet/data/meta/decay_detailed.parquet      frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp nucl-parquet/data/stopping/PSTAR.parquet \
              nucl-parquet/data/stopping/ASTAR.parquet \
              nucl-parquet/data/stopping/dSTAR.parquet \
@@ -335,6 +337,7 @@ jobs:
           cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/spectrum_xs.parquet            frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/nudex_level_gammas.parquet   frontend/public/data/parquet/meta/ 2>/dev/null || true
+          cp -f nucl-parquet/data/meta/decay_detailed.parquet      frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp nucl-parquet/data/stopping/PSTAR.parquet \
              nucl-parquet/data/stopping/ASTAR.parquet \
              nucl-parquet/data/stopping/dSTAR.parquet \
