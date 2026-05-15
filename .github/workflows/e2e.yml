@@ -111,7 +111,7 @@ jobs:
         run: npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/ms-playwright
@@ -387,7 +387,7 @@ jobs:
           ls -la _site/hyrr/ | head -5
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-static-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
