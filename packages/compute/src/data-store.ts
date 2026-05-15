@@ -50,6 +50,17 @@ export interface GammaLine {
   destLevelIdx: number;
 }
 
+/** Emission channel from decay_detailed.parquet. */
+export type EmissionChannel = "alpha" | "beta-" | "beta+" | "EC";
+
+export interface DecayEmissionLine {
+  channel: EmissionChannel;
+  energyKeV: number;
+  intensity: number;
+  /** EC shell (K, L, M, N) when channel is "EC". */
+  shell?: string;
+}
+
 async function fetchParquet(url: string): Promise<ArrayBuffer> {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
@@ -85,6 +96,8 @@ export class DataStore implements DatabaseProtocol {
   private doseConstants = new Map<string, { k: number; source: string }>();
   /** Pre-indexed gamma lines: "Z_A" -> sorted GammaLine[] */
   private gammaIndex = new Map<string, GammaLine[]>();
+  /** Pre-indexed decay emissions (α/β/EC): "Z_A" -> DecayEmissionLine[] */
+  private decayEmissionIndex = new Map<string, DecayEmissionLine[]>();
 
   // Lazy caches
   private xsCache = new Map<string, ParquetRow[]>();
@@ -153,6 +166,41 @@ export class DataStore implements DatabaseProtocol {
       }
     } catch {
       console.warn("[DataStore] nudex_level_gammas.parquet not found, gamma emissions unavailable");
+    }
+
+    // Load decay-detailed emissions (α, β⁻, β⁺, EC) — 62k rows, ~630 KB.
+    try {
+      const ddRows = await readParquetRows(`${this.baseUrl}/meta/decay_detailed.parquet`);
+      const MODE_MAP: Record<string, EmissionChannel | null> = {
+        "alpha": "alpha", "beta-": "beta-", "beta+": "beta+",
+        "KshellEC": "EC", "LshellEC": "EC", "MshellEC": "EC", "NshellEC": "EC",
+      };
+      const SHELL_MAP: Record<string, string> = {
+        "KshellEC": "K", "LshellEC": "L", "MshellEC": "M", "NshellEC": "N",
+      };
+      for (const row of ddRows) {
+        const mode = String(row.decay_mode);
+        const channel = MODE_MAP[mode];
+        if (!channel) continue; // skip SF, n, p, t
+        const parentEx = Number(row.parent_ex_kev ?? 0);
+        // Only ground-state decays (parent_ex_kev ~ 0) for the popup display.
+        // Isomeric-state decays would need state-aware routing.
+        if (parentEx > 1) continue;
+        const key = `${row.Z}_${row.A}`;
+        let bucket = this.decayEmissionIndex.get(key);
+        if (!bucket) { bucket = []; this.decayEmissionIndex.set(key, bucket); }
+        bucket.push({
+          channel,
+          energyKeV: Number(row.q_value_kev ?? 0),
+          intensity: Number(row.branching ?? 0),
+          ...(SHELL_MAP[mode] ? { shell: SHELL_MAP[mode] } : {}),
+        });
+      }
+      for (const bucket of this.decayEmissionIndex.values()) {
+        bucket.sort((a, b) => b.intensity - a.intensity);
+      }
+    } catch {
+      console.warn("[DataStore] decay_detailed.parquet not found, decay emissions unavailable");
     }
 
     onProgress?.("Loading stopping power data...", 0.75);
@@ -369,11 +417,18 @@ export class DataStore implements DatabaseProtocol {
     return this.gammaIndex.get(`${Z}_${A}`) ?? [];
   }
 
-  /** Whether gamma emission data was loaded (regardless of whether a
-   *  specific isotope has lines). Returns false if the parquet failed
-   *  to load or init hasn't completed. */
+  /** Whether emission data was loaded (gamma + decay_detailed). */
+  get emissionDataLoaded(): boolean {
+    return this.gammaIndex.size > 0 || this.decayEmissionIndex.size > 0;
+  }
+
+  /** @deprecated Use emissionDataLoaded instead. */
   get gammaDataLoaded(): boolean {
-    return this.gammaIndex.size > 0;
+    return this.emissionDataLoaded;
+  }
+
+  getDecayEmissions(Z: number, A: number): DecayEmissionLine[] {
+    return this.decayEmissionIndex.get(`${Z}_${A}`) ?? [];
   }
 
   getElementSymbol(Z: number): string {

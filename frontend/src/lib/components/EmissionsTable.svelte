@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getDataStore } from "../scheduler/sim-scheduler.svelte";
-  import type { GammaLine } from "@hyrr/compute";
+  import type { GammaLine, DecayEmissionLine } from "@hyrr/compute";
 
   interface Props {
     Z: number;
@@ -10,6 +10,22 @@
 
   let { Z, A, nuclearState }: Props = $props();
 
+  // --- Emission channel tabs ---
+  const TABS = [
+    { id: "gamma", label: "\u03B3" },
+    { id: "alpha", label: "\u03B1" },
+    { id: "beta-", label: "\u03B2\u207B" },
+    { id: "beta+", label: "\u03B2\u207A" },
+    { id: "EC", label: "EC" },
+    { id: "CE", label: "CE" },
+    { id: "xray", label: "X-ray" },
+    { id: "auger", label: "Auger" },
+  ] as const;
+
+  type TabId = (typeof TABS)[number]["id"];
+
+  let activeTab = $state<TabId>("gamma");
+
   type SortKey = "energy" | "intensity";
   type SortDir = "asc" | "desc";
 
@@ -17,36 +33,100 @@
   let sortDir = $state<SortDir>("asc");
   let showAll = $state(false);
 
-  const THRESHOLD = 0.001; // 0.1% total intensity per decay
+  const THRESHOLD = 0.001; // 0.1%
 
-  /** Whether the gamma parquet loaded at all (vs load failure / init incomplete). */
-  let gammaDataLoaded = $derived.by(() => {
+  // --- Data from DataStore ---
+  let emissionDataLoaded = $derived.by(() => {
     const db = getDataStore();
-    return db?.gammaDataLoaded ?? false;
+    return db?.emissionDataLoaded ?? false;
   });
 
-  let allLines = $derived.by((): GammaLine[] => {
+  let gammaLines = $derived.by((): GammaLine[] => {
     const db = getDataStore();
     if (!db) return [];
     return db.getGammaLines(Z, A);
   });
 
-  /** Lines above threshold, sorted per user choice. */
-  let visibleLines = $derived.by(() => {
-    const lines = showAll
-      ? allLines
-      : allLines.filter((l) => l.totalIntensity >= THRESHOLD);
+  let decayEmissions = $derived.by((): DecayEmissionLine[] => {
+    const db = getDataStore();
+    if (!db) return [];
+    return db.getDecayEmissions(Z, A);
+  });
+
+  /** Which tabs have data (drives enabled/disabled state). */
+  let tabHasData = $derived.by(() => {
+    const has: Record<string, boolean> = {};
+    has["gamma"] = gammaLines.length > 0;
+    has["alpha"] = decayEmissions.some((l) => l.channel === "alpha");
+    has["beta-"] = decayEmissions.some((l) => l.channel === "beta-");
+    has["beta+"] = decayEmissions.some((l) => l.channel === "beta+");
+    has["EC"] = decayEmissions.some((l) => l.channel === "EC");
+    // P1 — not yet wired
+    has["CE"] = false;
+    has["xray"] = false;
+    has["auger"] = false;
+    return has;
+  });
+
+  let hasAnyData = $derived(Object.values(tabHasData).some(Boolean));
+
+  /** Unified row type for display. */
+  interface DisplayRow {
+    energyKeV: number;
+    intensity: number;
+    note?: string;
+  }
+
+  let currentRows = $derived.by((): DisplayRow[] => {
+    if (activeTab === "gamma") {
+      return gammaLines.map((l) => ({
+        energyKeV: l.energyKeV,
+        intensity: l.totalIntensity,
+      }));
+    }
+    return decayEmissions
+      .filter((l) => l.channel === activeTab)
+      .map((l) => ({
+        energyKeV: l.energyKeV,
+        intensity: l.intensity,
+        note: l.shell ? `${l.shell}-shell` : undefined,
+      }));
+  });
+
+  let visibleRows = $derived.by(() => {
+    const rows = showAll
+      ? currentRows
+      : currentRows.filter((r) => r.intensity >= THRESHOLD);
     const key = sortKey;
     const dir = sortDir;
-    return lines.slice().sort((a, b) => {
-      const va = key === "energy" ? a.energyKeV : a.totalIntensity;
-      const vb = key === "energy" ? b.energyKeV : b.totalIntensity;
+    return rows.slice().sort((a, b) => {
+      const va = key === "energy" ? a.energyKeV : a.intensity;
+      const vb = key === "energy" ? b.energyKeV : b.intensity;
       return dir === "asc" ? va - vb : vb - va;
     });
   });
 
-  let aboveThreshold = $derived(allLines.filter((l) => l.totalIntensity >= THRESHOLD).length);
-  let belowThreshold = $derived(allLines.length - aboveThreshold);
+  let aboveThreshold = $derived(currentRows.filter((r) => r.intensity >= THRESHOLD).length);
+  let belowThreshold = $derived(currentRows.length - aboveThreshold);
+
+  // Auto-select first tab with data when isotope changes
+  $effect(() => {
+    // Read Z and A to track changes
+    const _z = Z;
+    const _a = A;
+    if (!tabHasData[activeTab]) {
+      const first = TABS.find((t) => tabHasData[t.id]);
+      if (first) activeTab = first.id;
+    }
+  });
+
+  function selectTab(id: TabId) {
+    if (!tabHasData[id]) return;
+    activeTab = id;
+    showAll = false;
+    sortKey = "energy";
+    sortDir = "asc";
+  }
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -63,9 +143,10 @@
   }
 
   function fmtEnergy(keV: number): string {
-    if (keV >= 1000) return keV.toFixed(1);
-    if (keV >= 10) return keV.toFixed(2);
-    return keV.toFixed(3);
+    if (keV >= 1000) return keV.toPrecision(5);
+    if (keV >= 100) return keV.toPrecision(4);
+    if (keV >= 1) return keV.toPrecision(3);
+    return keV.toPrecision(2);
   }
 
   function fmtIntensity(frac: number): string {
@@ -75,20 +156,37 @@
     if (pct >= 0.01) return pct.toFixed(3);
     return pct.toExponential(1);
   }
+
+  const TAB_LABEL = Object.fromEntries(TABS.map((t) => [t.id, t.label]));
 </script>
 
-{#if !gammaDataLoaded}
-  <!-- Gamma parquet didn't load — don't show the section at all.
-       Silent: the user didn't ask for emissions, no point showing an
-       error for an optional feature. -->
-{:else if allLines.length === 0}
-  <div class="empty-state">No ENSDF &gamma; transitions for this isotope</div>
+{#if !emissionDataLoaded}
+  <!-- Emission data not loaded — hide section silently. -->
+{:else if !hasAnyData}
+  <div class="empty-state">No ENSDF emission data for this isotope</div>
 {:else}
   <div class="section">
     <div class="section-bar">
       <span class="section-label">Emissions</span>
+      <div class="tab-row" role="tablist">
+        {#each TABS as tab}
+          <button
+            type="button"
+            role="tab"
+            class="tab-btn"
+            class:active={activeTab === tab.id}
+            class:disabled={!tabHasData[tab.id]}
+            aria-selected={activeTab === tab.id}
+            aria-disabled={!tabHasData[tab.id]}
+            onclick={() => selectTab(tab.id)}
+          >{tab.label}</button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="section-meta">
       <span class="line-count">
-        {aboveThreshold} &gamma; line{aboveThreshold !== 1 ? "s" : ""} above 0.1%
+        {aboveThreshold} line{aboveThreshold !== 1 ? "s" : ""} above 0.1%
       </span>
       {#if belowThreshold > 0}
         <button class="scale-toggle" class:active={showAll} onclick={() => { showAll = !showAll; }}>
@@ -96,47 +194,55 @@
         </button>
       {/if}
     </div>
-    <div class="table-wrap">
-      <table class="emissions-table">
-        <thead>
-          <tr>
-            <th class="et-energy sortable" onclick={() => toggleSort("energy")}>
-              Energy (keV){sortIndicator("energy")}
-            </th>
-            <th class="et-intensity sortable" onclick={() => toggleSort("intensity")}>
-              Intensity (%){sortIndicator("intensity")}
-            </th>
-            <th class="et-channel">Channel</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each visibleLines as line, i}
-            {#if i < 50 || showAll}
-              <tr>
-                <td class="et-energy">{fmtEnergy(line.energyKeV)}</td>
-                <td class="et-intensity">{fmtIntensity(line.totalIntensity)}</td>
-                <td class="et-channel">&gamma;</td>
+
+    {#if visibleRows.length > 0 || belowThreshold > 0}
+      <div class="table-wrap">
+        <table class="emissions-table">
+          <thead>
+            <tr>
+              <th class="et-energy sortable" onclick={() => toggleSort("energy")}>
+                Energy (keV){sortIndicator("energy")}
+              </th>
+              <th class="et-intensity sortable" onclick={() => toggleSort("intensity")}>
+                Intensity (%){sortIndicator("intensity")}
+              </th>
+              {#if activeTab === "EC"}
+                <th class="et-note">Shell</th>
+              {/if}
+            </tr>
+          </thead>
+          <tbody>
+            {#each visibleRows as row, i}
+              {#if i < 50 || showAll}
+                <tr>
+                  <td class="et-energy">{fmtEnergy(row.energyKeV)}</td>
+                  <td class="et-intensity">{fmtIntensity(row.intensity)}</td>
+                  {#if activeTab === "EC"}
+                    <td class="et-note">{row.note ?? ""}</td>
+                  {/if}
+                </tr>
+              {/if}
+            {/each}
+            {#if !showAll && belowThreshold > 0}
+              <tr class="grouped-row">
+                <td colspan={activeTab === "EC" ? 3 : 2}>
+                  {belowThreshold} weaker line{belowThreshold !== 1 ? "s" : ""} below 0.1% not shown
+                </td>
               </tr>
             {/if}
-          {/each}
-          {#if !showAll && belowThreshold > 0}
-            <tr class="grouped-row">
-              <td colspan="3">{belowThreshold} weaker line{belowThreshold !== 1 ? "s" : ""} below 0.1% not shown</td>
-            </tr>
-          {/if}
-        </tbody>
-      </table>
-      {#if !showAll && visibleLines.length > 50}
-        <div class="truncation-note">
-          Showing 50 of {visibleLines.length} lines
-        </div>
-      {/if}
-      {#if visibleLines.length === 0 && belowThreshold > 0}
-        <div class="truncation-note">
-          All {allLines.length} lines are below 0.1%
-        </div>
-      {/if}
-    </div>
+          </tbody>
+        </table>
+        {#if !showAll && visibleRows.length > 50}
+          <div class="truncation-note">
+            Showing 50 of {visibleRows.length} lines
+          </div>
+        {/if}
+      </div>
+    {:else}
+      <div class="truncation-note">
+        All {currentRows.length} lines are below 0.1%
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -158,12 +264,10 @@
   .section-bar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     padding: 0.3rem 0.5rem;
     border-bottom: 1px solid var(--c-border);
     background: var(--c-bg-default);
     gap: 0.5rem;
-    flex-wrap: wrap;
   }
 
   .section-label {
@@ -174,12 +278,52 @@
     flex-shrink: 0;
   }
 
-  .line-count {
-    font-size: 0.65rem;
+  .tab-row {
+    display: flex;
+    gap: 2px;
+    flex-wrap: wrap;
+  }
+
+  .tab-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
     color: var(--c-text-muted);
-    flex: 1;
-    text-align: right;
-    margin-right: 0.3rem;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.65rem;
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+
+  .tab-btn:hover:not(.disabled) {
+    color: var(--c-text);
+    border-color: var(--c-border);
+  }
+
+  .tab-btn.active {
+    color: var(--c-accent);
+    border-color: var(--c-accent);
+    background: var(--c-bg-active);
+    font-weight: 600;
+  }
+
+  .tab-btn.disabled {
+    color: var(--c-text-faint);
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .section-meta {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0.15rem 0.5rem;
+    gap: 0.4rem;
+  }
+
+  .line-count {
+    font-size: 0.6rem;
+    color: var(--c-text-faint);
   }
 
   .scale-toggle {
@@ -190,7 +334,6 @@
     padding: 0.1rem 0.4rem;
     font-size: 0.6rem;
     cursor: pointer;
-    letter-spacing: 0.02em;
     transition: all 0.15s;
   }
 
@@ -248,18 +391,9 @@
     white-space: nowrap;
   }
 
-  .et-energy {
-    text-align: right;
-  }
-
-  .et-intensity {
-    text-align: right;
-  }
-
-  .et-channel {
-    text-align: center;
-    color: var(--c-text-faint);
-  }
+  .et-energy { text-align: right; }
+  .et-intensity { text-align: right; }
+  .et-note { text-align: center; color: var(--c-text-faint); font-size: 0.6rem; }
 
   .grouped-row td {
     text-align: center;
