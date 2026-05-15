@@ -18,11 +18,16 @@
      *  mass-mixture rows so the user can inspect and modify before saving
      *  as a new custom. (#94 / #57) */
     oncatalogedit?: (catalogName: string) => void;
+    /** Open DefineForm seeded with a formula/name/density for a non-catalog
+     *  builtin (element or compound). (#214) */
+    onbuiltinedit?: (formula: string, density: number) => void;
+    /** Open DefineForm with empty state (or prefilled from search query). (#214) */
+    onnewmaterial?: (prefill?: string) => void;
     /** Optional slot rendered between the search input and the results list. */
     betweenInputAndResults?: Snippet;
   }
 
-  let { query, onQueryChange, materials, onselect, onclose, oneditRequest, oncatalogedit, betweenInputAndResults }: Props = $props();
+  let { query, onQueryChange, materials, onselect, onclose, oneditRequest, oncatalogedit, onbuiltinedit, onnewmaterial, betweenInputAndResults }: Props = $props();
 
   let searchInput: HTMLInputElement | undefined = $state();
 
@@ -172,6 +177,17 @@
     event.stopPropagation();
     oncatalogedit?.(catalogName);
   }
+
+  /** Edit a non-catalog builtin (element or compound) as a new custom. (#214) */
+  function editBuiltin(entry: MaterialInfo, event: Event) {
+    event.stopPropagation();
+    onbuiltinedit?.(entry.formula ?? entry.name, entry.density_g_cm3 ?? 0);
+  }
+
+  function newMaterial(event: Event) {
+    event.stopPropagation();
+    onnewmaterial?.(query.trim() || undefined);
+  }
 </script>
 
 <div class="search-row">
@@ -192,6 +208,17 @@
 {#if betweenInputAndResults}{@render betweenInputAndResults()}{/if}
 
 <ul class="results-list">
+  {#if onnewmaterial}
+    <li>
+      <button class="result-item new-material-row" onclick={newMaterial}>
+        <span class="mat-name">
+          <span class="new-material-icon">+</span>
+          {query.trim() ? `New from "${query.trim()}"` : "New material"}
+        </span>
+        <span class="mat-meta">Define &amp; save a custom material</span>
+      </button>
+    </li>
+  {/if}
   {#each results as entry}
     {@const custom = findCustomEntry(entry)}
     <li>
@@ -210,12 +237,14 @@
         <button class="edit-btn" title="Edit" onclick={(e) => editCustom(custom.customId, e)}>&#9998;</button>
         <button class="delete-btn" title="Delete" onclick={(e) => handleDelete(custom.customId, e)}>&times;</button>
       {:else if isCatalogEntry(entry) && oncatalogedit}
-        <button class="edit-btn" title="Edit catalog material as new custom" onclick={(e) => editCatalog(entry.name, e)}>&#9998;</button>
+        <button class="edit-btn" title="Edit as new custom" onclick={(e) => editCatalog(entry.name, e)}>&#9998;</button>
+      {:else if onbuiltinedit}
+        <button class="edit-btn" title="Edit as new custom" onclick={(e) => editBuiltin(entry, e)}>&#9998;</button>
       {/if}
     </li>
   {/each}
   {#if results.length === 0 && query.trim()}
-    <li class="no-results">No matches — Enter or "Use" to use as formula</li>
+    <li class="no-results">No matches — press Enter to use as formula, or click + New above</li>
   {/if}
 </ul>
 
@@ -332,6 +361,28 @@
 
   .edit-btn:hover { color: var(--c-accent); background: var(--c-accent-tint-subtle); }
   .delete-btn:hover { color: var(--c-red); background: var(--c-red-tint-subtle); }
+
+  .new-material-row {
+    border-bottom: 1px solid var(--c-border);
+    color: var(--c-accent);
+  }
+
+  .new-material-row .mat-name { color: var(--c-accent); }
+  .new-material-row .mat-meta { color: var(--c-text-muted); }
+
+  .new-material-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1rem;
+    height: 1.1rem;
+    border-radius: 50%;
+    border: 1px solid var(--c-accent);
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1;
+    flex-shrink: 0;
+  }
 
   .no-results {
     color: var(--c-text-faint);
