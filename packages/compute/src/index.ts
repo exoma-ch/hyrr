@@ -8,6 +8,7 @@
 
 // --- Data store ---
 export { DataStore } from "./data-store";
+export type { GammaLine } from "./data-store";
 
 // --- Materials ---
 export {
