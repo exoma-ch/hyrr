@@ -23,6 +23,10 @@ let activeBackend: BackendKind | null = null;
 let wasmStore: any = null; // WasmDataStore instance (lazy-loaded)
 let wasmTsDataStore: any = null; // TS DataStore used for WASM XS loading
 
+/** Return the TS DataStore created during WASM init (already fully init'd).
+ *  Null when using Tauri backend or if WASM init hasn't run yet. */
+export function getWasmTsDataStore(): any { return wasmTsDataStore; }
+
 export function getActiveBackend(): BackendKind | null {
   return activeBackend;
 }
