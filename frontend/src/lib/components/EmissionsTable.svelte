@@ -81,7 +81,7 @@
     if (activeTab === "gamma") {
       return gammaLines.map((l) => ({
         energyKeV: l.energyKeV,
-        intensity: l.totalIntensity,
+        intensity: l.intensity,
       }));
     }
     return decayEmissions
@@ -203,8 +203,8 @@
               <th class="et-energy sortable" onclick={() => toggleSort("energy")}>
                 Energy (keV){sortIndicator("energy")}
               </th>
-              <th class="et-intensity sortable" onclick={() => toggleSort("intensity")}>
-                Intensity (%){sortIndicator("intensity")}
+              <th class="et-intensity sortable" onclick={() => toggleSort("intensity")} title={activeTab === "gamma" ? "Relative intensity (strongest transition from each level = 100%). Absolute per-decay values pending upstream data." : "Branching ratio per decay (%)"}>
+                {activeTab === "gamma" ? "Rel. I (%)" : "I (%)"}{sortIndicator("intensity")}
               </th>
               {#if activeTab === "EC"}
                 <th class="et-note">Shell</th>
