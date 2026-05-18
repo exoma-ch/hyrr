@@ -400,6 +400,15 @@
         <BeamConfigBar />
       </div>
 
+      {#if hasLayers && result}
+        <nav class="section-nav" aria-label="Jump to section">
+          <button class="section-nav-btn" onclick={() => document.getElementById('sec-depth')?.scrollIntoView({ behavior: 'smooth' })}>Depth</button>
+          <button class="section-nav-btn" onclick={() => document.getElementById('sec-activity')?.scrollIntoView({ behavior: 'smooth' })}>Activity</button>
+          <button class="section-nav-btn" onclick={() => document.getElementById('sec-emission')?.scrollIntoView({ behavior: 'smooth' })}>Emissions</button>
+          <button class="section-nav-btn" onclick={() => document.getElementById('sec-table')?.scrollIntoView({ behavior: 'smooth' })}>Table</button>
+        </nav>
+      {/if}
+
       <LayerStackHorizontal onmaterialclick={openMaterialPopup} onelementclick={openElementPopup} />
 
       {#if computeError && !result}
@@ -417,6 +426,7 @@
       {/if}
 
       {#if hasLayers}
+        <div id="sec-depth"></div>
         <PlotDepthProfileLive />
 
         {#if result}
@@ -434,8 +444,11 @@
 
         {#if result}
           <IsotopeFilterBar {result} />
+          <div id="sec-activity"></div>
           <PlotActivityCurve {result} />
+          <div id="sec-emission"></div>
           <EmissionPlot {result} />
+          <div id="sec-table"></div>
           <ActivityTableEnhanced {result} onisotopeclick={openIsotopePopup} />
         {:else if resultError}
           <p class="compute-error-placeholder">
@@ -716,6 +729,37 @@
     display: flex;
     gap: 0.75rem;
     flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--c-bg);
+    padding: 0.4rem 0;
+    margin: -0.4rem 0 0;
+    border-bottom: 1px solid var(--c-border);
+  }
+
+  .section-nav {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+    padding: 0.15rem 0;
+    flex-wrap: wrap;
+  }
+
+  .section-nav-btn {
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    color: var(--c-text-muted);
+    padding: 0.1rem 0.4rem;
+    font-size: 0.6rem;
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+
+  .section-nav-btn:hover {
+    color: var(--c-accent);
+    border-color: var(--c-accent);
   }
 
   .status-bar {
