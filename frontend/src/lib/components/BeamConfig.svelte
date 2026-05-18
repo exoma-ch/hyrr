@@ -145,7 +145,7 @@
       value={displayedEnergy}
       min={isHI ? 3 : 1}
       max={isHI ? 1000 : 100}
-      step={isHI ? 1 : 0.5}
+
       onchange={onEnergyChange}
     />
 
@@ -155,7 +155,7 @@
       value={beam.current_mA * 1000}
       min={1}
       max={5000}
-      step={1}
+
       onchange={(v) => setCurrent(v / 1000)}
     />
   </div>
@@ -169,7 +169,7 @@
       units={TIME_UNIT_LABELS}
       value={irradValue}
       min={0}
-      step={1}
+
       onchange={onIrradChange}
       onunitchange={onIrradUnitChange}
     />
@@ -180,7 +180,7 @@
       units={TIME_UNIT_LABELS}
       value={coolValue}
       min={0}
-      step={1}
+
       onchange={onCoolChange}
       onunitchange={onCoolUnitChange}
     />

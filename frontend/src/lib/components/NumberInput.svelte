@@ -5,7 +5,6 @@
     value: number;
     min?: number;
     max?: number;
-    step?: number;
     label: string;
     unit?: string;
     units?: string[];
@@ -17,7 +16,6 @@
     value,
     min = 0,
     max = Infinity,
-    step = 1,
     label,
     unit = "",
     units = [],

@@ -33,9 +33,11 @@ describe("parseValueUnit", () => {
     expect(parseValueUnit("10\u03BCA", currentUnits)).toEqual({ value: 10, unit: "µA" });
   });
 
-  it("handles floats and scientific notation", () => {
+  it("handles floats, leading-dot shorthand, and scientific notation", () => {
     expect(parseValueUnit("1.5e3 MeV", energyUnits)).toEqual({ value: 1500, unit: "MeV" });
     expect(parseValueUnit("0.001 mA", currentUnits)).toEqual({ value: 0.001, unit: "mA" });
+    expect(parseValueUnit(".5 MeV", energyUnits)).toEqual({ value: 0.5, unit: "MeV" });
+    expect(parseValueUnit(".5MeV", energyUnits)).toEqual({ value: 0.5, unit: "MeV" });
   });
 
   it("returns null for empty or invalid input", () => {

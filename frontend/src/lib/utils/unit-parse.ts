@@ -24,9 +24,9 @@ export function parseValueUnit(
   const trimmed = input.trim();
   if (!trimmed) return null;
 
-  // Try to match: optional sign, number (int or float or scientific), optional whitespace, optional unit
+  // Try to match: optional sign, number (int/float/.N shorthand/scientific), optional whitespace, optional unit
   const m = trimmed.match(
-    /^([+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?)\s*(.*)$/i,
+    /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(.*)$/i,
   );
   if (!m) return null;
 
