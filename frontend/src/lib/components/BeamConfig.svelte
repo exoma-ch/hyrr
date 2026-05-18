@@ -34,12 +34,7 @@
     { id: "Fe-56", symbol: "\u2075\u2076Fe\u00b2\u2076\u207a", name: "\u2075\u2076Iron" },
   ];
 
-  const TIME_UNITS: { value: TimeUnit; label: string }[] = [
-    { value: "s", label: "s" },
-    { value: "min", label: "min" },
-    { value: "h", label: "h" },
-    { value: "d", label: "d" },
-  ];
+  const TIME_UNIT_LABELS: TimeUnit[] = ["s", "min", "h", "d"];
 
   let beam = $derived(getBeam());
   let config = $derived(getConfig());
@@ -77,22 +72,24 @@
   let irradValue = $derived(fromSeconds(config.irradiation_s, irradUnit));
   let coolValue = $derived(fromSeconds(config.cooling_s, coolUnit));
 
-  function onIrradChange(e: Event) {
-    const v = parseFloat((e.target as HTMLInputElement).value);
-    if (!isNaN(v) && v >= 0) setIrradiation(toSeconds(v, irradUnit));
+  function onIrradChange(v: number) {
+    if (v >= 0) setIrradiation(toSeconds(v, irradUnit));
   }
 
-  function onCoolChange(e: Event) {
-    const v = parseFloat((e.target as HTMLInputElement).value);
-    if (!isNaN(v) && v >= 0) setCooling(toSeconds(v, coolUnit));
+  function onCoolChange(v: number) {
+    if (v >= 0) setCooling(toSeconds(v, coolUnit));
   }
 
-  function onIrradUnitChange(e: Event) {
-    irradUnit = (e.target as HTMLSelectElement).value as TimeUnit;
+  function onIrradUnitChange(newUnit: string) {
+    const u = newUnit as TimeUnit;
+    setIrradiation(toSeconds(fromSeconds(config.irradiation_s, irradUnit), u));
+    irradUnit = u;
   }
 
-  function onCoolUnitChange(e: Event) {
-    coolUnit = (e.target as HTMLSelectElement).value as TimeUnit;
+  function onCoolUnitChange(newUnit: string) {
+    const u = newUnit as TimeUnit;
+    setCooling(toSeconds(fromSeconds(config.cooling_s, coolUnit), u));
+    coolUnit = u;
   }
 
   function handleCurrentUpload(e: Event) {
@@ -165,44 +162,28 @@
 
   <div class="separator"></div>
 
-  <div class="time-row">
-    <label for="bc-irrad">Irradiation</label>
-    <div class="time-controls">
-      <input
-        id="bc-irrad"
-        type="number"
-        value={irradValue}
-        min={0}
-        step={1}
-        onchange={onIrradChange}
-        class="time-input"
-      />
-      <select value={irradUnit} onchange={onIrradUnitChange} class="unit-select" aria-label="Irradiation unit">
-        {#each TIME_UNITS as u}
-          <option value={u.value}>{u.label}</option>
-        {/each}
-      </select>
-    </div>
-  </div>
+  <div class="field-grid">
+    <NumberInput
+      label="Irradiation"
+      unit={irradUnit}
+      units={TIME_UNIT_LABELS}
+      value={irradValue}
+      min={0}
+      step={1}
+      onchange={onIrradChange}
+      onunitchange={onIrradUnitChange}
+    />
 
-  <div class="time-row">
-    <label for="bc-cool">Cooling</label>
-    <div class="time-controls">
-      <input
-        id="bc-cool"
-        type="number"
-        value={coolValue}
-        min={0}
-        step={1}
-        onchange={onCoolChange}
-        class="time-input"
-      />
-      <select value={coolUnit} onchange={onCoolUnitChange} class="unit-select" aria-label="Cooling unit">
-        {#each TIME_UNITS as u}
-          <option value={u.value}>{u.label}</option>
-        {/each}
-      </select>
-    </div>
+    <NumberInput
+      label="Cooling"
+      unit={coolUnit}
+      units={TIME_UNIT_LABELS}
+      value={coolValue}
+      min={0}
+      step={1}
+      onchange={onCoolChange}
+      onunitchange={onCoolUnitChange}
+    />
   </div>
 
   <div class="current-profile">
@@ -283,54 +264,6 @@
   .separator {
     border-top: 1px solid var(--c-border);
     margin: 0.1rem 0;
-  }
-
-  .time-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .time-row label {
-    font-size: 0.8rem;
-    color: var(--c-text-label);
-  }
-
-  .time-controls {
-    display: flex;
-    gap: 0.4rem;
-  }
-
-  .time-input {
-    flex: 1;
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    color: var(--c-text);
-    padding: 0.35rem 0.5rem;
-    font-size: 0.85rem;
-    text-align: right;
-  }
-
-  .time-input:focus {
-    outline: none;
-    border-color: var(--c-accent);
-  }
-
-  .unit-select {
-    width: 60px;
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    color: var(--c-text);
-    padding: 0.35rem;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-
-  .unit-select:focus {
-    outline: none;
-    border-color: var(--c-accent);
   }
 
   .current-profile {
