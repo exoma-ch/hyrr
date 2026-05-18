@@ -19,7 +19,7 @@
     let total = 0;
     let hasAny = false;
     for (const iso of layerResult.isotopes) {
-      const d = getDoseConstant(iso.name, iso.activity_Bq);
+      const d = getDoseConstant(iso.name, iso.activity_Bq, iso.Z, iso.A, iso.state);
       if (d !== null) {
         total += d.doseRate;
         hasAny = true;
