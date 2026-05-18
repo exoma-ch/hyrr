@@ -58,9 +58,20 @@ function indexDecays(rows: any[]) {
     const key = `${row.Z}_${row.A}`;
     let bucket = idx.get(key);
     if (!bucket) { bucket = []; idx.set(key, bucket); }
+    // Apply physics corrections (mirrors DataStore.init)
+    const qKeV = Number(row.q_value_kev ?? 0);
+    const A = Number(row.A);
+    let energyKeV: number;
+    if (channel === "beta+") {
+      energyKeV = Math.max(0, qKeV - 1022);
+    } else if (channel === "alpha") {
+      energyKeV = A > 4 ? qKeV * (A - 4) / A : qKeV;
+    } else {
+      energyKeV = qKeV;
+    }
     bucket.push({
       channel,
-      energyKeV: Number(row.q_value_kev ?? 0),
+      energyKeV,
       intensity: Number(row.branching ?? 0),
     });
   }
@@ -142,4 +153,32 @@ describe("Decay emission matrix (#201)", () => {
       }
     });
   }
+
+  // β⁺ energy correction: endpoint = Q - 1022 keV (#240)
+  it.skipIf(!HAS_DECAY)("F-18 β⁺ endpoint ≈ 634 keV (Q=1656 − 1022)", async () => {
+    if (!decayIdx) {
+      const rows = await loadParquet(DECAY_FILE);
+      decayIdx = indexDecays(rows);
+    }
+    const f18 = decayIdx.get("9_18") ?? [];
+    const bp = f18.find((l: any) => l.channel === "beta+");
+    expect(bp).toBeDefined();
+    // Q = 1655.9 keV → endpoint = 633.9 keV
+    expect(bp.energyKeV).toBeGreaterThan(600);
+    expect(bp.energyKeV).toBeLessThan(670);
+  });
+
+  // α energy correction: kinetic E = Q × (A-4)/A (#240)
+  it.skipIf(!HAS_DECAY)("Ra-226 α energy ≈ 4784 keV (Q × 222/226)", async () => {
+    if (!decayIdx) {
+      const rows = await loadParquet(DECAY_FILE);
+      decayIdx = indexDecays(rows);
+    }
+    const ra226 = decayIdx.get("88_226") ?? [];
+    const alpha = ra226.find((l: any) => l.channel === "alpha" && l.intensity > 0.5);
+    expect(alpha).toBeDefined();
+    // Dominant α: Q ≈ 4870 keV → kinetic ≈ 4870 × 222/226 ≈ 4784 keV
+    expect(alpha.energyKeV).toBeGreaterThan(4700);
+    expect(alpha.energyKeV).toBeLessThan(4900);
+  });
 });

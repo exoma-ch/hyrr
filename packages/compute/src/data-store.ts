@@ -189,9 +189,23 @@ export class DataStore implements DatabaseProtocol {
         const key = `${row.Z}_${row.A}`;
         let bucket = this.decayEmissionIndex.get(key);
         if (!bucket) { bucket = []; this.decayEmissionIndex.set(key, bucket); }
+        // Convert Q-value to actual particle energy:
+        // β⁺: endpoint = Q − 2mₑc² (1022 keV)
+        // α:  kinetic E = Q × (A−4)/A (recoil correction)
+        // β⁻, EC: Q-value is correct as-is
+        const qKeV = Number(row.q_value_kev ?? 0);
+        const A = Number(row.A);
+        let energyKeV: number;
+        if (channel === "beta+") {
+          energyKeV = Math.max(0, qKeV - 1022);
+        } else if (channel === "alpha") {
+          energyKeV = A > 4 ? qKeV * (A - 4) / A : qKeV;
+        } else {
+          energyKeV = qKeV;
+        }
         bucket.push({
           channel,
-          energyKeV: Number(row.q_value_kev ?? 0),
+          energyKeV,
           intensity: Number(row.branching ?? 0),
           ...(SHELL_MAP[mode] ? { shell: SHELL_MAP[mode] } : {}),
         });
