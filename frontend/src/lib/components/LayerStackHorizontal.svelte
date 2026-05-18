@@ -244,6 +244,7 @@
     gap: 0.35rem;
     cursor: grab;
     transition: border-color 0.15s, opacity 0.15s;
+    overflow: hidden; /* prevent child inputs from escaping card bounds (#234) */
   }
 
   .layer-card:hover {

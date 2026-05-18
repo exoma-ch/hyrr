@@ -232,6 +232,7 @@
     display: flex;
     align-items: center;
     gap: 0.3rem;
+    min-width: 0; /* allow shrink (#234) */
   }
 
   .input-with-feedback {
@@ -239,10 +240,12 @@
     align-items: center;
     gap: 0.25rem;
     flex: 1;
+    min-width: 0; /* allow shrink within parent flex (#234) */
   }
 
   .val-input {
     flex: 1;
+    min-width: 0; /* allow flex shrink below intrinsic width (#234) */
     background: var(--c-bg-default);
     border: 1px solid var(--c-border);
     border-radius: 4px;
