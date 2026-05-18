@@ -446,10 +446,10 @@
         <tr>
           <th class="col-layer sortable" onclick={() => toggleSort("layer")}>L#</th>
           <th class="col-name sortable" onclick={() => toggleSort("name")}>Isotope</th>
+          <th class="col-reaction">Reaction</th>
           <th class="col-z">Z</th>
           <th class="col-a">A</th>
           <th class="col-hl sortable" onclick={() => toggleSort("half_life")}>t½</th>
-          <th class="col-reaction">Reaction</th>
           <th class="col-act sortable" onclick={() => toggleSort("activity_eob")} title="Activity at end of bombardment">EOB</th>
           <th class="col-act sortable" onclick={() => toggleSort("activity")} title="Activity at end of cooling">EOC</th>
           <th class="col-act sortable" onclick={() => toggleSort("direct")}>Direct</th>
@@ -473,9 +473,11 @@
             class:selected={isSelected(row.name)}
             onclick={() => toggleIsotope(row.name)}
           >
-            <td class="col-layer" title={row.layerList ? `layers ${row.layerList.map(i => i + 1).join(", ")}` : ""}>
+            <td class="col-layer" title={row.layerList && row.layerList.length > 1
+              ? `Produced in ${row.layerList.length} layers: ${row.layerList.map(i => `L${i + 1}`).join(", ")}. Activities summed across all layers.`
+              : ""}>
               {#if row.layerList && row.layerList.length > 1}
-                L{row.layerList[0] + 1}–{row.layerList[row.layerList.length - 1] + 1}×{row.layerList.length}
+                {row.layerList.map(i => `L${i + 1}`).join(", ")}
               {:else}
                 L{(row.layerList ? row.layerList[0] : row.layerIndex) + 1}
               {/if}
@@ -491,13 +493,15 @@
                 {@html nucHtml(row.name)}
               </button>
             </td>
-            <td class="col-z">{row.Z}</td>
-            <td class="col-a">{row.A}</td>
-            <td class="col-hl">{formatHalfLife(row.half_life_s)}</td>
-            <td class="col-reaction">
+            <td class="col-reaction" title={row.layerList && row.layerList.length > 1
+              ? `Routes across ${row.layerList.length} layers:\n${[...new Set([...row.reactions, ...row.decayNotations])].join("\n")}`
+              : ""}>
               {#each [...new Set([...row.reactions, ...row.decayNotations].map(formatReaction))] as rxn, i}{#if i > 0}, {/if}{rxn}{/each}
               {#if row.reactions.length === 0 && row.decayNotations.length === 0 && row.source === "daughter"}decay{/if}
             </td>
+            <td class="col-z">{row.Z}</td>
+            <td class="col-a">{row.A}</td>
+            <td class="col-hl">{formatHalfLife(row.half_life_s)}</td>
             <td class="col-act" class:clamped={eob.clamped}>{eob.text}</td>
             <td class="col-act" class:clamped={eoc.clamped}>{eoc.text}</td>
             <td class="col-act" class:clamped={direct.clamped}>{direct.text}</td>
