@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getDataStore } from "../scheduler/sim-scheduler.svelte";
-  import type { GammaLine, DecayEmissionLine } from "@hyrr/compute";
+  import type { EmissionLine, EmissionRadType } from "@hyrr/compute";
 
   interface Props {
     Z: number;
@@ -13,10 +13,8 @@
   // --- Emission channel tabs ---
   const TABS = [
     { id: "gamma", label: "\u03B3" },
-    { id: "alpha", label: "\u03B1" },
     { id: "beta-", label: "\u03B2\u207B" },
-    { id: "beta+", label: "\u03B2\u207A" },
-    { id: "EC", label: "EC" },
+    { id: "beta+", label: "\u03B2\u207A/511" },
     { id: "CE", label: "CE" },
     { id: "xray", label: "X-ray" },
     { id: "auger", label: "Auger" },
@@ -41,30 +39,34 @@
     return db?.emissionDataLoaded ?? false;
   });
 
-  let gammaLines = $derived.by((): GammaLine[] => {
+  /** All emissions for this nuclide from the unified emissions table. */
+  let allEmissions = $derived.by((): EmissionLine[] => {
     const db = getDataStore();
     if (!db) return [];
-    return db.getGammaLines(Z, A);
+    return db.getEmissions(Z, A, nuclearState ?? "");
   });
 
-  let decayEmissions = $derived.by((): DecayEmissionLine[] => {
-    const db = getDataStore();
-    if (!db) return [];
-    return db.getDecayEmissions(Z, A);
-  });
+  /** Map from tab ID to the rad_type(s) it shows. */
+  const TAB_RAD_TYPES: Record<TabId, EmissionRadType[]> = {
+    "gamma": ["gamma"],
+    "beta-": ["beta-"],
+    "beta+": ["beta+", "annihilation"],
+    "CE": ["ce"],
+    "xray": ["xray"],
+    "auger": ["auger"],
+  };
 
   /** Which tabs have data (drives enabled/disabled state). */
   let tabHasData = $derived.by(() => {
     const has: Record<string, boolean> = {};
-    has["gamma"] = gammaLines.length > 0;
-    has["alpha"] = decayEmissions.some((l) => l.channel === "alpha");
-    has["beta-"] = decayEmissions.some((l) => l.channel === "beta-");
-    has["beta+"] = decayEmissions.some((l) => l.channel === "beta+");
-    has["EC"] = decayEmissions.some((l) => l.channel === "EC");
-    // P1 — not yet wired
-    has["CE"] = false;
-    has["xray"] = false;
-    has["auger"] = false;
+    for (const tab of TABS) {
+      const radTypes = TAB_RAD_TYPES[tab.id];
+      if (radTypes.length === 0) {
+        has[tab.id] = false;
+      } else {
+        has[tab.id] = allEmissions.some((e) => radTypes.includes(e.radType));
+      }
+    }
     return has;
   });
 
@@ -78,18 +80,14 @@
   }
 
   let currentRows = $derived.by((): DisplayRow[] => {
-    if (activeTab === "gamma") {
-      return gammaLines.map((l) => ({
-        energyKeV: l.energyKeV,
-        intensity: l.intensity,
-      }));
-    }
-    return decayEmissions
-      .filter((l) => l.channel === activeTab)
-      .map((l) => ({
-        energyKeV: l.energyKeV,
-        intensity: l.intensity,
-        note: l.shell ? `${l.shell}-shell` : undefined,
+    const radTypes = TAB_RAD_TYPES[activeTab];
+    if (radTypes.length === 0) return [];
+    return allEmissions
+      .filter((e) => radTypes.includes(e.radType))
+      .map((e) => ({
+        energyKeV: e.energyKeV,
+        intensity: e.intensity,
+        note: e.radSubtype ?? undefined,
       }));
   });
 
@@ -203,11 +201,11 @@
               <th class="et-energy sortable" onclick={() => toggleSort("energy")}>
                 Energy (keV){sortIndicator("energy")}
               </th>
-              <th class="et-intensity sortable" onclick={() => toggleSort("intensity")} title={activeTab === "gamma" ? "Relative intensity (strongest transition from each level = 100%). Absolute per-decay values pending upstream data." : "Branching ratio per decay (%)"}>
-                {activeTab === "gamma" ? "Rel. I (%)" : "I (%)"}{sortIndicator("intensity")}
+              <th class="et-intensity sortable" onclick={() => toggleSort("intensity")} title="Absolute emission probability per decay (%)">
+                I (%){sortIndicator("intensity")}
               </th>
-              {#if activeTab === "EC"}
-                <th class="et-note">Shell</th>
+              {#if activeTab === "CE" || activeTab === "xray" || activeTab === "auger"}
+                <th class="et-note">Type</th>
               {/if}
             </tr>
           </thead>
@@ -217,7 +215,7 @@
                 <tr>
                   <td class="et-energy">{fmtEnergy(row.energyKeV)}</td>
                   <td class="et-intensity">{fmtIntensity(row.intensity)}</td>
-                  {#if activeTab === "EC"}
+                  {#if activeTab === "CE" || activeTab === "xray" || activeTab === "auger"}
                     <td class="et-note">{row.note ?? ""}</td>
                   {/if}
                 </tr>
@@ -225,7 +223,7 @@
             {/each}
             {#if !showAll && belowThreshold > 0}
               <tr class="grouped-row">
-                <td colspan={activeTab === "EC" ? 3 : 2}>
+                <td colspan={activeTab === "CE" || activeTab === "xray" || activeTab === "auger" ? 3 : 2}>
                   {belowThreshold} weaker line{belowThreshold !== 1 ? "s" : ""} below 0.1% not shown
                 </td>
               </tr>

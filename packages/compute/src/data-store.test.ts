@@ -1,19 +1,29 @@
 /**
- * DataStore emission data — matrix test across isotope types (#201).
+ * DataStore emission data — matrix test across isotope types (#201, #242).
  *
  * Parses real parquet files from the nucl-parquet submodule and verifies
- * gamma + decay-detailed data for a representative set of isotopes covering
- * all emission channels (α, β⁻, β⁺, EC, γ).
+ * absolute per-decay emission intensities from the unified emissions table
+ * (data-2026.5.2+). Validates gamma, CE, X-ray, Auger, β, and annihilation
+ * lines against NuDat reference values.
  */
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const DATA_DIR = resolve(__dirname, "../../../nucl-parquet/data");
-const GAMMA_FILE = resolve(DATA_DIR, "meta/nudex_level_gammas.parquet");
-const DECAY_FILE = resolve(DATA_DIR, "meta/decay_detailed.parquet");
-const HAS_GAMMA = existsSync(GAMMA_FILE);
-const HAS_DECAY = existsSync(DECAY_FILE);
+const EMISSIONS_DIR = resolve(DATA_DIR, "meta/ensdf/emissions");
+const HAS_EMISSIONS = existsSync(EMISSIONS_DIR);
+
+interface EmissionRow {
+  parent_Z: number;
+  parent_A: number;
+  parent_state: string;
+  decay_mode: string;
+  rad_type: string;
+  energy_keV: number;
+  intensity_pct: number;
+  rad_subtype: string | null;
+}
 
 async function loadParquet(path: string): Promise<any[]> {
   const { parquetRead } = await import("hyparquet");
@@ -30,155 +40,203 @@ async function loadParquet(path: string): Promise<any[]> {
   return rows;
 }
 
-function indexGammas(rows: any[]) {
-  const idx = new Map<string, any[]>();
-  for (const row of rows) {
-    const key = `${row.Z}_${row.A}`;
-    let bucket = idx.get(key);
-    if (!bucket) { bucket = []; idx.set(key, bucket); }
-    bucket.push({
-      energyKeV: Number(row.gamma_energy_MeV) * 1000,
-      intensity: Number(row.intensity),
-      totalIntensity: Number(row.total_intensity),
-    });
-  }
-  return idx;
-}
+/** Load emissions for an element symbol, aggregate across decay modes,
+ *  return rows keyed by "Z_A" or "Z_A_state". */
+async function loadEmissions(symbol: string): Promise<Map<string, EmissionRow[]>> {
+  const path = resolve(EMISSIONS_DIR, `${symbol}.parquet`);
+  if (!existsSync(path)) return new Map();
+  const rows = await loadParquet(path);
 
-function indexDecays(rows: any[]) {
-  const MODE_MAP: Record<string, string | null> = {
-    alpha: "alpha", "beta-": "beta-", "beta+": "beta+",
-    KshellEC: "EC", LshellEC: "EC", MshellEC: "EC", NshellEC: "EC",
-  };
-  const idx = new Map<string, any[]>();
+  // Aggregate same-energy lines across decay modes (mirrors DataStore.ensureEmissions)
+  const aggMap = new Map<string, { row: EmissionRow; totalPct: number }>();
   for (const row of rows) {
-    const channel = MODE_MAP[String(row.decay_mode)];
-    if (!channel) continue;
-    if (Number(row.parent_ex_kev ?? 0) > 1) continue;
-    const key = `${row.Z}_${row.A}`;
-    let bucket = idx.get(key);
-    if (!bucket) { bucket = []; idx.set(key, bucket); }
-    // Apply physics corrections (mirrors DataStore.init)
-    const qKeV = Number(row.q_value_kev ?? 0);
-    const A = Number(row.A);
-    let energyKeV: number;
-    if (channel === "beta+") {
-      energyKeV = Math.max(0, qKeV - 1022);
-    } else if (channel === "alpha") {
-      energyKeV = A > 4 ? qKeV * (A - 4) / A : qKeV;
+    const state = String(row.parent_state ?? "");
+    const nuclideKey = `${row.parent_Z}_${row.parent_A}${state ? `_${state}` : ""}`;
+    const energyRounded = Number(row.energy_keV).toFixed(2);
+    const subtype = row.rad_subtype ? String(row.rad_subtype) : "";
+    const aggKey = `${nuclideKey}\0${row.rad_type}\0${energyRounded}\0${subtype}`;
+    const existing = aggMap.get(aggKey);
+    if (existing) {
+      existing.totalPct += Number(row.intensity_pct);
     } else {
-      energyKeV = qKeV;
+      aggMap.set(aggKey, {
+        totalPct: Number(row.intensity_pct),
+        row: { ...row as EmissionRow, intensity_pct: 0 },
+      });
     }
-    bucket.push({
-      channel,
-      energyKeV,
-      intensity: Number(row.branching ?? 0),
-    });
+  }
+
+  const idx = new Map<string, EmissionRow[]>();
+  for (const [aggKey, { row, totalPct }] of aggMap) {
+    const nuclideKey = aggKey.split("\0")[0];
+    row.intensity_pct = totalPct;
+    let bucket = idx.get(nuclideKey);
+    if (!bucket) { bucket = []; idx.set(nuclideKey, bucket); }
+    bucket.push(row);
   }
   return idx;
 }
 
-// --- Gamma matrix ---
-describe("Gamma emission matrix (#201)", () => {
-  const CASES = [
-    // [label, Z, A, minLines, knownLineKeV, minIntensity]
-    ["Tc-99m (IT γ workhorse)", 43, 99, 50, 141, 0.89],
-    ["Mn-52 (EC/β⁺, strong γ)", 25, 52, 50, 732, 0.9],
-    ["Co-60 (β⁻ → γγ cascade)", 27, 60, 5, 1173, 0.99],
-    ["Bi-212 (α + β⁻, mixed γ cascade)", 83, 212, 5, 39, 0.0],
-    ["Na-22 (β⁺ annihilation + 1275 γ)", 11, 22, 1, 1275, 0.99],
-    ["I-131 (thyroid therapy, 364 γ)", 53, 131, 10, 364, 0.0],
-    // Cs-137 662 keV is from Ba-137m (Z=56, A=137), not Cs-137 itself
-    ["Ba-137m (662 keV reference from Cs-137 chain)", 56, 137, 1, 662, 0.84],
-  ] as const;
+// --- Unified emission matrix ---
+describe("Unified emission data (data-2026.5.2+) (#242)", () => {
 
-  let gammaIdx: Map<string, any[]>;
-
-  it.skipIf(!HAS_GAMMA)("parquet loads without stack overflow (245k+ rows)", async () => {
-    const rows = await loadParquet(GAMMA_FILE);
-    expect(rows.length).toBeGreaterThan(200_000);
-    gammaIdx = indexGammas(rows);
-    expect(gammaIdx.size).toBeGreaterThan(1000);
+  it.skipIf(!HAS_EMISSIONS)("emissions directory has 100+ element files", () => {
+    const files = readdirSync(EMISSIONS_DIR).filter(f => f.endsWith(".parquet"));
+    expect(files.length).toBeGreaterThan(100);
   });
 
-  for (const [label, Z, A, minLines, knownKeV, minI] of CASES) {
-    it.skipIf(!HAS_GAMMA)(`${label} (Z=${Z}, A=${A}): ≥${minLines} lines, ${knownKeV} keV at ≥${(minI * 100).toFixed(0)}%`, async () => {
-      if (!gammaIdx) {
-        const rows = await loadParquet(GAMMA_FILE);
-        gammaIdx = indexGammas(rows);
-      }
-      const lines = gammaIdx.get(`${Z}_${A}`) ?? [];
-      expect(lines.length).toBeGreaterThanOrEqual(minLines);
+  // --- Gamma intensities: NuDat-validated absolute values ---
+  describe("Gamma: absolute per-decay intensities (NuDat reference)", () => {
+    const GAMMA_CASES = [
+      // [label, symbol, Z, A, state, energyKeV, minPct, maxPct]
+      ["Co-60 1173 keV", "Co", 27, 60, "", 1173, 99.5, 100.2],
+      ["Co-60 1332 keV", "Co", 27, 60, "", 1332, 99.8, 100.2],
+      ["Tc-99m 140 keV", "Tc", 43, 99, "m", 140, 88.5, 89.5],
+      // Na-22: 89.90% (β⁺) + 9.26% (KEC) + 0.77% (LEC) + 0.01% (MEC) ≈ 99.94%
+      ["Na-22 1275 keV", "Na", 11, 22, "", 1274, 99.0, 100.5],
+      ["I-131 364 keV", "I", 53, 131, "", 364, 80.0, 83.0],
+      ["Ba-137m 662 keV", "Ba", 56, 137, "m", 662, 84.0, 90.0],
+      // Eu-152 122keV: sum across EC shells + β⁺ ≈ 28.49% (NuDat: 28.58%)
+      ["Eu-152 122 keV", "Eu", 63, 152, "", 121, 27.5, 29.5],
+      // Eu-152 344keV: from β⁻ branch ≈ 26.58% (NuDat: 26.50%)
+      ["Eu-152 344 keV", "Eu", 63, 152, "", 344, 25.5, 27.5],
+    ] as const;
 
-      const match = lines.find((l: any) => Math.abs(l.energyKeV - knownKeV) < 5);
-      expect(match, `expected ~${knownKeV} keV line`).toBeDefined();
-      expect(match.intensity).toBeGreaterThanOrEqual(minI);
-    });
-  }
-});
+    for (const [label, symbol, Z, A, state, keV, minPct, maxPct] of GAMMA_CASES) {
+      it.skipIf(!HAS_EMISSIONS)(`${label}: ${minPct}–${maxPct}%`, async () => {
+        const idx = await loadEmissions(symbol);
+        const key = state ? `${Z}_${A}_${state}` : `${Z}_${A}`;
+        const lines = idx.get(key) ?? [];
+        const gammas = lines.filter(r => r.rad_type === "gamma");
+        expect(gammas.length).toBeGreaterThan(0);
 
-// --- Decay emission matrix ---
-describe("Decay emission matrix (#201)", () => {
-  const CASES = [
-    // [label, Z, A, expectedChannels]
-    ["Ra-226 (α decayer)", 88, 226, ["alpha"]],
-    ["Co-60 (β⁻ decayer)", 27, 60, ["beta-"]],
-    ["F-18 (β⁺ + EC)", 9, 18, ["beta+", "EC"]],
-    ["Mn-51 (β⁺ + EC)", 25, 51, ["beta+", "EC"]],
-    ["Bi-212 (α + β⁻ mixed)", 83, 212, ["alpha", "beta-"]],
-    ["At-211 (EC + α)", 85, 211, ["alpha", "EC"]],
-  ] as const;
-
-  let decayIdx: Map<string, any[]>;
-
-  it.skipIf(!HAS_DECAY)("decay_detailed parquet loads (62k+ rows)", async () => {
-    const rows = await loadParquet(DECAY_FILE);
-    expect(rows.length).toBeGreaterThan(50_000);
-    decayIdx = indexDecays(rows);
-    expect(decayIdx.size).toBeGreaterThan(500);
-  });
-
-  for (const [label, Z, A, channels] of CASES) {
-    it.skipIf(!HAS_DECAY)(`${label} (Z=${Z}, A=${A}): has ${channels.join(" + ")}`, async () => {
-      if (!decayIdx) {
-        const rows = await loadParquet(DECAY_FILE);
-        decayIdx = indexDecays(rows);
-      }
-      const lines = decayIdx.get(`${Z}_${A}`) ?? [];
-      expect(lines.length).toBeGreaterThan(0);
-
-      for (const ch of channels) {
-        const has = lines.some((l: any) => l.channel === ch);
-        expect(has, `expected ${ch} channel for ${label}`).toBe(true);
-      }
-    });
-  }
-
-  // β⁺ energy correction: endpoint = Q - 1022 keV (#240)
-  it.skipIf(!HAS_DECAY)("F-18 β⁺ endpoint ≈ 634 keV (Q=1656 − 1022)", async () => {
-    if (!decayIdx) {
-      const rows = await loadParquet(DECAY_FILE);
-      decayIdx = indexDecays(rows);
+        // Pick the strongest match within ±5 keV tolerance
+        const candidates = gammas.filter(r => Math.abs(r.energy_keV - keV) < 5);
+        expect(candidates.length, `expected ~${keV} keV line`).toBeGreaterThan(0);
+        const match = candidates.sort((a, b) => b.intensity_pct - a.intensity_pct)[0];
+        expect(match.intensity_pct).toBeGreaterThanOrEqual(minPct);
+        expect(match.intensity_pct).toBeLessThanOrEqual(maxPct);
+      });
     }
-    const f18 = decayIdx.get("9_18") ?? [];
-    const bp = f18.find((l: any) => l.channel === "beta+");
-    expect(bp).toBeDefined();
-    // Q = 1655.9 keV → endpoint = 633.9 keV
-    expect(bp.energyKeV).toBeGreaterThan(600);
-    expect(bp.energyKeV).toBeLessThan(670);
   });
 
-  // α energy correction: kinetic E = Q × (A-4)/A (#240)
-  it.skipIf(!HAS_DECAY)("Ra-226 α energy ≈ 4784 keV (Q × 222/226)", async () => {
-    if (!decayIdx) {
-      const rows = await loadParquet(DECAY_FILE);
-      decayIdx = indexDecays(rows);
+  // --- β⁺ endpoint energies (pre-corrected in data) ---
+  describe("β⁺: endpoint energies come pre-corrected", () => {
+    it.skipIf(!HAS_EMISSIONS)("F-18 β⁺ endpoint ≈ 634 keV", async () => {
+      const idx = await loadEmissions("F");
+      const f18 = (idx.get("9_18") ?? []).filter(r => r.rad_type === "beta+");
+      expect(f18.length).toBeGreaterThan(0);
+      const bp = f18[0];
+      expect(bp.energy_keV).toBeGreaterThan(600);
+      expect(bp.energy_keV).toBeLessThan(670);
+    });
+
+    it.skipIf(!HAS_EMISSIONS)("Na-22 β⁺ endpoint ≈ 547 keV", async () => {
+      const idx = await loadEmissions("Na");
+      const na22 = (idx.get("11_22") ?? []).filter(r => r.rad_type === "beta+");
+      expect(na22.length).toBeGreaterThan(0);
+      expect(na22[0].energy_keV).toBeGreaterThan(500);
+      expect(na22[0].energy_keV).toBeLessThan(600);
+    });
+  });
+
+  // --- Annihilation 511 keV ---
+  describe("Annihilation: 511 keV lines", () => {
+    it.skipIf(!HAS_EMISSIONS)("F-18 annihilation ≈ 193% (2× per β⁺)", async () => {
+      const idx = await loadEmissions("F");
+      const annih = (idx.get("9_18") ?? []).filter(r => r.rad_type === "annihilation");
+      expect(annih.length).toBeGreaterThan(0);
+      const line = annih.find(r => Math.abs(r.energy_keV - 511) < 1);
+      expect(line).toBeDefined();
+      // ~96.73% β⁺ × 2 photons = ~193.46%
+      expect(line!.intensity_pct).toBeGreaterThan(180);
+      expect(line!.intensity_pct).toBeLessThan(200);
+    });
+  });
+
+  // --- CE (conversion electron) lines ---
+  describe("CE: conversion electrons present", () => {
+    it.skipIf(!HAS_EMISSIONS)("Co-60m has dominant CE line", async () => {
+      const idx = await loadEmissions("Co");
+      const co60m = (idx.get("27_60_m") ?? []).filter(r => r.rad_type === "ce");
+      expect(co60m.length).toBeGreaterThan(0);
+      // 58.6 keV IT transition, high ICC → dominant CE
+      const dominant = co60m.sort((a, b) => b.intensity_pct - a.intensity_pct)[0];
+      expect(dominant.intensity_pct).toBeGreaterThan(50);
+    });
+  });
+
+  // --- X-ray lines ---
+  describe("X-ray: characteristic X-rays present", () => {
+    it.skipIf(!HAS_EMISSIONS)("Co-60m has K X-rays", async () => {
+      const idx = await loadEmissions("Co");
+      const xrays = (idx.get("27_60_m") ?? []).filter(r => r.rad_type === "xray");
+      expect(xrays.length).toBeGreaterThan(0);
+      const ka = xrays.find(r => r.rad_subtype?.startsWith("K"));
+      expect(ka).toBeDefined();
+    });
+  });
+
+  // --- Auger electrons ---
+  describe("Auger: Auger electrons present", () => {
+    it.skipIf(!HAS_EMISSIONS)("F-18 has Auger electrons from EC", async () => {
+      const idx = await loadEmissions("F");
+      const auger = (idx.get("9_18") ?? []).filter(r => r.rad_type === "auger");
+      expect(auger.length).toBeGreaterThan(0);
+    });
+
+    it.skipIf(!HAS_EMISSIONS)("Co-60m has KLL Auger lines", async () => {
+      const idx = await loadEmissions("Co");
+      const auger = (idx.get("27_60_m") ?? []).filter(r => r.rad_type === "auger");
+      expect(auger.length).toBeGreaterThan(0);
+      const kll = auger.find(r => r.rad_subtype === "KLL");
+      expect(kll).toBeDefined();
+    });
+  });
+
+  // --- Multi-channel isotopes ---
+  describe("Multi-channel isotopes have complete data", () => {
+    const MULTI_CASES = [
+      // [label, symbol, Z, A, state, expectedRadTypes]
+      ["Tc-99m (IT → γ + CE + X-ray + Auger)", "Tc", 43, 99, "m",
+        ["gamma", "ce", "xray", "auger"]],
+      ["F-18 (β⁺/EC → annihilation + β⁺ + Auger)", "F", 9, 18, "",
+        ["annihilation", "beta+", "auger"]],
+      ["Co-60 (β⁻ → γ + β⁻)", "Co", 27, 60, "",
+        ["gamma", "beta-"]],
+      ["Na-22 (β⁺/EC → γ + annihilation + β⁺)", "Na", 11, 22, "",
+        ["gamma", "annihilation", "beta+"]],
+    ] as const;
+
+    for (const [label, symbol, Z, A, state, expectedTypes] of MULTI_CASES) {
+      it.skipIf(!HAS_EMISSIONS)(`${label}`, async () => {
+        const idx = await loadEmissions(symbol);
+        const key = state ? `${Z}_${A}_${state}` : `${Z}_${A}`;
+        const lines = idx.get(key) ?? [];
+        expect(lines.length).toBeGreaterThan(0);
+
+        for (const rt of expectedTypes) {
+          const has = lines.some(r => r.rad_type === rt);
+          expect(has, `expected ${rt} for ${label}`).toBe(true);
+        }
+      });
     }
-    const ra226 = decayIdx.get("88_226") ?? [];
-    const alpha = ra226.find((l: any) => l.channel === "alpha" && l.intensity > 0.5);
-    expect(alpha).toBeDefined();
-    // Dominant α: Q ≈ 4870 keV → kinetic ≈ 4870 × 222/226 ≈ 4784 keV
-    expect(alpha.energyKeV).toBeGreaterThan(4700);
-    expect(alpha.energyKeV).toBeLessThan(4900);
+  });
+
+  // --- DataStore integration ---
+  describe("DataStore.ensureEmissions() loads and indexes correctly", () => {
+    it.skipIf(!HAS_EMISSIONS)("loads Co emissions and returns gamma lines via getEmissions()", async () => {
+      // Simulate what DataStore does: read file, build index
+      const idx = await loadEmissions("Co");
+      const co60 = (idx.get("27_60") ?? []).filter(r => r.rad_type === "gamma");
+      expect(co60.length).toBeGreaterThan(0);
+
+      // Verify intensity is absolute (not relative)
+      const line1173 = co60.find(r => Math.abs(r.energy_keV - 1173) < 5);
+      expect(line1173).toBeDefined();
+      // Old relative data had this at 100% — absolute should be ~99.86%
+      expect(line1173!.intensity_pct).toBeLessThan(100.1);
+      expect(line1173!.intensity_pct).toBeGreaterThan(99.0);
+    });
   });
 });

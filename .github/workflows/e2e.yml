@@ -55,15 +55,15 @@ jobs:
 
       - name: Copy nuclear data for frontend
         run: |
-          mkdir -p frontend/public/data/parquet/{meta,stopping,xs,hi-xs-prod,neutron-xs}
+          mkdir -p frontend/public/data/parquet/{meta/ensdf,stopping,xs,hi-xs-prod,neutron-xs}
           cp nucl-parquet/data/meta/abundances.parquet \
              nucl-parquet/data/meta/decay.parquet \
              nucl-parquet/data/meta/elements.parquet \
              frontend/public/data/parquet/meta/
           cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/spectrum_xs.parquet            frontend/public/data/parquet/meta/ 2>/dev/null || true
-          cp -f nucl-parquet/data/meta/nudex_level_gammas.parquet   frontend/public/data/parquet/meta/ 2>/dev/null || true
-          cp -f nucl-parquet/data/meta/decay_detailed.parquet      frontend/public/data/parquet/meta/ 2>/dev/null || true
+          # Unified per-element emissions (absolute per-decay intensities, data-2026.5.2+)
+          cp -r nucl-parquet/data/meta/ensdf/emissions frontend/public/data/parquet/meta/ensdf/emissions 2>/dev/null || true
           cp nucl-parquet/data/stopping/PSTAR.parquet \
              nucl-parquet/data/stopping/ASTAR.parquet \
              nucl-parquet/data/stopping/dSTAR.parquet \
@@ -239,15 +239,15 @@ jobs:
 
       - name: Copy nuclear data for frontend
         run: |
-          mkdir -p frontend/public/data/parquet/{meta,stopping,xs,hi-xs-prod,neutron-xs}
+          mkdir -p frontend/public/data/parquet/{meta/ensdf,stopping,xs,hi-xs-prod,neutron-xs}
           cp nucl-parquet/data/meta/abundances.parquet \
              nucl-parquet/data/meta/decay.parquet \
              nucl-parquet/data/meta/elements.parquet \
              frontend/public/data/parquet/meta/
           cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/spectrum_xs.parquet            frontend/public/data/parquet/meta/ 2>/dev/null || true
-          cp -f nucl-parquet/data/meta/nudex_level_gammas.parquet   frontend/public/data/parquet/meta/ 2>/dev/null || true
-          cp -f nucl-parquet/data/meta/decay_detailed.parquet      frontend/public/data/parquet/meta/ 2>/dev/null || true
+          # Unified per-element emissions (absolute per-decay intensities, data-2026.5.2+)
+          cp -r nucl-parquet/data/meta/ensdf/emissions frontend/public/data/parquet/meta/ensdf/emissions 2>/dev/null || true
           cp nucl-parquet/data/stopping/PSTAR.parquet \
              nucl-parquet/data/stopping/ASTAR.parquet \
              nucl-parquet/data/stopping/dSTAR.parquet \
@@ -329,15 +329,15 @@ jobs:
 
       - name: Copy nuclear data for frontend
         run: |
-          mkdir -p frontend/public/data/parquet/{meta,stopping,xs,hi-xs-prod,neutron-xs}
+          mkdir -p frontend/public/data/parquet/{meta/ensdf,stopping,xs,hi-xs-prod,neutron-xs}
           cp nucl-parquet/data/meta/abundances.parquet \
              nucl-parquet/data/meta/decay.parquet \
              nucl-parquet/data/meta/elements.parquet \
              frontend/public/data/parquet/meta/
           cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
           cp -f nucl-parquet/data/meta/spectrum_xs.parquet            frontend/public/data/parquet/meta/ 2>/dev/null || true
-          cp -f nucl-parquet/data/meta/nudex_level_gammas.parquet   frontend/public/data/parquet/meta/ 2>/dev/null || true
-          cp -f nucl-parquet/data/meta/decay_detailed.parquet      frontend/public/data/parquet/meta/ 2>/dev/null || true
+          # Unified per-element emissions (absolute per-decay intensities, data-2026.5.2+)
+          cp -r nucl-parquet/data/meta/ensdf/emissions frontend/public/data/parquet/meta/ensdf/emissions 2>/dev/null || true
           cp nucl-parquet/data/stopping/PSTAR.parquet \
              nucl-parquet/data/stopping/ASTAR.parquet \
              nucl-parquet/data/stopping/dSTAR.parquet \
