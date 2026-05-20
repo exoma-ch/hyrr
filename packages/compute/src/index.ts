@@ -103,7 +103,7 @@ export type {
 } from "./config-bridge";
 
 // --- Layer expansion ---
-export { expandLayers, expandedLayerCount } from "./expand-layers";
+export { expandLayers, expandedLayerCount, setComputeEnergyOutImpl } from "./expand-layers";
 
 // --- Interpolation utility (for XS plotting) ---
 export { interp } from "./_interp";
