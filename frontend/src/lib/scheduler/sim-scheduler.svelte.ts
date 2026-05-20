@@ -173,6 +173,17 @@ async function runSimulation(hash: string): Promise<void> {
     const currentHash = configHash(getConfig());
     if (currentHash !== hash) return;
 
+    // Load emission data for all produced isotope elements (lazy, parallel).
+    if (dataStore) {
+      const zValues = new Set<number>();
+      for (const layer of simResult.layers) {
+        for (const iso of layer.isotopes) {
+          zValues.add(iso.Z);
+        }
+      }
+      await dataStore.ensureEmissionsByZ([...zValues]);
+    }
+
     lastHash = hash;
     state = "ready";
     setResult(simResult);

@@ -42,6 +42,37 @@ interface ParquetRow {
   [key: string]: number | string | null;
 }
 
+/**
+ * Unified emission line from nucl-parquet emissions/{Symbol}.parquet.
+ * Absolute per-decay intensities (NuDat-equivalent), validated to <0.3%.
+ */
+export interface EmissionLine {
+  /** Radiation type: gamma, ce, xray, auger, annihilation, beta+, beta- */
+  radType: EmissionRadType;
+  energyKeV: number;
+  /** Absolute per-decay intensity as fraction (0–1+). Can exceed 1 for
+   *  annihilation (2 photons per β⁺ decay). */
+  intensity: number;
+  /** Sub-type detail (e.g. "Kα1", "KLL") for xray/auger lines. */
+  radSubtype?: string;
+  /** Decay mode that produces this emission. */
+  decayMode?: string;
+  /** Parent nuclear state ("" = ground, "m" = metastable). */
+  parentState?: string;
+}
+
+export type EmissionRadType =
+  | "gamma"
+  | "ce"
+  | "xray"
+  | "auger"
+  | "annihilation"
+  | "beta+"
+  | "beta-";
+
+// --- Backward-compat type aliases (deprecated) ---
+
+/** @deprecated Use EmissionLine with radType === "gamma" instead. */
 export interface GammaLine {
   energyKeV: number;
   intensity: number;
@@ -50,14 +81,14 @@ export interface GammaLine {
   destLevelIdx: number;
 }
 
-/** Emission channel from decay_detailed.parquet. */
+/** @deprecated Use EmissionLine instead. */
 export type EmissionChannel = "alpha" | "beta-" | "beta+" | "EC";
 
+/** @deprecated Use EmissionLine instead. */
 export interface DecayEmissionLine {
   channel: EmissionChannel;
   energyKeV: number;
   intensity: number;
-  /** EC shell (K, L, M, N) when channel is "EC". */
   shell?: string;
 }
 
@@ -94,10 +125,11 @@ export class DataStore implements DatabaseProtocol {
   private stoppingData: ParquetRow[] = [];
   /** Pre-indexed dose constants: "Z_A_state" -> { k, source } */
   private doseConstants = new Map<string, { k: number; source: string }>();
-  /** Pre-indexed gamma lines: "Z_A" -> sorted GammaLine[] */
-  private gammaIndex = new Map<string, GammaLine[]>();
-  /** Pre-indexed decay emissions (α/β/EC): "Z_A" -> DecayEmissionLine[] */
-  private decayEmissionIndex = new Map<string, DecayEmissionLine[]>();
+  /** Unified emission index: "Z_A_state" -> EmissionLine[].
+   *  Loaded lazily per element via ensureEmissions(). */
+  private emissionIndex = new Map<string, EmissionLine[]>();
+  /** Elements whose emission data has been loaded (or attempted). */
+  private emissionLoadedSymbols = new Set<string>();
 
   // Lazy caches
   private xsCache = new Map<string, ParquetRow[]>();
@@ -145,79 +177,7 @@ export class DataStore implements DatabaseProtocol {
       console.warn("[DataStore] dose_constants.parquet not found, dose rates unavailable");
     }
 
-    onProgress?.("Loading gamma emission data...", 0.7);
-    try {
-      const gammaRows = await readParquetRows(`${this.baseUrl}/meta/nudex_level_gammas.parquet`);
-      for (const row of gammaRows) {
-        const key = `${row.Z}_${row.A}`;
-        let bucket = this.gammaIndex.get(key);
-        if (!bucket) { bucket = []; this.gammaIndex.set(key, bucket); }
-        bucket.push({
-          energyKeV: Number(row.gamma_energy_MeV) * 1000,
-          intensity: Number(row.intensity),
-          totalIntensity: Number(row.total_intensity),
-          sourceLevelIdx: Number(row.source_level_idx),
-          destLevelIdx: Number(row.dest_level_idx),
-        });
-      }
-      // Sort each bucket by energy ascending
-      for (const bucket of this.gammaIndex.values()) {
-        bucket.sort((a, b) => a.energyKeV - b.energyKeV);
-      }
-    } catch {
-      console.warn("[DataStore] nudex_level_gammas.parquet not found, gamma emissions unavailable");
-    }
-
-    // Load decay-detailed emissions (α, β⁻, β⁺, EC) — 62k rows, ~630 KB.
-    try {
-      const ddRows = await readParquetRows(`${this.baseUrl}/meta/decay_detailed.parquet`);
-      const MODE_MAP: Record<string, EmissionChannel | null> = {
-        "alpha": "alpha", "beta-": "beta-", "beta+": "beta+",
-        "KshellEC": "EC", "LshellEC": "EC", "MshellEC": "EC", "NshellEC": "EC",
-      };
-      const SHELL_MAP: Record<string, string> = {
-        "KshellEC": "K", "LshellEC": "L", "MshellEC": "M", "NshellEC": "N",
-      };
-      for (const row of ddRows) {
-        const mode = String(row.decay_mode);
-        const channel = MODE_MAP[mode];
-        if (!channel) continue; // skip SF, n, p, t
-        const parentEx = Number(row.parent_ex_kev ?? 0);
-        // Only ground-state decays (parent_ex_kev ~ 0) for the popup display.
-        // Isomeric-state decays would need state-aware routing.
-        if (parentEx > 1) continue;
-        const key = `${row.Z}_${row.A}`;
-        let bucket = this.decayEmissionIndex.get(key);
-        if (!bucket) { bucket = []; this.decayEmissionIndex.set(key, bucket); }
-        // Convert Q-value to actual particle energy:
-        // β⁺: endpoint = Q − 2mₑc² (1022 keV)
-        // α:  kinetic E = Q × (A−4)/A (recoil correction)
-        // β⁻, EC: Q-value is correct as-is
-        const qKeV = Number(row.q_value_kev ?? 0);
-        const A = Number(row.A);
-        let energyKeV: number;
-        if (channel === "beta+") {
-          energyKeV = Math.max(0, qKeV - 1022);
-        } else if (channel === "alpha") {
-          energyKeV = A > 4 ? qKeV * (A - 4) / A : qKeV;
-        } else {
-          energyKeV = qKeV;
-        }
-        bucket.push({
-          channel,
-          energyKeV,
-          intensity: Number(row.branching ?? 0),
-          ...(SHELL_MAP[mode] ? { shell: SHELL_MAP[mode] } : {}),
-        });
-      }
-      for (const bucket of this.decayEmissionIndex.values()) {
-        bucket.sort((a, b) => b.intensity - a.intensity);
-      }
-    } catch {
-      console.warn("[DataStore] decay_detailed.parquet not found, decay emissions unavailable");
-    }
-
-    onProgress?.("Loading stopping power data...", 0.75);
+    onProgress?.("Loading stopping power data...", 0.7);
     // Light-ion sources (PSTAR, ASTAR, dSTAR, tSTAR) plus heavy-ion
     // catima pre-split tables (catima_C12, catima_O16, …). The catima
     // files have the same (source, target_Z, energy_MeV, dedx) schema
@@ -292,6 +252,77 @@ export class DataStore implements DatabaseProtocol {
   ): Promise<void> {
     const promises = symbols.map((sym) => this.ensureCrossSections(projectile, sym));
     await Promise.all(promises);
+  }
+
+  /** Load emissions for elements by symbol (lazy, idempotent).
+   *  Fetches `meta/ensdf/emissions/{Symbol}.parquet` for each new symbol. */
+  async ensureEmissions(symbols: string[]): Promise<void> {
+    const toLoad = symbols.filter((s) => !this.emissionLoadedSymbols.has(s));
+    if (toLoad.length === 0) return;
+
+    await Promise.all(
+      toLoad.map(async (symbol) => {
+        this.emissionLoadedSymbols.add(symbol);
+        try {
+          const rows = await readParquetRows(
+            `${this.baseUrl}/meta/ensdf/emissions/${symbol}.parquet`,
+          );
+          // Aggregate same-energy lines across decay modes.
+          // The upstream data has one row per (decay_mode, transition) —
+          // e.g. Na-22 1274.5 keV γ appears 4 times (β⁺, KshellEC, LshellEC, MshellEC).
+          // Sum intensities for same (parent_Z, parent_A, parent_state, rad_type, energy_keV, rad_subtype).
+          const aggMap = new Map<string, { line: EmissionLine; totalPct: number }>();
+          for (const row of rows) {
+            const parentState = String(row.parent_state ?? "");
+            const nuclideKey = `${row.parent_Z}_${row.parent_A}${parentState ? `_${parentState}` : ""}`;
+            const radType = String(row.rad_type) as EmissionRadType;
+            const energyKeV = Number(row.energy_keV);
+            const subtype = row.rad_subtype ? String(row.rad_subtype) : "";
+            // Aggregate key: nuclide + rad_type + energy (rounded to 0.01 keV) + subtype
+            const aggKey = `${nuclideKey}\0${radType}\0${energyKeV.toFixed(2)}\0${subtype}`;
+            const existing = aggMap.get(aggKey);
+            if (existing) {
+              existing.totalPct += Number(row.intensity_pct);
+            } else {
+              aggMap.set(aggKey, {
+                totalPct: Number(row.intensity_pct),
+                line: {
+                  radType,
+                  energyKeV,
+                  intensity: 0, // filled after aggregation
+                  radSubtype: subtype || undefined,
+                  parentState: parentState || undefined,
+                },
+              });
+            }
+          }
+          // Write aggregated lines into the index, track touched buckets
+          const touchedKeys = new Set<string>();
+          for (const [aggKey, { line, totalPct }] of aggMap) {
+            const nuclideKey = aggKey.split("\0")[0];
+            line.intensity = totalPct / 100; // pct → fraction
+            let bucket = this.emissionIndex.get(nuclideKey);
+            if (!bucket) { bucket = []; this.emissionIndex.set(nuclideKey, bucket); }
+            bucket.push(line);
+            touchedKeys.add(nuclideKey);
+          }
+          // Sort newly-populated buckets by intensity descending
+          for (const key of touchedKeys) {
+            this.emissionIndex.get(key)!.sort((a, b) => b.intensity - a.intensity);
+          }
+        } catch {
+          // File doesn't exist for this element — that's fine
+        }
+      }),
+    );
+  }
+
+  /** Load emissions for elements by Z (convenience wrapper). */
+  async ensureEmissionsByZ(zValues: number[]): Promise<void> {
+    const symbols = [...new Set(
+      zValues.map((z) => this.zToSymbol.get(z) ?? ELEMENT_SYMBOLS[z]).filter(Boolean),
+    )] as string[];
+    return this.ensureEmissions(symbols);
   }
 
   // --- DatabaseProtocol methods ---
@@ -427,13 +458,16 @@ export class DataStore implements DatabaseProtocol {
     return this.doseConstants.get(key) ?? null;
   }
 
-  getGammaLines(Z: number, A: number): GammaLine[] {
-    return this.gammaIndex.get(`${Z}_${A}`) ?? [];
+  /** Get all emission lines for a nuclide (unified: gamma, CE, X-ray, Auger, β, annihilation).
+   *  Call ensureEmissions() / ensureEmissionsByZ() first to load the data. */
+  getEmissions(Z: number, A: number, state: string = ""): EmissionLine[] {
+    const key = state ? `${Z}_${A}_${state}` : `${Z}_${A}`;
+    return this.emissionIndex.get(key) ?? [];
   }
 
-  /** Whether emission data was loaded (gamma + decay_detailed). */
+  /** Whether any emission data has been loaded. */
   get emissionDataLoaded(): boolean {
-    return this.gammaIndex.size > 0 || this.decayEmissionIndex.size > 0;
+    return this.emissionLoadedSymbols.size > 0;
   }
 
   /** @deprecated Use emissionDataLoaded instead. */
@@ -441,8 +475,26 @@ export class DataStore implements DatabaseProtocol {
     return this.emissionDataLoaded;
   }
 
-  getDecayEmissions(Z: number, A: number): DecayEmissionLine[] {
-    return this.decayEmissionIndex.get(`${Z}_${A}`) ?? [];
+  /** Get gamma lines for a nuclide. Backward-compat shim over getEmissions().
+   *  @deprecated Use getEmissions() and filter by radType === "gamma". */
+  getGammaLines(Z: number, A: number): GammaLine[] {
+    const emissions = this.getEmissions(Z, A);
+    return emissions
+      .filter((e) => e.radType === "gamma")
+      .map((e) => ({
+        energyKeV: e.energyKeV,
+        intensity: e.intensity,
+        totalIntensity: e.intensity,
+        sourceLevelIdx: 0,
+        destLevelIdx: 0,
+      }));
+  }
+
+  /** @deprecated Use getEmissions() and filter by radType. */
+  getDecayEmissions(_Z: number, _A: number): DecayEmissionLine[] {
+    // Old decay_detailed-based API removed in data-2026.5.2 migration.
+    // Use getEmissions() with radType filters instead.
+    return [];
   }
 
   getElementSymbol(Z: number): string {

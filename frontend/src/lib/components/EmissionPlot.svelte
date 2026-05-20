@@ -16,7 +16,7 @@
   import { getResolvedTheme } from "../stores/theme.svelte";
   import { nucLabel } from "@hyrr/compute";
   import { getDataStore } from "../scheduler/sim-scheduler.svelte";
-  import type { GammaLine } from "@hyrr/compute";
+  import type { EmissionLine } from "@hyrr/compute";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
   import { getSelectedIsotopes } from "../stores/selection.svelte";
   import { aggregateByIsotopeName } from "../plotting/aggregate-isotopes";
@@ -92,7 +92,7 @@
     if (!Plotly || !plotDiv) return;
     const tc = themeColors();
     const db = getDataStore();
-    if (!db || !db.gammaDataLoaded) return;
+    if (!db || !db.emissionDataLoaded) return;
 
     const irrTime = result.config.irradiation_s;
 
@@ -152,9 +152,10 @@
     let hasAnyLines = false;
 
     for (const agg of aggregated) {
-      // Get gamma lines for this isotope
-      const gammaLines: GammaLine[] = db.getGammaLines(agg.Z, agg.A);
-      if (gammaLines.length === 0) continue;
+      // Get gamma emissions for this isotope (absolute per-decay intensities)
+      const emissions: EmissionLine[] = db.getEmissions(agg.Z, agg.A)
+        .filter((e) => e.radType === "gamma");
+      if (emissions.length === 0) continue;
 
       // Get activity at chosen time
       const activity = getActivityAtTime(
@@ -171,10 +172,10 @@
       // Compute emission rates, filter by intensity threshold
       const energies: number[] = [];
       const rates: number[] = [];
-      for (const line of gammaLines) {
-        if (line.totalIntensity < INTENSITY_THRESHOLD) continue;
+      for (const line of emissions) {
+        if (line.intensity < INTENSITY_THRESHOLD) continue;
         energies.push(line.energyKeV);
-        rates.push(activity * line.totalIntensity);
+        rates.push(activity * line.intensity);
       }
 
       if (energies.length === 0) continue;
