@@ -1,6 +1,8 @@
 /**
  * Chemical formula parsing — TypeScript port of hyrr/materials.py:parse_formula.
+ * When WASM is available, delegates to Rust SSoT (core/src/formula.rs).
  */
+import { getSSoT } from "./ssot";
 
 /** Element symbol -> atomic number. */
 export const SYMBOL_TO_Z: Record<string, number> = {
@@ -56,6 +58,10 @@ export const Z_TO_SYMBOL: Record<number, string> = Object.fromEntries(
  *   "Cu" -> { Cu: 1 }
  */
 export function parseFormula(formula: string): Record<string, number> {
+  const ssot = getSSoT().parseFormula;
+  if (ssot) return ssot(formula);
+
+  // TS fallback (used before WASM loads)
   const pattern = /([A-Z][a-z]?)(\d*)/g;
   const elements: Record<string, number> = {};
 

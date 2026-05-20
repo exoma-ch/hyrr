@@ -101,23 +101,38 @@ export async function initBackend(
     await transferDataToWasm(tsStore, wasmStore, onProgress);
     wasmTsDataStore = tsStore;
 
-    // Register WASM stopping power as SSoT for expand-layers (#251).
-    // This replaces the TS _energy-loss.ts approximation with the exact
-    // Rust physics from hyrr-core/stopping.rs.
-    const { setComputeEnergyOutImpl } = await import("@hyrr/compute");
-    setComputeEnergyOutImpl((_db, projectile, composition, density, energyIn, thickness) => {
-      try {
-        return wasmStore.computeEnergyOutScalar(
-          projectile,
-          JSON.stringify(composition),
-          density,
-          energyIn,
-          thickness,
-        );
-      } catch {
-        // Fallback: beam stopped or data missing — return 0
-        return 0;
-      }
+    // Register WASM-backed SSoT implementations (#251).
+    // After this, @hyrr/compute functions delegate to Rust physics
+    // instead of their TS fallbacks.
+    const { registerSSoT } = await import("@hyrr/compute");
+    registerSSoT({
+      parseFormula: (formula: string) => {
+        try {
+          return JSON.parse(wasmStore.parseFormula(formula));
+        } catch {
+          return {};
+        }
+      },
+      resolveMaterial: (identifier: string) => {
+        try {
+          return JSON.parse(wasmStore.resolveMaterial(identifier));
+        } catch {
+          return null;
+        }
+      },
+      computeEnergyOut: (projectile, composition, density, energyIn, thickness) => {
+        try {
+          return wasmStore.computeEnergyOutScalar(
+            projectile,
+            JSON.stringify(composition),
+            density,
+            energyIn,
+            thickness,
+          );
+        } catch {
+          return 0;
+        }
+      },
     });
 
     activeBackend = "wasm";

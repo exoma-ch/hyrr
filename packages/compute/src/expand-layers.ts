@@ -10,25 +10,7 @@ import { isGroup } from "./config-bridge";
 import type { DatabaseProtocol } from "./types";
 import { resolveMaterial } from "./materials";
 import { computeEnergyOut as computeEnergyOutTS } from "./_energy-loss";
-
-/** Pluggable energy-out computation. When the WASM backend is available,
- *  the frontend registers the Rust implementation here so expand-layers
- *  uses the SSoT physics instead of the TS approximation. */
-let computeEnergyOutFn: typeof computeEnergyOutTS = computeEnergyOutTS;
-
-/** Register a WASM-backed computeEnergyOut implementation. */
-export function setComputeEnergyOutImpl(
-  fn: (
-    db: DatabaseProtocol,
-    projectile: string,
-    composition: Array<[number, number]>,
-    densityGCm3: number,
-    energyInMeV: number,
-    thicknessCm: number,
-  ) => number,
-): void {
-  computeEnergyOutFn = fn;
-}
+import { getSSoT } from "./ssot";
 
 /**
  * Expand groups in a SimulationConfig into a flat layer array.
@@ -159,5 +141,9 @@ function computeLayerEnergyOut(
     return energyIn;
   }
 
-  return computeEnergyOutFn(db, projectile, composition, density, energyIn, thicknessCm);
+  const ssot = getSSoT().computeEnergyOut;
+  if (ssot) {
+    return ssot(projectile, composition, density, energyIn, thicknessCm);
+  }
+  return computeEnergyOutTS(db, projectile, composition, density, energyIn, thicknessCm);
 }

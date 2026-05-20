@@ -103,7 +103,11 @@ export type {
 } from "./config-bridge";
 
 // --- Layer expansion ---
-export { expandLayers, expandedLayerCount, setComputeEnergyOutImpl } from "./expand-layers";
+export { expandLayers, expandedLayerCount } from "./expand-layers";
+
+// --- SSoT bridge ---
+export { registerSSoT, getSSoT } from "./ssot";
+export type { SSoTImpl } from "./ssot";
 
 // --- Interpolation utility (for XS plotting) ---
 export { interp } from "./_interp";
