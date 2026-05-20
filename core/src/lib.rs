@@ -4,6 +4,7 @@
 //! for stacked target assemblies under charged-particle bombardment.
 
 pub mod bateman;
+pub mod config_url;
 pub mod chains;
 pub mod compute;
 pub mod constants;

@@ -19,6 +19,7 @@ serde_json = "1"
 thiserror = "2"
 nucl-parquet = { path = "../nucl-parquet/clients/rs/nucl-parquet", optional = true, default-features = false }
 regex = "1"
+flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
 
 # Native-only deps for the lazy data-fetch path (#52). Gated so wasm32
 # consumers don't pull reqwest/tar/zstd into their dependency graph.

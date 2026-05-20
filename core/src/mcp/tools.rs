@@ -445,9 +445,13 @@ fn tool_simulate(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, Stri
         projectile_str, energy_mev, current_ma
     ));
     output.push_str(&format!(
-        "**Irradiation:** {:.0}s | **Cooling:** {:.0}s\n\n",
+        "**Irradiation:** {:.0}s | **Cooling:** {:.0}s\n",
         irr_time, cool_time
     ));
+    if let Some(url) = crate::config_url::share_url(args) {
+        output.push_str(&format!("\n**[View in browser]({})**\n", url));
+    }
+    output.push('\n');
 
     for (li, lr) in result.layer_results.iter().enumerate() {
         output.push_str(&format!(
