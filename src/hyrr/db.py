@@ -324,6 +324,7 @@ class DataStore:
         self._decay: pl.DataFrame | None = None
         self._stopping: pl.DataFrame | None = None
         self._dose_constants: pl.DataFrame | None = None
+        self._dose_constants_checked = False
 
         # Lazy-loaded cross-section DataFrames: (projectile, symbol) -> DataFrame
         self._xs_cache: dict[str, pl.DataFrame] = {}
@@ -375,12 +376,11 @@ class DataStore:
     @property
     def dose_constants(self) -> pl.DataFrame | None:
         """Dose constants (lazy-loaded). None if file not available."""
-        if self._dose_constants is None:
+        if not self._dose_constants_checked:
+            self._dose_constants_checked = True
             path = self._resolve_meta("dose_constants")
             if path.exists():
                 self._dose_constants = pl.read_parquet(path)
-            else:
-                return None
         return self._dose_constants
 
     # -- context manager -----------------------------------------------------

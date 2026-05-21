@@ -146,9 +146,16 @@ export class DataStore implements DatabaseProtocol {
     this.baseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
   }
 
+  /** Normalize a path segment to end with '/'. */
+  private static ensureTrailingSlash(p: string): string {
+    return p.endsWith("/") ? p : `${p}/`;
+  }
+
   /** Resolve a meta file URL via catalog, with hardcoded fallback. */
   private metaUrl(name: string): string {
-    const metaPath = this.catalog?.shared?.meta?.path ?? "meta/";
+    const metaPath = DataStore.ensureTrailingSlash(
+      this.catalog?.shared?.meta?.path ?? "meta/",
+    );
     const files = this.catalog?.shared?.meta?.files as Record<string, string> | undefined;
     const filename = files?.[name] ?? `${name}.parquet`;
     return `${this.baseUrl}/${metaPath}${filename}`;
@@ -156,7 +163,9 @@ export class DataStore implements DatabaseProtocol {
 
   /** Resolve a stopping file URL via catalog, with hardcoded fallback. */
   private stoppingUrl(source: string): string {
-    const stopPath = this.catalog?.shared?.stopping?.path ?? "stopping/";
+    const stopPath = DataStore.ensureTrailingSlash(
+      this.catalog?.shared?.stopping?.path ?? "stopping/",
+    );
     return `${this.baseUrl}/${stopPath}${source}.parquet`;
   }
 
@@ -273,7 +282,9 @@ export class DataStore implements DatabaseProtocol {
 
   /** Resolve the emissions directory path via catalog. */
   private emissionsPath(): string {
-    const emPath = this.catalog?.shared?.emissions?.path ?? "meta/ensdf/emissions/";
+    const emPath = DataStore.ensureTrailingSlash(
+      this.catalog?.shared?.emissions?.path ?? "meta/ensdf/emissions/",
+    );
     return `${this.baseUrl}/${emPath}`;
   }
 
