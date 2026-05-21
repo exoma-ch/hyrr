@@ -24,11 +24,12 @@
 use std::path::Path;
 
 fn main() {
+    // --- DATA_VERSION from nucl-parquet submodule ---
     let catalog = Path::new("../nucl-parquet/data/catalog.json");
     println!("cargo:rerun-if-changed=../nucl-parquet/data/catalog.json");
 
     let version = match std::fs::read_to_string(catalog) {
-        Ok(s) => extract_data_version(&s).unwrap_or_else(|| {
+        Ok(s) => extract_json_string(&s, "data_version").unwrap_or_else(|| {
             println!(
                 "cargo:warning=core/build.rs: could not parse top-level \"data_version\" from {}; \
                  falling back to 0.0.0-unknown. Bump the submodule cleanly.",
@@ -45,22 +46,35 @@ fn main() {
             "0.0.0-unknown".to_string()
         }
     };
-
     println!("cargo:rustc-env=HYRR_DATA_VERSION={version}");
+
+    // --- DEFAULT_LIBRARY from hyrr.json (SSoT #269) ---
+    let hyrr_json = Path::new("../hyrr.json");
+    println!("cargo:rerun-if-changed=../hyrr.json");
+
+    let default_library = match std::fs::read_to_string(hyrr_json) {
+        Ok(s) => extract_json_string(&s, "default_library").unwrap_or_else(|| {
+            println!(
+                "cargo:warning=core/build.rs: could not parse \"default_library\" from hyrr.json; \
+                 falling back to tendl-2023-iso."
+            );
+            "tendl-2023-iso".to_string()
+        }),
+        Err(_) => {
+            println!(
+                "cargo:warning=core/build.rs: hyrr.json not found; falling back to tendl-2023-iso."
+            );
+            "tendl-2023-iso".to_string()
+        }
+    };
+    println!("cargo:rustc-env=HYRR_DEFAULT_LIBRARY={default_library}");
 }
 
-/// Tiny JSON walker — avoids pulling a `serde_json` build-dep for one
-/// string field. Matches the top-level `"data_version": "..."` pair.
-/// Tolerates whitespace variation around `:` and between the key and
-/// its value. JSON is unambiguous about string quoting (always `"`),
-/// so this is simpler than the previous hand-rolled TOML walker.
-fn extract_data_version(content: &str) -> Option<String> {
-    // Quick-and-dirty: scan for the `"data_version"` key, then read the
-    // following quoted string. Sufficient for a fixed top-level field
-    // in a generated catalog.json — we don't need to parse nested
-    // objects or escape sequences.
-    let key = "\"data_version\"";
-    let idx = content.find(key)?;
+/// Extract a top-level `"key": "value"` string from JSON without
+/// pulling a `serde_json` build-dep. Tolerates whitespace around `:`.
+fn extract_json_string(content: &str, field: &str) -> Option<String> {
+    let key = format!("\"{}\"", field);
+    let idx = content.find(&key)?;
     let rest = &content[idx + key.len()..];
     // Skip whitespace and the colon.
     let after_colon = rest.trim_start().strip_prefix(':')?.trim_start();
