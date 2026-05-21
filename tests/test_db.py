@@ -261,6 +261,73 @@ class TestGetElement:
             db.get_element_Z("Xx")
 
 
+class TestCatalogDriven:
+    """Tests for catalog.json-driven data discovery (#257)."""
+
+    def test_lazy_loading_defers_parquet_reads(self, data_dir) -> None:
+        """DataStore init should not load decay/abundances/stopping eagerly."""
+        store = DataStore(data_dir, library="test-lib")
+        # Internal state should be None until first access
+        assert store._abundances is None
+        assert store._decay is None
+        assert store._stopping is None
+        # Accessing the property triggers the load
+        assert len(store.abundances) > 0
+        assert store._abundances is not None
+
+    def test_catalog_resolves_meta_paths(self, data_dir) -> None:
+        """With a catalog.json, meta paths are resolved from it."""
+        # Write a catalog that remaps elements to a custom filename
+        import json
+        catalog = {
+            "version": 2,
+            "shared": {
+                "meta": {
+                    "path": "meta/",
+                    "files": {
+                        "elements": "elements.parquet",
+                        "abundances": "abundances.parquet",
+                        "decay": "decay.parquet",
+                    }
+                },
+                "stopping": {"path": "stopping/"},
+            },
+            "libraries": {},
+        }
+        (data_dir / "catalog.json").write_text(json.dumps(catalog))
+        store = DataStore(data_dir, library="test-lib")
+        # Should load fine via catalog-resolved paths
+        assert store.get_element_symbol(42) == "Mo"
+
+    def test_dose_constant_returns_none_when_missing(self, db: DataStore) -> None:
+        """get_dose_constant returns None when dose_constants.parquet doesn't exist."""
+        assert db.get_dose_constant(21, 44) is None
+
+    def test_dose_constant_loads_when_available(self, data_dir) -> None:
+        """get_dose_constant works when dose_constants.parquet is present."""
+        meta_dir = data_dir / "meta"
+        pl.DataFrame({
+            "Z": [21, 21],
+            "A": [44, 44],
+            "state": ["", "m"],
+            "k_uSv_m2_MBq_h": [0.153, 0.0],
+            "source": ["ensdf", "zero"],
+        }).cast({"Z": pl.Int32, "A": pl.Int32}).write_parquet(
+            meta_dir / "dose_constants.parquet"
+        )
+        store = DataStore(data_dir, library="test-lib")
+        # Ground state lookup
+        result = store.get_dose_constant(21, 44)
+        assert result is not None
+        k, source = result
+        assert k == pytest.approx(0.153)
+        assert source == "ensdf"
+        # state='g' normalizes to ''
+        result_g = store.get_dose_constant(21, 44, "g")
+        assert result_g is not None
+        assert result_g[0] == pytest.approx(0.153)
+
+
 class TestContextManager:
     """Tests for context manager lifecycle."""
 

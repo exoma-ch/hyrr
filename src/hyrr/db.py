@@ -83,6 +83,18 @@ class DatabaseProtocol(Protocol):
         """
         ...
 
+    def get_dose_constant(
+        self,
+        Z: int,
+        A: int,
+        state: str = "",
+    ) -> tuple[float, str] | None:
+        """Get gamma dose rate constant k (µSv·m²/MBq·h) and source quality tag.
+
+        Returns None if not available.
+        """
+        ...
+
     def get_element_symbol(self, Z: int) -> str:
         """Get element symbol from atomic number."""
         ...
@@ -280,6 +292,9 @@ class DataStore:
             msg = f"Data directory not found: {self._data_dir}"
             raise FileNotFoundError(msg)
 
+        # Load catalog.json — SSoT for data file discovery (#257)
+        self._catalog = load_catalog(self._data_dir)
+
         self._library = library
         self._xs_dir = self._data_dir / library / "xs"
         if not self._xs_dir.is_dir():
@@ -289,18 +304,9 @@ class DataStore:
             )
             raise FileNotFoundError(msg)
 
-        # Eagerly load small metadata tables
+        # Elements are eagerly loaded (needed for all lookups)
         self._elements: pl.DataFrame = pl.read_parquet(
-            self._data_dir / "meta" / "elements.parquet"
-        )
-        self._abundances: pl.DataFrame = pl.read_parquet(
-            self._data_dir / "meta" / "abundances.parquet"
-        )
-        self._decay: pl.DataFrame = pl.read_parquet(
-            self._data_dir / "meta" / "decay.parquet"
-        )
-        self._stopping: pl.DataFrame = pl.read_parquet(
-            self._data_dir / "stopping" / "stopping.parquet"
+            self._resolve_meta("elements")
         )
 
         # Build element lookup dicts from the elements table
@@ -313,6 +319,12 @@ class DataStore:
         )
         self._symbol_to_z: dict[str, int] = {s: z for z, s in self._z_to_symbol.items()}
 
+        # Lazy-loaded DataFrames — populated on first access
+        self._abundances: pl.DataFrame | None = None
+        self._decay: pl.DataFrame | None = None
+        self._stopping: pl.DataFrame | None = None
+        self._dose_constants: pl.DataFrame | None = None
+
         # Lazy-loaded cross-section DataFrames: (projectile, symbol) -> DataFrame
         self._xs_cache: dict[str, pl.DataFrame] = {}
 
@@ -321,6 +333,55 @@ class DataStore:
             tuple[str, int],
             tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]],
         ] = {}
+
+    def _resolve_meta(self, name: str) -> Path:
+        """Resolve a meta file path via catalog, with hardcoded fallback."""
+        shared = self._catalog.get("shared", {})
+        meta = shared.get("meta", {})
+        meta_path = meta.get("path", "meta/")
+        files = meta.get("files", {})
+        filename = files.get(name, f"{name}.parquet")
+        return self._data_dir / meta_path / filename
+
+    def _resolve_stopping(self) -> Path:
+        """Resolve the concatenated stopping file path via catalog."""
+        shared = self._catalog.get("shared", {})
+        stopping = shared.get("stopping", {})
+        stop_path = stopping.get("path", "stopping/")
+        # Prefer concatenated stopping.parquet for Python compatibility
+        return self._data_dir / stop_path / "stopping.parquet"
+
+    @property
+    def abundances(self) -> pl.DataFrame:
+        """Natural isotopic abundances (lazy-loaded)."""
+        if self._abundances is None:
+            self._abundances = pl.read_parquet(self._resolve_meta("abundances"))
+        return self._abundances
+
+    @property
+    def decay(self) -> pl.DataFrame:
+        """Decay data (lazy-loaded)."""
+        if self._decay is None:
+            self._decay = pl.read_parquet(self._resolve_meta("decay"))
+        return self._decay
+
+    @property
+    def stopping(self) -> pl.DataFrame:
+        """Stopping power data (lazy-loaded)."""
+        if self._stopping is None:
+            self._stopping = pl.read_parquet(self._resolve_stopping())
+        return self._stopping
+
+    @property
+    def dose_constants(self) -> pl.DataFrame | None:
+        """Dose constants (lazy-loaded). None if file not available."""
+        if self._dose_constants is None:
+            path = self._resolve_meta("dose_constants")
+            if path.exists():
+                self._dose_constants = pl.read_parquet(path)
+            else:
+                return None
+        return self._dose_constants
 
     # -- context manager -----------------------------------------------------
 
@@ -430,7 +491,7 @@ class DataStore:
         if key in self._sp_cache:
             return self._sp_cache[key]
 
-        filtered = self._stopping.filter(
+        filtered = self.stopping.filter(
             (pl.col("source") == source) & (pl.col("target_Z") == target_Z)
         ).sort("energy_MeV")
 
@@ -445,7 +506,7 @@ class DataStore:
         Z: int,
     ) -> dict[int, tuple[float, float]]:
         """Get natural isotopic abundances for an element."""
-        filtered = self._abundances.filter(pl.col("Z") == Z)
+        filtered = self.abundances.filter(pl.col("Z") == Z)
         return {
             int(row["A"]): (float(row["abundance"]), float(row["atomic_mass"]))
             for row in filtered.iter_rows(named=True)
@@ -461,7 +522,7 @@ class DataStore:
         # Normalize "g" → "" — xs data uses "g" for ground-state products,
         # but decay data uses "" for ground state (#254).
         norm = "" if state == "g" else state
-        filtered = self._decay.filter(
+        filtered = self.decay.filter(
             (pl.col("Z") == Z) & (pl.col("A") == A) & (pl.col("state") == norm)
         )
         if filtered.is_empty():
@@ -485,6 +546,29 @@ class DataStore:
             half_life_s=rows[0]["half_life_s"],
             decay_modes=modes,
         )
+
+    def get_dose_constant(
+        self,
+        Z: int,
+        A: int,
+        state: str = "",
+    ) -> tuple[float, str] | None:
+        """Get gamma dose rate constant k (µSv·m²/MBq·h) and source quality tag.
+
+        Returns None if dose_constants.parquet is not available or the nuclide
+        is not found. Normalizes state='g' → '' for ground-state lookups (#254).
+        """
+        dc = self.dose_constants
+        if dc is None:
+            return None
+        norm = "" if state == "g" else state
+        filtered = dc.filter(
+            (pl.col("Z") == Z) & (pl.col("A") == A) & (pl.col("state") == norm)
+        )
+        if filtered.is_empty():
+            return None
+        row = filtered.row(0, named=True)
+        return (float(row["k_uSv_m2_MBq_h"]), str(row.get("source", "ensdf")))
 
     def get_element_symbol(self, Z: int) -> str:
         """Get element symbol from atomic number."""

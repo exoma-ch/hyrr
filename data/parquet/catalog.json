@@ -1,6 +1,6 @@
 {
   "$schema": "./catalog.schema.json",
-  "version": 1,
+  "version": 2,
   "data_version": "2026.5.4",
   "data_sha256": "a4edf294f82c4b540c7fbe443a97e2c793a05bee08c256a89224c261377fbfb3",
   "description": "Registry of available nuclear data libraries",
@@ -270,7 +270,10 @@
         "compound_compositions": "compound_compositions.parquet",
         "nudex_shellcor": "nudex_shellcor.parquet",
         "nudex_special_inputs": "nudex_special_inputs.parquet",
-        "nudex_general_stat": "nudex_general_stat.parquet"
+        "nudex_general_stat": "nudex_general_stat.parquet",
+        "dose_constants": "dose_constants.parquet",
+        "decay_detailed": "decay_detailed.parquet",
+        "nudex_level_gammas": "nudex_level_gammas.parquet"
       },
       "spectrum_xs_note": "Spectrum-averaged neutron XS for thermal (Maxwellian kT=0.0253eV), epithermal (1/E), and fast (Watt fission) spectra. Built by nucl_parquet.build_spectrum_xs.",
       "compound_compositions_note": "Elemental compositions (Z, weight_fraction) for the 33 NIST XCOM standard materials (water, air, tissue, bone, plastics, glasses, …). One row per (material, Z); weight fractions sum to 1.0 ± 1e-6 per material. Source: NIST XCOM Table 4 + ICRU-44. Join on `material` to xcom_compounds (integrated µ/ρ) or to photon_pe_total/photon_compton/photon_pair for Bragg-additive per-process σ. Built by nucl_parquet.build_compound_compositions.",
