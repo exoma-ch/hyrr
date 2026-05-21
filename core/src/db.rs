@@ -224,9 +224,69 @@ use std::sync::Mutex;
 use arrow::array::Array;
 use crate::types::DecayMode;
 
+/// Catalog-derived path resolver for meta/stopping files (#257).
+///
+/// Reads `catalog.json` once and resolves file paths from the `shared`
+/// section, falling back to hardcoded defaults if the catalog is absent
+/// or missing a field.
+struct CatalogPaths {
+    meta_dir: PathBuf,
+    stopping_dir: PathBuf,
+    meta_files: HashMap<String, String>,
+}
+
+impl CatalogPaths {
+    fn from_data_dir(data_dir: &Path) -> Self {
+        let catalog_path = data_dir.join("catalog.json");
+        if let Ok(text) = std::fs::read_to_string(&catalog_path) {
+            if let Ok(cat) = serde_json::from_str::<serde_json::Value>(&text) {
+                let shared = &cat["shared"];
+                let meta_path = shared["meta"]["path"].as_str().unwrap_or("meta/");
+                let stop_path = shared["stopping"]["path"].as_str().unwrap_or("stopping/");
+                let mut meta_files = HashMap::new();
+                if let Some(files) = shared["meta"]["files"].as_object() {
+                    for (key, val) in files {
+                        if let Some(s) = val.as_str() {
+                            meta_files.insert(key.clone(), s.to_string());
+                        }
+                    }
+                }
+                return Self {
+                    meta_dir: data_dir.join(meta_path),
+                    stopping_dir: data_dir.join(stop_path),
+                    meta_files,
+                };
+            }
+        }
+        // Fallback: hardcoded defaults
+        Self {
+            meta_dir: data_dir.join("meta"),
+            stopping_dir: data_dir.join("stopping"),
+            meta_files: HashMap::new(),
+        }
+    }
+
+    fn meta_file(&self, name: &str) -> PathBuf {
+        let filename = self.meta_files
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| format!("{}.parquet", name));
+        self.meta_dir.join(filename)
+    }
+
+    fn stopping_file(&self, source: &str) -> PathBuf {
+        self.stopping_dir.join(format!("{}.parquet", source))
+    }
+
+    fn stopping_compounds_dir(&self) -> PathBuf {
+        self.stopping_dir.join("compounds")
+    }
+}
+
 /// Parquet-backed nuclear data store.
 pub struct ParquetDataStore {
     data_dir: PathBuf,
+    catalog: CatalogPaths,
     pub library: String,
     // Eagerly loaded at startup
     elements: HashMap<u32, String>,
@@ -250,9 +310,11 @@ impl ParquetDataStore {
         library: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let data_dir = data_dir.as_ref().to_path_buf();
+        let catalog = CatalogPaths::from_data_dir(&data_dir);
 
         let mut store = Self {
             data_dir,
+            catalog,
             library: library.to_string(),
             elements: HashMap::new(),
             symbol_to_z: HashMap::new(),
@@ -281,7 +343,7 @@ impl ParquetDataStore {
         // Mark as attempted immediately so we don't retry on error
         guard.1.insert(source.to_string());
 
-        let path = self.data_dir.join("stopping").join(format!("{}.parquet", source));
+        let path = self.catalog.stopping_file(source);
         if !path.exists() {
             return;
         }
@@ -321,7 +383,7 @@ impl ParquetDataStore {
         guard.1 = true;
 
         for filename in &["PSTAR_compounds.parquet", "ASTAR_compounds.parquet"] {
-            let path = self.data_dir.join("stopping").join("compounds").join(filename);
+            let path = self.catalog.stopping_compounds_dir().join(filename);
             if !path.exists() { continue; }
             let file = match std::fs::File::open(&path) {
                 Ok(f) => f,
@@ -354,7 +416,7 @@ impl ParquetDataStore {
     }
 
     fn load_elements(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = self.data_dir.join("meta").join("elements.parquet");
+        let path = self.catalog.meta_file("elements");
         if !path.exists() {
             return Ok(());
         }
@@ -386,7 +448,7 @@ impl ParquetDataStore {
     }
 
     fn load_abundances(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = self.data_dir.join("meta").join("abundances.parquet");
+        let path = self.catalog.meta_file("abundances");
         if !path.exists() {
             return Ok(());
         }
@@ -417,7 +479,7 @@ impl ParquetDataStore {
     }
 
     fn load_decay(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = self.data_dir.join("meta").join("decay.parquet");
+        let path = self.catalog.meta_file("decay");
         if !path.exists() {
             return Ok(());
         }
@@ -481,7 +543,7 @@ impl ParquetDataStore {
 
 
     fn load_dose_constants(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = self.data_dir.join("meta").join("dose_constants.parquet");
+        let path = self.catalog.meta_file("dose_constants");
         if !path.exists() {
             return Ok(());
         }
