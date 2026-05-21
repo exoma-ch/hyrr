@@ -4,6 +4,38 @@ use std::collections::HashMap;
 
 use crate::types::{CrossSectionData, DecayData};
 
+/// Normalize isomeric state for decay/dose lookups.
+///
+/// Cross-section data uses `"g"` for ground-state products, but decay
+/// data uses `""` (empty) for ground state. Map `"g"` → `""` so lookups
+/// match (#252).
+#[inline]
+fn normalize_decay_state(state: &str) -> &str {
+    if state == "g" { "" } else { state }
+}
+
+/// When both total (`state=""`) and state-resolved (`state="g"/"m"`)
+/// cross-sections exist for the same residual, drop the totals to avoid
+/// double-counting production (#252).
+fn dedup_xs_prefer_resolved(mut xs: Vec<CrossSectionData>) -> Vec<CrossSectionData> {
+    use std::collections::HashSet;
+
+    // Collect residual keys that have explicit state-resolved entries
+    let resolved: HashSet<(u32, u32)> = xs
+        .iter()
+        .filter(|x| !x.state.is_empty())
+        .map(|x| (x.residual_z, x.residual_a))
+        .collect();
+
+    if resolved.is_empty() {
+        return xs; // nothing state-resolved, keep everything
+    }
+
+    // Drop totals (state="") for residuals that have state-resolved entries
+    xs.retain(|x| !x.state.is_empty() || !resolved.contains(&(x.residual_z, x.residual_a)));
+    xs
+}
+
 /// Database protocol — all physics modules depend on this trait.
 pub trait DatabaseProtocol: Send + Sync {
     /// Get all residual production cross-sections.
@@ -128,10 +160,11 @@ impl DatabaseProtocol for InMemoryDataStore {
     fn get_cross_sections(&self, projectile: &str, target_z: u32, target_a: u32) -> Vec<CrossSectionData> {
         let symbol = self.elements.get(&target_z).cloned().unwrap_or_default();
         let key = format!("{}_{}", projectile, symbol);
-        self.xs_cache
+        let xs = self.xs_cache
             .get(&key)
             .map(|xs| xs.iter().filter(|x| x.target_a == target_a).cloned().collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        dedup_xs_prefer_resolved(xs)
     }
 
     fn get_stopping_power(&self, source: &str, target_z: u32) -> (Vec<f64>, Vec<f64>) {
@@ -155,12 +188,12 @@ impl DatabaseProtocol for InMemoryDataStore {
     }
 
     fn get_decay_data(&self, z: u32, a: u32, state: &str) -> Option<DecayData> {
-        let key = format!("{}-{}-{}", z, a, state);
+        let key = format!("{}-{}-{}", z, a, normalize_decay_state(state));
         self.decay_data.get(&key).cloned()
     }
 
     fn get_dose_constant(&self, z: u32, a: u32, state: &str) -> Option<(f64, String)> {
-        let key = format!("{}-{}-{}", z, a, state);
+        let key = format!("{}-{}-{}", z, a, normalize_decay_state(state));
         self.dose_constants.get(&key).cloned()
     }
 
@@ -316,9 +349,10 @@ impl DatabaseProtocol for NpDataStore {
 
         let cache_key = format!("{}_{}", projectile, symbol);
         let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
-        cache.get(&cache_key)
+        let xs = cache.get(&cache_key)
             .map(|xs| xs.iter().filter(|x| x.target_a == target_a).cloned().collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        dedup_xs_prefer_resolved(xs)
     }
 
     fn get_stopping_power(&self, source: &str, target_z: u32) -> (Vec<f64>, Vec<f64>) {
@@ -347,7 +381,8 @@ impl DatabaseProtocol for NpDataStore {
     }
 
     fn get_decay_data(&self, z: u32, a: u32, state: &str) -> Option<DecayData> {
-        let entries = self.decay.modes(z, a, state);
+        let lookup_state = normalize_decay_state(state);
+        let entries = self.decay.modes(z, a, lookup_state);
         if entries.is_empty() {
             return None;
         }
@@ -370,8 +405,9 @@ impl DatabaseProtocol for NpDataStore {
     }
 
     fn get_dose_constant(&self, z: u32, a: u32, state: &str) -> Option<(f64, String)> {
+        let lookup_state = normalize_decay_state(state);
         self.dose
-            .dose_constant(z, a, state)
+            .dose_constant(z, a, lookup_state)
             .map(|dc| (dc.k, dc.source.clone()))
     }
 
@@ -399,3 +435,92 @@ pub use np_store::NpDataStore;
 /// Backward-compat alias — existing callers use `ParquetDataStore`.
 #[cfg(feature = "parquet-store")]
 pub type ParquetDataStore = NpDataStore;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{DecayData, DecayMode};
+
+    #[test]
+    fn normalize_decay_state_maps_g_to_empty() {
+        assert_eq!(normalize_decay_state("g"), "");
+        assert_eq!(normalize_decay_state("m"), "m");
+        assert_eq!(normalize_decay_state(""), "");
+        assert_eq!(normalize_decay_state("m2"), "m2");
+    }
+
+    #[test]
+    fn dedup_xs_drops_total_when_resolved_exists() {
+        let xs = vec![
+            CrossSectionData {
+                target_a: 44, residual_z: 21, residual_a: 44, state: String::new(),
+                energies_mev: vec![10.0], xs_mb: vec![611.0],
+            },
+            CrossSectionData {
+                target_a: 44, residual_z: 21, residual_a: 44, state: "g".into(),
+                energies_mev: vec![10.0], xs_mb: vec![576.0],
+            },
+            CrossSectionData {
+                target_a: 44, residual_z: 21, residual_a: 44, state: "m".into(),
+                energies_mev: vec![10.0], xs_mb: vec![34.0],
+            },
+            // A different residual with only total — should be kept
+            CrossSectionData {
+                target_a: 44, residual_z: 20, residual_a: 43, state: String::new(),
+                energies_mev: vec![10.0], xs_mb: vec![50.0],
+            },
+        ];
+        let result = dedup_xs_prefer_resolved(xs);
+        assert_eq!(result.len(), 3);
+        // Sc-44 total should be gone, g and m should remain
+        let states: Vec<_> = result.iter()
+            .filter(|x| x.residual_z == 21 && x.residual_a == 44)
+            .map(|x| x.state.as_str())
+            .collect();
+        assert!(states.contains(&"g"));
+        assert!(states.contains(&"m"));
+        assert!(!states.contains(&""));
+        // Ca-43 total should remain
+        assert!(result.iter().any(|x| x.residual_z == 20 && x.residual_a == 43 && x.state.is_empty()));
+    }
+
+    #[test]
+    fn dedup_xs_keeps_totals_when_no_resolved() {
+        let xs = vec![
+            CrossSectionData {
+                target_a: 44, residual_z: 21, residual_a: 44, state: String::new(),
+                energies_mev: vec![10.0], xs_mb: vec![611.0],
+            },
+        ];
+        let result = dedup_xs_prefer_resolved(xs);
+        assert_eq!(result.len(), 1);
+    }
+
+    /// Regression test for #252: looking up Sc-44 ground state with
+    /// state="g" (from cross-section data) should find the decay entry
+    /// stored under state="" (from decay data).
+    #[test]
+    fn decay_lookup_normalizes_ground_state() {
+        let mut db = InMemoryDataStore::new("test");
+        db.add_decay_data(DecayData {
+            z: 21, a: 44, state: String::new(), // ground state stored as ""
+            half_life_s: Some(14551.0),
+            decay_modes: vec![DecayMode {
+                mode: "B+".into(),
+                daughter_z: Some(20), daughter_a: Some(44),
+                daughter_state: String::new(), branching: 1.0,
+            }],
+        });
+
+        // Lookup with "g" (from xs data) should still find it
+        let decay = db.get_decay_data(21, 44, "g");
+        assert!(decay.is_some(), "get_decay_data(21, 44, 'g') should match state=''");
+        assert!((decay.unwrap().half_life_s.unwrap() - 14551.0).abs() < 0.1);
+
+        // Lookup with "" should also work (direct match)
+        assert!(db.get_decay_data(21, 44, "").is_some());
+
+        // Lookup with "m" should NOT match (different state)
+        assert!(db.get_decay_data(21, 44, "m").is_none());
+    }
+}
