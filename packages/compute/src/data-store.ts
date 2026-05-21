@@ -368,8 +368,21 @@ export class DataStore implements DatabaseProtocol {
       groups.set(gkey, group);
     }
 
+    // Prefer state-resolved xs over totals: when both state="" and
+    // state="g"/"m" exist for the same residual, drop the total (#252).
+    const resolved = new Set<string>();
+    for (const gkey of groups.keys()) {
+      const state = gkey.split("_")[2];
+      if (state) resolved.add(gkey.substring(0, gkey.lastIndexOf("_")));
+    }
+
     const results: CrossSectionData[] = [];
-    for (const group of groups.values()) {
+    for (const [gkey, group] of groups) {
+      const state = String(group[0].state ?? "");
+      const residualKey = gkey.substring(0, gkey.lastIndexOf("_"));
+      // Skip total when state-resolved entries exist for this residual
+      if (state === "" && resolved.has(residualKey)) continue;
+
       const energies = new Float64Array(group.length);
       const xs = new Float64Array(group.length);
       for (let i = 0; i < group.length; i++) {
@@ -379,7 +392,7 @@ export class DataStore implements DatabaseProtocol {
       results.push({
         residualZ: Number(group[0].residual_Z),
         residualA: Number(group[0].residual_A),
-        state: String(group[0].state ?? ""),
+        state,
         energiesMeV: energies,
         xsMb: xs,
       });
@@ -429,11 +442,14 @@ export class DataStore implements DatabaseProtocol {
   }
 
   getDecayData(Z: number, A: number, state: string = ""): DecayData | null {
+    // Normalize "g" → "" — xs data uses "g" for ground-state products,
+    // but decay data uses "" for ground state (#252).
+    const norm = state === "g" ? "" : state;
     const filtered = this.decayData.filter(
       (r) =>
         Number(r.Z) === Z &&
         Number(r.A) === A &&
-        String(r.state ?? "") === state,
+        String(r.state ?? "") === norm,
     );
 
     if (filtered.length === 0) return null;
@@ -454,7 +470,8 @@ export class DataStore implements DatabaseProtocol {
   }
 
   getDoseConstant(Z: number, A: number, state: string = ""): { k: number; source: string } | null {
-    const key = `${Z}_${A}_${state}`;
+    const norm = state === "g" ? "" : state;
+    const key = `${Z}_${A}_${norm}`;
     return this.doseConstants.get(key) ?? null;
   }
 
