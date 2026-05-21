@@ -1,6 +1,6 @@
 """Integration tests for neutron activation with real TENDL-2025 data.
 
-Requires nucl-parquet data directory with tendl-2025 library.
+Requires nucl-parquet data directory with tendl-2023-iso library.
 All tests are skipped if the data is not available.
 """
 
@@ -22,10 +22,10 @@ pytestmark = [pytest.mark.integration, requires_db]
 
 
 def _make_db(data_path: Path):
-    """Create a DataStore with tendl-2025 library."""
+    """Create a DataStore with tendl-2023-iso library."""
     from hyrr.db import DataStore
 
-    return DataStore(data_path, library="tendl-2025")
+    return DataStore(data_path, library="tendl-2023-iso")
 
 
 def _mo_element():

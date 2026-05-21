@@ -67,7 +67,7 @@ async function readParquetFile(filePath: string): Promise<ParquetRow[]> {
 export function resolveDataDir(dataDir?: string, library?: string): string {
   // Mirrors `hyrr_core::mcp::transport::DEFAULT_LIBRARY`. Kept as a literal
   // here because this package has no runtime path back to the Rust core.
-  const lib = library ?? process.env.HYRR_LIBRARY ?? "tendl-2025";
+  const lib = library ?? process.env.HYRR_LIBRARY ?? "tendl-2023-iso";
 
   if (dataDir) {
     return resolve(dataDir, lib);

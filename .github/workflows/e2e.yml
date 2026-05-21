@@ -49,7 +49,7 @@ jobs:
           git sparse-checkout set \
             data/meta \
             data/stopping \
-            data/tendl-2024/xs \
+            data/tendl-2023-iso/xs \
             data/hi-xs-prod/xs \
             data/endfb-8.1/xs
 
@@ -76,7 +76,7 @@ jobs:
              nucl-parquet/data/stopping/catima_Ar40.parquet \
              nucl-parquet/data/stopping/catima_Fe56.parquet \
              frontend/public/data/parquet/stopping/
-          cp nucl-parquet/data/tendl-2024/xs/*.parquet  frontend/public/data/parquet/xs/
+          cp nucl-parquet/data/tendl-2023-iso/xs/*.parquet  frontend/public/data/parquet/xs/
           cp nucl-parquet/data/hi-xs-prod/xs/*.parquet  frontend/public/data/parquet/hi-xs-prod/
           cp nucl-parquet/data/endfb-8.1/xs/n_*.parquet frontend/public/data/parquet/neutron-xs/
 
@@ -233,7 +233,7 @@ jobs:
           git sparse-checkout set \
             data/meta \
             data/stopping \
-            data/tendl-2024/xs \
+            data/tendl-2023-iso/xs \
             data/hi-xs-prod/xs \
             data/endfb-8.1/xs
 
@@ -260,7 +260,7 @@ jobs:
              nucl-parquet/data/stopping/catima_Ar40.parquet \
              nucl-parquet/data/stopping/catima_Fe56.parquet \
              frontend/public/data/parquet/stopping/
-          cp nucl-parquet/data/tendl-2024/xs/*.parquet  frontend/public/data/parquet/xs/
+          cp nucl-parquet/data/tendl-2023-iso/xs/*.parquet  frontend/public/data/parquet/xs/
           cp nucl-parquet/data/hi-xs-prod/xs/*.parquet  frontend/public/data/parquet/hi-xs-prod/
           cp nucl-parquet/data/endfb-8.1/xs/n_*.parquet frontend/public/data/parquet/neutron-xs/
 
@@ -323,7 +323,7 @@ jobs:
           git sparse-checkout set \
             data/meta \
             data/stopping \
-            data/tendl-2024/xs \
+            data/tendl-2023-iso/xs \
             data/hi-xs-prod/xs \
             data/endfb-8.1/xs
 
@@ -350,7 +350,7 @@ jobs:
              nucl-parquet/data/stopping/catima_Ar40.parquet \
              nucl-parquet/data/stopping/catima_Fe56.parquet \
              frontend/public/data/parquet/stopping/
-          cp nucl-parquet/data/tendl-2024/xs/*.parquet  frontend/public/data/parquet/xs/
+          cp nucl-parquet/data/tendl-2023-iso/xs/*.parquet  frontend/public/data/parquet/xs/
           cp nucl-parquet/data/hi-xs-prod/xs/*.parquet  frontend/public/data/parquet/hi-xs-prod/
           cp nucl-parquet/data/endfb-8.1/xs/n_*.parquet frontend/public/data/parquet/neutron-xs/
 

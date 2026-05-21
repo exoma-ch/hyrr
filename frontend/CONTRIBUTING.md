@@ -168,7 +168,7 @@ vi.mock("../compute/data-fetch-meta", () => ({
   getReleaseUrl: vi.fn(async () => "https://example.test/data.tar.zst"),
   getCacheRootPattern: vi.fn(async () => "~/.hyrr/nucl-parquet/<version>"),
   getDataVersion: vi.fn(async () => "v0.10.0"),
-  DEFAULT_LIBRARY: "tendl-2025",
+  DEFAULT_LIBRARY: "tendl-2023-iso",
 }));
 ```
 
