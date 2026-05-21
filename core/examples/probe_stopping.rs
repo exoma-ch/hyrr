@@ -10,7 +10,7 @@ use hyrr_core::types::*;
 fn main() {
     let data_dir =
         std::env::var("HYRR_DATA").unwrap_or_else(|_| "../nucl-parquet/data".to_string());
-    let db = ParquetDataStore::new(&data_dir, "tendl-2024").unwrap();
+    let db = ParquetDataStore::new(&data_dir, "tendl-2023-iso").unwrap();
 
     let al = resolve_material(&db, "Al", None);
     let ti = resolve_material(&db, "Ti", None);

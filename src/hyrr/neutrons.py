@@ -455,7 +455,7 @@ def compute_secondary_neutron_activation(
     projectile_A: int,
     irradiation_time_s: float,
     cooling_time_s: float,
-    neutron_library: str = "tendl-2025",
+    neutron_library: str = "tendl-2023-iso",
     temperature_MeV: float = 1.5,
 ) -> NeutronActivationResult | None:
     """Compute secondary neutron activation from a charged-particle layer."""

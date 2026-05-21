@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         "--library",
         type=str,
         default=None,
-        help="Cross-section library (default: tendl-2025)",
+        help="Cross-section library (default: tendl-2023-iso)",
     )
 
     # hyrr run
@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         "--library",
         type=str,
         default=None,
-        help="Cross-section library (default: tendl-2025)",
+        help="Cross-section library (default: tendl-2023-iso)",
     )
     run_parser.add_argument(
         "--output-dir", type=Path, default=None, help="Output directory"
@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         type=str,
         default=None,
         metavar="ID",
-        help="Fetch a specific library (e.g. tendl-2025)",
+        help="Fetch a specific library (e.g. tendl-2023-iso)",
     )
     fd_group.add_argument(
         "--all",

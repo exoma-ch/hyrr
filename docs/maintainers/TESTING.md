@@ -39,6 +39,6 @@ keeps working.
 ### CI
 
 CI initialises the nucl-parquet submodule with sparse-checkout for
-`data/meta`, `data/stopping`, and `data/tendl-2025/xs`, then runs
+`data/meta`, `data/stopping`, and `data/tendl-2023-iso/xs`, then runs
 `cargo test --test projectile_matrix -- --include-ignored` from
 `core/`. See `.github/workflows/ci.yml`.

@@ -80,4 +80,4 @@ export async function getCacheRootPattern(): Promise<string | null> {
  * `hyrr_core::mcp::transport::DEFAULT_LIBRARY`. Kept as a literal here so
  * non-Tauri (browser, Node) callers get a synchronous answer; if it ever
  * needs to vary, route through a `data_default_library` command. */
-export const DEFAULT_LIBRARY = "tendl-2025";
+export const DEFAULT_LIBRARY = "tendl-2023-iso";

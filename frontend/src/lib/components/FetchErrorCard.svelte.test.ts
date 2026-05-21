@@ -26,7 +26,7 @@ vi.mock("../compute/data-fetch-meta", () => ({
   getTarballFilename: vi.fn(async () => "nucl-parquet-data-2026.5.0.tar.zst"),
   getReleaseBaseUrl: vi.fn(async () => "https://github.com/exoma-ch/nucl-parquet"),
   getDataVersion: vi.fn(async () => "2026.5.0"),
-  DEFAULT_LIBRARY: "tendl-2025",
+  DEFAULT_LIBRARY: "tendl-2023-iso",
 }));
 
 // Mock open-url so we don't try to escape jsdom.

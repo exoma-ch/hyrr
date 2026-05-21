@@ -30,7 +30,7 @@ vi.mock("../compute/data-fetch-meta", () => ({
   getTarballFilename: vi.fn(async () => null),
   getReleaseBaseUrl: vi.fn(async () => null),
   getDataVersion: vi.fn(async () => null),
-  DEFAULT_LIBRARY: "tendl-2025",
+  DEFAULT_LIBRARY: "tendl-2023-iso",
 }));
 
 // Capture every `listen()` call so each test can grab the latest handler.
