@@ -61,6 +61,7 @@ try:
     from hyrr._native_bridge import HAS_NATIVE
 except ImportError:
     HAS_NATIVE = False
+from hyrr.data import fetch_data
 from hyrr.sweep import sweep
 
 __all__ = [
@@ -106,6 +107,7 @@ __all__ = [
     "result_to_json_str",
     "run_simulation",
     "run_simulation_from_json",
+    "fetch_data",
     "save_result",
     "stack_to_config",
     "sweep",
