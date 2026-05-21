@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { svelteTesting } from "@testing-library/svelte/vite";
 import pkg from "./package.json" with { type: "json" };
+import hyrrConfig from "../hyrr.json" with { type: "json" };
 
 // Web base path resolution:
 //   - Tauri bundle  → "./"               (relative; bundled webview)
@@ -56,6 +57,7 @@ export default defineConfig({
   base: resolvedBase,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __DEFAULT_LIBRARY__: JSON.stringify(hyrrConfig.default_library),
   },
   resolve: {
     alias: process.env.TAURI_ENV_PLATFORM
