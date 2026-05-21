@@ -17,7 +17,8 @@
   } from "../scheduler/sim-scheduler.svelte";
   import { getStatus } from "../stores/results.svelte";
   import { parseTime } from "../utils/time-parse";
-  import { isHeavyIon, heavyIonA } from "@hyrr/compute";
+  // Heavy-ion helpers retained for when #266 is resolved.
+  // import { isHeavyIon, heavyIonA } from "@hyrr/compute";
 
   const LIGHT_PROJECTILES: { id: string; label: string }[] = [
     { id: "p", label: "p" },
@@ -27,25 +28,19 @@
     { id: "a", label: "\u03b1" },
   ];
 
-  const HEAVY_PROJECTILES: { id: string; label: string }[] = [
-    { id: "C-12",  label: "\u00b9\u00b2C" },
-    { id: "O-16",  label: "\u00b9\u2076O" },
-    { id: "Ne-20", label: "\u00b2\u2070Ne" },
-    { id: "Si-28", label: "\u00b2\u2078Si" },
-    { id: "Ar-40", label: "\u2074\u2070Ar" },
-    { id: "Fe-56", label: "\u2075\u2076Fe" },
-  ];
+  // Heavy ions disabled until multi-library XS routing is wired (#266).
+  // The hi-xs-prod data is deployed but DataStore doesn't route to it,
+  // so selecting C-12 silently produces zero results.
+  // const HEAVY_PROJECTILES = [
+  //   { id: "C-12",  label: "¹²C" },  { id: "O-16",  label: "¹⁶O" },
+  //   { id: "Ne-20", label: "²⁰Ne" }, { id: "Si-28", label: "²⁸Si" },
+  //   { id: "Ar-40", label: "⁴⁰Ar" }, { id: "Fe-56", label: "⁵⁶Fe" },
+  // ];
 
   let beam = $derived(getBeam());
   let config = $derived(getConfig());
 
-  /** True when the selected projectile is a heavy ion. */
-  let isHI = $derived(isHeavyIon(beam.projectile));
-
-  /** For heavy ions: MeV/u; for light ions: total MeV. */
-  let displayedEnergy = $derived(
-    isHI ? beam.energy_MeV / heavyIonA(beam.projectile) : beam.energy_MeV
-  );
+  let displayedEnergy = $derived(beam.energy_MeV);
   let simMode = $derived(getSimMode());
   let schedulerState = $derived(getSchedulerState());
   let simStatus = $derived(getStatus());
@@ -131,7 +126,7 @@
   function onEnergyChange(e: Event) {
     const v = parseFloat((e.target as HTMLInputElement).value);
     if (!isNaN(v) && v > 0) {
-      setEnergy(isHI ? v * heavyIonA(beam.projectile) : v);
+      setEnergy(v);
     }
   }
 
@@ -145,16 +140,9 @@
   <div class="field">
     <label for="bcb-projectile">Projectile</label>
     <select id="bcb-projectile" value={beam.projectile} onchange={(e) => setProjectile((e.target as HTMLSelectElement).value)}>
-      <optgroup label="Light ions">
-        {#each LIGHT_PROJECTILES as p}
-          <option value={p.id}>{p.label}</option>
-        {/each}
-      </optgroup>
-      <optgroup label="Heavy ions">
-        {#each HEAVY_PROJECTILES as p}
-          <option value={p.id}>{p.label}</option>
-        {/each}
-      </optgroup>
+      {#each LIGHT_PROJECTILES as p}
+        <option value={p.id}>{p.label}</option>
+      {/each}
     </select>
   </div>
 
@@ -162,7 +150,7 @@
     <label for="bcb-energy">Energy</label>
     <div class="input-group">
       <input id="bcb-energy" type="text" inputmode="decimal" value={displayedEnergy} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onEnergyChange} />
-      <span class="unit">{isHI ? "MeV/u" : "MeV"}</span>
+      <span class="unit">MeV</span>
     </div>
   </div>
 
