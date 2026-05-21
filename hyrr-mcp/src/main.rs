@@ -3,6 +3,12 @@
 //! Same MCP surface as `hyrr --mcp` on the desktop binary; uses
 //! the shared `hyrr_core::mcp` module, so tool definitions and
 //! responses stay byte-identical across entry points.
+//!
+//! On first run the server auto-fetches the required nuclear data
+//! (~50 MB for meta+stopping+default library) from GitHub Releases
+//! into `~/.hyrr/nucl-parquet/`. Progress is printed to stderr so
+//! the JSON-RPC stdout stream stays clean. Subsequent runs are
+//! instant (sentinel-gated, no network).
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -15,9 +21,58 @@ fn main() {
         return;
     }
 
-    let data_dir = hyrr_core::data_dir::resolve();
     let library = resolve_library(&args);
+
+    // Auto-fetch nuclear data on first run (#264 US3). Progress goes to
+    // stderr so the JSON-RPC stdout channel stays clean. The ensure_*
+    // functions are sentinel-gated and no-op on a warm cache.
+    if !has_explicit_data_dir(&args) {
+        ensure_data_or_exit(&library);
+    }
+
+    let data_dir = hyrr_core::data_dir::resolve();
     hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library);
+}
+
+/// Check whether the user supplied an explicit --data-dir or HYRR_DATA.
+/// When they did, we skip auto-fetch — they own their data layout.
+fn has_explicit_data_dir(args: &[String]) -> bool {
+    if args.windows(2).any(|w| w[0] == "--data-dir") {
+        return true;
+    }
+    std::env::var("HYRR_DATA").map(|v| !v.is_empty()).unwrap_or(false)
+}
+
+/// Fetch meta+stopping and the requested library into the managed cache.
+/// Prints progress to stderr. On failure, prints a diagnostic and exits
+/// with code 2 — better than a cryptic JSON-RPC error mid-conversation.
+fn ensure_data_or_exit(library: &str) {
+    use hyrr_core::data_fetch;
+
+    let mut progress = data_fetch::throttle(|p| {
+        let pct = match p.bytes_total {
+            Some(total) if total > 0 => format!(" ({:.0}%)", p.bytes_done as f64 / total as f64 * 100.0),
+            _ => String::new(),
+        };
+        eprintln!("hyrr-mcp: {:?}{}", p.stage, pct);
+    });
+
+    if let Err(e) = data_fetch::ensure_meta_stopping_with_progress(&mut progress) {
+        eprintln!(
+            "hyrr-mcp: failed to fetch nuclear data: {e}\n\n\
+             Set HYRR_DATA to point at an existing nucl-parquet/data/ directory,\n\
+             or check your network connection and try again."
+        );
+        std::process::exit(2);
+    }
+    if let Err(e) = data_fetch::ensure_library_with_progress(library, &mut progress) {
+        eprintln!(
+            "hyrr-mcp: failed to fetch library `{library}`: {e}\n\n\
+             Set HYRR_DATA to point at an existing nucl-parquet/data/ directory,\n\
+             or check your network connection and try again."
+        );
+        std::process::exit(2);
+    }
 }
 
 /// Resolve the nuclear data library: `--library <id>` arg → `HYRR_LIBRARY`

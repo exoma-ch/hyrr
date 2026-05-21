@@ -90,6 +90,30 @@ jobs:
       - name: cargo check py/ (PyO3 bindings)
         run: cargo check --manifest-path py/Cargo.toml
 
+  data-fetch-integration:
+    # #263 — exercises data_dir resolution, cache lifecycle, seed_from_dir,
+    # and cold-start error paths without network access.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+      - name: Init nucl-parquet submodule (catalog only)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set data/catalog.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Run data_fetch unit tests (serial)
+        working-directory: core
+        run: cargo test --lib -- data_fetch --test-threads=1
+      - name: Run MCP cold-start integration tests
+        working-directory: core
+        run: cargo test --test mcp_cold_start
+
   data-fetch-ssot:
     runs-on: ubuntu-latest
     steps:
