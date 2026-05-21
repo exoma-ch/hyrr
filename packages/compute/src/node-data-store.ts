@@ -112,6 +112,9 @@ export class NodeDataStore implements DatabaseProtocol {
 
   private initialized = false;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private catalog: any = null;
+
   constructor(dataDir: string) {
     this.dataDir = dataDir.endsWith("/") ? dataDir.slice(0, -1) : dataDir;
   }
@@ -125,11 +128,38 @@ export class NodeDataStore implements DatabaseProtocol {
     throw new Error(`Cannot find ${name}/ directory in ${this.dataDir} or its parent`);
   }
 
+  /** Resolve a meta file path via catalog, with hardcoded fallback. */
+  private metaFile(name: string): string {
+    const metaPath = this.catalog?.shared?.meta?.path ?? "meta/";
+    const files = this.catalog?.shared?.meta?.files as Record<string, string> | undefined;
+    const filename = files?.[name] ?? `${name}.parquet`;
+    // Try catalog-resolved path first, fall back to resolveSharedDir
+    const catalogPath = join(this.dataDir, metaPath, filename);
+    if (existsSync(catalogPath)) return catalogPath;
+    const sharedPath = join(this.resolveSharedDir("meta"), filename);
+    return sharedPath;
+  }
+
   async init(onProgress?: (msg: string, fraction?: number) => void): Promise<void> {
-    const metaDir = this.resolveSharedDir("meta");
+    // Load catalog.json — SSoT for data file discovery (#257)
+    try {
+      const catPath = join(this.dataDir, "..", "catalog.json");
+      if (existsSync(catPath)) {
+        const text = await readFile(catPath, "utf-8");
+        this.catalog = JSON.parse(text);
+      } else {
+        const catLocal = join(this.dataDir, "catalog.json");
+        if (existsSync(catLocal)) {
+          const text = await readFile(catLocal, "utf-8");
+          this.catalog = JSON.parse(text);
+        }
+      }
+    } catch {
+      // No catalog — fall back to hardcoded paths
+    }
 
     onProgress?.("Loading element data...", 0);
-    const elementsPath = join(metaDir, "elements.parquet");
+    const elementsPath = this.metaFile("elements");
     if (existsSync(elementsPath)) {
       const elements = await readParquetFile(elementsPath);
       for (const row of elements) {
@@ -141,14 +171,14 @@ export class NodeDataStore implements DatabaseProtocol {
     }
 
     onProgress?.("Loading abundance data...", 0.25);
-    this.abundanceData = await readParquetFile(join(metaDir, "abundances.parquet"));
+    this.abundanceData = await readParquetFile(this.metaFile("abundances"));
 
     onProgress?.("Loading decay data...", 0.5);
-    this.decayData = await readParquetFile(join(metaDir, "decay.parquet"));
+    this.decayData = await readParquetFile(this.metaFile("decay"));
 
     onProgress?.("Loading dose constants...", 0.65);
     try {
-      const doseRows = await readParquetFile(join(metaDir, "dose_constants.parquet"));
+      const doseRows = await readParquetFile(this.metaFile("dose_constants"));
       for (const row of doseRows) {
         const key = `${row.Z}_${row.A}_${row.state ?? ""}`;
         this.doseConstants.set(key, {
@@ -157,7 +187,7 @@ export class NodeDataStore implements DatabaseProtocol {
         });
       }
     } catch {
-      // dose_constants.parquet may not exist in all libraries
+      // dose_constants.parquet may not exist in all data sets
     }
 
     onProgress?.("Loading stopping power data...", 0.75);

@@ -146,10 +146,35 @@ export class DataStore implements DatabaseProtocol {
     this.baseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
   }
 
-  /** Initialize by loading meta + stopping tables. Must be called before use. */
+  /** Resolve a meta file URL via catalog, with hardcoded fallback. */
+  private metaUrl(name: string): string {
+    const metaPath = this.catalog?.shared?.meta?.path ?? "meta/";
+    const files = this.catalog?.shared?.meta?.files as Record<string, string> | undefined;
+    const filename = files?.[name] ?? `${name}.parquet`;
+    return `${this.baseUrl}/${metaPath}${filename}`;
+  }
+
+  /** Resolve a stopping file URL via catalog, with hardcoded fallback. */
+  private stoppingUrl(source: string): string {
+    const stopPath = this.catalog?.shared?.stopping?.path ?? "stopping/";
+    return `${this.baseUrl}/${stopPath}${source}.parquet`;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private catalog: any = null;
+
+  /** Initialize by loading catalog + meta + stopping tables. Must be called before use. */
   async init(onProgress?: (msg: string, fraction?: number) => void): Promise<void> {
+    // Load catalog.json — SSoT for data file discovery (#257)
+    try {
+      const catResp = await fetch(`${this.baseUrl}/catalog.json`);
+      if (catResp.ok) this.catalog = await catResp.json();
+    } catch {
+      // No catalog — fall back to hardcoded paths
+    }
+
     onProgress?.("Loading element data...", 0);
-    const elements = await readParquetRows(`${this.baseUrl}/meta/elements.parquet`);
+    const elements = await readParquetRows(this.metaUrl("elements"));
     for (const row of elements) {
       const Z = Number(row.Z);
       const symbol = String(row.symbol);
@@ -158,14 +183,14 @@ export class DataStore implements DatabaseProtocol {
     }
 
     onProgress?.("Loading abundance data...", 0.25);
-    this.abundanceData = await readParquetRows(`${this.baseUrl}/meta/abundances.parquet`);
+    this.abundanceData = await readParquetRows(this.metaUrl("abundances"));
 
     onProgress?.("Loading decay data...", 0.5);
-    this.decayData = await readParquetRows(`${this.baseUrl}/meta/decay.parquet`);
+    this.decayData = await readParquetRows(this.metaUrl("decay"));
 
     onProgress?.("Loading dose constants...", 0.65);
     try {
-      const doseRows = await readParquetRows(`${this.baseUrl}/meta/dose_constants.parquet`);
+      const doseRows = await readParquetRows(this.metaUrl("dose_constants"));
       for (const row of doseRows) {
         const key = `${row.Z}_${row.A}_${row.state ?? ""}`;
         this.doseConstants.set(key, {
@@ -178,24 +203,17 @@ export class DataStore implements DatabaseProtocol {
     }
 
     onProgress?.("Loading stopping power data...", 0.7);
-    // Light-ion sources (PSTAR, ASTAR, dSTAR, tSTAR) plus heavy-ion
-    // catima pre-split tables (catima_C12, catima_O16, …). The catima
-    // files have the same (source, target_Z, energy_MeV, dedx) schema
-    // as the light-ion files — added in nucl-parquet data-2026.5.1.
-    //
-    // He3STAR removed in data-2026.5.0: ³He routes through ASTAR with
-    // velocity-scaling (E × 4/3). See _energy-loss.ts.
-    const stoppingSources = [
-      // Light ions
-      "PSTAR", "ASTAR", "dSTAR", "tSTAR",
-      // Heavy ions — pre-split catima tables (synced with
-      // BUNDLED_CATIMA_PROJECTILES in core/src/stopping.rs)
-      "catima_C12", "catima_O16", "catima_Ne20",
-      "catima_Si28", "catima_Ar40", "catima_Fe56",
-    ];
+    // Resolve stopping sources from catalog, with hardcoded fallback
+    const catalogSources: string[] =
+      (this.catalog?.shared?.stopping?.sources as string[]) ?? [];
+    const stoppingSources = catalogSources.length > 0
+      ? catalogSources
+      : ["PSTAR", "ASTAR", "dSTAR", "tSTAR",
+         "catima_C12", "catima_O16", "catima_Ne20",
+         "catima_Si28", "catima_Ar40", "catima_Fe56"];
     const stoppingFiles = await Promise.all(
       stoppingSources.map((src) =>
-        readParquetRows(`${this.baseUrl}/stopping/${src}.parquet`).catch(() => [] as ParquetRow[]),
+        readParquetRows(this.stoppingUrl(src)).catch(() => [] as ParquetRow[]),
       ),
     );
     for (const rows of stoppingFiles) {
@@ -210,13 +228,12 @@ export class DataStore implements DatabaseProtocol {
       bucket.push(row);
     }
 
-    // Load NIST compound stopping tables (PSTAR/ASTAR compounds).
-    // Schema: { source, compound, energy_MeV, dedx } — keyed by compound
-    // name, not target_Z. (#193)
+    // Load NIST compound stopping tables
+    const stopPath = this.catalog?.shared?.stopping?.path ?? "stopping/";
     const compoundSources = ["compounds/PSTAR_compounds", "compounds/ASTAR_compounds"];
     const compoundFiles = await Promise.all(
       compoundSources.map((src) =>
-        readParquetRows(`${this.baseUrl}/stopping/${src}.parquet`).catch(() => [] as ParquetRow[]),
+        readParquetRows(`${this.baseUrl}/${stopPath}${src}.parquet`).catch(() => [] as ParquetRow[]),
       ),
     );
     for (const rows of compoundFiles) {
@@ -254,18 +271,25 @@ export class DataStore implements DatabaseProtocol {
     await Promise.all(promises);
   }
 
+  /** Resolve the emissions directory path via catalog. */
+  private emissionsPath(): string {
+    const emPath = this.catalog?.shared?.emissions?.path ?? "meta/ensdf/emissions/";
+    return `${this.baseUrl}/${emPath}`;
+  }
+
   /** Load emissions for elements by symbol (lazy, idempotent).
-   *  Fetches `meta/ensdf/emissions/{Symbol}.parquet` for each new symbol. */
+   *  Fetches emissions/{Symbol}.parquet for each new symbol. */
   async ensureEmissions(symbols: string[]): Promise<void> {
     const toLoad = symbols.filter((s) => !this.emissionLoadedSymbols.has(s));
     if (toLoad.length === 0) return;
 
+    const emBase = this.emissionsPath();
     await Promise.all(
       toLoad.map(async (symbol) => {
         this.emissionLoadedSymbols.add(symbol);
         try {
           const rows = await readParquetRows(
-            `${this.baseUrl}/meta/ensdf/emissions/${symbol}.parquet`,
+            `${emBase}${symbol}.parquet`,
           );
           // Aggregate same-energy lines across decay modes.
           // The upstream data has one row per (decay_mode, transition) —
