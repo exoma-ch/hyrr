@@ -391,17 +391,29 @@ class DataStore:
         if filtered.is_empty():
             return []
 
+        # Prefer state-resolved xs over totals: when both state="" and
+        # state="g"/"m" exist for the same residual, drop the total (#254).
+        resolved: set[tuple[int, int]] = set()
+        for (rz, ra, st), _ in filtered.group_by(
+            ["residual_Z", "residual_A", "state"], maintain_order=True
+        ):
+            if str(st):
+                resolved.add((int(rz), int(ra)))
+
         results: list[CrossSectionData] = []
         for (rz, ra, st), group in filtered.group_by(
             ["residual_Z", "residual_A", "state"], maintain_order=True
         ):
+            rz_i, ra_i, st_s = int(rz), int(ra), str(st)
+            if not st_s and (rz_i, ra_i) in resolved:
+                continue  # skip total when state-resolved exist
             energies = group["energy_MeV"].to_numpy().astype(np.float64)
             xs = group["xs_mb"].to_numpy().astype(np.float64)
             results.append(
                 CrossSectionData(
-                    residual_Z=int(rz),
-                    residual_A=int(ra),
-                    state=str(st),
+                    residual_Z=rz_i,
+                    residual_A=ra_i,
+                    state=st_s,
                     energies_MeV=energies,
                     xs_mb=xs,
                 )
@@ -446,8 +458,11 @@ class DataStore:
         state: str = "",
     ) -> DecayData | None:
         """Get decay data for a nuclide. Returns None if not found."""
+        # Normalize "g" → "" — xs data uses "g" for ground-state products,
+        # but decay data uses "" for ground state (#254).
+        norm = "" if state == "g" else state
         filtered = self._decay.filter(
-            (pl.col("Z") == Z) & (pl.col("A") == A) & (pl.col("state") == state)
+            (pl.col("Z") == Z) & (pl.col("A") == A) & (pl.col("state") == norm)
         )
         if filtered.is_empty():
             return None

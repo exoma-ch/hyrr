@@ -124,16 +124,18 @@ class TestProtocol:
 class TestGetCrossSections:
     """Tests for get_cross_sections."""
 
-    def test_groups_by_residual(self, db: DataStore) -> None:
+    def test_prefers_state_resolved_over_total(self, db: DataStore) -> None:
+        """When both total (state='') and resolved (state='m') exist,
+        only the resolved entry should be returned (#254)."""
         results = db.get_cross_sections("p", 42, 100)
-        assert len(results) == 2
+        assert len(results) == 1
+        assert results[0].state == "m"
         assert all(isinstance(r, CrossSectionData) for r in results)
 
     def test_array_shapes_and_values(self, db: DataStore) -> None:
         results = db.get_cross_sections("p", 42, 100)
-        by_state = {r.state: r for r in results}
-
-        meta = by_state["m"]
+        meta = results[0]
+        assert meta.state == "m"
         assert meta.residual_Z == 43
         assert meta.residual_A == 99
         assert meta.energies_MeV.shape == (3,)
@@ -141,8 +143,29 @@ class TestGetCrossSections:
         np.testing.assert_array_almost_equal(meta.energies_MeV, [5.0, 10.0, 15.0])
         np.testing.assert_array_almost_equal(meta.xs_mb, [10.0, 50.0, 30.0])
 
-        ground = by_state[""]
-        assert ground.energies_MeV.shape == (2,)
+    def test_keeps_total_when_no_resolved(self, data_dir) -> None:
+        """Total xs (state='') kept when no state-resolved entries exist."""
+        xs_dir = data_dir / "test-lib" / "xs"
+        pl.DataFrame({
+            "target_A": [44, 44],
+            "residual_Z": [21, 21],
+            "residual_A": [44, 44],
+            "state": ["", ""],
+            "energy_MeV": [5.0, 10.0],
+            "xs_mb": [200.0, 600.0],
+        }).cast({"target_A": pl.Int32, "residual_Z": pl.Int32, "residual_A": pl.Int32}).write_parquet(
+            xs_dir / "p_Ca.parquet"
+        )
+        # Add Ca element
+        meta_dir = data_dir / "meta"
+        elements = pl.read_parquet(meta_dir / "elements.parquet")
+        elements = pl.concat([elements, pl.DataFrame({"Z": [20], "symbol": ["Ca"]}).cast({"Z": pl.Int32})])
+        elements.write_parquet(meta_dir / "elements.parquet")
+
+        store = DataStore(data_dir, library="test-lib")
+        results = store.get_cross_sections("p", 20, 44)
+        assert len(results) == 1
+        assert results[0].state == ""
 
     def test_empty_result(self, db: DataStore) -> None:
         results = db.get_cross_sections("d", 1, 1)
@@ -193,6 +216,30 @@ class TestGetDecayData:
 
     def test_unknown_returns_none(self, db: DataStore) -> None:
         assert db.get_decay_data(999, 999) is None
+
+    def test_normalizes_g_to_empty(self, data_dir) -> None:
+        """Regression test for #254: state='g' from xs data should find
+        ground-state decay stored as state=''."""
+        meta_dir = data_dir / "meta"
+        decay = pl.read_parquet(meta_dir / "decay.parquet")
+        # Add Sc-44 ground state (state="")
+        sc44 = pl.DataFrame({
+            "Z": [21], "A": [44], "state": [""],
+            "half_life_s": [14551.0], "decay_mode": ["beta+"],
+            "daughter_Z": [20], "daughter_A": [44],
+            "daughter_state": [""], "branching": [1.0],
+        }).cast({"Z": pl.Int32, "A": pl.Int32, "daughter_Z": pl.Int32, "daughter_A": pl.Int32})
+        pl.concat([decay, sc44]).write_parquet(meta_dir / "decay.parquet")
+
+        store = DataStore(data_dir, library="test-lib")
+        # Lookup with "g" should find ground state stored as ""
+        dd = store.get_decay_data(21, 44, "g")
+        assert dd is not None
+        assert dd.half_life_s == pytest.approx(14551.0)
+        # Direct "" should also work
+        assert store.get_decay_data(21, 44, "").half_life_s == pytest.approx(14551.0)
+        # "m" should not match ground
+        assert store.get_decay_data(21, 44, "m") is None
 
 
 class TestGetElement:
