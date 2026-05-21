@@ -9,7 +9,8 @@ import type { StackConfig, LayerConfig, StackItem } from "./config-bridge";
 import { isGroup } from "./config-bridge";
 import type { DatabaseProtocol } from "./types";
 import { resolveMaterial } from "./materials";
-import { computeEnergyOut } from "./_energy-loss";
+import { computeEnergyOut as computeEnergyOutTS } from "./_energy-loss";
+import { getSSoT } from "./ssot";
 
 /**
  * Expand groups in a SimulationConfig into a flat layer array.
@@ -140,5 +141,9 @@ function computeLayerEnergyOut(
     return energyIn;
   }
 
-  return computeEnergyOut(db, projectile, composition, density, energyIn, thicknessCm);
+  const ssot = getSSoT().computeEnergyOut;
+  if (ssot) {
+    return ssot(projectile, composition, density, energyIn, thicknessCm);
+  }
+  return computeEnergyOutTS(db, projectile, composition, density, energyIn, thicknessCm);
 }

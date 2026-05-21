@@ -401,6 +401,30 @@ impl WasmDataStore {
         serde_json::to_string(&preview_layers).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Compute exit energy after traversing a material layer.
+    ///
+    /// Delegates to `hyrr_core::stopping::compute_energy_out` — the same
+    /// physics used by `computeDepthPreview` and `computeStack`. This is
+    /// exposed as a standalone function so `expand-layers.ts` can call it
+    /// instead of the TS duplicate in `_energy-loss.ts`.
+    #[wasm_bindgen(js_name = computeEnergyOutScalar)]
+    pub fn compute_energy_out_scalar(
+        &self,
+        projectile: &str,
+        composition_json: &str,
+        density_g_cm3: f64,
+        energy_in_mev: f64,
+        thickness_cm: f64,
+    ) -> Result<f64, JsValue> {
+        let proj = ProjectileType::from_str(projectile)
+            .ok_or_else(|| JsValue::from_str(&format!("Invalid projectile: {projectile}")))?;
+        let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        compute_energy_out(&self.inner, &proj, &composition, density_g_cm3, energy_in_mev, thickness_cm, 1000)
+            .map(|v| v.max(0.0))
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     /// Parse a chemical formula. Returns JSON `{"H": 2, "O": 1}`.
     #[wasm_bindgen(js_name = parseFormula)]
     pub fn parse_formula_js(formula: &str) -> Result<String, JsValue> {

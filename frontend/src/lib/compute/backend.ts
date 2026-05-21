@@ -101,6 +101,40 @@ export async function initBackend(
     await transferDataToWasm(tsStore, wasmStore, onProgress);
     wasmTsDataStore = tsStore;
 
+    // Register WASM-backed SSoT implementations (#251).
+    // After this, @hyrr/compute functions delegate to Rust physics
+    // instead of their TS fallbacks.
+    const { registerSSoT } = await import("@hyrr/compute");
+    registerSSoT({
+      parseFormula: (formula: string) => {
+        try {
+          return JSON.parse(wasmStore.parseFormula(formula));
+        } catch {
+          return {};
+        }
+      },
+      resolveMaterial: (identifier: string) => {
+        try {
+          return JSON.parse(wasmStore.resolveMaterial(identifier));
+        } catch {
+          return null;
+        }
+      },
+      computeEnergyOut: (projectile, composition, density, energyIn, thickness) => {
+        try {
+          return wasmStore.computeEnergyOutScalar(
+            projectile,
+            JSON.stringify(composition),
+            density,
+            energyIn,
+            thickness,
+          );
+        } catch {
+          return 0;
+        }
+      },
+    });
+
     activeBackend = "wasm";
     return "wasm";
   } catch (e) {
