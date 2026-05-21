@@ -967,7 +967,9 @@ name = "nucl-parquet"
 version = "0.13.2"
 dependencies = [
  "arrow",
+ "bytes",
  "parquet",
+ "serde_json",
  "thiserror",
 ]
 

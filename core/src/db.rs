@@ -267,14 +267,14 @@ impl NpDataStore {
             match CrossSectionDb::open(&path) {
                 Ok(db) => {
                     let mut list = Vec::new();
-                    for &(ta, rz, ra, ref state) in db.reaction_keys() {
+                    for (ta, rz, ra, state) in db.reaction_keys() {
                         let pairs = db.entries_state(ta, rz, ra, state);
                         if pairs.is_empty() { continue; }
                         list.push(CrossSectionData {
                             target_a: ta,
                             residual_z: rz,
                             residual_a: ra,
-                            state: state.clone(),
+                            state: state.to_string(),
                             energies_mev: pairs.iter().map(|p| p.0).collect(),
                             xs_mb: pairs.iter().map(|p| p.1).collect(),
                         });
@@ -330,12 +330,12 @@ impl DatabaseProtocol for NpDataStore {
 
     fn get_compound_stopping_power(
         &self,
-        _source: &str,
-        _compound: &str,
+        source: &str,
+        compound: &str,
     ) -> Option<(Vec<f64>, Vec<f64>)> {
-        // Stub: compound stopping not yet exposed by nucl-parquet (issue #199).
-        // Bragg additivity fallback in stopping.rs handles this.
-        None
+        self.stopping
+            .compound_table(source, compound)
+            .map(|(e, s)| (e.clone(), s.clone()))
     }
 
     fn get_natural_abundances(&self, z: u32) -> HashMap<u32, (f64, f64)> {
@@ -370,10 +370,9 @@ impl DatabaseProtocol for NpDataStore {
     }
 
     fn get_dose_constant(&self, z: u32, a: u32, state: &str) -> Option<(f64, String)> {
-        // Source string stubbed as "ensdf" until nucl-parquet#200 lands.
         self.dose
             .dose_constant(z, a, state)
-            .map(|k| (k, "ensdf".to_string()))
+            .map(|dc| (dc.k, dc.source.clone()))
     }
 
     fn get_element_symbol(&self, z: u32) -> String {
