@@ -427,7 +427,7 @@ impl WasmDataStore {
 
     /// Parse a chemical formula. Returns JSON `{"H": 2, "O": 1}`.
     #[wasm_bindgen(js_name = parseFormula)]
-    pub fn parse_formula_js(formula: &str) -> Result<String, JsValue> {
+    pub fn parse_formula_js(&self, formula: &str) -> Result<String, JsValue> {
         let result = parse_formula(formula);
         serde_json::to_string(&result).map_err(|e| JsValue::from_str(&e.to_string()))
     }
