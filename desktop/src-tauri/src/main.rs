@@ -6,8 +6,6 @@ mod commands;
 
 use std::sync::Mutex;
 
-use tauri::Manager;
-
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -24,37 +22,14 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_opener::init())
-        .manage(commands::BundledDataDir(Mutex::new(None)));
+        .plugin(tauri_plugin_opener::init());
 
-    // Auto-updater: skip on Linux package-manager installs (.deb / .rpm),
-    // where the OS owns updates and a parallel auto-updater would conflict
-    // with apt/dnf. AppImage / DMG / MSI / NSIS installs all opt in. The
-    // env var is set by the bundler at build time per `linux.deb.depends`.
-    // See #116 — the spike resolution settled on minisign single-key with
-    // an offline backup; the runtime trust check is configured in
-    // `tauri.conf.json` under `plugins.updater.pubkey`.
     if updater_enabled() {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
 
     builder
         .manage(commands::DataStoreState(Mutex::new(None)))
-        .setup(|app| {
-            // Resolve the bundled resource dir and store it so
-            // `init_data_store` can read directly from it — no copy to
-            // a writable cache. The installer ships meta/ + stopping/ +
-            // tendl-2023-iso/ in the bundle resources; ParquetDataStore
-            // reads them in-place (read-only is fine, we never write).
-            if let Ok(resource_root) = app.path().resource_dir() {
-                let bundled_data = resource_root.join("data");
-                if bundled_data.join("meta").is_dir() {
-                    let state = app.state::<commands::BundledDataDir>();
-                    *state.0.lock().unwrap() = Some(bundled_data.to_string_lossy().to_string());
-                }
-            }
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             commands::init_data_store,
             commands::run_compute_stack,
@@ -71,9 +46,7 @@ fn main() {
 }
 
 /// Disable the updater plugin entirely on Linux package-manager installs
-/// (.deb/.rpm). Detection: the bundler sets `APPDIR` for AppImage runs and
-/// leaves it unset for system-package installs; we also honour an explicit
-/// `HYRR_DISABLE_UPDATER=1` env var so packagers can force-disable.
+/// (.deb/.rpm).
 fn updater_enabled() -> bool {
     if std::env::var("HYRR_DISABLE_UPDATER")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -81,7 +54,6 @@ fn updater_enabled() -> bool {
     {
         return false;
     }
-    // Linux: only enable for AppImage runs. apt/dnf own the rest.
     #[cfg(target_os = "linux")]
     {
         return std::env::var("APPIMAGE").is_ok() || std::env::var("APPDIR").is_ok();
