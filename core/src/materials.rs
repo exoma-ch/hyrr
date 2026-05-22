@@ -323,6 +323,33 @@ pub static COMPOUND_DENSITIES: LazyLock<HashMap<&'static str, f64>> = LazyLock::
 pub struct CatalogEntry {
     pub density: f64,
     pub mass_fractions: HashMap<&'static str, f64>,
+    /// NIST compound stopping table name. When set, stopping code uses
+    /// ICRU-measured data instead of Bragg additivity.
+    pub nist_compound: Option<&'static str>,
+}
+
+/// Map common material identifiers/formulas to NIST PSTAR/ASTAR compound
+/// names. These are SCREAMING_SNAKE_CASE keys matching the names in
+/// `stopping/compounds/PSTAR_compounds.parquet`.
+pub fn nist_compound_name(identifier: &str) -> Option<&'static str> {
+    match identifier.to_lowercase().as_str() {
+        "h2o" | "h2o-18" | "water" => Some("WATER_LIQUID"),
+        "polyethylene" | "pe" => Some("POLYETHYLENE"),
+        "polystyrene" | "ps" => Some("POLYSTYRENE"),
+        "pmma" | "lucite" | "plexiglass" => Some("POLYMETHYL_METHACRYLATE"),
+        "kapton" => Some("KAPTON_POLYIMIDE_FILM"),
+        "mylar" => Some("MYLAR"),
+        "teflon" | "ptfe" => Some("TEFLON"),
+        "air" => Some("AIR_DRY_NEAR_SEA_LEVEL"),
+        "sio2" | "quartz" | "silica" => Some("SILICON_DIOXIDE"),
+        "al2o3" | "alumina" => Some("ALUMINUM_OXIDE"),
+        "concrete" => Some("CONCRETE_ORDINARY_NIST"),
+        "pyrex" | "borosilicate" => Some("GLASS_BOROSILICATE"),
+        "acetylene" => Some("ACETYLENE"),
+        "methane" | "ch4" => Some("METHANE"),
+        "propane" | "c3h8" => Some("PROPANE"),
+        _ => None,
+    }
 }
 
 pub static MATERIAL_CATALOG: LazyLock<HashMap<&'static str, CatalogEntry>> = LazyLock::new(|| {
@@ -341,6 +368,7 @@ pub static MATERIAL_CATALOG: LazyLock<HashMap<&'static str, CatalogEntry>> = Laz
         CatalogEntry {
             density: 8.3,
             mass_fractions: havar,
+            nist_compound: None,
         },
     );
     m
@@ -442,6 +470,8 @@ pub struct MaterialResolution {
     pub elements: Vec<(Element, f64)>,
     pub density: f64,
     pub molecular_weight: f64,
+    /// NIST compound name for stopping power lookup.
+    pub nist_compound: Option<String>,
 }
 
 /// Resolve a material identifier (name, formula, or element symbol).
@@ -464,6 +494,7 @@ pub fn resolve_material(
             elements,
             density: entry.density,
             molecular_weight: 0.0,
+            nist_compound: entry.nist_compound.map(|s| s.to_string()),
         };
     }
 
@@ -486,6 +517,7 @@ pub fn resolve_material(
                     elements: vec![(element, 1.0)],
                     density,
                     molecular_weight: mass_num as f64,
+                    nist_compound: None,
                 };
             }
         }
@@ -516,9 +548,15 @@ pub fn resolve_material(
         }
     };
 
+    // Check if the formula/identifier matches a known NIST compound
+    let nist = nist_compound_name(identifier)
+        .or_else(|| nist_compound_name(&formula_clean))
+        .map(|s| s.to_string());
+
     MaterialResolution {
         elements,
         density,
         molecular_weight,
+        nist_compound: nist,
     }
 }
