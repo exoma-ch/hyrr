@@ -68,6 +68,105 @@ fn main() {
         }
     };
     println!("cargo:rustc-env=HYRR_DEFAULT_LIBRARY={default_library}");
+
+    // --- Embed nuclear data as a tar (#274) ---
+    #[cfg(feature = "embed-data")]
+    pack_data_tar(&default_library);
+}
+
+/// Pack the required nucl-parquet files into an uncompressed tar in OUT_DIR.
+/// The tar is included at compile time via `include_bytes!` in `db.rs`.
+#[cfg(feature = "embed-data")]
+fn pack_data_tar(library: &str) {
+    use std::fs;
+    use std::io::Write;
+
+    let data_root = Path::new("../nucl-parquet/data");
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
+    let tar_path = Path::new(&out_dir).join("hyrr-data.tar");
+
+    // Rerun if any data file changes.
+    println!("cargo:rerun-if-changed=../nucl-parquet/data/meta/abundances.parquet");
+    println!("cargo:rerun-if-changed=../nucl-parquet/data/stopping");
+    println!("cargo:rerun-if-changed=../nucl-parquet/data/{library}");
+
+    let file = fs::File::create(&tar_path).expect("create tar");
+    let mut tar = tar::Builder::new(file);
+
+    // Helper: add a single file under a relative path in the tar.
+    let add_file = |tar: &mut tar::Builder<fs::File>, disk_path: &Path, tar_path: &str| {
+        let data = fs::read(disk_path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", disk_path.display()));
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, tar_path, data.as_slice())
+            .unwrap_or_else(|e| panic!("tar append {tar_path}: {e}"));
+    };
+
+    // Meta: single-file Dbs
+    for name in &["abundances.parquet", "decay.parquet", "dose_constants.parquet"] {
+        let disk = data_root.join("meta").join(name);
+        if disk.exists() {
+            add_file(&mut tar, &disk, &format!("meta/{name}"));
+        }
+    }
+
+    // Stopping: full directory tree
+    let stopping_dir = data_root.join("stopping");
+    if stopping_dir.exists() {
+        add_dir_recursive(&mut tar, &stopping_dir, "stopping");
+    }
+
+    // XS library
+    let xs_dir = data_root.join(library).join("xs");
+    if xs_dir.exists() {
+        add_dir_recursive(&mut tar, &xs_dir, &format!("{library}/xs"));
+    }
+
+    // Emissions
+    let emissions_dir = data_root.join("meta/ensdf/emissions");
+    if emissions_dir.exists() {
+        add_dir_recursive(&mut tar, &emissions_dir, "meta/ensdf/emissions");
+    }
+
+    tar.finish().expect("finish tar");
+
+    let size = fs::metadata(&tar_path).map(|m| m.len()).unwrap_or(0);
+    println!(
+        "cargo:warning=core/build.rs: packed hyrr-data.tar ({} MB) into {}",
+        size / 1_048_576,
+        tar_path.display()
+    );
+}
+
+#[cfg(feature = "embed-data")]
+fn add_dir_recursive(tar: &mut tar::Builder<std::fs::File>, dir: &Path, prefix: &str) {
+    use std::fs;
+
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let tar_path = format!("{prefix}/{name_str}");
+
+        if path.is_dir() {
+            add_dir_recursive(tar, &path, &tar_path);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("parquet")
+            || path.extension().and_then(|e| e.to_str()) == Some("json")
+        {
+            let data = fs::read(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, &tar_path, data.as_slice())
+                .unwrap_or_else(|e| panic!("tar append {tar_path}: {e}"));
+        }
+    }
 }
 
 /// Extract a top-level `"key": "value"` string from JSON without
