@@ -13,6 +13,7 @@
   // --- Emission channel tabs ---
   const TABS = [
     { id: "gamma", label: "\u03B3" },
+    { id: "alpha", label: "\u03B1" },
     { id: "beta-", label: "\u03B2\u207B" },
     { id: "beta+", label: "\u03B2\u207A" },
     { id: "CE", label: "CE" },
@@ -49,6 +50,7 @@
   /** Map from tab ID to the rad_type(s) it shows. */
   const TAB_RAD_TYPES: Record<TabId, EmissionRadType[]> = {
     "gamma": ["gamma", "annihilation"],
+    "alpha": ["alpha"],
     "beta-": ["beta-"],
     "beta+": ["beta+"],
     "CE": ["ce"],

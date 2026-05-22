@@ -68,7 +68,8 @@ export type EmissionRadType =
   | "auger"
   | "annihilation"
   | "beta+"
-  | "beta-";
+  | "beta-"
+  | "alpha";
 
 // --- Backward-compat type aliases (deprecated) ---
 
