@@ -3,8 +3,13 @@ name: Release Please
 # On every push to main, release-please scans conventional commits since the
 # last release tag and either creates/updates a "Release vX.Y.Z" PR (with
 # CHANGELOG + version bumps) or — if that PR was just merged — creates the
-# tag + GitHub Release, which triggers the downstream publish workflows
-# (release.yml, tauri-build.yml, release-hyrr-mcp.yml).
+# tag + GitHub Release.
+#
+# IMPORTANT: Tags created by GITHUB_TOKEN don't trigger other workflows.
+# After release-please creates a tag, manually dispatch the downstream
+# publish workflows (release.yml, tauri-build.yml) or re-push the tag
+# from a local clone. See ADR 0002 for details. A PAT-based approach
+# would eliminate this step but adds secret management overhead.
 
 on:
   push:
