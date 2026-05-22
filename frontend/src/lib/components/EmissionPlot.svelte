@@ -102,6 +102,63 @@
     if (p && div) render();
   });
 
+  // ---------------------------------------------------------------------------
+  // β spectrum shape (Fermi function × phase space)
+  // ---------------------------------------------------------------------------
+
+  const ME_KEV = 510.999; // electron rest mass in keV
+  const ALPHA_FS = 1 / 137.036; // fine-structure constant
+
+  /**
+   * Compute the allowed β spectrum shape N(E) for a single transition.
+   * Returns arrays of (energy_keV, N) normalized so ∫N dE = 1.
+   *
+   * @param E0 - endpoint kinetic energy in keV
+   * @param Z  - atomic number of the DAUGHTER nucleus
+   * @param isPlus - true for β⁺, false for β⁻
+   * @param nPts - number of energy bins
+   */
+  function betaSpectrum(
+    E0: number, Z: number, isPlus: boolean, nPts = 100,
+  ): { energies: number[]; shape: number[] } {
+    if (E0 <= 0) return { energies: [], shape: [] };
+    const energies: number[] = [];
+    const shape: number[] = [];
+    const dE = E0 / nPts;
+
+    for (let i = 1; i < nPts; i++) {
+      const E = i * dE; // kinetic energy
+      const Etot = E + ME_KEV; // total energy
+      const p = Math.sqrt(Etot * Etot - ME_KEV * ME_KEV); // momentum (keV/c)
+      const phasespace = p * Etot * (E0 - E) * (E0 - E);
+
+      // Fermi function (non-relativistic approximation)
+      const eta = (isPlus ? -1 : 1) * Z * ALPHA_FS * Etot / p;
+      const twoPiEta = 2 * Math.PI * eta;
+      const fermi = Math.abs(twoPiEta) < 1e-6
+        ? 1.0 // limit for small η
+        : twoPiEta / (1 - Math.exp(-twoPiEta));
+
+      energies.push(E);
+      shape.push(fermi * phasespace);
+    }
+
+    // Normalize to unit area
+    let area = 0;
+    for (let i = 0; i < shape.length - 1; i++) {
+      area += 0.5 * (shape[i] + shape[i + 1]) * dE;
+    }
+    if (area > 0) {
+      for (let i = 0; i < shape.length; i++) {
+        shape[i] /= area;
+      }
+    }
+
+    return { energies, shape };
+  }
+
+  const BETA_TABS = new Set(["beta-", "beta+"]);
+
   /** Get activity at the chosen time point for an isotope. */
   function getActivityAtTime(
     iso: { time_grid_s?: number[]; activity_vs_time_Bq?: number[]; activity_Bq: number },
@@ -187,19 +244,22 @@
       aggregated = aggregated.slice(0, 15);
     }
 
-    // Build stick traces per isotope
+    // Build traces per isotope — bars for discrete, curves for β
     const traces: any[] = [];
     let colorIdx = 0;
     let hasAnyLines = false;
+    const isBeta = BETA_TABS.has(activeEmTab);
+    const isBetaPlus = activeEmTab === "beta+";
+
+    // For β tabs: accumulate sum envelope
+    const sumBins: Map<number, number> = new Map();
 
     for (const agg of aggregated) {
-      // Get emissions matching the active tab's radiation types
       const tabRadTypes = EMISSION_TABS.find((t) => t.id === activeEmTab)?.radTypes ?? ["gamma"];
       const emissions: EmissionLine[] = db.getEmissions(agg.Z, agg.A)
         .filter((e) => tabRadTypes.includes(e.radType));
       if (emissions.length === 0) continue;
 
-      // Get activity at chosen time
       const activity = getActivityAtTime(
         {
           time_grid_s: agg.time_grid_s,
@@ -211,38 +271,111 @@
       );
       if (activity <= 0) continue;
 
-      // Compute emission rates, filter by intensity threshold
-      const energies: number[] = [];
-      const rates: number[] = [];
-      for (const line of emissions) {
-        if (line.intensity < INTENSITY_THRESHOLD) continue;
-        energies.push(line.energyKeV);
-        rates.push(activity * line.intensity);
+      if (isBeta) {
+        // β continuous spectrum: compute Fermi shape for each endpoint
+        // Sum multiple transitions (e.g. allowed + first-forbidden)
+        const nPts = 100;
+        let combinedX: number[] | null = null;
+        let combinedY: number[] | null = null;
+
+        for (const line of emissions) {
+          if (line.intensity < INTENSITY_THRESHOLD) continue;
+          const { energies: ex, shape } = betaSpectrum(
+            line.energyKeV, agg.Z, isBetaPlus, nPts,
+          );
+          if (ex.length === 0) continue;
+
+          // Scale: rate spectrum = activity × branching × shape (already normalized)
+          const scaled = shape.map((s) => activity * line.intensity * s);
+
+          if (!combinedX) {
+            combinedX = ex;
+            combinedY = scaled;
+          } else {
+            // Add to existing (same grid since nPts is constant — may differ in range)
+            // Use the longer range
+            if (ex.length > combinedX.length) {
+              const padded = new Array(ex.length).fill(0);
+              for (let i = 0; i < combinedY.length; i++) padded[i] = combinedY[i];
+              combinedX = ex;
+              combinedY = padded;
+            }
+            for (let i = 0; i < Math.min(scaled.length, combinedY!.length); i++) {
+              combinedY![i] += scaled[i];
+            }
+          }
+        }
+
+        if (!combinedX || !combinedY) continue;
+        hasAnyLines = true;
+
+        // Add to sum envelope
+        for (let i = 0; i < combinedX.length; i++) {
+          const e = Math.round(combinedX[i] * 10) / 10; // bin to 0.1 keV
+          sumBins.set(e, (sumBins.get(e) ?? 0) + combinedY[i]);
+        }
+
+        const color = TRACE_COLORS[colorIdx % TRACE_COLORS.length];
+        traces.push({
+          x: combinedX,
+          y: combinedY,
+          type: "scatter",
+          mode: "lines",
+          fill: "tozeroy",
+          fillcolor: color.replace(")", ", 0.15)").replace("rgb", "rgba"),
+          line: { color, width: 1.5 },
+          name: nucLabel(agg.name),
+          hovertemplate: `%{x:.1f} keV<br>%{y:.2e} /s/keV<br>${nucLabel(agg.name)}<extra></extra>`,
+        });
+        colorIdx++;
+      } else {
+        // Discrete lines: bar sticks
+        const energies: number[] = [];
+        const rates: number[] = [];
+        for (const line of emissions) {
+          if (line.intensity < INTENSITY_THRESHOLD) continue;
+          energies.push(line.energyKeV);
+          rates.push(activity * line.intensity);
+        }
+
+        if (energies.length === 0) continue;
+        hasAnyLines = true;
+
+        const color = TRACE_COLORS[colorIdx % TRACE_COLORS.length];
+        traces.push({
+          x: energies,
+          y: rates,
+          type: "bar",
+          name: nucLabel(agg.name),
+          marker: { color },
+          hovertemplate: `%{x:.1f} keV<br>%{y:.2e} /s<br>${nucLabel(agg.name)}<extra></extra>`,
+        });
+        colorIdx++;
       }
-
-      if (energies.length === 0) continue;
-      hasAnyLines = true;
-
-      const color = TRACE_COLORS[colorIdx % TRACE_COLORS.length];
-      traces.push({
-        x: energies,
-        y: rates,
-        type: "bar",
-        name: nucLabel(agg.name),
-        marker: { color },
-        hovertemplate: `%{x:.1f} keV<br>%{y:.2e} /s<br>${nucLabel(agg.name)}<extra></extra>`,
-      });
-      colorIdx++;
     }
 
-    // Sort traces so the smallest max-rate renders first (back) and the
-    // largest renders last (front). Plotly hover picks the frontmost bar
-    // at a given x, so this prioritizes the dominant emission.
-    traces.sort((a, b) => {
-      const maxA = Math.max(...(a.y as number[]));
-      const maxB = Math.max(...(b.y as number[]));
-      return maxA - maxB;
-    });
+    // β sum envelope (dashed, no hover)
+    if (isBeta && sumBins.size > 0 && traces.length > 1) {
+      const sorted = [...sumBins.entries()].sort((a, b) => a[0] - b[0]);
+      traces.push({
+        x: sorted.map(([e]) => e),
+        y: sorted.map(([, r]) => r),
+        type: "scatter",
+        mode: "lines",
+        line: { color: "#fff", width: 2, dash: "dash" },
+        name: "Sum",
+        hoverinfo: "skip",
+      });
+    }
+
+    // For discrete tabs: sort by max rate (tallest bar frontmost for hover)
+    if (!isBeta) {
+      traces.sort((a, b) => {
+        const maxA = Math.max(...(a.y as number[]));
+        const maxB = Math.max(...(b.y as number[]));
+        return maxA - maxB;
+      });
+    }
 
     // Adaptive bar width: ~0.3% of the energy range so sticks are
     // visible at any scale (X-rays ~0.1-100 keV vs gammas ~50-7000 keV).
@@ -278,7 +411,7 @@
         type: logX ? "log" : "linear",
       },
       yaxis: {
-        title: { text: "Emission rate (/s)" },
+        title: { text: isBeta ? "Spectral rate (/s/keV)" : "Emission rate (/s)" },
         gridcolor: tc.border,
         type: logY ? "log" : "linear",
       },
