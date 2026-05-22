@@ -11,12 +11,11 @@
  */
 
 describe("Cold launch", () => {
-  // Wait for the app to fully initialize — the .app-flow container only
-  // appears after `ready = true` in App.svelte, meaning init_data_store
-  // succeeded and the embedded data was loaded.
-  before(async () => {
-    const appFlow = await $(".app-flow");
-    await appFlow.waitForExist({ timeout: 30_000 });
+  it("should detect as Tauri environment", async () => {
+    const isTauri = await browser.execute(() => {
+      return "__TAURI_INTERNALS__" in window;
+    });
+    expect(isTauri).toBe(true);
   });
 
   it("should set the window title", async () => {
@@ -24,9 +23,30 @@ describe("Cold launch", () => {
     expect(title).toMatch(/HYRR/);
   });
 
+  it("should initialize and show main UI", async () => {
+    // The app loads embedded data (no network), so init should be fast.
+    // Wait for the main app flow to render — the .app-flow container only
+    // appears after `ready = true` in App.svelte.
+    //
+    // If this times out, dump the page body for diagnostics.
+    const appFlow = await $(".app-flow");
+    try {
+      await appFlow.waitForExist({ timeout: 30_000 });
+    } catch (e) {
+      // Dump page state for diagnostics before failing
+      const bodyText = await browser.execute(() => document.body?.innerText || "");
+      const bodyHTML = await browser.execute(() => document.body?.innerHTML?.substring(0, 2000) || "");
+      const consoleErrors = await browser.execute(() => {
+        return (window.__TEST_CONSOLE_ERRORS || []).join("\n");
+      });
+      console.log("=== DIAGNOSTIC: page text ===\n", bodyText);
+      console.log("=== DIAGNOSTIC: page HTML (first 2000) ===\n", bodyHTML);
+      console.log("=== DIAGNOSTIC: console errors ===\n", consoleErrors);
+      throw e;
+    }
+  });
+
   it("should render the beam config bar", async () => {
-    // BeamConfigBar is the first interactive element in the main UI —
-    // if it renders, the full init chain (backend init + store setup) worked.
     const configRow = await $(".config-row");
     await configRow.waitForExist({ timeout: 5_000 });
     expect(await configRow.isDisplayed()).toBe(true);
@@ -36,12 +56,5 @@ describe("Cold launch", () => {
     const header = await $("header");
     await header.waitForExist({ timeout: 5_000 });
     expect(await header.isDisplayed()).toBe(true);
-  });
-
-  it("should detect as Tauri environment", async () => {
-    const isTauri = await browser.execute(() => {
-      return "__TAURI_INTERNALS__" in window;
-    });
-    expect(isTauri).toBe(true);
   });
 });
