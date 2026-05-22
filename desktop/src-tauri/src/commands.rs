@@ -266,7 +266,7 @@ pub fn run_compute_stack(
     // (via ensure_xs). No explicit load_xs call needed.
 
     let projectile = ProjectileType::from_str(&config.beam.projectile)
-        .ok_or_else(|| format!("Invalid projectile: {projectile_str}"))?;
+        .ok_or_else(|| format!("Invalid projectile: {}", config.beam.projectile))?;
 
     let layers = config_to_layers(db, &config);
 
