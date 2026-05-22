@@ -12,6 +12,7 @@ exclude = [".cargo/**"]
 default = ["parquet-store"]
 parquet-store = ["dep:nucl-parquet"]
 mcp = ["parquet-store"]
+embed-data = ["parquet-store", "dep:tempfile"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -32,6 +33,15 @@ fs2 = "0.4"
 # at the Tauri/IPC boundary (#173). Pure-Rust, tiny, no transitive
 # baggage. Native-only because wasm32 has no filesystem.
 home = "0.5"
+
+# tempfile is used at runtime for embed-data (stopping dir extraction)
+# and at test time for isolated $HOME tests.
+[dependencies.tempfile]
+version = "3"
+optional = true
+
+[build-dependencies]
+tar = "0.4"
 
 [dev-dependencies]
 approx = "0.5"

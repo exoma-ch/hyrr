@@ -525,3 +525,251 @@ mod tests {
         assert!(db.get_decay_data(21, 44, "m").is_none());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Embedded data store (#274)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "embed-data")]
+mod embedded_store {
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use nucl_parquet::{AbundancesDb, CrossSectionDb, DecayDb, DoseDb, StoppingDb};
+use crate::types::{CrossSectionData, DecayMode};
+
+/// Static embedded tar containing all nuclear data files.
+/// Packed at build time by `core/build.rs` when `embed-data` is enabled.
+static DATA_TAR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/hyrr-data.tar"));
+
+/// Index into the embedded tar: maps relative paths to `(offset, len)`.
+fn build_tar_index() -> HashMap<String, (usize, usize)> {
+    let mut index = HashMap::new();
+    let mut archive = tar::Archive::new(DATA_TAR);
+    for entry in archive.entries().expect("tar entries") {
+        let entry = entry.expect("tar entry");
+        let path = entry.path().expect("tar path").to_string_lossy().to_string();
+        let offset = entry.raw_file_position() as usize;
+        let size = entry.size() as usize;
+        index.insert(path, (offset, size));
+    }
+    index
+}
+
+/// Extract a file's bytes from the embedded tar by offset+len.
+fn extract_bytes(offset: usize, len: usize) -> &'static [u8] {
+    &DATA_TAR[offset..offset + len]
+}
+
+/// Nuclear data store backed by data embedded in the binary at build time.
+///
+/// No filesystem access for meta/XS/emissions — reads directly from the
+/// static `DATA_TAR`. Stopping power requires a tmpdir because
+/// `StoppingDb::open()` reads a directory tree (14 files).
+pub struct EmbeddedDataStore {
+    library: String,
+    abundances: AbundancesDb,
+    decay: DecayDb,
+    dose: DoseDb,
+    stopping: StoppingDb,
+    elements: HashMap<u32, String>,
+    symbol_to_z: HashMap<String, u32>,
+    xs_cache: Mutex<HashMap<String, Vec<CrossSectionData>>>,
+    tar_index: HashMap<String, (usize, usize)>,
+    // Keep the tmpdir alive for the lifetime of the store (stopping files).
+    _stopping_dir: tempfile::TempDir,
+}
+
+impl EmbeddedDataStore {
+    /// Create an embedded data store. Reads all data from the binary.
+    ///
+    /// `library` is the XS library identifier (must match the library
+    /// packed at build time via `hyrr.json::default_library`).
+    pub fn new(library: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let tar_index = build_tar_index();
+
+        // Meta Dbs: single-file, use from_bytes directly
+        let abundances = AbundancesDb::from_bytes(
+            extract_bytes_by_path(&tar_index, "meta/abundances.parquet")?,
+        )?;
+        let decay = DecayDb::from_bytes(
+            extract_bytes_by_path(&tar_index, "meta/decay.parquet")?,
+        )?;
+        let dose = DoseDb::from_bytes(
+            extract_bytes_by_path(&tar_index, "meta/dose_constants.parquet")?,
+        )?;
+
+        // Stopping: extract to tmpdir, open as directory
+        let stopping_dir = tempfile::tempdir()?;
+        for (path, &(offset, len)) in &tar_index {
+            if path.starts_with("stopping/") {
+                let dest = stopping_dir.path().join(path);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&dest, extract_bytes(offset, len))?;
+            }
+        }
+        let stopping = StoppingDb::open(stopping_dir.path().join("stopping"))?;
+
+        // Build Z ↔ symbol maps
+        let mut elements = HashMap::new();
+        let mut symbol_to_z = HashMap::new();
+        for z in 1..=118u32 {
+            let isotopes = abundances.isotopes(z);
+            if let Some(first) = isotopes.first() {
+                elements.insert(z, first.symbol.clone());
+                symbol_to_z.insert(first.symbol.clone(), z);
+            }
+        }
+
+        Ok(Self {
+            library: library.to_string(),
+            abundances,
+            decay,
+            dose,
+            stopping,
+            elements,
+            symbol_to_z,
+            xs_cache: Mutex::new(HashMap::new()),
+            tar_index,
+            _stopping_dir: stopping_dir,
+        })
+    }
+
+    fn ensure_xs(&self, projectile: &str, symbol: &str) {
+        let cache_key = format!("{}_{}", projectile, symbol);
+        {
+            let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
+            if cache.contains_key(&cache_key) {
+                return;
+            }
+        }
+
+        let tar_path = format!("{}/xs/{}_{}.parquet", self.library, projectile, symbol);
+        let xs_list = match self.tar_index.get(&tar_path) {
+            Some(&(offset, len)) => {
+                let data = extract_bytes(offset, len);
+                let z = self.symbol_to_z.get(symbol).copied().unwrap_or(0);
+                match CrossSectionDb::from_bytes(z, data) {
+                    Ok(db) => {
+                        let mut list = Vec::new();
+                        for (ta, rz, ra, state) in db.reaction_keys() {
+                            let pairs = db.entries_state(ta, rz, ra, state);
+                            if pairs.is_empty() { continue; }
+                            list.push(CrossSectionData {
+                                target_a: ta,
+                                residual_z: rz,
+                                residual_a: ra,
+                                state: state.to_string(),
+                                energies_mev: pairs.iter().map(|p| p.0).collect(),
+                                xs_mb: pairs.iter().map(|p| p.1).collect(),
+                            });
+                        }
+                        list
+                    }
+                    Err(_) => Vec::new(),
+                }
+            }
+            None => Vec::new(),
+        };
+
+        let mut cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
+        cache.insert(cache_key, xs_list);
+    }
+}
+
+fn extract_bytes_by_path<'a>(
+    index: &HashMap<String, (usize, usize)>,
+    path: &str,
+) -> Result<&'static [u8], Box<dyn std::error::Error>> {
+    let &(offset, len) = index
+        .get(path)
+        .ok_or_else(|| format!("embedded tar missing: {path}"))?;
+    Ok(extract_bytes(offset, len))
+}
+
+impl super::DatabaseProtocol for EmbeddedDataStore {
+    fn get_cross_sections(
+        &self,
+        projectile: &str,
+        target_z: u32,
+        target_a: u32,
+    ) -> Vec<CrossSectionData> {
+        let symbol = match self.elements.get(&target_z) {
+            Some(s) => s.clone(),
+            None => return Vec::new(),
+        };
+        self.ensure_xs(projectile, &symbol);
+        let cache_key = format!("{}_{}", projectile, symbol);
+        let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
+        let xs = cache.get(&cache_key)
+            .map(|xs| xs.iter().filter(|x| x.target_a == target_a).cloned().collect())
+            .unwrap_or_default();
+        super::dedup_xs_prefer_resolved(xs)
+    }
+
+    fn get_stopping_power(&self, source: &str, target_z: u32) -> (Vec<f64>, Vec<f64>) {
+        self.stopping
+            .nist_table(source, target_z)
+            .map(|(e, s)| (e.clone(), s.clone()))
+            .unwrap_or_default()
+    }
+
+    fn get_natural_abundances(&self, z: u32) -> HashMap<u32, (f64, f64)> {
+        self.abundances
+            .isotopes(z)
+            .iter()
+            .map(|e| (e.a, (e.abundance, e.atomic_mass)))
+            .collect()
+    }
+
+    fn get_decay_data(&self, z: u32, a: u32, state: &str) -> Option<super::DecayData> {
+        let lookup_state = super::normalize_decay_state(state);
+        let entries = self.decay.modes(z, a, lookup_state);
+        if entries.is_empty() {
+            return None;
+        }
+        Some(super::DecayData {
+            z,
+            a,
+            state: state.to_string(),
+            half_life_s: entries[0].half_life_s,
+            decay_modes: entries
+                .iter()
+                .map(|e| DecayMode {
+                    mode: e.decay_mode.clone(),
+                    daughter_z: e.daughter_z,
+                    daughter_a: e.daughter_a,
+                    daughter_state: e.daughter_state.clone(),
+                    branching: e.branching,
+                })
+                .collect(),
+        })
+    }
+
+    fn get_dose_constant(&self, z: u32, a: u32, state: &str) -> Option<(f64, String)> {
+        let st = super::normalize_decay_state(state);
+        self.dose
+            .dose_constant(z, a, st)
+            .map(|dc| (dc.k, dc.source.clone()))
+    }
+
+    fn get_element_symbol(&self, z: u32) -> String {
+        self.elements.get(&z).cloned().unwrap_or_default()
+    }
+
+    fn get_element_z(&self, symbol: &str) -> u32 {
+        self.symbol_to_z.get(symbol).copied().unwrap_or(0)
+    }
+
+    fn library(&self) -> &str {
+        &self.library
+    }
+
+}
+
+} // mod embedded_store
+
+#[cfg(feature = "embed-data")]
+pub use embedded_store::EmbeddedDataStore;
