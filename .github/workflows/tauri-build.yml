@@ -123,8 +123,8 @@ jobs:
           # `latest.json` (the updater manifest tauri-action uploads to
           # the Release) is what `tauri-plugin-updater` polls — the
           # endpoint in tauri.conf.json points to the GH-Releases-latest
-          # download URL, so once the draft Release is published this
-          # manifest is what the running app sees.
+          # download URL. The release is created by release-please; this
+          # workflow uploads artifacts to it.
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 

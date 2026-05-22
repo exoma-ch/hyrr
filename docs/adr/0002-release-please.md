@@ -2,7 +2,7 @@
 
 **Status:** Accepted (2026-05-22)
 **Implements:** #192
-**PR:** TBD
+**PR:** #295
 
 ## Context
 
