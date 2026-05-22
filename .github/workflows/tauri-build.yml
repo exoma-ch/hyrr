@@ -42,6 +42,7 @@ jobs:
           submodules: false
 
       - name: Init nucl-parquet submodule (sparse)
+        shell: bash
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
