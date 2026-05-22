@@ -3,7 +3,7 @@
 use std::sync::Mutex;
 
 use hyrr_core::compute::compute_stack;
-use hyrr_core::db::ParquetDataStore;
+use hyrr_core::db::EmbeddedDataStore;
 use hyrr_core::materials::resolve_material;
 use hyrr_core::production::generate_depth_profile;
 use hyrr_core::stopping::{
@@ -12,20 +12,13 @@ use hyrr_core::stopping::{
 use hyrr_core::types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use tauri::State;
 
 // ---------------------------------------------------------------------------
 // Managed state
 // ---------------------------------------------------------------------------
 
-pub struct DataStoreState(pub Mutex<Option<ParquetDataStore>>);
-
-/// Resolved path to the bundled `data/` directory inside the Tauri
-/// resource dir. Set during `setup` when the installer bundle contains
-/// `data/meta/`. `init_data_store` reads directly from this path — no
-/// copy to a writable cache, no network fetch.
-pub struct BundledDataDir(pub Mutex<Option<String>>);
+pub struct DataStoreState(pub Mutex<Option<EmbeddedDataStore>>);
 
 // ---------------------------------------------------------------------------
 // JSON contract types — mirror packages/compute/src/config-bridge.ts
@@ -138,7 +131,7 @@ pub struct DepthPreviewPoint {
 // ---------------------------------------------------------------------------
 
 fn config_to_layers(
-    db: &ParquetDataStore,
+    db: &EmbeddedDataStore,
     config: &SimulationConfig,
 ) -> Vec<Layer> {
     config
@@ -183,29 +176,22 @@ fn layer_composition(layer: &Layer) -> Vec<(u32, f64)> {
 // Commands
 // ---------------------------------------------------------------------------
 
-/// Initialize the Parquet data store. Must be called before compute commands.
+/// Initialize the data store from embedded binary data.
 ///
-/// Resolution priority:
-/// 1. Explicit `data_dir` argument from the frontend (non-empty)
-/// 2. Bundled resource dir (set during `setup` — read-only, no copy)
-/// 3. `data_dir::resolve()` fallback (dev-tree sibling, env var, etc.)
+/// All nuclear data is baked into the binary at build time (#274).
+/// No filesystem probing, no network, no cache — instant init.
 #[tauri::command]
 pub fn init_data_store(
     state: State<'_, DataStoreState>,
-    bundled: State<'_, BundledDataDir>,
-    data_dir: String,
     library: String,
 ) -> Result<(), String> {
-    let resolved = if !data_dir.is_empty() {
-        data_dir
-    } else if let Some(dir) = bundled.0.lock().map_err(|e| e.to_string())?.as_ref() {
-        dir.clone()
+    let lib = if library.is_empty() {
+        hyrr_core::mcp::transport::DEFAULT_LIBRARY
     } else {
-        hyrr_core::data_dir::resolve()
+        &library
     };
-    let resolved_display = hyrr_core::data_fetch::redact_home(Path::new(&resolved));
-    let store = ParquetDataStore::new(&resolved, &library)
-        .map_err(|e| format!("Failed to init DB at {resolved_display}: {e}"))?;
+    let store = EmbeddedDataStore::new(lib)
+        .map_err(|e| format!("Failed to init embedded DB: {e}"))?;
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
     *guard = Some(store);
     Ok(())

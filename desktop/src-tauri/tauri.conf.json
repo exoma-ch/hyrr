@@ -31,13 +31,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": {
-      "../../nucl-parquet/data/meta": "data/meta",
-      "../../nucl-parquet/data/stopping": "data/stopping",
-      "../../nucl-parquet/data/tendl-2023-iso": "data/tendl-2023-iso",
-      "../../nucl-parquet/data/catalog.json": "data/catalog.json",
-      "../../nucl-parquet/data/suppliers.json": "data/suppliers.json"
-    },
     "windows": {
       "nsis": {
         "installMode": "perMachine"

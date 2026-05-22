@@ -54,10 +54,7 @@ export async function initBackend(
       const { invoke } = await import("@tauri-apps/api/core");
       const lib = library ?? DEFAULT_LIBRARY;
 
-      await invoke("init_data_store", {
-        dataDir: dataDir ?? "",
-        library: lib,
-      });
+      await invoke("init_data_store", { library: lib });
       activeBackend = "tauri";
       return "tauri";
     } catch (e) {
