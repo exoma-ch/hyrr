@@ -8,6 +8,7 @@
  */
 
 const os = require("os");
+const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 
@@ -52,6 +53,16 @@ exports.config = {
   mochaOpts: {
     ui: "bdd",
     timeout: 60_000,
+  },
+
+  // Capture screenshot on test failure for CI artefacts (#188 acceptance).
+  async afterTest(_test, _context, { passed }) {
+    if (!passed) {
+      const screenshotDir = path.resolve(__dirname, "screenshots");
+      fs.mkdirSync(screenshotDir, { recursive: true });
+      const name = `failure-${Date.now()}.png`;
+      await browser.saveScreenshot(path.join(screenshotDir, name));
+    }
   },
 
   // Spawn tauri-driver before each test session
