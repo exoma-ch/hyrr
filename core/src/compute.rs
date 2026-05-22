@@ -125,6 +125,7 @@ fn compute_layer(
 
     let composition = layer_composition(layer);
     let density = layer.density_g_cm3;
+    let nist = layer.nist_compound.as_deref();
 
     // Resolve thickness / energy_out
     let (thickness, energy_out) = if let Some(e_out) = layer.energy_out_mev {
@@ -136,6 +137,7 @@ fn compute_layer(
             energy_in,
             e_out,
             1000,
+            nist,
         )?;
         (thick, e_out)
     } else if let Some(thick) = layer.thickness_cm {
@@ -147,6 +149,7 @@ fn compute_layer(
             energy_in,
             thick,
             1000,
+            nist,
         )?;
         (thick, e_out)
     } else {
@@ -159,6 +162,7 @@ fn compute_layer(
             energy_in,
             thick,
             1000,
+            nist,
         )?;
         (thick, e_out)
     };
@@ -169,13 +173,6 @@ fn compute_layer(
 
     let sp_sources = get_stopping_sources(db, projectile, &composition)?;
 
-    // Validate the FULL energy range the layer's grid will query — both ends.
-    // `compute_energy_out` only checks the entrance energy; if integration
-    // brings residual below the table_min for the chosen catima source, the
-    // downstream `linspace(energy_out.max(0.01), energy_in)` will produce
-    // points below table_min and the closure's `.expect()` would panic mid-
-    // loop. Surfacing here propagates a typed StoppingError::EnergyOutOfRange
-    // to the frontend recovery card. See #150 (panic-class follow-up to #142).
     let layer_e_low_for_validate = energy_out.max(0.01);
     dedx_mev_per_cm(
         db,
@@ -183,13 +180,14 @@ fn compute_layer(
         &composition,
         density,
         &[layer_e_low_for_validate, energy_in],
+        nist,
     )?;
 
     let dedx_fn = |energies: &[f64]| -> Vec<f64> {
-        dedx_mev_per_cm(db, projectile, &composition, density, energies)
+        dedx_mev_per_cm(db, projectile, &composition, density, energies, nist)
             .expect("dedx_fn: layer-level prevalidation above guarantees coverage")
     };
-    let _ = dedx_mev_per_cm_scalar; // silence unused-import noise on some build configs
+    let _ = dedx_mev_per_cm_scalar;
 
     let volume = thickness * area;
     let avg_a = layer.average_atomic_mass();
@@ -657,21 +655,22 @@ fn compute_layer_stopping_only(
 
     let composition = layer_composition(layer);
     let density = layer.density_g_cm3;
+    let nist = layer.nist_compound.as_deref();
 
     let (thickness, energy_out) = if let Some(e_out) = layer.energy_out_mev {
         let thick = compute_thickness_from_energy(
-            db, projectile, &composition, density, energy_in, e_out, 1000,
+            db, projectile, &composition, density, energy_in, e_out, 1000, nist,
         )?;
         (thick, e_out)
     } else if let Some(thick) = layer.thickness_cm {
         let e_out = compute_energy_out(
-            db, projectile, &composition, density, energy_in, thick, 1000,
+            db, projectile, &composition, density, energy_in, thick, 1000, nist,
         )?;
         (thick, e_out)
     } else {
         let thick = layer.areal_density_g_cm2.unwrap() / density;
         let e_out = compute_energy_out(
-            db, projectile, &composition, density, energy_in, thick, 1000,
+            db, projectile, &composition, density, energy_in, thick, 1000, nist,
         )?;
         (thick, e_out)
     };
@@ -682,11 +681,9 @@ fn compute_layer_stopping_only(
 
     let sp_sources = get_stopping_sources(db, projectile, &composition)?;
 
-    // Same energy grid + dE/dx the full path uses, so heat values are
-    // bit-identical to the activation path's output.
     let layer_e_low = energy_out.max(0.01);
     let layer_energies = linspace(layer_e_low, energy_in, 300);
-    let layer_dedx = dedx_mev_per_cm(db, projectile, &composition, density, &layer_energies)?;
+    let layer_dedx = dedx_mev_per_cm(db, projectile, &composition, density, &layer_energies, nist)?;
 
     let depth_raw =
         generate_depth_profile(&layer_energies, &layer_dedx, current_ma, area, projectile_z);

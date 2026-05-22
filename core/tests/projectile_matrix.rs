@@ -46,7 +46,9 @@ fn trivial_cu_stack(db: &ParquetDataStore, projectile: ProjectileType, energy_me
         areal_density_g_cm2: Some(1.0e-4), // ~0.1 µm Cu equivalent
         energy_out_mev: None,
         is_monitor: false,
-        computed_energy_in: 0.0,
+        nist_compound: None,
+                nist_compound: None,
+            computed_energy_in: 0.0,
         computed_energy_out: 0.0,
         computed_thickness: 0.0,
     };
@@ -172,7 +174,9 @@ fn thick_target_residual_below_table_min_returns_typed_error_not_panic() {
         areal_density_g_cm2: None,
         energy_out_mev: None,
         is_monitor: false,
-        computed_energy_in: 0.0,
+        nist_compound: None,
+                nist_compound: None,
+            computed_energy_in: 0.0,
         computed_energy_out: 0.0,
         computed_thickness: 0.0,
     };
@@ -233,6 +237,8 @@ fn beam_stopped_upstream_yields_empty_downstream_layers_not_error() {
             areal_density_g_cm2: None,
             energy_out_mev: eo,
             is_monitor: false,
+            nist_compound: None,
+                nist_compound: None,
             computed_energy_in: 0.0,
             computed_energy_out: 0.0,
             computed_thickness: 0.0,

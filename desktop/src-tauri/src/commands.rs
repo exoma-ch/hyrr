@@ -147,6 +147,7 @@ fn config_to_layers(
                 areal_density_g_cm2: lc.areal_density_g_cm2,
                 energy_out_mev: lc.energy_out_MeV,
                 is_monitor: lc.is_monitor.unwrap_or(false),
+                nist_compound: resolution.nist_compound,
                 computed_energy_in: 0.0,
                 computed_energy_out: 0.0,
                 computed_thickness: 0.0,
@@ -354,7 +355,7 @@ pub fn compute_depth_preview(
                 (0.0, "energy_out", Some(format!("Eout ({e_out} MeV) > Ein ({energy_in:.1} MeV)")))
             } else {
                 match compute_thickness_from_energy(
-                    db, &projectile, &composition, density, energy_in, e_out.max(0.0), 1000,
+                    db, &projectile, &composition, density, energy_in, e_out.max(0.0), 1000, None,
                 ) {
                     Ok(t) => (t, "energy_out", None),
                     Err(e) => (0.0, "energy_out", Some(e.to_string())),
@@ -371,7 +372,7 @@ pub fn compute_depth_preview(
             let e_out_res: Result<f64, hyrr_core::stopping::StoppingError> = if user_specified == "energy_out" {
                 Ok(lc.energy_out_MeV.unwrap_or(0.0).min(energy_in).max(0.0))
             } else {
-                compute_energy_out(db, &projectile, &composition, density, energy_in, thickness_cm, 1000)
+                compute_energy_out(db, &projectile, &composition, density, energy_in, thickness_cm, 1000, None)
                     .map(|v| v.max(0.0))
             };
             let e_out = match e_out_res {
@@ -398,7 +399,7 @@ pub fn compute_depth_preview(
             let energies: Vec<f64> = (0..n_pts)
                 .map(|i| e_min + (energy_in - e_min) * (i as f64) / ((n_pts - 1) as f64))
                 .collect();
-            let dedx_vals = match dedx_mev_per_cm(db, &projectile, &composition, density, &energies) {
+            let dedx_vals = match dedx_mev_per_cm(db, &projectile, &composition, density, &energies, None) {
                 Ok(v) => v,
                 Err(err) => {
                     preview_layers.push(DepthPreviewLayer {

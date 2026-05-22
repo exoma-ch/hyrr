@@ -397,8 +397,9 @@ pub fn dedx_mev_per_cm(
     composition: &[(u32, f64)],
     density_g_cm3: f64,
     energies_mev: &[f64],
+    nist_compound: Option<&str>,
 ) -> Result<Vec<f64>, StoppingError> {
-    Ok(compound_dedx(db, projectile, composition, energies_mev)?
+    Ok(compound_dedx_with_nist(db, projectile, composition, energies_mev, nist_compound)?
         .iter()
         .map(|&s| s * density_g_cm3)
         .collect())
@@ -412,8 +413,9 @@ pub fn dedx_mev_per_cm_scalar(
     composition: &[(u32, f64)],
     density_g_cm3: f64,
     energy_mev: f64,
+    nist_compound: Option<&str>,
 ) -> f64 {
-    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_mev])
+    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_mev], nist_compound)
         .expect("dedx_mev_per_cm_scalar: caller failed to pre-validate source/target/energy")[0]
 }
 
@@ -427,13 +429,14 @@ pub fn compute_thickness_from_energy(
     energy_in_mev: f64,
     energy_out_mev: f64,
     n_points: usize,
+    nist_compound: Option<&str>,
 ) -> Result<f64, StoppingError> {
     let energies = linspace(energy_out_mev, energy_in_mev, n_points);
     let de = energies[1] - energies[0];
 
     let midpoints: Vec<f64> = (0..n_points - 1).map(|i| energies[i] + de / 2.0).collect();
 
-    let dedx_arr = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &midpoints)?;
+    let dedx_arr = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &midpoints, nist_compound)?;
 
     let mut thickness = 0.0;
     for &dedx_val in &dedx_arr {
@@ -452,15 +455,14 @@ pub fn compute_energy_out(
     energy_in_mev: f64,
     thickness_cm: f64,
     n_points: usize,
+    nist_compound: Option<&str>,
 ) -> Result<f64, StoppingError> {
     if thickness_cm <= 0.0 {
         return Ok(energy_in_mev);
     }
 
-    // Pre-validate by sampling at the entrance energy. If this miss-types
-    // (NoSourceTable / NoTargetData / EnergyOutOfRange) the integration
-    // loop would otherwise panic via `_scalar`; surface the typed error.
-    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_in_mev])?;
+    // Pre-validate by sampling at the entrance energy.
+    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_in_mev], nist_compound)?;
 
     let dx = thickness_cm / n_points as f64;
     let mut energy = energy_in_mev;
@@ -470,7 +472,7 @@ pub fn compute_energy_out(
         // as typed Err(EnergyOutOfRange) instead of panicking via _scalar.
         // See #150 — without this, heavy-ion stacks that bring residual
         // energy below the catima table-min crash compute opaquely.
-        let dedx = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy])?;
+        let dedx = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy], nist_compound)?;
         energy -= dedx[0] * dx;
         if energy <= 0.0 {
             return Ok(0.0);

@@ -140,6 +140,11 @@ pub struct Layer {
     pub areal_density_g_cm2: Option<f64>,
     pub energy_out_mev: Option<f64>,
     pub is_monitor: bool,
+    /// NIST compound name for direct stopping-power table lookup.
+    /// When set, `compound_dedx_with_nist` uses ICRU-measured data
+    /// instead of Bragg additivity (e.g. "WATER_LIQUID").
+    #[serde(skip)]
+    pub nist_compound: Option<String>,
     /// Computed fields (set during simulation).
     #[serde(skip)]
     pub computed_energy_in: f64,

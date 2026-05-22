@@ -272,7 +272,7 @@ impl WasmDataStore {
                     (0.0, "energy_out", Some(format!("Eout ({e_out} MeV) > Ein ({energy_in:.1} MeV)")))
                 } else {
                     match compute_thickness_from_energy(
-                        &self.inner, &projectile, &composition, density, energy_in, e_out.max(0.0), 1000,
+                        &self.inner, &projectile, &composition, density, energy_in, e_out.max(0.0), 1000, None,
                     ) {
                         Ok(t) => (t, "energy_out", None),
                         Err(e) => (0.0, "energy_out", Some(e.to_string())),
@@ -289,7 +289,7 @@ impl WasmDataStore {
                 let e_out_res: Result<f64, StoppingError> = if user_specified == "energy_out" {
                     Ok(lc.energy_out_mev.unwrap_or(0.0).min(energy_in).max(0.0))
                 } else {
-                    compute_energy_out(&self.inner, &projectile, &composition, density, energy_in, thickness_cm, 1000)
+                    compute_energy_out(&self.inner, &projectile, &composition, density, energy_in, thickness_cm, 1000, None)
                         .map(|v| v.max(0.0))
                 };
                 let e_out = match e_out_res {
@@ -320,7 +320,7 @@ impl WasmDataStore {
                 let energies: Vec<f64> = (0..n_pts)
                     .map(|i| e_min + (energy_in - e_min) * (i as f64) / ((n_pts - 1) as f64))
                     .collect();
-                let dedx_vals = match dedx_mev_per_cm(&self.inner, &projectile, &composition, density, &energies) {
+                let dedx_vals = match dedx_mev_per_cm(&self.inner, &projectile, &composition, density, &energies, None) {
                     Ok(v) => v,
                     Err(err) => {
                         preview_layers.push(DepthPreviewLayer {
@@ -420,7 +420,7 @@ impl WasmDataStore {
             .ok_or_else(|| JsValue::from_str(&format!("Invalid projectile: {projectile}")))?;
         let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        compute_energy_out(&self.inner, &proj, &composition, density_g_cm3, energy_in_mev, thickness_cm, 1000)
+        compute_energy_out(&self.inner, &proj, &composition, density_g_cm3, energy_in_mev, thickness_cm, 1000, None)
             .map(|v| v.max(0.0))
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
@@ -698,6 +698,7 @@ fn config_to_layers(db: &dyn DatabaseProtocol, config: &SimulationConfig) -> Vec
                 areal_density_g_cm2: lc.areal_density_g_cm2,
                 energy_out_mev: lc.energy_out_mev,
                 is_monitor: lc.is_monitor.unwrap_or(false),
+                nist_compound: resolution.nist_compound,
                 computed_energy_in: 0.0,
                 computed_energy_out: 0.0,
                 computed_thickness: 0.0,
