@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 hyrr-core = { path = "../core", features = ["mcp"] }
+nucl-parquet = { path = "../nucl-parquet/clients/rs/nucl-parquet", features = ["fetch"] }
 
 [profile.release]
 strip = true
