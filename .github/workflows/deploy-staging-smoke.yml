@@ -61,8 +61,17 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: https://exoma-ch.github.io/hyrr/tst/
           CI: "1"
-        # Single viewport for speed — full multi-viewport coverage already ran on the PR.
         run: npx playwright test --grep @smoke --project=desktop-1280 --reporter=list,html
+
+      - name: Run preset golden tests (release gate)
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: https://exoma-ch.github.io/hyrr/tst/
+          CI: "1"
+        # All 5 presets must produce the expected isotope in the expected
+        # layer. Catches silent WASM/data regressions that break production
+        # for non-alloy materials, enriched targets, etc.
+        run: npx playwright test --grep @preset --project=desktop-1280 --reporter=list,html
 
       - name: Upload Playwright report
         if: always()
