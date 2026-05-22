@@ -47,8 +47,7 @@ fn trivial_cu_stack(db: &ParquetDataStore, projectile: ProjectileType, energy_me
         energy_out_mev: None,
         is_monitor: false,
         nist_compound: None,
-                nist_compound: None,
-            computed_energy_in: 0.0,
+        computed_energy_in: 0.0,
         computed_energy_out: 0.0,
         computed_thickness: 0.0,
     };
@@ -175,8 +174,7 @@ fn thick_target_residual_below_table_min_returns_typed_error_not_panic() {
         energy_out_mev: None,
         is_monitor: false,
         nist_compound: None,
-                nist_compound: None,
-            computed_energy_in: 0.0,
+        computed_energy_in: 0.0,
         computed_energy_out: 0.0,
         computed_thickness: 0.0,
     };
@@ -238,8 +236,7 @@ fn beam_stopped_upstream_yields_empty_downstream_layers_not_error() {
             energy_out_mev: eo,
             is_monitor: false,
             nist_compound: None,
-                nist_compound: None,
-            computed_energy_in: 0.0,
+        computed_energy_in: 0.0,
             computed_energy_out: 0.0,
             computed_thickness: 0.0,
         }

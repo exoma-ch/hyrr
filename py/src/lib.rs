@@ -173,7 +173,7 @@ fn py_dedx_mev_per_cm(
     })?;
     let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    stopping::dedx_mev_per_cm(&db, &proj, &composition, density, &energies)
+    stopping::dedx_mev_per_cm(&db, &proj, &composition, density, &energies, None)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
@@ -197,7 +197,7 @@ fn py_compute_energy_out(
     })?;
     let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    stopping::compute_energy_out(&db, &proj, &composition, density, e_in, thickness, n_points)
+    stopping::compute_energy_out(&db, &proj, &composition, density, e_in, thickness, n_points, None)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
@@ -221,7 +221,7 @@ fn py_compute_thickness(
     })?;
     let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    stopping::compute_thickness_from_energy(&db, &proj, &composition, density, e_in, e_out, n_points)
+    stopping::compute_thickness_from_energy(&db, &proj, &composition, density, e_in, e_out, n_points, None)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
@@ -423,6 +423,7 @@ fn config_to_layers(db: &ParquetDataStore, config: &SimConfig) -> Vec<Layer> {
                 areal_density_g_cm2: lc.areal_density_g_cm2,
                 energy_out_mev: lc.energy_out_mev,
                 is_monitor: lc.is_monitor.unwrap_or(false),
+                nist_compound: resolution.nist_compound,
                 computed_energy_in: 0.0,
                 computed_energy_out: 0.0,
                 computed_thickness: 0.0,

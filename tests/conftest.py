@@ -24,11 +24,13 @@ def pytest_collection_modifyitems(config, items):  # noqa: ANN001, ARG001
         os.environ.get("HYRR_DATA", ""),
     ]
     repo_root = Path(__file__).parent.parent
-    candidates.extend([
-        str(repo_root / "nucl-parquet" / "data"),
-        str(repo_root / "data" / "parquet"),
-        str(Path.home() / ".hyrr" / "nucl-parquet"),
-    ])
+    candidates.extend(
+        [
+            str(repo_root / "nucl-parquet" / "data"),
+            str(repo_root / "data" / "parquet"),
+            str(Path.home() / ".hyrr" / "nucl-parquet"),
+        ]
+    )
 
     for c in candidates:
         if c and Path(c).is_dir() and (Path(c) / "meta").is_dir():

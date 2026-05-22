@@ -59,9 +59,9 @@ def data_dir(tmp_path):
     (tmp_path / "catalog.json").write_text(json.dumps(catalog))
 
     # -- elements
-    pl.DataFrame(
-        {"Z": [20, 21, 42, 43], "symbol": ["Ca", "Sc", "Mo", "Tc"]}
-    ).cast({"Z": pl.Int32}).write_parquet(meta_dir / "elements.parquet")
+    pl.DataFrame({"Z": [20, 21, 42, 43], "symbol": ["Ca", "Sc", "Mo", "Tc"]}).cast(
+        {"Z": pl.Int32}
+    ).write_parquet(meta_dir / "elements.parquet")
 
     # -- abundances: Mo
     pl.DataFrame(
@@ -171,7 +171,6 @@ class TestProtocol:
 
 
 class TestGetCrossSections:
-
     def test_prefers_state_resolved_over_total(self, db: DataStore) -> None:
         """When both total and resolved exist, only resolved is returned (#254)."""
         results = db.get_cross_sections("p", 42, 100)
@@ -206,7 +205,6 @@ class TestGetCrossSections:
 
 
 class TestGetStoppingPower:
-
     def test_sorted_arrays(self, db: DataStore) -> None:
         energies, dedx = db.get_stopping_power("PSTAR", 1)
         assert len(energies) == 3
@@ -225,7 +223,6 @@ class TestGetStoppingPower:
 
 
 class TestGetNaturalAbundances:
-
     def test_returns_correct_dict(self, db: DataStore) -> None:
         abund = db.get_natural_abundances(42)
         assert set(abund.keys()) == {92, 94, 100}
@@ -244,7 +241,6 @@ class TestGetNaturalAbundances:
 
 
 class TestGetDecayData:
-
     def test_known_nuclide(self, db: DataStore) -> None:
         dd = db.get_decay_data(43, 99, "m")
         assert dd is not None
@@ -274,7 +270,6 @@ class TestGetDecayData:
 
 
 class TestGetDoseConstant:
-
     def test_known_nuclide(self, db: DataStore) -> None:
         result = db.get_dose_constant(43, 99, "m")
         assert result is not None
@@ -298,7 +293,6 @@ class TestGetDoseConstant:
 
 
 class TestGetElement:
-
     def test_from_data(self, db: DataStore) -> None:
         assert db.get_element_symbol(42) == "Mo"
         assert db.get_element_Z("Tc") == 43
@@ -320,7 +314,6 @@ class TestGetElement:
 
 
 class TestContextManager:
-
     def test_enter_exit(self, data_dir) -> None:
         with DataStore(data_dir, library="test-lib") as d:
             assert d.get_element_symbol(42) == "Mo"
