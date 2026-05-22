@@ -70,6 +70,34 @@ jobs:
           HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
         run: cargo test --test projectile_matrix -- --include-ignored
 
+  embedded-data-store:
+    # #274 — verify the embedded data store initializes, queries work,
+    # and a full simulation runs through the build-time tar.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set \
+            data/catalog.json \
+            data/meta/abundances.parquet \
+            data/meta/decay.parquet \
+            data/meta/dose_constants.parquet \
+            data/meta/ensdf/emissions \
+            data/stopping \
+            data/tendl-2023-iso/xs
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Run EmbeddedDataStore tests (including full simulation)
+        working-directory: core
+        run: cargo test --features embed-data --test embedded_data_store
+
   hyrr-py-check:
     # Catches PyO3 binding type drift against hyrr-core (Refs: #181).
     # The py/ crate is excluded from the default workspace because the
