@@ -1,0 +1,45 @@
+name: Release Please
+
+# On every push to main, release-please scans conventional commits since the
+# last release tag and either creates/updates a "Release vX.Y.Z" PR (with
+# CHANGELOG + version bumps) or — if that PR was just merged — creates the
+# tag + GitHub Release, which triggers the downstream publish workflows
+# (release.yml, tauri-build.yml, release-hyrr-mcp.yml).
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          manifest-file: .release-please-manifest.json
+          config-file: release-please-config.json
+
+      # When a release is created for the root package, also push a
+      # hyrr-mcp-v* tag so release-hyrr-mcp.yml fires and publishes the
+      # MCP wheel to PyPI. Both artifacts share the same version number.
+      - uses: actions/checkout@v6
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        with:
+          fetch-depth: 0
+
+      - name: Tag hyrr-mcp release
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          git tag "hyrr-mcp-${TAG}"
+          git push origin "hyrr-mcp-${TAG}"

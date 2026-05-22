@@ -118,7 +118,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "HYRR ${{ github.ref_name }}"
           releaseBody: "Desktop app for offline use. See [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           # `latest.json` (the updater manifest tauri-action uploads to
           # the Release) is what `tauri-plugin-updater` polls — the
