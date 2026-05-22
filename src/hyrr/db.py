@@ -9,7 +9,6 @@ from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import numpy.typing as npt
-import polars as pl
 
 DEFAULT_LIBRARY = "tendl-2023-iso"
 

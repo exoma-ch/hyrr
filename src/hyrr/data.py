@@ -12,16 +12,16 @@ through the CLI.
 
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 
 def fetch_data(
     *,
-    library: Optional[str] = None,
+    library: str | None = None,
     all_libs: bool = False,
-    from_tarball: Optional[str] = None,
-    offline_bundle: Optional[str] = None,
-    progress: Optional[Callable] = None,
+    from_tarball: str | None = None,
+    offline_bundle: str | None = None,
+    progress: Callable | None = None,
 ) -> None:
     """Fetch nuclear data into the managed cache.
 
