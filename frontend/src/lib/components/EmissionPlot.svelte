@@ -23,6 +23,7 @@
 
   const EMISSION_TABS = [
     { id: "gamma", label: "\u03B3", radTypes: ["gamma", "annihilation"] as EmissionRadType[] },
+    { id: "alpha", label: "\u03B1", radTypes: ["alpha"] as EmissionRadType[] },
     { id: "beta-", label: "\u03B2\u207B", radTypes: ["beta-"] as EmissionRadType[] },
     { id: "beta+", label: "\u03B2\u207A", radTypes: ["beta+"] as EmissionRadType[] },
     { id: "CE", label: "CE", radTypes: ["ce"] as EmissionRadType[] },
