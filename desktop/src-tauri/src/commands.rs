@@ -3,7 +3,6 @@
 use std::sync::Mutex;
 
 use hyrr_core::compute::compute_stack;
-use hyrr_core::data_fetch::{FetchErrorPayload, FetchProgress};
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::materials::resolve_material;
 use hyrr_core::production::generate_depth_profile;
@@ -13,14 +12,20 @@ use hyrr_core::stopping::{
 use hyrr_core::types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter, State};
+use std::path::Path;
+use tauri::State;
 
 // ---------------------------------------------------------------------------
 // Managed state
 // ---------------------------------------------------------------------------
 
 pub struct DataStoreState(pub Mutex<Option<ParquetDataStore>>);
+
+/// Resolved path to the bundled `data/` directory inside the Tauri
+/// resource dir. Set during `setup` when the installer bundle contains
+/// `data/meta/`. `init_data_store` reads directly from this path — no
+/// copy to a writable cache, no network fetch.
+pub struct BundledDataDir(pub Mutex<Option<String>>);
 
 // ---------------------------------------------------------------------------
 // JSON contract types — mirror packages/compute/src/config-bridge.ts
@@ -180,107 +185,30 @@ fn layer_composition(layer: &Layer) -> Vec<(u32, f64)> {
 
 /// Initialize the Parquet data store. Must be called before compute commands.
 ///
-/// If `data_dir` is empty, falls back to the same resolver used by the
-/// `--mcp` mode (`hyrr_core::data_dir::resolve()`), which prefers a managed
-/// cache populated by [`ensure_data`]. If the cache is incomplete the
-/// caller should invoke [`ensure_data`] first and surface progress to the
-/// user, otherwise this call returns the underlying ParquetDataStore error
-/// (which the frontend currently swallows into a silent WASM fallback —
-/// known issue #52).
+/// Resolution priority:
+/// 1. Explicit `data_dir` argument from the frontend (non-empty)
+/// 2. Bundled resource dir (set during `setup` — read-only, no copy)
+/// 3. `data_dir::resolve()` fallback (dev-tree sibling, env var, etc.)
 #[tauri::command]
 pub fn init_data_store(
     state: State<'_, DataStoreState>,
+    bundled: State<'_, BundledDataDir>,
     data_dir: String,
     library: String,
 ) -> Result<(), String> {
-    let resolved = if data_dir.is_empty() {
-        hyrr_core::data_dir::resolve()
-    } else {
+    let resolved = if !data_dir.is_empty() {
         data_dir
+    } else if let Some(dir) = bundled.0.lock().map_err(|e| e.to_string())?.as_ref() {
+        dir.clone()
+    } else {
+        hyrr_core::data_dir::resolve()
     };
-    // Redact `$HOME` before letting `resolved` reach the IPC error string —
-    // on the empty-`data_dir` branch this comes from `data_dir::resolve()`
-    // which returns paths under `~/.hyrr/...` (sibling leak to #173, see
-    // #176). The frontend-supplied branch also gets redacted defensively
-    // in case a future caller routes a literal home path through here.
     let resolved_display = hyrr_core::data_fetch::redact_home(Path::new(&resolved));
     let store = ParquetDataStore::new(&resolved, &library)
         .map_err(|e| format!("Failed to init DB at {resolved_display}: {e}"))?;
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
     *guard = Some(store);
     Ok(())
-}
-
-/// Ensure the managed nucl-parquet cache contains the given `library`,
-/// downloading from GitHub Releases if necessary. Idempotent, blocking,
-/// and safe to call from multiple threads (see `data_fetch` hardening).
-///
-/// Returns the resolved data directory the caller should hand to
-/// [`init_data_store`]. Frontend callers should display a "Initializing
-/// nuclear data…" splash while this runs because a cold cache pulls
-/// ~50 MB at minimum.
-///
-/// Pass an empty `library` (or a known-good library name) to ensure only
-/// `meta/`+`stopping/` are present (e.g. for a depth preview that doesn't
-/// need cross-sections).
-#[tauri::command]
-pub fn ensure_data(app: AppHandle, library: String) -> Result<String, String> {
-    let result = if library.is_empty() {
-        hyrr_core::data_fetch::ensure_meta_stopping_with_progress(
-            &mut throttled_emit(&app),
-        )
-    } else {
-        hyrr_core::data_fetch::ensure_library_with_progress(
-            &library,
-            &mut throttled_emit(&app),
-        )
-    };
-
-    if let Err(e) = result {
-        return Err(FetchErrorPayload::from(&e).to_json_string());
-    }
-    let cache = hyrr_core::data_fetch::cache_dir()
-        .map_err(|e| FetchErrorPayload::from(&e).to_json_string())?;
-    Ok(cache.join("data").to_string_lossy().to_string())
-}
-
-/// Install a `.tar.zst` previously downloaded to a local path. Wraps
-/// `data_fetch::install_from_tarball_with_progress` and emits the same
-/// `hyrr://data-fetch-progress` events so the splash bar updates while
-/// the (potentially slow) extraction runs.
-///
-/// Returns the resolved data dir on success, or a JSON-encoded
-/// [`FetchErrorPayload`] on failure (same wire shape as `ensure_data`).
-#[tauri::command]
-pub fn install_from_local_tarball(app: AppHandle, path: String) -> Result<String, String> {
-    let archive = PathBuf::from(&path);
-    if let Err(e) = hyrr_core::data_fetch::install_from_tarball_with_progress(
-        &archive,
-        &mut throttled_emit(&app),
-    ) {
-        return Err(FetchErrorPayload::from(&e).to_json_string());
-    }
-    let cache = hyrr_core::data_fetch::cache_dir()
-        .map_err(|e| FetchErrorPayload::from(&e).to_json_string())?;
-    Ok(cache.join("data").to_string_lossy().to_string())
-}
-
-/// Build a closure that emits each [`FetchProgress`] event onto
-/// `hyrr://data-fetch-progress`, throttled by the canonical policy in
-/// [`hyrr_core::data_fetch::throttle`] (100 ms interval + 256 KiB
-/// byte-step on Downloading; stage transitions and final-byte events
-/// bypass the throttle). See the throttle's docs for the full gate
-/// matrix — this site is just the IPC sink.
-fn throttled_emit(app: &AppHandle) -> impl FnMut(FetchProgress) + '_ {
-    let app = app.clone();
-    hyrr_core::data_fetch::throttle(move |p: FetchProgress| {
-        // Failure to emit means the window has closed or no listener
-        // is attached — both are recoverable from the user's
-        // perspective, so log and proceed.
-        if let Err(e) = app.emit("hyrr://data-fetch-progress", &p) {
-            eprintln!("emit data-fetch-progress: {e}");
-        }
-    })
 }
 
 /// SSoT accessors for the data-fetch path. Each command is a thin
@@ -334,21 +262,6 @@ pub fn updater_enabled() -> bool {
     {
         true
     }
-}
-
-/// Quick check from the frontend: does the cache already have everything we
-/// need to skip the splash entirely? Cheap (just file-existence checks).
-#[tauri::command]
-pub fn data_ready(library: String) -> bool {
-    if !hyrr_core::data_fetch::is_cache_complete() {
-        return false;
-    }
-    if library.is_empty() {
-        return true;
-    }
-    hyrr_core::data_fetch::cache_dir()
-        .map(|c| c.join("data").join(&library).is_dir())
-        .unwrap_or(false)
 }
 
 /// Run a full HYRR simulation. Returns SimulationResult JSON.

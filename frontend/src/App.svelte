@@ -151,16 +151,6 @@
     await finishPostDataLoad();
   }
 
-  /** "Use bundled data only" — accept the partial cache (meta/+stopping/+
-   *  catalog/+suppliers) and proceed past the splash. Yield computation
-   *  is gated, but depth preview, material picker, layer config and the
-   *  catalog browse still work. The banner-mounted "Fetch now" button
-   *  re-runs the original init flow. */
-  async function useLimitedMode(): Promise<void> {
-    setDataMode("limited");
-    loadingError = null;
-    await finishPostDataLoad();
-  }
 
   async function finishPostDataLoad(): Promise<void> {
     // Check URL for shared config — URL hash takes priority over session restore
@@ -392,7 +382,6 @@
       fallbackFraction={loadingProgress}
       {loadingError}
       onretry={retryDataLoad}
-      onuselimited={useLimitedMode}
     />
   {:else}
     <div class="app-flow">

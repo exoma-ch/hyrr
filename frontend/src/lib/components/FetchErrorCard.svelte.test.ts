@@ -2,28 +2,24 @@
  * Render-matrix coverage for `FetchErrorCard` (#169).
  *
  * The pure-function path is covered by `parse-fetch-error.test.ts`; this
- * suite asserts the rendered contract — title text, the four-button
- * visibility matrix (varies by variant × `isTauri()` × `onuselimited`
- * presence), and the callback wiring.
+ * suite asserts the rendered contract — title text, button visibility,
+ * and callback wiring.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 
-// Mock the platform helper. The mock factory must be self-contained because
-// vi.mock is hoisted above imports.
+// Mock the platform helper.
 vi.mock("../utils/platform", () => ({
   isTauri: vi.fn(() => false),
   detectOS: () => "macos",
 }));
 
-// Mock the data-fetch-meta SSoT — we don't want the test to hit the
-// (non-existent in jsdom) Tauri invoke surface.
+// Mock the data-fetch-meta SSoT.
 vi.mock("../compute/data-fetch-meta", () => ({
   getReleaseUrl: vi.fn(async () =>
     "https://github.com/exoma-ch/nucl-parquet/releases/download/data-2026.5.0/nucl-parquet-data-2026.5.0.tar.zst",
   ),
   getCacheRootPattern: vi.fn(async () => "~/.hyrr/nucl-parquet/<version>"),
-  getTarballFilename: vi.fn(async () => "nucl-parquet-data-2026.5.0.tar.zst"),
   getReleaseBaseUrl: vi.fn(async () => "https://github.com/exoma-ch/nucl-parquet"),
   getDataVersion: vi.fn(async () => "2026.5.0"),
   DEFAULT_LIBRARY: "tendl-2023-iso",
@@ -46,7 +42,6 @@ const mockedIsTauri = vi.mocked(isTauri);
 const CACHE = "/Users/x/.hyrr/nucl-parquet/v2026.5.0";
 const URL_ = "https://github.com/exoma-ch/nucl-parquet/releases/download/data-2026.5.0/nucl-parquet-data-2026.5.0.tar.zst";
 
-/** One representative payload per parsed-error variant. Seven entries. */
 const variants: Array<{ name: string; payload: ParsedFetchError; carriesUrl: boolean }> = [
   {
     name: "HttpStatus",
@@ -74,8 +69,6 @@ const variants: Array<{ name: string; payload: ParsedFetchError; carriesUrl: boo
   },
   {
     name: "Decompress",
-    // Variants without a `url` field fall back to the SSoT `releaseUrl`
-    // mock above, so the "Open URL" button still renders after onMount.
     carriesUrl: true,
     payload: {
       kind: "FetchError",
@@ -127,7 +120,6 @@ const variants: Array<{ name: string; payload: ParsedFetchError; carriesUrl: boo
   },
 ];
 
-/** Wait one microtask + a tick for onMount + $derived to settle. */
 async function flush() {
   await new Promise((r) => setTimeout(r, 0));
 }
@@ -147,8 +139,6 @@ describe("FetchErrorCard — title text matches fetchErrorTitle()", () => {
         onretry: vi.fn(),
       });
       await flush();
-      // Title text is the SSoT — couples the rendered header to the same
-      // string the support triage uses.
       expect(getByText(fetchErrorTitle(payload))).toBeInTheDocument();
     });
   }
@@ -156,19 +146,17 @@ describe("FetchErrorCard — title text matches fetchErrorTitle()", () => {
 
 describe("FetchErrorCard — Retry button is always rendered", () => {
   for (const { name, payload } of variants) {
-    for (const desktop of [false, true]) {
-      it(`shows Retry for ${name} (isTauri=${desktop})`, async () => {
-        mockedIsTauri.mockReturnValue(desktop);
-        const { getByRole } = render(FetchErrorCard, {
-          error: payload,
-          onretry: vi.fn(),
-        });
-        await flush();
-        const retry = getByRole("button", { name: /retry/i });
-        expect(retry).toBeInTheDocument();
-        expect(retry).not.toBeDisabled();
+    it(`shows Retry for ${name}`, async () => {
+      mockedIsTauri.mockReturnValue(false);
+      const { getByRole } = render(FetchErrorCard, {
+        error: payload,
+        onretry: vi.fn(),
       });
-    }
+      await flush();
+      const retry = getByRole("button", { name: /retry/i });
+      expect(retry).toBeInTheDocument();
+      expect(retry).not.toBeDisabled();
+    });
   }
 });
 
@@ -184,8 +172,6 @@ describe("FetchErrorCard — Open URL button visibility tracks triedUrl", () => 
   });
 
   it("renders Open URL for variants without a URL via the SSoT fallback", async () => {
-    // Decompress carries no url field; the component falls back to
-    // `getReleaseUrl()` (mocked above to return a non-empty string).
     mockedIsTauri.mockReturnValue(false);
     const { queryByRole } = render(FetchErrorCard, {
       error: variants[2].payload,
@@ -193,49 +179,6 @@ describe("FetchErrorCard — Open URL button visibility tracks triedUrl", () => 
     });
     await flush();
     expect(queryByRole("button", { name: /open url/i })).toBeInTheDocument();
-  });
-});
-
-describe("FetchErrorCard — desktop-only buttons gated by isTauri()", () => {
-  it("hides Install/Use-bundled in browser mode (isTauri=false)", async () => {
-    mockedIsTauri.mockReturnValue(false);
-    const { queryByRole } = render(FetchErrorCard, {
-      error: variants[0].payload,
-      onretry: vi.fn(),
-      onuselimited: vi.fn(),
-    });
-    await flush();
-    expect(
-      queryByRole("button", { name: /install from local tarball/i }),
-    ).toBeNull();
-    expect(queryByRole("button", { name: /use bundled data only/i })).toBeNull();
-  });
-
-  it("shows Install in desktop mode (isTauri=true)", async () => {
-    mockedIsTauri.mockReturnValue(true);
-    const { queryByRole } = render(FetchErrorCard, {
-      error: variants[0].payload,
-      onretry: vi.fn(),
-    });
-    await flush();
-    expect(
-      queryByRole("button", { name: /install from local tarball/i }),
-    ).toBeInTheDocument();
-    // Without onuselimited, the bundled button stays hidden even on desktop.
-    expect(queryByRole("button", { name: /use bundled data only/i })).toBeNull();
-  });
-
-  it("shows Use-bundled only when isTauri=true AND onuselimited provided", async () => {
-    mockedIsTauri.mockReturnValue(true);
-    const { queryByRole } = render(FetchErrorCard, {
-      error: variants[0].payload,
-      onretry: vi.fn(),
-      onuselimited: vi.fn(),
-    });
-    await flush();
-    expect(
-      queryByRole("button", { name: /use bundled data only/i }),
-    ).toBeInTheDocument();
   });
 });
 
@@ -252,31 +195,13 @@ describe("FetchErrorCard — callbacks fire on button click", () => {
     expect(onretry).toHaveBeenCalledTimes(1);
   });
 
-  it("Use bundled data only → onuselimited()", async () => {
-    mockedIsTauri.mockReturnValue(true);
-    const onretry = vi.fn();
-    const onuselimited = vi.fn();
-    const { getByRole } = render(FetchErrorCard, {
-      error: variants[0].payload,
-      onretry,
-      onuselimited,
-    });
-    await flush();
-    await fireEvent.click(
-      getByRole("button", { name: /use bundled data only/i }),
-    );
-    expect(onuselimited).toHaveBeenCalledTimes(1);
-    // The use-bundled handler must not also kick a retry.
-    expect(onretry).not.toHaveBeenCalled();
-  });
-
   it("Open URL → openExternalUrl(triedUrl)", async () => {
     mockedIsTauri.mockReturnValue(false);
     const { openExternalUrl } = await import("../utils/open-url");
     const mocked = vi.mocked(openExternalUrl);
     mocked.mockClear();
     const { getByRole } = render(FetchErrorCard, {
-      error: variants[0].payload, // HttpStatus carries url=URL_
+      error: variants[0].payload,
       onretry: vi.fn(),
     });
     await flush();

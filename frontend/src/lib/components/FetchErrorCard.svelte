@@ -18,19 +18,16 @@
     fetchErrorTitle,
   } from "../utils/parse-fetch-error";
   import { openExternalUrl } from "../utils/open-url";
-  import { isTauri } from "../utils/platform";
   import {
     getReleaseUrl,
     getCacheRootPattern,
-    getTarballFilename,
   } from "../compute/data-fetch-meta";
 
   type Props = {
     error: ParsedFetchError;
     onretry: () => void;
-    onuselimited?: () => void;
   };
-  let { error, onretry, onuselimited }: Props = $props();
+  let { error, onretry }: Props = $props();
 
   // SSoT-resolved values (Tauri only). Browser mode falls through to
   // the URL/cache_dir already in the error payload (if any) — both are
@@ -38,17 +35,13 @@
   // they're identical-by-construction.
   let releaseUrl = $state<string | null>(null);
   let cacheRoot = $state<string | null>(null);
-  let tarballName = $state<string | null>(null);
 
   onMount(async () => {
-    [releaseUrl, cacheRoot, tarballName] = await Promise.all([
+    [releaseUrl, cacheRoot] = await Promise.all([
       getReleaseUrl(),
       getCacheRootPattern(),
-      getTarballFilename(),
     ]);
   });
-
-  const desktop = $derived(isTauri());
 
   const triedUrl = $derived(
     error.kind === "FetchError" &&
@@ -60,45 +53,9 @@
     error.kind === "FetchError" && "cache_dir" in error ? error.cache_dir : (cacheRoot ?? ""),
   );
 
-  let busy = $state(false);
-  let installError = $state<string | null>(null);
-
   async function onOpenUrl() {
     if (!triedUrl) return;
     await openExternalUrl(triedUrl);
-  }
-
-  async function onInstallLocal() {
-    if (!desktop) return;
-    busy = true;
-    installError = null;
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const filterName = tarballName ? `Tarball (${tarballName})` : "Tarball";
-      const path = await open({
-        multiple: false,
-        directory: false,
-        filters: [
-          { name: filterName, extensions: ["zst", "tar.zst"] },
-          { name: "All files", extensions: ["*"] },
-        ],
-      });
-      if (typeof path !== "string" || !path) return;
-
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke<string>("install_from_local_tarball", { path });
-      // On success, kick the parent to retry the init flow — the
-      // cache is now populated and the next ensure_data short-circuits.
-      onretry();
-    } catch (e) {
-      installError = e instanceof Error ? e.message : String(e);
-    } finally {
-      busy = false;
-    }
-  }
-
-  function onUseBundled() {
-    onuselimited?.();
   }
 </script>
 
@@ -127,37 +84,22 @@
 
   <section class="explanation">
     <p class="message">{error.message || fetchErrorTitle(error)}</p>
-    {#if installError}
-      <p class="install-error">Install failed: <code>{installError}</code></p>
-    {/if}
   </section>
 
   <footer class="actions">
-    <button type="button" class="primary" onclick={onretry} disabled={busy}>
+    <button type="button" class="primary" onclick={onretry}>
       Retry
     </button>
     {#if triedUrl}
-      <button type="button" onclick={onOpenUrl} disabled={busy}>
+      <button type="button" onclick={onOpenUrl}>
         Open URL in browser
       </button>
     {/if}
-    {#if desktop}
-      <button type="button" onclick={onInstallLocal} disabled={busy}>
-        Install from local tarball…
-      </button>
-      {#if onuselimited}
-        <button type="button" onclick={onUseBundled} disabled={busy}>
-          Use bundled data only
-        </button>
-      {/if}
-    {/if}
   </footer>
 
-  {#if tarballName}
-    <p class="cli-hint">
-      Or from a terminal: <code>hyrr fetch-data --offline-bundle path/to/{tarballName}</code>
-    </p>
-  {/if}
+  <p class="cli-hint">
+    Or from a terminal: <code>hyrr fetch-data</code>
+  </p>
 </div>
 
 <style>
@@ -215,11 +157,6 @@
   .explanation .message {
     margin: 0.5rem 0;
     line-height: 1.4;
-  }
-  .install-error {
-    color: var(--c-red, #d23f3f);
-    margin: 0.4rem 0 0;
-    font-size: 0.85rem;
   }
   .actions {
     display: flex;
