@@ -262,17 +262,10 @@ pub fn run_compute_stack(
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
     let db = guard.as_mut().ok_or("Data store not initialized")?;
 
-    // Load cross-sections for all elements in all layers
-    let projectile_str = &config.beam.projectile;
-    for lc in &config.layers {
-        let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref());
-        for (elem, _) in &resolution.elements {
-            db.load_xs(projectile_str, elem.z)
-                .map_err(|e| format!("Failed to load XS: {e}"))?;
-        }
-    }
+    // Cross-sections are loaded on demand by EmbeddedDataStore::get_cross_sections
+    // (via ensure_xs). No explicit load_xs call needed.
 
-    let projectile = ProjectileType::from_str(projectile_str)
+    let projectile = ProjectileType::from_str(&config.beam.projectile)
         .ok_or_else(|| format!("Invalid projectile: {projectile_str}"))?;
 
     let layers = config_to_layers(db, &config);
