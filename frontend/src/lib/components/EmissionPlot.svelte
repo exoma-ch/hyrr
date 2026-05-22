@@ -251,8 +251,6 @@
     const isBeta = BETA_TABS.has(activeEmTab);
     const isBetaPlus = activeEmTab === "beta+";
 
-    // For β tabs: accumulate sum envelope
-    const sumBins: Map<number, number> = new Map();
 
     for (const agg of aggregated) {
       const tabRadTypes = EMISSION_TABS.find((t) => t.id === activeEmTab)?.radTypes ?? ["gamma"];
@@ -309,12 +307,6 @@
         if (!combinedX || !combinedY) continue;
         hasAnyLines = true;
 
-        // Add to sum envelope
-        for (let i = 0; i < combinedX.length; i++) {
-          const e = Math.round(combinedX[i] * 10) / 10; // bin to 0.1 keV
-          sumBins.set(e, (sumBins.get(e) ?? 0) + combinedY[i]);
-        }
-
         const color = TRACE_COLORS[colorIdx % TRACE_COLORS.length];
         traces.push({
           x: combinedX,
@@ -354,18 +346,44 @@
       }
     }
 
-    // β sum envelope (dashed, no hover)
-    if (isBeta && sumBins.size > 0 && traces.length > 1) {
-      const sorted = [...sumBins.entries()].sort((a, b) => a[0] - b[0]);
-      traces.push({
-        x: sorted.map(([e]) => e),
-        y: sorted.map(([, r]) => r),
-        type: "scatter",
-        mode: "lines",
-        line: { color: "#fff", width: 2, dash: "dash" },
-        name: "Sum",
-        hoverinfo: "skip",
-      });
+    // β sum envelope: sample all isotope traces on a shared grid
+    if (isBeta && traces.length > 1) {
+      const betaTraces = traces.filter((t: any) => t.type === "scatter");
+      if (betaTraces.length > 1) {
+        const allX = betaTraces.flatMap((t: any) => t.x as number[]);
+        const eMax = Math.max(...allX);
+        const nGrid = 200;
+        const grid: number[] = [];
+        for (let i = 0; i <= nGrid; i++) grid.push((i / nGrid) * eMax);
+
+        const sumY = new Array(grid.length).fill(0);
+        for (const t of betaTraces) {
+          const tx = t.x as number[];
+          const ty = t.y as number[];
+          for (let gi = 0; gi < grid.length; gi++) {
+            const e = grid[gi];
+            // Linear interpolation into this trace's data
+            if (e <= tx[0]) { sumY[gi] += ty[0]; continue; }
+            if (e >= tx[tx.length - 1]) continue; // beyond endpoint → 0
+            let lo = 0;
+            for (let j = 1; j < tx.length; j++) {
+              if (tx[j] >= e) { lo = j - 1; break; }
+            }
+            const frac = (e - tx[lo]) / (tx[lo + 1] - tx[lo]);
+            sumY[gi] += ty[lo] + frac * (ty[lo + 1] - ty[lo]);
+          }
+        }
+
+        traces.push({
+          x: grid,
+          y: sumY,
+          type: "scatter",
+          mode: "lines",
+          line: { color: "#fff", width: 2, dash: "dash" },
+          name: "Sum",
+          hoverinfo: "skip",
+        });
+      }
     }
 
     // For discrete tabs: sort by max rate (tallest bar frontmost for hover)
