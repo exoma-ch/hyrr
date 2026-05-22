@@ -68,10 +68,6 @@ export async function getDataVersion(): Promise<string | null> {
   return (await loadMeta())?.dataVersion ?? null;
 }
 
-export async function getTarballFilename(): Promise<string | null> {
-  return (await loadMeta())?.tarballFilename ?? null;
-}
-
 export async function getCacheRootPattern(): Promise<string | null> {
   return (await loadMeta())?.cacheRootPattern ?? null;
 }
