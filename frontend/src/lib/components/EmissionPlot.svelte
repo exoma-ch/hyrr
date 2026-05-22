@@ -40,6 +40,7 @@
   let plotDiv = $state<HTMLDivElement | null>(null);
   let Plotly = $state<any>(null);
 
+  let logX = $state(false);
   let logY = $state(false);
   let activeEmTab = $state<EmTabId>("gamma");
   /** "eob" or "eoc" — which time to evaluate activity at. */
@@ -51,6 +52,31 @@
 
   let selected = $derived(getSelectedIsotopes());
   let sharedFilter = $derived(getIsotopeFilter());
+
+  /** Which tabs have emission data for the current filtered isotopes. */
+  let tabHasData = $derived.by((): Record<string, boolean> => {
+    const db = getDataStore();
+    if (!db?.emissionDataLoaded) return {};
+    const has: Record<string, boolean> = {};
+    // Collect all isotopes passing the filter (same logic as render)
+    const isos: { Z: number; A: number }[] = [];
+    for (const layer of (result?.layers ?? [])) {
+      if (sharedFilter.layers.size > 0 && !sharedFilter.layers.has(layer.layer_index)) continue;
+      for (const iso of layer.isotopes) {
+        if (iso.half_life_s === null || iso.activity_Bq <= 0) continue;
+        if (sharedFilter.text && !iso.name.toLowerCase().includes(sharedFilter.text.toLowerCase())) continue;
+        if (selected.size > 0 && !selected.has(iso.name)) continue;
+        isos.push({ Z: iso.Z, A: iso.A });
+      }
+    }
+    for (const tab of EMISSION_TABS) {
+      has[tab.id] = isos.some((iso) => {
+        const emissions = db.getEmissions(iso.Z, iso.A);
+        return emissions.some((e) => tab.radTypes.includes(e.radType));
+      });
+    }
+    return has;
+  });
 
   onMount(async () => {
     Plotly = await import("plotly.js-dist-min");
@@ -67,7 +93,8 @@
     const _result = result;
     const _sel = selected;
     const _tp = timePoint;
-    const _log = logY;
+    const _logX = logX;
+    const _logY = logY;
     const _emTab = activeEmTab;
     const _filter = JSON.stringify(sharedFilter);
     const _theme = getResolvedTheme();
@@ -239,6 +266,7 @@
       xaxis: {
         title: { text: "Energy (keV)" },
         gridcolor: tc.border,
+        type: logX ? "log" : "linear",
       },
       yaxis: {
         title: { text: "Emission rate (/s)" },
@@ -275,6 +303,7 @@
       <button
         class="ctrl-btn"
         class:active={activeEmTab === tab.id}
+        disabled={tabHasData[tab.id] === false}
         onclick={() => { activeEmTab = tab.id; }}
       >
         {tab.label}
@@ -300,6 +329,9 @@
 
     <div class="separator"></div>
 
+    <button class="ctrl-btn" class:active={logX} onclick={() => { logX = !logX; }}>
+      log X
+    </button>
     <button class="ctrl-btn" class:active={logY} onclick={() => { logY = !logY; }}>
       log Y
     </button>
