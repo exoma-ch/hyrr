@@ -100,8 +100,9 @@ jobs:
           Pop-Location
           echo "$driverDir" | Out-File -Append -FilePath $env:GITHUB_PATH
 
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --locked
+      - name: Install tauri-cli + tauri-driver
+        run: |
+          cargo install tauri-cli tauri-driver --locked
 
       - uses: actions/setup-node@v6
         with:
@@ -117,12 +118,9 @@ jobs:
             npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
           fi
 
-      - name: Build frontend
-        working-directory: frontend
-        run: npm run build
-
       - name: Build Tauri app (debug, no bundle)
-        run: cargo build --manifest-path desktop/src-tauri/Cargo.toml
+        working-directory: desktop
+        run: cargo tauri build --debug --no-bundle
 
       - name: Verify binary exists
         run: ls -la "${{ matrix.binary }}"
