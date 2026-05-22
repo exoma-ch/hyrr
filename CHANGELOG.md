@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/exoma-ch/hyrr/compare/v0.8.0...v0.9.0) (2026-05-22)
+
+
+### Features
+
+* complete [#219](https://github.com/exoma-ch/hyrr/issues/219) P0 — logX toggle, tab greying, polished plot ([#287](https://github.com/exoma-ch/hyrr/issues/287)) ([d9b36f3](https://github.com/exoma-ch/hyrr/commit/d9b36f3e4ffb3d37b6c75f0eb40cc7478befd5e5))
+* continuous β spectrum rendering (Fermi function) ([#290](https://github.com/exoma-ch/hyrr/issues/290)) ([#291](https://github.com/exoma-ch/hyrr/issues/291)) ([8d51cc4](https://github.com/exoma-ch/hyrr/commit/8d51cc4ec9d68eae8efdf39ecb251b4fbdfdce5d))
+* **core:** replace ParquetDataStore with nucl-parquet SSoT adapter ([#249](https://github.com/exoma-ch/hyrr/issues/249)) ([e87e2e8](https://github.com/exoma-ch/hyrr/commit/e87e2e80b85d1562a1e0849ebb8323fbc3d3985f))
+* **data:** bump nucl-parquet to data-2026.5.1 + wire catima & compound stopping ([#222](https://github.com/exoma-ch/hyrr/issues/222)) ([1f37da8](https://github.com/exoma-ch/hyrr/commit/1f37da811aae6e749d61d54af7dabeea9dbd3b66))
+* EmbeddedDataStore — nuclear data baked into binary ([#274](https://github.com/exoma-ch/hyrr/issues/274)) ([#276](https://github.com/exoma-ch/hyrr/issues/276)) ([3f1c869](https://github.com/exoma-ch/hyrr/commit/3f1c869eb82d1e3b4a74d357fcacfe4eae7e3111))
+* emission plot tabs + empty state + hover UX ([#284](https://github.com/exoma-ch/hyrr/issues/284)) ([17fd734](https://github.com/exoma-ch/hyrr/commit/17fd734bb6b3cd8c1e015f8f7242cd5310ffb385))
+* **frontend:** edit-as-custom for all materials + "New material" row ([#214](https://github.com/exoma-ch/hyrr/issues/214)) ([#220](https://github.com/exoma-ch/hyrr/issues/220)) ([202315f](https://github.com/exoma-ch/hyrr/commit/202315f60c7e4b2e5c457f7e392cda2cc169596d))
+* **frontend:** emission tabs (α/β⁻/β⁺/EC/γ) + readParquetRows stack fix ([#201](https://github.com/exoma-ch/hyrr/issues/201)) ([#230](https://github.com/exoma-ch/hyrr/issues/230)) ([f95ef4e](https://github.com/exoma-ch/hyrr/commit/f95ef4efed1aeff932046fcf47d73c65183a3d07))
+* **frontend:** per-isotope γ emission table in IsotopePopup ([#201](https://github.com/exoma-ch/hyrr/issues/201)) ([#223](https://github.com/exoma-ch/hyrr/issues/223)) ([8c21ae2](https://github.com/exoma-ch/hyrr/commit/8c21ae2d343cf7749a66cf6d2eb2287b93d1a2ec))
+* **frontend:** stack-level γ emission Rate vs E plot ([#219](https://github.com/exoma-ch/hyrr/issues/219)) ([#232](https://github.com/exoma-ch/hyrr/issues/232)) ([32a6b76](https://github.com/exoma-ch/hyrr/commit/32a6b76ee7b8b83f7ca741ccb801a32b1da8c41a))
+* **frontend:** sticky beam bar + section nav + table UX ([#236](https://github.com/exoma-ch/hyrr/issues/236), [#237](https://github.com/exoma-ch/hyrr/issues/237), [#238](https://github.com/exoma-ch/hyrr/issues/238)) ([#239](https://github.com/exoma-ch/hyrr/issues/239)) ([010cb45](https://github.com/exoma-ch/hyrr/commit/010cb45a06e0eae277010e24063583fef1370603))
+* lazy per-file data fetch for hyrr-mcp (nucl-parquet v0.13.5) ([#275](https://github.com/exoma-ch/hyrr/issues/275)) ([eeaed51](https://github.com/exoma-ch/hyrr/commit/eeaed51e44f93467704fb55e497e5f5ab62040f2))
+* NIST compound stopping pipeline ([#292](https://github.com/exoma-ch/hyrr/issues/292)) ([#293](https://github.com/exoma-ch/hyrr/issues/293)) ([9001b07](https://github.com/exoma-ch/hyrr/commit/9001b070b847c04dbb4129b5f23d8f36d5f70b1f))
+* offline-first data + data-fetch test coverage ([#263](https://github.com/exoma-ch/hyrr/issues/263), [#264](https://github.com/exoma-ch/hyrr/issues/264)) ([#271](https://github.com/exoma-ch/hyrr/issues/271)) ([beead1f](https://github.com/exoma-ch/hyrr/commit/beead1fecef616cbb59e1d28034c4dcc8304bc38))
+* preset golden tests as staging release gate ([#286](https://github.com/exoma-ch/hyrr/issues/286)) ([a55ce96](https://github.com/exoma-ch/hyrr/commit/a55ce96e8bb5294675b2c6b63f0f93adb5716409))
+* **python:** delegate DataStore to nucl-parquet DuckDB client ([#257](https://github.com/exoma-ch/hyrr/issues/257)) ([#261](https://github.com/exoma-ch/hyrr/issues/261)) ([c24d1e7](https://github.com/exoma-ch/hyrr/commit/c24d1e7ff8002a5406d5e5903455e31e34ab877c))
+* wire EmbeddedDataStore into Tauri, kill resource bundling ([#274](https://github.com/exoma-ch/hyrr/issues/274)) ([#277](https://github.com/exoma-ch/hyrr/issues/277)) ([279a8b8](https://github.com/exoma-ch/hyrr/commit/279a8b84fca3a09b6c96a869726ba4f99ee43406))
+* α emission tab + compound stopping (nucl-parquet v0.13.6) ([#289](https://github.com/exoma-ch/hyrr/issues/289)) ([2bc0afc](https://github.com/exoma-ch/hyrr/commit/2bc0afc7f517bed247c9cb1bd0da5b20b277b626))
+
+
+### Bug Fixes
+
+* **ci:** add nudex_level_gammas.parquet to e2e workflow data copy ([#201](https://github.com/exoma-ch/hyrr/issues/201)) ([#228](https://github.com/exoma-ch/hyrr/issues/228)) ([7306ad0](https://github.com/exoma-ch/hyrr/commit/7306ad0c3747dfc4ea0f2d3ef28c7c244a427c09))
+* **compute:** handle beam-stopped-upstream layers without crashing ([#211](https://github.com/exoma-ch/hyrr/issues/211)) ([#212](https://github.com/exoma-ch/hyrr/issues/212)) ([580742b](https://github.com/exoma-ch/hyrr/commit/580742b7c553b6096431ae7fdf3f1ce3844c0df4))
+* **compute:** isomeric state mismatch — decay lookup + xs dedup + data-2026.5.4 ([#252](https://github.com/exoma-ch/hyrr/issues/252)) ([#253](https://github.com/exoma-ch/hyrr/issues/253)) ([4d011de](https://github.com/exoma-ch/hyrr/commit/4d011dec58309c87ff9277d52e0a866535cbe8ac))
+* **ecard:** use SSoT theme tokens — was unreadable in dark mode ([#213](https://github.com/exoma-ch/hyrr/issues/213) follow-up) ([#216](https://github.com/exoma-ch/hyrr/issues/216)) ([b79b57e](https://github.com/exoma-ch/hyrr/commit/b79b57eb7070ac3ffeb512182a55a49d28f06058))
+* emission plot hover — closest mode, prioritize tallest bar ([#285](https://github.com/exoma-ch/hyrr/issues/285)) ([12c13cd](https://github.com/exoma-ch/hyrr/commit/12c13cd80e3c48abdb52af7f05ce1e76c6f9e016))
+* emission UX — 511 keV in γ tab, wider hover targets, unified hover ([#283](https://github.com/exoma-ch/hyrr/issues/283)) ([939e415](https://github.com/exoma-ch/hyrr/commit/939e4156268f1b989423cfe0ecadcfc2e04b0b97))
+* **emissions:** absolute per-decay intensities from nucl-parquet data-2026.5.2 ([#244](https://github.com/exoma-ch/hyrr/issues/244)) ([99ed669](https://github.com/exoma-ch/hyrr/commit/99ed669ec047ca95bbb9a484fc71aad1acc4abed))
+* **enrichment:** natural-fill partial vectors + guard Apply on invalid sums ([#217](https://github.com/exoma-ch/hyrr/issues/217)) ([#218](https://github.com/exoma-ch/hyrr/issues/218)) ([76ea62e](https://github.com/exoma-ch/hyrr/commit/76ea62e85f5ba94f13cb79b12c9419fa339b4f49))
+* **errors:** layer-attributed StoppingError + honest ECard + kill NaN panic ([#213](https://github.com/exoma-ch/hyrr/issues/213)) ([#213](https://github.com/exoma-ch/hyrr/issues/213)) ([0cdc17b](https://github.com/exoma-ch/hyrr/commit/0cdc17b4dcfb35fdc835dd0a820a5c41bedc9957))
+* **frontend:** iOS mobile bugs — dose display, input overflow, unit UX ([#233](https://github.com/exoma-ch/hyrr/issues/233) [#234](https://github.com/exoma-ch/hyrr/issues/234) [#235](https://github.com/exoma-ch/hyrr/issues/235)) ([#241](https://github.com/exoma-ch/hyrr/issues/241)) ([aff7bc3](https://github.com/exoma-ch/hyrr/commit/aff7bc3bd23090532c1a50362d1d2f801675eee0))
+* **frontend:** readParquetRows stack overflow + emission threshold grouping ([#201](https://github.com/exoma-ch/hyrr/issues/201)) ([#229](https://github.com/exoma-ch/hyrr/issues/229)) ([ead5293](https://github.com/exoma-ch/hyrr/commit/ead529339528c6b018a7976e50dc664d78ce70b7))
+* **frontend:** remove heavy-ion projectiles until XS routing wired ([#267](https://github.com/exoma-ch/hyrr/issues/267)) ([3c2426e](https://github.com/exoma-ch/hyrr/commit/3c2426eb94b2f7b20e70be0606584ee8a12fd040)), closes [#266](https://github.com/exoma-ch/hyrr/issues/266)
+* **frontend:** β⁺ endpoint energy + γ relative intensity labeling ([#240](https://github.com/exoma-ch/hyrr/issues/240), [#242](https://github.com/exoma-ch/hyrr/issues/242)) ([#243](https://github.com/exoma-ch/hyrr/issues/243)) ([c94f822](https://github.com/exoma-ch/hyrr/commit/c94f822b0cfe1bc2c21b129e992b270dd73a545f))
+* include 511 keV annihilation in emission plot + preset golden tests ([#282](https://github.com/exoma-ch/hyrr/issues/282)) ([062ba72](https://github.com/exoma-ch/hyrr/commit/062ba72772f827dfc4ce5451af0fd92f3f106d3e))
+* **python:** normalize 'g'→'' decay lookup + xs dedup in DataStore ([#254](https://github.com/exoma-ch/hyrr/issues/254)) ([#255](https://github.com/exoma-ch/hyrr/issues/255)) ([5765679](https://github.com/exoma-ch/hyrr/commit/57656797f56a1388296aa939f9bfec4e4fe6a174))
+* read bundled data in-place, eliminate download/cache flow ([#272](https://github.com/exoma-ch/hyrr/issues/272)) ([2207798](https://github.com/exoma-ch/hyrr/commit/22077983e16fe8972e978d59592bab2fa4a69f83)), closes [#264](https://github.com/exoma-ch/hyrr/issues/264)
+* SSoT for DEFAULT_LIBRARY via hyrr.json ([#269](https://github.com/exoma-ch/hyrr/issues/269)) ([#270](https://github.com/exoma-ch/hyrr/issues/270)) ([d0659d5](https://github.com/exoma-ch/hyrr/commit/d0659d5f641158e985725791cbfe5b8631c81849))
+* switch default library to tendl-2023-iso (isomeric splitting) ([#265](https://github.com/exoma-ch/hyrr/issues/265)) ([#268](https://github.com/exoma-ch/hyrr/issues/268)) ([c737571](https://github.com/exoma-ch/hyrr/commit/c737571924e4d815c48f1f5570b814f9d21c70dd))
+* WASM parseFormula static→instance, preset golden tests ([#279](https://github.com/exoma-ch/hyrr/issues/279)) ([#280](https://github.com/exoma-ch/hyrr/issues/280)) ([1dd683f](https://github.com/exoma-ch/hyrr/commit/1dd683f355a3de16d8e3898d4ffa4361a532a317))
+* wire compound stopping (nucl-parquet v0.13.6) + emission plot polish ([#288](https://github.com/exoma-ch/hyrr/issues/288)) ([b4531a0](https://github.com/exoma-ch/hyrr/commit/b4531a04cd821784410259d577e411370a9fc619))
+* β spectrum sum envelope on shared interpolated grid ([#294](https://github.com/exoma-ch/hyrr/issues/294)) ([08e2653](https://github.com/exoma-ch/hyrr/commit/08e2653545d5fab636dee87508c00098fc358692))
+
+
+### Tests
+
+* **compute:** matrix emission test — 7 γ isotopes + 6 decay channels ([#201](https://github.com/exoma-ch/hyrr/issues/201)) ([#231](https://github.com/exoma-ch/hyrr/issues/231)) ([575dcfb](https://github.com/exoma-ch/hyrr/commit/575dcfb62d3abcbc98443803059be96631b484e8))
+* **desktop:** Tauri WebDriver smoke tests ([#188](https://github.com/exoma-ch/hyrr/issues/188)) ([4bca814](https://github.com/exoma-ch/hyrr/commit/4bca8141bdbf249ca1b423582c85d963140f58ff))
+* EmbeddedDataStore integration tests + CI ([#274](https://github.com/exoma-ch/hyrr/issues/274)) ([#278](https://github.com/exoma-ch/hyrr/issues/278)) ([e7433be](https://github.com/exoma-ch/hyrr/commit/e7433bead2aa801f1efb6c3e1c82a34df70c5b9c))
+
+
+### Miscellaneous
+
+* **deps:** bump actions/cache from 4 to 5 ([#226](https://github.com/exoma-ch/hyrr/issues/226)) ([dc4d7ae](https://github.com/exoma-ch/hyrr/commit/dc4d7ae966fa530ea3c89c7e19ced726c0bb6256))
+* **deps:** bump actions/setup-node from 4 to 6 ([#225](https://github.com/exoma-ch/hyrr/issues/225)) ([7b335d2](https://github.com/exoma-ch/hyrr/commit/7b335d2ee2862bd9304730ad44482c68b95c8347))
+* **deps:** bump hyparquet-writer from 0.14.0 to 0.15.1 in /frontend ([#227](https://github.com/exoma-ch/hyrr/issues/227)) ([91d3f86](https://github.com/exoma-ch/hyrr/commit/91d3f86151e04b3eb3735cb1d6fccc4c5a2f8847))
+* devendor data/parquet/ from git — download on demand ([#259](https://github.com/exoma-ch/hyrr/issues/259)) ([#262](https://github.com/exoma-ch/hyrr/issues/262)) ([0ed4ff4](https://github.com/exoma-ch/hyrr/commit/0ed4ff4725538774d9ba773235f8b0f07a7d4e91))
+* remove dead limited-mode code ([#273](https://github.com/exoma-ch/hyrr/issues/273)) ([8e31d2e](https://github.com/exoma-ch/hyrr/commit/8e31d2ebcf2f90a350fe8b9358044a76ae0e5a19))
+
+
+### CI
+
+* copies decay_detailed.parquet in deploy, promote, and e2e workflows. ([f95ef4e](https://github.com/exoma-ch/hyrr/commit/f95ef4efed1aeff932046fcf47d73c65183a3d07))
+
 ## [0.8.0] — 2026-05-13
 
 The **Local-first** release. Three architectural shifts let HYRR run as an
