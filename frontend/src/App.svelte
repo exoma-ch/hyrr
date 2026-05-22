@@ -67,7 +67,6 @@
   import DownloadLinks from "./lib/components/DownloadLinks.svelte";
   import UpdatePrompt from "./lib/components/UpdatePrompt.svelte";
   import DataFetchSplash from "./lib/components/DataFetchSplash.svelte";
-  import { getDataMode, setDataMode, resetDataMode } from "./lib/stores/data-mode.svelte";
   import { checkForUpdate, type PendingUpdate } from "./lib/updater";
 
   let loadingState = $state("Initializing...");
@@ -88,7 +87,6 @@
   let computeError = $derived(getComputeError());
   let resultError = $derived(getResultError());
   let historyOpen = $derived(getHistoryOpen());
-  let dataMode = $derived(getDataMode());
 
   // Popup state
   let materialPopupOpen = $state(false);
@@ -145,7 +143,6 @@
   /** Retry the cold-cache fetch from the recovery card. Re-runs the
    *  full post-load init only if the data load succeeds. */
   async function retryDataLoad(): Promise<void> {
-    resetDataMode();
     const ok = await runInitialDataLoad();
     if (!ok) return;
     await finishPostDataLoad();
@@ -345,20 +342,6 @@
 <main>
   <HeaderBar />
 
-  {#if ready && dataMode === "limited"}
-    <div class="limited-banner" role="status">
-      <span>
-        <strong>Limited mode</strong> — running with bundled stopping-power data only.
-        Yield computation is unavailable until you fetch full nuclear data.
-      </span>
-      <div class="limited-actions">
-        <button type="button" class="limited-fetch" onclick={retryDataLoad}>
-          Fetch now
-        </button>
-      </div>
-    </div>
-  {/if}
-
   {#if showSchemaBreakBanner}
     <div class="schema-break-banner" role="status">
       <span>
@@ -553,33 +536,6 @@
     border-radius: 3px;
   }
   .schema-break-close:hover { color: var(--c-text); background: var(--c-bg-default); }
-  .limited-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.6rem;
-    background: var(--c-gold-tint, var(--c-bg-muted));
-    color: var(--c-text);
-    padding: 0.5rem 0.9rem;
-    font-size: 0.82rem;
-    border-bottom: 1px solid var(--c-border);
-  }
-  .limited-actions {
-    display: flex;
-    gap: 0.4rem;
-  }
-  .limited-fetch {
-    padding: 0.25rem 0.7rem;
-    background: var(--c-accent);
-    color: #fff;
-    border: 1px solid transparent;
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 0.78rem;
-  }
-  .limited-fetch:hover {
-    background: var(--c-accent-hover);
-  }
   /* ─── Theme tokens ─── */
   :global(:root),
   :global([data-theme="dark"]) {
