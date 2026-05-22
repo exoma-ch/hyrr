@@ -68,7 +68,7 @@ const PROJECTILES: &[&str] = &[
 #[test]
 #[ignore = "requires bundled nucl-parquet data; run with --include-ignored after submodule init"]
 fn every_supported_projectile_computes_without_panic() {
-    let Some(mut db) = make_db("tendl-2025") else {
+    let Some(mut db) = make_db("tendl-2023-iso") else {
         eprintln!("skipping: no nucl-parquet data dir found (set HYRR_DATA or init the submodule)");
         return;
     };
@@ -108,7 +108,7 @@ fn every_supported_projectile_computes_without_panic() {
 #[test]
 #[ignore = "requires bundled nucl-parquet data; run with --include-ignored after submodule init"]
 fn unsupported_heavy_ion_returns_typed_error_not_panic() {
-    let Some(mut db) = make_db("tendl-2025") else {
+    let Some(mut db) = make_db("tendl-2023-iso") else {
         eprintln!("skipping: no nucl-parquet data dir found");
         return;
     };
@@ -151,7 +151,7 @@ fn thick_target_residual_below_table_min_returns_typed_error_not_panic() {
     // below catima table_min. A thick Cu foil with a heavy-ion projectile
     // brings residual energy below 0.012 MeV (catima_C12 table_min) — must
     // surface as Err(EnergyOutOfRange), not a panic.
-    let Some(mut db) = make_db("tendl-2025") else {
+    let Some(mut db) = make_db("tendl-2023-iso") else {
         eprintln!("skipping: no nucl-parquet data dir found");
         return;
     };
@@ -215,7 +215,7 @@ fn thick_target_residual_below_table_min_returns_typed_error_not_panic() {
 #[test]
 #[ignore = "requires bundled nucl-parquet data; run with --include-ignored after submodule init"]
 fn beam_stopped_upstream_yields_empty_downstream_layers_not_error() {
-    let Some(mut db) = make_db("tendl-2025") else {
+    let Some(mut db) = make_db("tendl-2023-iso") else {
         eprintln!("skipping: no nucl-parquet data dir found");
         return;
     };

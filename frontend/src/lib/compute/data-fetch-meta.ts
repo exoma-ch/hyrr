@@ -76,8 +76,10 @@ export async function getCacheRootPattern(): Promise<string | null> {
   return (await loadMeta())?.cacheRootPattern ?? null;
 }
 
-/** Default nuclear-data library identifier. Mirrors
- * `hyrr_core::mcp::transport::DEFAULT_LIBRARY`. Kept as a literal here so
- * non-Tauri (browser, Node) callers get a synchronous answer; if it ever
- * needs to vary, route through a `data_default_library` command. */
-export const DEFAULT_LIBRARY = "tendl-2025";
+/** Default nuclear-data library identifier — injected at build time from
+ *  `hyrr.json::default_library` via Vite's `define` (#269). SSoT shared
+ *  with Rust (`core/build.rs` → `HYRR_DEFAULT_LIBRARY` env). */
+declare const __DEFAULT_LIBRARY__: string;
+export const DEFAULT_LIBRARY: string = typeof __DEFAULT_LIBRARY__ !== "undefined"
+  ? __DEFAULT_LIBRARY__
+  : "tendl-2023-iso"; // fallback for non-Vite contexts (tests, Node)

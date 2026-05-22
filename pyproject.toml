@@ -27,6 +27,7 @@ dependencies = [
     "xlsxwriter>=3.2.9",
     "pycatima>=1.9",
     "tqdm>=4.67.3",
+    "nucl-parquet>=0.14",
 ]
 
 [project.optional-dependencies]

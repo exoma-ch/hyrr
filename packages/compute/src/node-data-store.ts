@@ -48,13 +48,13 @@ async function readParquetFile(filePath: string): Promise<ParquetRow[]> {
     buffer.byteOffset,
     buffer.byteOffset + buffer.byteLength,
   );
-  const rows: ParquetRow[] = [];
+  let rows: ParquetRow[] = [];
   await parquetRead({
     file: arrayBuffer,
     compressors,
     rowFormat: "object",
     onComplete: (data: ParquetRow[]) => {
-      rows.push(...data);
+      rows = rows.concat(data);
     },
   });
   return rows;
@@ -67,7 +67,7 @@ async function readParquetFile(filePath: string): Promise<ParquetRow[]> {
 export function resolveDataDir(dataDir?: string, library?: string): string {
   // Mirrors `hyrr_core::mcp::transport::DEFAULT_LIBRARY`. Kept as a literal
   // here because this package has no runtime path back to the Rust core.
-  const lib = library ?? process.env.HYRR_LIBRARY ?? "tendl-2025";
+  const lib = library ?? process.env.HYRR_LIBRARY ?? "tendl-2023-iso";
 
   if (dataDir) {
     return resolve(dataDir, lib);
@@ -232,8 +232,19 @@ export class NodeDataStore implements DatabaseProtocol {
       groups.set(gkey, group);
     }
 
+    // Prefer state-resolved xs over totals (#252)
+    const resolved = new Set<string>();
+    for (const gkey of groups.keys()) {
+      const state = gkey.split("_")[2];
+      if (state) resolved.add(gkey.substring(0, gkey.lastIndexOf("_")));
+    }
+
     const results: CrossSectionData[] = [];
-    for (const group of groups.values()) {
+    for (const [gkey, group] of groups) {
+      const state = String(group[0].state ?? "");
+      const residualKey = gkey.substring(0, gkey.lastIndexOf("_"));
+      if (state === "" && resolved.has(residualKey)) continue;
+
       const energies = new Float64Array(group.length);
       const xs = new Float64Array(group.length);
       for (let i = 0; i < group.length; i++) {
@@ -243,7 +254,7 @@ export class NodeDataStore implements DatabaseProtocol {
       results.push({
         residualZ: Number(group[0].residual_Z),
         residualA: Number(group[0].residual_A),
-        state: String(group[0].state ?? ""),
+        state,
         energiesMeV: energies,
         xsMb: xs,
       });
@@ -292,11 +303,12 @@ export class NodeDataStore implements DatabaseProtocol {
   }
 
   getDecayData(Z: number, A: number, state: string = ""): DecayData | null {
+    const norm = state === "g" ? "" : state;
     const filtered = this.decayData.filter(
       (r) =>
         Number(r.Z) === Z &&
         Number(r.A) === A &&
-        String(r.state ?? "") === state,
+        String(r.state ?? "") === norm,
     );
 
     if (filtered.length === 0) return null;
@@ -317,7 +329,8 @@ export class NodeDataStore implements DatabaseProtocol {
   }
 
   getDoseConstant(Z: number, A: number, state: string = ""): { k: number; source: string } | null {
-    const key = `${Z}_${A}_${state}`;
+    const norm = state === "g" ? "" : state;
+    const key = `${Z}_${A}_${norm}`;
     return this.doseConstants.get(key) ?? null;
   }
 

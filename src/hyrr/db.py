@@ -11,7 +11,7 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 
-DEFAULT_LIBRARY = "tendl-2025"
+DEFAULT_LIBRARY = "tendl-2023-iso"
 
 
 def load_catalog(data_dir: str | Path) -> dict[str, Any]:
@@ -257,12 +257,16 @@ _SYMBOL_TO_Z: dict[str, int] = {sym: z for z, sym in ELEMENT_SYMBOLS.items()}
 
 
 # ---------------------------------------------------------------------------
-# Concrete Parquet/Polars implementation
+# Concrete implementation — thin adapter over nucl-parquet DuckDB client (#257)
 # ---------------------------------------------------------------------------
 
 
 class DataStore:
-    """Parquet/Polars-backed nuclear data store implementing :class:`DatabaseProtocol`.
+    """Nuclear data store backed by the ``nucl-parquet`` Python client.
+
+    Delegates all data access to ``nucl_parquet.connect()`` which registers
+    Parquet files as DuckDB views with catalog-driven path resolution. This
+    mirrors the Rust ``NpDataStore`` pattern (PR #249).
 
     Parameters
     ----------
@@ -271,52 +275,30 @@ class DataStore:
         ``stopping/``, and per-library ``{library}/xs/`` subdirectories.
     library:
         Nuclear data library to use for cross-sections (e.g. ``"tendl-2025"``).
-        Must correspond to a subdirectory with an ``xs/`` folder.
     """
 
     def __init__(self, data_dir: str | Path, library: str = DEFAULT_LIBRARY) -> None:
+        import nucl_parquet
+
         self._data_dir = Path(data_dir)
         if not self._data_dir.is_dir():
             msg = f"Data directory not found: {self._data_dir}"
             raise FileNotFoundError(msg)
 
         self._library = library
-        self._xs_dir = self._data_dir / library / "xs"
-        if not self._xs_dir.is_dir():
-            msg = (
-                f"Library '{library}' not found at {self._xs_dir}. "
-                f"Available: {', '.join(self.available_libraries())}"
-            )
-            raise FileNotFoundError(msg)
+        self._db = nucl_parquet.connect(self._data_dir)
 
-        # Eagerly load small metadata tables
-        self._elements: pl.DataFrame = pl.read_parquet(
-            self._data_dir / "meta" / "elements.parquet"
-        )
-        self._abundances: pl.DataFrame = pl.read_parquet(
-            self._data_dir / "meta" / "abundances.parquet"
-        )
-        self._decay: pl.DataFrame = pl.read_parquet(
-            self._data_dir / "meta" / "decay.parquet"
-        )
-        self._stopping: pl.DataFrame = pl.read_parquet(
-            self._data_dir / "stopping" / "stopping.parquet"
-        )
+        # View name for the active library (e.g. "tendl_2025")
+        self._lib_view = library.replace("-", "_").replace(".", "_")
 
-        # Build element lookup dicts from the elements table
-        self._z_to_symbol: dict[int, str] = dict(
-            zip(
-                self._elements["Z"].to_list(),
-                self._elements["symbol"].to_list(),
-                strict=True,
-            )
-        )
+        # Build element lookup dicts
+        rows = self._db.execute(
+            "SELECT Z, symbol FROM elements ORDER BY Z"
+        ).fetchall()
+        self._z_to_symbol: dict[int, str] = {int(z): s for z, s in rows}
         self._symbol_to_z: dict[str, int] = {s: z for z, s in self._z_to_symbol.items()}
 
-        # Lazy-loaded cross-section DataFrames: (projectile, symbol) -> DataFrame
-        self._xs_cache: dict[str, pl.DataFrame] = {}
-
-        # Stopping power cache: (source, target_Z) -> (energies, dedx) arrays
+        # Caches
         self._sp_cache: dict[
             tuple[str, int],
             tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]],
@@ -333,7 +315,7 @@ class DataStore:
         exc_val: BaseException | None,
         exc_tb: object,
     ) -> None:
-        pass  # No resources to close for Parquet/Polars
+        self._db.close()
 
     # -- internal helpers ----------------------------------------------------
 
@@ -347,6 +329,11 @@ class DataStore:
         """The active cross-section library name."""
         return self._library
 
+    @property
+    def db(self):
+        """The underlying DuckDB connection (for advanced queries)."""
+        return self._db
+
     def available_libraries(self) -> list[str]:
         """List cross-section libraries available in the data directory."""
         libs = []
@@ -354,23 +341,6 @@ class DataStore:
             if p.is_dir() and (p / "xs").is_dir():
                 libs.append(p.name)
         return libs
-
-    def _get_xs_df(self, projectile: str, target_Z: int) -> pl.DataFrame | None:
-        """Load cross-section DataFrame for a projectile+element, with caching."""
-        symbol = self.get_element_symbol(target_Z)
-        cache_key = f"{projectile}_{symbol}"
-
-        if cache_key in self._xs_cache:
-            return self._xs_cache[cache_key]
-
-        xs_path = self._xs_dir / f"{cache_key}.parquet"
-        if not xs_path.exists():
-            self._xs_cache[cache_key] = pl.DataFrame()
-            return None
-
-        df = pl.read_parquet(xs_path)
-        self._xs_cache[cache_key] = df
-        return df
 
     # -- DatabaseProtocol methods --------------------------------------------
 
@@ -381,29 +351,42 @@ class DataStore:
         target_A: int,
     ) -> list[CrossSectionData]:
         """Get all residual production cross-sections for a given reaction."""
-        df = self._get_xs_df(projectile, target_Z)
-        if df is None or df.is_empty():
+        symbol = self.get_element_symbol(target_Z)
+        xs_path = self._data_dir / self._library / "xs" / f"{projectile}_{symbol}.parquet"
+        if not xs_path.exists():
             return []
 
-        filtered = df.filter(pl.col("target_A") == target_A).sort(
-            "residual_Z", "residual_A", "state", "energy_MeV"
-        )
-        if filtered.is_empty():
+        rows = self._db.execute(f"""
+            SELECT residual_Z, residual_A, state, energy_MeV, xs_mb
+            FROM read_parquet('{xs_path}')
+            WHERE target_A = ?
+            ORDER BY residual_Z, residual_A, state, energy_MeV
+        """, [target_A]).fetchall()
+
+        if not rows:
             return []
+
+        # Group by (residual_Z, residual_A, state)
+        groups: dict[tuple[int, int, str], list[tuple[float, float]]] = {}
+        for rz, ra, st, e, xs in rows:
+            key = (int(rz), int(ra), str(st))
+            groups.setdefault(key, []).append((float(e), float(xs)))
+
+        # Prefer state-resolved xs over totals (#254)
+        resolved: set[tuple[int, int]] = {
+            (rz, ra) for (rz, ra, st) in groups if st
+        }
 
         results: list[CrossSectionData] = []
-        for (rz, ra, st), group in filtered.group_by(
-            ["residual_Z", "residual_A", "state"], maintain_order=True
-        ):
-            energies = group["energy_MeV"].to_numpy().astype(np.float64)
-            xs = group["xs_mb"].to_numpy().astype(np.float64)
+        for (rz, ra, st), points in groups.items():
+            if not st and (rz, ra) in resolved:
+                continue
+            energies = np.array([p[0] for p in points], dtype=np.float64)
+            xs_arr = np.array([p[1] for p in points], dtype=np.float64)
             results.append(
                 CrossSectionData(
-                    residual_Z=int(rz),
-                    residual_A=int(ra),
-                    state=str(st),
-                    energies_MeV=energies,
-                    xs_mb=xs,
+                    residual_Z=rz, residual_A=ra, state=st,
+                    energies_MeV=energies, xs_mb=xs_arr,
                 )
             )
         return results
@@ -418,12 +401,14 @@ class DataStore:
         if key in self._sp_cache:
             return self._sp_cache[key]
 
-        filtered = self._stopping.filter(
-            (pl.col("source") == source) & (pl.col("target_Z") == target_Z)
-        ).sort("energy_MeV")
+        rows = self._db.execute("""
+            SELECT energy_MeV, dedx FROM stopping
+            WHERE source = ? AND target_Z = ?
+            ORDER BY energy_MeV
+        """, [source, target_Z]).fetchall()
 
-        energies = filtered["energy_MeV"].to_numpy().astype(np.float64)
-        dedx = filtered["dedx"].to_numpy().astype(np.float64)
+        energies = np.array([r[0] for r in rows], dtype=np.float64)
+        dedx = np.array([r[1] for r in rows], dtype=np.float64)
         result = (energies, dedx)
         self._sp_cache[key] = result
         return result
@@ -433,11 +418,10 @@ class DataStore:
         Z: int,
     ) -> dict[int, tuple[float, float]]:
         """Get natural isotopic abundances for an element."""
-        filtered = self._abundances.filter(pl.col("Z") == Z)
-        return {
-            int(row["A"]): (float(row["abundance"]), float(row["atomic_mass"]))
-            for row in filtered.iter_rows(named=True)
-        }
+        rows = self._db.execute(
+            "SELECT A, abundance, atomic_mass FROM abundances WHERE Z = ?", [Z]
+        ).fetchall()
+        return {int(a): (float(ab), float(am)) for a, ab, am in rows}
 
     def get_decay_data(
         self,
@@ -446,30 +430,49 @@ class DataStore:
         state: str = "",
     ) -> DecayData | None:
         """Get decay data for a nuclide. Returns None if not found."""
-        filtered = self._decay.filter(
-            (pl.col("Z") == Z) & (pl.col("A") == A) & (pl.col("state") == state)
-        )
-        if filtered.is_empty():
+        # Normalize "g" → "" (#254)
+        norm = "" if state == "g" else state
+        rows = self._db.execute("""
+            SELECT half_life_s, decay_mode, daughter_Z, daughter_A,
+                   daughter_state, branching
+            FROM decay
+            WHERE Z = ? AND A = ? AND state = ?
+        """, [Z, A, norm]).fetchall()
+
+        if not rows:
             return None
 
-        rows = filtered.to_dicts()
         modes = [
             DecayMode(
-                mode=r["decay_mode"],
-                daughter_Z=r["daughter_Z"],
-                daughter_A=r["daughter_A"],
-                daughter_state=r["daughter_state"] or "",
-                branching=r["branching"],
+                mode=r[1],
+                daughter_Z=r[2],
+                daughter_A=r[3],
+                daughter_state=r[4] or "",
+                branching=r[5],
             )
             for r in rows
         ]
         return DecayData(
-            Z=Z,
-            A=A,
-            state=state,
-            half_life_s=rows[0]["half_life_s"],
+            Z=Z, A=A, state=state,
+            half_life_s=rows[0][0],
             decay_modes=modes,
         )
+
+    def get_dose_constant(
+        self,
+        Z: int,
+        A: int,
+        state: str = "",
+    ) -> tuple[float, str] | None:
+        """Get gamma dose rate constant k (µSv·m²/MBq·h) and source quality tag."""
+        norm = "" if state == "g" else state
+        rows = self._db.execute("""
+            SELECT k_uSv_m2_MBq_h, source FROM dose_constants
+            WHERE Z = ? AND A = ? AND state = ?
+        """, [Z, A, norm]).fetchall()
+        if not rows:
+            return None
+        return (float(rows[0][0]), str(rows[0][1]))
 
     def get_element_symbol(self, Z: int) -> str:
         """Get element symbol from atomic number."""
@@ -496,5 +499,5 @@ class DataStore:
     def has_cross_sections(self, projectile: str, target_Z: int) -> bool:
         """Check if cross-section data exists for a projectile+element combination."""
         symbol = self.get_element_symbol(target_Z)
-        xs_path = self._xs_dir / f"{projectile}_{symbol}.parquet"
+        xs_path = self._data_dir / self._library / "xs" / f"{projectile}_{symbol}.parquet"
         return xs_path.exists()

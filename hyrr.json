@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "HYRR project-wide configuration — SSoT for values shared across Rust, TypeScript, Python, CI.",
+  "default_library": "tendl-2023-iso"
+}

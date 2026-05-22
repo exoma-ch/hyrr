@@ -34,7 +34,7 @@ fn data_dir() -> Option<String> {
 
 fn make_db() -> Option<ParquetDataStore> {
     let dir = data_dir()?;
-    ParquetDataStore::new(&dir, "tendl-2025").ok()
+    ParquetDataStore::new(&dir, "tendl-2023-iso").ok()
 }
 
 /// NIST ASTAR α-on-Al total mass stopping power [MeV·cm²/g].

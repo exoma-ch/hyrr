@@ -179,7 +179,7 @@
                   class:enriched={!!item.enrichment?.[el]}
                   onclick={(e) => { e.stopPropagation(); onelementclick?.(undefined, i, el); }}
                   title="{el}{item.enrichment?.[el] ? ' (enriched)' : ''}"
-                >{el}{#if item.enrichment?.[el]}<span class="enr-dot"></span>{/if}</button>
+                >{el}</button>
               {/each}
             </div>
           {/if}
@@ -244,6 +244,7 @@
     gap: 0.35rem;
     cursor: grab;
     transition: border-color 0.15s, opacity 0.15s;
+    overflow: hidden; /* prevent child inputs from escaping card bounds (#234) */
   }
 
   .layer-card:hover {
@@ -416,16 +417,6 @@
     border-color: var(--c-gold);
     color: var(--c-gold);
     background: var(--c-gold-tint-subtle);
-  }
-
-  .enr-dot {
-    display: inline-block;
-    width: 4px;
-    height: 4px;
-    background: var(--c-gold);
-    border-radius: 50%;
-    margin-left: 0.15rem;
-    vertical-align: middle;
   }
 
   @media (max-width: 640px) {

@@ -108,7 +108,7 @@
                 class="el-badge"
                 class:enriched={!!layer.enrichment?.[el]}
                 onclick={(e) => { e.stopPropagation(); onelementclick?.(groupIndex, i, el); }}
-              >{el}{#if layer.enrichment?.[el]}<span class="enr-dot"></span>{/if}</button>
+              >{el}</button>
             {/each}
           </div>
         {/if}
@@ -270,16 +270,6 @@
 
   .el-badge:hover { border-color: var(--c-accent); color: var(--c-accent); }
   .el-badge.enriched { border-color: var(--c-gold); color: var(--c-gold); background: var(--c-gold-tint-subtle); }
-
-  .enr-dot {
-    display: inline-block;
-    width: 3px;
-    height: 3px;
-    background: var(--c-gold);
-    border-radius: 50%;
-    margin-left: 0.1rem;
-    vertical-align: middle;
-  }
 
   .add-layer-btn {
     flex-shrink: 0;

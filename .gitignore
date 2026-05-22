@@ -221,9 +221,10 @@ __marimo__/
 # Node.js
 node_modules/
 
-# HYRR data (too large for git, downloaded separately)
+# HYRR data (too large for git, downloaded via `hyrr fetch-data`)
 data/hyrr.sqlite
 data/*.sqlite
+data/parquet/
 
 # Tauri
 desktop/src-tauri/target/

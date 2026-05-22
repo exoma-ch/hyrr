@@ -8,6 +8,7 @@
 
 // --- Data store ---
 export { DataStore } from "./data-store";
+export type { EmissionLine, EmissionRadType, GammaLine, DecayEmissionLine, EmissionChannel } from "./data-store";
 
 // --- Materials ---
 export {
@@ -103,6 +104,10 @@ export type {
 
 // --- Layer expansion ---
 export { expandLayers, expandedLayerCount } from "./expand-layers";
+
+// --- SSoT bridge ---
+export { registerSSoT, getSSoT } from "./ssot";
+export type { SSoTImpl } from "./ssot";
 
 // --- Interpolation utility (for XS plotting) ---
 export { interp } from "./_interp";

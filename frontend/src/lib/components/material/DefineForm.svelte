@@ -478,8 +478,8 @@
       }
       defineOpen = true;
       nameDraft = editInitial.name;
-      nameManuallySet = true;
-      densityDraft = editInitial.density;
+      nameManuallySet = !!editInitial.name;
+      densityDraft = editInitial.density || null;
 
       editingCustomId = editInitial.editingCustomId;
       textDraft = "";

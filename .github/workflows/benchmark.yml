@@ -23,7 +23,7 @@ jobs:
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
-          git sparse-checkout set data/meta data/stopping data/tendl-2025/xs
+          git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"

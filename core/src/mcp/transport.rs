@@ -67,10 +67,12 @@ const SERVER_NAME: &str = "hyrr";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
-/// Default nuclear data library when none is specified.
-pub const DEFAULT_LIBRARY: &str = "tendl-2025";
+/// Default nuclear data library — sourced from `hyrr.json` at build time (#269).
+/// tendl-2023-iso has full ground/metastable isomeric splitting;
+/// tendl-2025 dropped the g/m split entirely (#265).
+pub const DEFAULT_LIBRARY: &str = env!("HYRR_DEFAULT_LIBRARY");
 
-/// Run the MCP stdio server loop with the default library (`tendl-2025`).
+/// Run the MCP stdio server loop with the default library.
 ///
 /// Convenience wrapper around [`run_mcp_server_with_library`].
 pub fn run_mcp_server(data_dir: &str) {

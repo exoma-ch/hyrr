@@ -32,7 +32,7 @@ struct PyDataStore {
 #[pymethods]
 impl PyDataStore {
     #[new]
-    #[pyo3(signature = (data_dir, library="tendl-2025"))]
+    #[pyo3(signature = (data_dir, library="tendl-2023-iso"))]
     fn new(data_dir: &str, library: &str) -> PyResult<Self> {
         let store = ParquetDataStore::new(data_dir, library)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;

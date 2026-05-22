@@ -115,10 +115,18 @@ export async function initDataStore(
   const backend = await initBackend(baseUrl, undefined, undefined, onProgress);
   backendReady = true;
 
-  // Init TS DataStore for data loading (used by WASM for XS transfer)
+  // Reuse the WASM backend's already-init'd DataStore when available —
+  // avoids creating a second instance and the race where the popup opens
+  // before this DataStore finishes loading (#201 reactivity fix).
   if (!dataStore) {
-    dataStore = new DataStore(baseUrl);
-    await dataStore.init(onProgress);
+    const { getWasmTsDataStore } = await import("../compute/backend");
+    const existing = getWasmTsDataStore();
+    if (existing) {
+      dataStore = existing;
+    } else {
+      dataStore = new DataStore(baseUrl);
+      await dataStore.init(onProgress);
+    }
   }
 }
 
@@ -164,6 +172,17 @@ async function runSimulation(hash: string): Promise<void> {
 
     const currentHash = configHash(getConfig());
     if (currentHash !== hash) return;
+
+    // Load emission data for all produced isotope elements (lazy, parallel).
+    if (dataStore) {
+      const zValues = new Set<number>();
+      for (const layer of simResult.layers) {
+        for (const iso of layer.isotopes) {
+          zValues.add(iso.Z);
+        }
+      }
+      await dataStore.ensureEmissionsByZ([...zValues]);
+    }
 
     lastHash = hash;
     state = "ready";

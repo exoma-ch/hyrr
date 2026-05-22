@@ -15,7 +15,7 @@ use hyrr_core::types::*;
 fn main() {
     let data_dir =
         std::env::var("HYRR_DATA").unwrap_or_else(|_| "../nucl-parquet/data".to_string());
-    let mut db = ParquetDataStore::new(&data_dir, "tendl-2024").unwrap();
+    let mut db = ParquetDataStore::new(&data_dir, "tendl-2023-iso").unwrap();
     db.load_xs("p", 20).expect("load p+Ca");
 
     // 99% Ca-44, remainder Ca-40 (most abundant stable alternative).

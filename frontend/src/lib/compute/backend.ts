@@ -23,6 +23,10 @@ let activeBackend: BackendKind | null = null;
 let wasmStore: any = null; // WasmDataStore instance (lazy-loaded)
 let wasmTsDataStore: any = null; // TS DataStore used for WASM XS loading
 
+/** Return the TS DataStore created during WASM init (already fully init'd).
+ *  Null when using Tauri backend or if WASM init hasn't run yet. */
+export function getWasmTsDataStore(): any { return wasmTsDataStore; }
+
 export function getActiveBackend(): BackendKind | null {
   return activeBackend;
 }
@@ -82,6 +86,40 @@ export async function initBackend(
     // Transfer metadata to WASM store
     await transferDataToWasm(tsStore, wasmStore, onProgress);
     wasmTsDataStore = tsStore;
+
+    // Register WASM-backed SSoT implementations (#251).
+    // After this, @hyrr/compute functions delegate to Rust physics
+    // instead of their TS fallbacks.
+    const { registerSSoT } = await import("@hyrr/compute");
+    registerSSoT({
+      parseFormula: (formula: string) => {
+        try {
+          return JSON.parse(wasmStore.parseFormula(formula));
+        } catch {
+          return {};
+        }
+      },
+      resolveMaterial: (identifier: string) => {
+        try {
+          return JSON.parse(wasmStore.resolveMaterial(identifier));
+        } catch {
+          return null;
+        }
+      },
+      computeEnergyOut: (projectile, composition, density, energyIn, thickness) => {
+        try {
+          return wasmStore.computeEnergyOutScalar(
+            projectile,
+            JSON.stringify(composition),
+            density,
+            energyIn,
+            thickness,
+          );
+        } catch {
+          return 0;
+        }
+      },
+    });
 
     activeBackend = "wasm";
     return "wasm";
@@ -271,6 +309,18 @@ async function transferDataToWasm(
       }
     }
     wasm.loadStoppingData(JSON.stringify(stoppingRows));
+  }
+
+  // Compound stopping (NIST tables) — separate API since keyed by
+  // compound name, not target_Z. (#193)
+  if (tsStore.compoundStoppingData?.length) {
+    const compoundRows = tsStore.compoundStoppingData.map((row: any) => ({
+      source: String(row.source),
+      compound: String(row.compound),
+      energy_MeV: Number(row.energy_MeV),
+      dedx: Number(row.dedx),
+    }));
+    wasm.loadCompoundStoppingData(JSON.stringify(compoundRows));
   }
 
   onProgress?.("WASM backend ready", 1.0);

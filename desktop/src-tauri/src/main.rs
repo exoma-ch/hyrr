@@ -93,7 +93,7 @@ fn updater_enabled() -> bool {
 }
 
 /// Resolve the nuclear data library: `--library <id>` arg → `HYRR_LIBRARY`
-/// env → DEFAULT_LIBRARY.
+/// env → DEFAULT_LIBRARY (`tendl-2023-iso`).
 fn resolve_mcp_library(args: &[String]) -> String {
     if args.len() >= 2 {
         for i in 0..args.len() - 1 {
