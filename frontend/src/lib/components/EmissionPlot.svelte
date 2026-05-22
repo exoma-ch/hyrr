@@ -200,7 +200,6 @@
         x: energies,
         y: rates,
         type: "bar",
-        width: 3,
         name: nucLabel(agg.name),
         marker: { color },
         hovertemplate: `%{x:.1f} keV<br>%{y:.2e} /s<br>${nucLabel(agg.name)}<extra></extra>`,
@@ -217,14 +216,23 @@
       return maxA - maxB;
     });
 
+    // Adaptive bar width: ~0.3% of the energy range so sticks are
+    // visible at any scale (X-rays ~0.1-100 keV vs gammas ~50-7000 keV).
+    const allEnergies = traces.flatMap((t: any) => t.x as number[]);
+    const eMin = Math.min(...allEnergies);
+    const eMax = Math.max(...allEnergies);
+    const barWidth = Math.max(0.3, (eMax - eMin) * 0.003 + 0.5);
+    for (const t of traces) {
+      (t as any).width = barWidth;
+    }
+
     if (!hasAnyLines) {
-      // No emission lines for the selected isotopes — show a clean
-      // empty state instead of a broken micro-plot with noise axes.
+      const tabLabel = EMISSION_TABS.find((t) => t.id === activeEmTab)?.label ?? activeEmTab;
       Plotly.react(plotDiv, [], darkLayout({
         xaxis: { title: { text: "Energy (keV)" }, gridcolor: tc.border, range: [0, 2000] },
         yaxis: { title: { text: "Emission rate (/s)" }, gridcolor: tc.border, range: [0, 1] },
         annotations: [{
-          text: "No photon emission data for selected isotopes",
+          text: `No ${tabLabel} emission data for selected isotopes`,
           xref: "paper", yref: "paper",
           x: 0.5, y: 0.5,
           showarrow: false,
