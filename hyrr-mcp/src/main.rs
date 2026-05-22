@@ -4,11 +4,11 @@
 //! the shared `hyrr_core::mcp` module, so tool definitions and
 //! responses stay byte-identical across entry points.
 //!
-//! On first run the server auto-fetches the required nuclear data
-//! (~50 MB for meta+stopping+default library) from GitHub Releases
-//! into `~/.hyrr/nucl-parquet/`. Progress is printed to stderr so
-//! the JSON-RPC stdout stream stays clean. Subsequent runs are
-//! instant (sentinel-gated, no network).
+//! On first run the server lazy-fetches the required nuclear data
+//! files (~30 MB for a typical session) from GitHub via
+//! nucl-parquet's `DataDir::ensure_lazy()`. Individual parquet files
+//! are fetched on demand and cached in `~/.nucl-parquet/v{V}/`.
+//! Progress is printed to stderr. Subsequent runs are instant.
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -22,61 +22,85 @@ fn main() {
     }
 
     let library = resolve_library(&args);
+    let data_dir = resolve_data_dir(&args, &library);
 
-    // Auto-fetch nuclear data on first run (#264 US3). Progress goes to
-    // stderr so the JSON-RPC stdout channel stays clean. The ensure_*
-    // functions are sentinel-gated and no-op on a warm cache.
-    if !has_explicit_data_dir(&args) {
-        ensure_data_or_exit(&library);
-    }
-
-    let data_dir = hyrr_core::data_dir::resolve();
     hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library);
 }
 
-/// Check whether the user supplied an explicit --data-dir or HYRR_DATA.
-/// When they did, we skip auto-fetch — they own their data layout.
-fn has_explicit_data_dir(args: &[String]) -> bool {
-    if args.windows(2).any(|w| w[0] == "--data-dir") {
-        return true;
+/// Resolve the data directory. Priority:
+/// 1. --data-dir argument / HYRR_DATA env (explicit, no fetch)
+/// 2. nucl-parquet DataDir::resolve() (existing local data)
+/// 3. nucl-parquet DataDir::ensure_lazy() (lazy HTTP fetch)
+fn resolve_data_dir(args: &[String], library: &str) -> String {
+    // Explicit data dir — user owns it, no fetch
+    if let Some(dir) = explicit_data_dir(args) {
+        return dir;
     }
-    std::env::var("HYRR_DATA").map(|v| !v.is_empty()).unwrap_or(false)
+
+    // Try nucl-parquet's own resolution (env var, existing cache, sibling)
+    if let Ok(dd) = nucl_parquet::DataDir::resolve() {
+        return dd.root().to_string_lossy().to_string();
+    }
+
+    // No local data — use lazy fetch. Downloads catalog.json (~2 KB),
+    // then individual parquet files on demand as NpDataStore opens them.
+    match nucl_parquet::DataDir::ensure_lazy() {
+        Ok(dd) => {
+            // Pre-fetch the files NpDataStore::new() needs eagerly.
+            // Without this, the Db::open() calls would fail on missing files.
+            let eager_files = [
+                "meta/abundances.parquet",
+                "meta/decay.parquet",
+                "meta/dose_constants.parquet",
+                "stopping/PSTAR.parquet",
+                "stopping/ASTAR.parquet",
+                "stopping/dSTAR.parquet",
+                "stopping/tSTAR.parquet",
+                "stopping/catima/catima.parquet",
+                "stopping/compounds/PSTAR_compounds.parquet",
+                "stopping/compounds/ASTAR_compounds.parquet",
+            ];
+            for f in &eager_files {
+                if let Err(e) = dd.fetch_file(f) {
+                    eprintln!("hyrr-mcp: warning: failed to fetch {f}: {e}");
+                }
+            }
+
+            // Pre-fetch the manifest for the requested library so
+            // NpDataStore can find the xs/ directory.
+            let manifest = format!("{library}/manifest.json");
+            let _ = dd.fetch_file(&manifest);
+
+            dd.root().to_string_lossy().to_string()
+        }
+        Err(e) => {
+            eprintln!(
+                "hyrr-mcp: failed to resolve nuclear data: {e}\n\n\
+                 Set HYRR_DATA or NUCL_PARQUET_DATA to point at a nucl-parquet data directory,\n\
+                 or check your network connection.\n"
+            );
+            std::process::exit(2);
+        }
+    }
 }
 
-/// Fetch meta+stopping and the requested library into the managed cache.
-/// Prints progress to stderr. On failure, prints a diagnostic and exits
-/// with code 2 — better than a cryptic JSON-RPC error mid-conversation.
-fn ensure_data_or_exit(library: &str) {
-    use hyrr_core::data_fetch;
-
-    let mut progress = data_fetch::throttle(|p| {
-        let pct = match p.bytes_total {
-            Some(total) if total > 0 => format!(" ({:.0}%)", p.bytes_done as f64 / total as f64 * 100.0),
-            _ => String::new(),
-        };
-        eprintln!("hyrr-mcp: {:?}{}", p.stage, pct);
-    });
-
-    if let Err(e) = data_fetch::ensure_meta_stopping_with_progress(&mut progress) {
-        eprintln!(
-            "hyrr-mcp: failed to fetch nuclear data: {e}\n\n\
-             Set HYRR_DATA to point at an existing nucl-parquet/data/ directory,\n\
-             or check your network connection and try again."
-        );
-        std::process::exit(2);
+/// Check whether the user supplied an explicit --data-dir or HYRR_DATA.
+fn explicit_data_dir(args: &[String]) -> Option<String> {
+    for w in args.windows(2) {
+        if w[0] == "--data-dir" {
+            return Some(w[1].clone());
+        }
     }
-    if let Err(e) = data_fetch::ensure_library_with_progress(library, &mut progress) {
-        eprintln!(
-            "hyrr-mcp: failed to fetch library `{library}`: {e}\n\n\
-             Set HYRR_DATA to point at an existing nucl-parquet/data/ directory,\n\
-             or check your network connection and try again."
-        );
-        std::process::exit(2);
+    if let Ok(v) = std::env::var("HYRR_DATA") {
+        if !v.is_empty() {
+            return Some(v);
+        }
     }
+    None
 }
 
 /// Resolve the nuclear data library: `--library <id>` arg → `HYRR_LIBRARY`
-/// env → `tendl-2023-iso` (DEFAULT_LIBRARY).
+/// env → DEFAULT_LIBRARY (`tendl-2023-iso`).
 fn resolve_library(args: &[String]) -> String {
     if args.len() >= 2 {
         for i in 0..args.len() - 1 {
@@ -110,13 +134,11 @@ fn print_help() {
          \n\
          ENVIRONMENT:\n    \
              HYRR_DATA          Nucl-parquet data directory (if --data-dir not set)\n    \
+             NUCL_PARQUET_DATA  Nucl-parquet data directory (alternative)\n    \
              HYRR_LIBRARY       Nuclear data library (if --library not set)\n\
          \n\
-         Data resolution priority:\n    \
-             1. --data-dir argument\n    \
-             2. HYRR_DATA environment variable\n    \
-             3. Sibling nucl-parquet/ directory (dev layout)\n    \
-             4. ~/.hyrr/nucl-parquet\n\
+         On first run, required data files are fetched lazily from GitHub\n\
+         (~30 MB for a typical session). Cached in ~/.nucl-parquet/.\n\
          \n\
          Register with Claude Code:\n    \
              claude mcp add hyrr -- hyrr-mcp\n",
