@@ -16,10 +16,21 @@
   import { getResolvedTheme } from "../stores/theme.svelte";
   import { nucLabel } from "@hyrr/compute";
   import { getDataStore } from "../scheduler/sim-scheduler.svelte";
-  import type { EmissionLine } from "@hyrr/compute";
+  import type { EmissionLine, EmissionRadType } from "@hyrr/compute";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
   import { getSelectedIsotopes } from "../stores/selection.svelte";
   import { aggregateByIsotopeName } from "../plotting/aggregate-isotopes";
+
+  const EMISSION_TABS = [
+    { id: "gamma", label: "\u03B3", radTypes: ["gamma", "annihilation"] as EmissionRadType[] },
+    { id: "beta-", label: "\u03B2\u207B", radTypes: ["beta-"] as EmissionRadType[] },
+    { id: "beta+", label: "\u03B2\u207A", radTypes: ["beta+"] as EmissionRadType[] },
+    { id: "CE", label: "CE", radTypes: ["ce"] as EmissionRadType[] },
+    { id: "xray", label: "X-ray", radTypes: ["xray"] as EmissionRadType[] },
+    { id: "auger", label: "Auger", radTypes: ["auger"] as EmissionRadType[] },
+  ] as const;
+
+  type EmTabId = (typeof EMISSION_TABS)[number]["id"];
 
   interface Props {
     result: SimulationResult;
@@ -30,6 +41,7 @@
   let Plotly = $state<any>(null);
 
   let logY = $state(false);
+  let activeEmTab = $state<EmTabId>("gamma");
   /** "eob" or "eoc" — which time to evaluate activity at. */
   let timePoint = $state<"eob" | "eoc">("eoc");
 
@@ -56,6 +68,7 @@
     const _sel = selected;
     const _tp = timePoint;
     const _log = logY;
+    const _emTab = activeEmTab;
     const _filter = JSON.stringify(sharedFilter);
     const _theme = getResolvedTheme();
     if (p && div) render();
@@ -152,9 +165,10 @@
     let hasAnyLines = false;
 
     for (const agg of aggregated) {
-      // Get photon emissions: gamma lines + 511 keV annihilation (β⁺ emitters)
+      // Get emissions matching the active tab's radiation types
+      const tabRadTypes = EMISSION_TABS.find((t) => t.id === activeEmTab)?.radTypes ?? ["gamma"];
       const emissions: EmissionLine[] = db.getEmissions(agg.Z, agg.A)
-        .filter((e) => e.radType === "gamma" || e.radType === "annihilation");
+        .filter((e) => tabRadTypes.includes(e.radType));
       if (emissions.length === 0) continue;
 
       // Get activity at chosen time
@@ -195,8 +209,19 @@
     }
 
     if (!hasAnyLines) {
-      // Clear the plot when there's nothing to show
-      Plotly.react(plotDiv, [], darkLayout({ height: 100 }), PLOTLY_CONFIG);
+      // No emission lines for the selected isotopes — show a clean
+      // empty state instead of a broken micro-plot with noise axes.
+      Plotly.react(plotDiv, [], darkLayout({
+        xaxis: { title: { text: "Energy (keV)" }, gridcolor: tc.border, range: [0, 2000] },
+        yaxis: { title: { text: "Emission rate (/s)" }, gridcolor: tc.border, range: [0, 1] },
+        annotations: [{
+          text: "No photon emission data for selected isotopes",
+          xref: "paper", yref: "paper",
+          x: 0.5, y: 0.5,
+          showarrow: false,
+          font: { size: 13, color: tc.textMuted ?? "#888" },
+        }],
+      }), PLOTLY_CONFIG);
       lastExport = null;
       return;
     }
@@ -235,7 +260,19 @@
 
 <div class="emission-plot">
   <div class="controls">
-    <span class="section-label">{"\u03B3"} + annihilation emission spectrum</span>
+    <span class="section-label">Emission spectrum</span>
+
+    {#each EMISSION_TABS as tab}
+      <button
+        class="ctrl-btn"
+        class:active={activeEmTab === tab.id}
+        onclick={() => { activeEmTab = tab.id; }}
+      >
+        {tab.label}
+      </button>
+    {/each}
+
+    <div class="separator"></div>
 
     <button
       class="ctrl-btn"
@@ -260,12 +297,12 @@
 
     <span class="right-actions">
       <SaveMenu
-        filenamePrefix="hyrr-gamma-emission"
+        filenamePrefix="hyrr-{activeEmTab}-emission"
         xLabel={lastExport?.xLabel ?? "Energy (keV)"}
         yLabel={lastExport?.yLabel ?? "Emission rate (/s)"}
         getTraces={() => lastExport?.traces ?? []}
         notes={() => [
-          `HYRR gamma emission spectrum (${timePoint === "eob" ? "EOB" : "EOC"})`,
+          `HYRR ${activeEmTab} emission spectrum (${timePoint === "eob" ? "EOB" : "EOC"})`,
           `generated ${new Date().toISOString()}`,
         ]}
         title="Save / download emission data"
