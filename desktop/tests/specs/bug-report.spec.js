@@ -34,9 +34,15 @@ describe("Bug report modal (desktop)", () => {
     const modal = await $('[role="dialog"]');
     await modal.waitForExist({ timeout: 5_000 });
 
-    // Desktop should have "Open on GitHub" and "Save to file" buttons
-    const buttons = await modal.$$("button");
-    const texts = await Promise.all(buttons.map((b) => b.getText()));
+    // Collect button texts via browser.execute to avoid WebdriverIO
+    // element-array iteration issues with Promise.all.
+    const texts = await browser.execute(() => {
+      const modal = document.querySelector('[role="dialog"]');
+      if (!modal) return [];
+      return Array.from(modal.querySelectorAll("button")).map(
+        (b) => b.textContent?.trim() || "",
+      );
+    });
 
     expect(texts).toContain("Open on GitHub");
     expect(texts).toContain("Save to file");
@@ -48,9 +54,13 @@ describe("Bug report modal (desktop)", () => {
   });
 
   it("should NOT show the Submit button in desktop mode", async () => {
-    const modal = await $('[role="dialog"]');
-    const buttons = await modal.$$("button");
-    const texts = await Promise.all(buttons.map((b) => b.getText()));
+    const texts = await browser.execute(() => {
+      const modal = document.querySelector('[role="dialog"]');
+      if (!modal) return [];
+      return Array.from(modal.querySelectorAll("button")).map(
+        (b) => b.textContent?.trim() || "",
+      );
+    });
     expect(texts).not.toContain("Submit");
   });
 

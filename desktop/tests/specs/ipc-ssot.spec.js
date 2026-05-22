@@ -35,7 +35,8 @@ describe("IPC SSoT commands", () => {
     expect(url).toMatch(
       /^https:\/\/github\.com\/exoma-ch\/nucl-parquet\/releases\/download\//,
     );
-    expect(url).toMatch(/\.tar\.gz$/);
+    // Tarball may be .tar.gz or .tar.zst
+    expect(url).toMatch(/\.tar\.(gz|zst)$/);
   });
 
   it("data_version should return a CalVer string", async () => {
@@ -61,14 +62,14 @@ describe("IPC SSoT commands", () => {
     );
   });
 
-  it("data_tarball_filename should return a .tar.gz filename", async () => {
+  it("data_tarball_filename should return a compressed tarball filename", async () => {
     const filename = await browser.executeAsync((done) => {
       window.__TAURI_INTERNALS__
         .invoke("data_tarball_filename")
         .then(done)
         .catch((e) => done("ERROR: " + e));
     });
-    expect(filename).toMatch(/^nucl-parquet-.*\.tar\.gz$/);
+    expect(filename).toMatch(/^nucl-parquet-.*\.tar\.(gz|zst)$/);
   });
 
   it("data_cache_root_pattern should contain ~/.hyrr", async () => {
