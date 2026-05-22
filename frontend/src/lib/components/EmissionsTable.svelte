@@ -14,7 +14,7 @@
   const TABS = [
     { id: "gamma", label: "\u03B3" },
     { id: "beta-", label: "\u03B2\u207B" },
-    { id: "beta+", label: "\u03B2\u207A/511" },
+    { id: "beta+", label: "\u03B2\u207A" },
     { id: "CE", label: "CE" },
     { id: "xray", label: "X-ray" },
     { id: "auger", label: "Auger" },
@@ -48,9 +48,9 @@
 
   /** Map from tab ID to the rad_type(s) it shows. */
   const TAB_RAD_TYPES: Record<TabId, EmissionRadType[]> = {
-    "gamma": ["gamma"],
+    "gamma": ["gamma", "annihilation"],
     "beta-": ["beta-"],
-    "beta+": ["beta+", "annihilation"],
+    "beta+": ["beta+"],
     "CE": ["ce"],
     "xray": ["xray"],
     "auger": ["auger"],

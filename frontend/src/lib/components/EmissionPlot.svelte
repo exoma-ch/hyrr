@@ -186,7 +186,7 @@
         x: energies,
         y: rates,
         type: "bar",
-        width: 0.5,
+        width: 3,
         name: nucLabel(agg.name),
         marker: { color },
         hovertemplate: `%{x:.1f} keV<br>%{y:.2e} /s<br>${nucLabel(agg.name)}<extra></extra>`,
@@ -213,6 +213,8 @@
       },
       barmode: "overlay",
       bargap: 0,
+      hovermode: "x unified",
+      hoverdistance: 20,
       showlegend: traces.length <= 20,
       legend: {
         x: 1,
