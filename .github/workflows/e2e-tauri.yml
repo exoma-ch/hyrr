@@ -118,9 +118,18 @@ jobs:
             npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
           fi
 
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
       - name: Build Tauri app (debug, no bundle)
         working-directory: desktop
-        run: cargo tauri build --debug --no-bundle
+        env:
+          # Skip beforeBuildCommand — we already built the frontend above.
+          # tauri.conf.json's `--prefix ../frontend` resolves incorrectly
+          # when cargo tauri runs from the desktop/ working directory.
+          TAURI_CLI_NO_DEV_SERVER_WAIT: "true"
+        run: cargo tauri build --debug --no-bundle --config '{"build":{"beforeBuildCommand":""}}'
 
       - name: Verify binary exists
         run: ls -la "${{ matrix.binary }}"
