@@ -208,6 +208,15 @@
       colorIdx++;
     }
 
+    // Sort traces so the smallest max-rate renders first (back) and the
+    // largest renders last (front). Plotly hover picks the frontmost bar
+    // at a given x, so this prioritizes the dominant emission.
+    traces.sort((a, b) => {
+      const maxA = Math.max(...(a.y as number[]));
+      const maxB = Math.max(...(b.y as number[]));
+      return maxA - maxB;
+    });
+
     if (!hasAnyLines) {
       // No emission lines for the selected isotopes — show a clean
       // empty state instead of a broken micro-plot with noise axes.
@@ -238,8 +247,8 @@
       },
       barmode: "overlay",
       bargap: 0,
-      hovermode: "x unified",
-      hoverdistance: 20,
+      hovermode: "closest",
+      hoverdistance: 30,
       showlegend: traces.length <= 20,
       legend: {
         x: 1,
