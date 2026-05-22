@@ -364,13 +364,12 @@ impl DatabaseProtocol for NpDataStore {
 
     fn get_compound_stopping_power(
         &self,
-        _source: &str,
-        _compound: &str,
+        source: &str,
+        compound: &str,
     ) -> Option<(Vec<f64>, Vec<f64>)> {
-        // TODO: nucl-parquet v0.13.5 removed compound_table() raw accessor;
-        // compound_dedx() is a scalar interpolator. File upstream issue to
-        // re-add raw table access. Bragg additivity fallback works for now.
-        None
+        self.stopping
+            .compound_table(source, compound)
+            .map(|(e, s)| (e.clone(), s.clone()))
     }
 
     fn get_natural_abundances(&self, z: u32) -> HashMap<u32, (f64, f64)> {
@@ -714,6 +713,16 @@ impl super::DatabaseProtocol for EmbeddedDataStore {
             .nist_table(source, target_z)
             .map(|(e, s)| (e.clone(), s.clone()))
             .unwrap_or_default()
+    }
+
+    fn get_compound_stopping_power(
+        &self,
+        source: &str,
+        compound: &str,
+    ) -> Option<(Vec<f64>, Vec<f64>)> {
+        self.stopping
+            .compound_table(source, compound)
+            .map(|(e, s)| (e.clone(), s.clone()))
     }
 
     fn get_natural_abundances(&self, z: u32) -> HashMap<u32, (f64, f64)> {
