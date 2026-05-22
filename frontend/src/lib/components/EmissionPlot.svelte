@@ -152,9 +152,9 @@
     let hasAnyLines = false;
 
     for (const agg of aggregated) {
-      // Get gamma emissions for this isotope (absolute per-decay intensities)
+      // Get photon emissions: gamma lines + 511 keV annihilation (β⁺ emitters)
       const emissions: EmissionLine[] = db.getEmissions(agg.Z, agg.A)
-        .filter((e) => e.radType === "gamma");
+        .filter((e) => e.radType === "gamma" || e.radType === "annihilation");
       if (emissions.length === 0) continue;
 
       // Get activity at chosen time
@@ -233,7 +233,7 @@
 
 <div class="emission-plot">
   <div class="controls">
-    <span class="section-label">{"\u03B3"} emission spectrum</span>
+    <span class="section-label">{"\u03B3"} + annihilation emission spectrum</span>
 
     <button
       class="ctrl-btn"
