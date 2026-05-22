@@ -28,7 +28,7 @@ jobs:
   e2e-tauri:
     name: e2e-tauri (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -118,17 +118,17 @@ jobs:
             npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
           fi
 
-      - name: Build frontend
+      - name: Build frontend (Tauri mode)
         working-directory: frontend
+        env:
+          # Vite uses TAURI_ENV_PLATFORM to set base="./" (relative assets)
+          # instead of base="/hyrr/" (GitHub Pages). Without this the app
+          # loads with broken asset paths in the embedded webview.
+          TAURI_ENV_PLATFORM: ${{ matrix.os }}
         run: npm run build
 
       - name: Build Tauri app (debug, no bundle)
         working-directory: desktop
-        env:
-          # Skip beforeBuildCommand — we already built the frontend above.
-          # tauri.conf.json's `--prefix ../frontend` resolves incorrectly
-          # when cargo tauri runs from the desktop/ working directory.
-          TAURI_CLI_NO_DEV_SERVER_WAIT: "true"
         run: cargo tauri build --debug --no-bundle --config '{"build":{"beforeBuildCommand":""}}'
 
       - name: Verify binary exists
