@@ -82,15 +82,12 @@ jobs:
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
-          git sparse-checkout set \
-            clients/rs/nucl-parquet \
-            data/catalog.json \
-            data/meta/abundances.parquet \
-            data/meta/decay.parquet \
-            data/meta/dose_constants.parquet \
-            data/meta/ensdf/emissions \
-            data/stopping \
-            data/tendl-2023-iso/xs
+          git sparse-checkout set --no-cone \
+            'clients/rs/nucl-parquet/' \
+            'data/catalog.json' \
+            'data/meta/' \
+            'data/stopping/' \
+            'data/tendl-2023-iso/xs/'
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -138,7 +135,9 @@ jobs:
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
-          git sparse-checkout set clients/rs/nucl-parquet data/catalog.json
+          git sparse-checkout set --no-cone \
+            'clients/rs/nucl-parquet/' \
+            'data/catalog.json'
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

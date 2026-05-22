@@ -291,9 +291,7 @@ class DataStore:
         self._lib_view = library.replace("-", "_").replace(".", "_")
 
         # Build element lookup dicts
-        rows = self._db.execute(
-            "SELECT Z, symbol FROM elements ORDER BY Z"
-        ).fetchall()
+        rows = self._db.execute("SELECT Z, symbol FROM elements ORDER BY Z").fetchall()
         self._z_to_symbol: dict[int, str] = {int(z): s for z, s in rows}
         self._symbol_to_z: dict[str, int] = {s: z for z, s in self._z_to_symbol.items()}
 
@@ -351,16 +349,21 @@ class DataStore:
     ) -> list[CrossSectionData]:
         """Get all residual production cross-sections for a given reaction."""
         symbol = self.get_element_symbol(target_Z)
-        xs_path = self._data_dir / self._library / "xs" / f"{projectile}_{symbol}.parquet"
+        xs_path = (
+            self._data_dir / self._library / "xs" / f"{projectile}_{symbol}.parquet"
+        )
         if not xs_path.exists():
             return []
 
-        rows = self._db.execute(f"""
+        rows = self._db.execute(
+            f"""
             SELECT residual_Z, residual_A, state, energy_MeV, xs_mb
             FROM read_parquet('{xs_path}')
             WHERE target_A = ?
             ORDER BY residual_Z, residual_A, state, energy_MeV
-        """, [target_A]).fetchall()
+        """,
+            [target_A],
+        ).fetchall()
 
         if not rows:
             return []
@@ -372,9 +375,7 @@ class DataStore:
             groups.setdefault(key, []).append((float(e), float(xs)))
 
         # Prefer state-resolved xs over totals (#254)
-        resolved: set[tuple[int, int]] = {
-            (rz, ra) for (rz, ra, st) in groups if st
-        }
+        resolved: set[tuple[int, int]] = {(rz, ra) for (rz, ra, st) in groups if st}
 
         results: list[CrossSectionData] = []
         for (rz, ra, st), points in groups.items():
@@ -384,8 +385,11 @@ class DataStore:
             xs_arr = np.array([p[1] for p in points], dtype=np.float64)
             results.append(
                 CrossSectionData(
-                    residual_Z=rz, residual_A=ra, state=st,
-                    energies_MeV=energies, xs_mb=xs_arr,
+                    residual_Z=rz,
+                    residual_A=ra,
+                    state=st,
+                    energies_MeV=energies,
+                    xs_mb=xs_arr,
                 )
             )
         return results
@@ -400,11 +404,14 @@ class DataStore:
         if key in self._sp_cache:
             return self._sp_cache[key]
 
-        rows = self._db.execute("""
+        rows = self._db.execute(
+            """
             SELECT energy_MeV, dedx FROM stopping
             WHERE source = ? AND target_Z = ?
             ORDER BY energy_MeV
-        """, [source, target_Z]).fetchall()
+        """,
+            [source, target_Z],
+        ).fetchall()
 
         energies = np.array([r[0] for r in rows], dtype=np.float64)
         dedx = np.array([r[1] for r in rows], dtype=np.float64)
@@ -431,12 +438,15 @@ class DataStore:
         """Get decay data for a nuclide. Returns None if not found."""
         # Normalize "g" → "" (#254)
         norm = "" if state == "g" else state
-        rows = self._db.execute("""
+        rows = self._db.execute(
+            """
             SELECT half_life_s, decay_mode, daughter_Z, daughter_A,
                    daughter_state, branching
             FROM decay
             WHERE Z = ? AND A = ? AND state = ?
-        """, [Z, A, norm]).fetchall()
+        """,
+            [Z, A, norm],
+        ).fetchall()
 
         if not rows:
             return None
@@ -452,7 +462,9 @@ class DataStore:
             for r in rows
         ]
         return DecayData(
-            Z=Z, A=A, state=state,
+            Z=Z,
+            A=A,
+            state=state,
             half_life_s=rows[0][0],
             decay_modes=modes,
         )
@@ -465,10 +477,13 @@ class DataStore:
     ) -> tuple[float, str] | None:
         """Get gamma dose rate constant k (µSv·m²/MBq·h) and source quality tag."""
         norm = "" if state == "g" else state
-        rows = self._db.execute("""
+        rows = self._db.execute(
+            """
             SELECT k_uSv_m2_MBq_h, source FROM dose_constants
             WHERE Z = ? AND A = ? AND state = ?
-        """, [Z, A, norm]).fetchall()
+        """,
+            [Z, A, norm],
+        ).fetchall()
         if not rows:
             return None
         return (float(rows[0][0]), str(rows[0][1]))
@@ -498,5 +513,7 @@ class DataStore:
     def has_cross_sections(self, projectile: str, target_Z: int) -> bool:
         """Check if cross-section data exists for a projectile+element combination."""
         symbol = self.get_element_symbol(target_Z)
-        xs_path = self._data_dir / self._library / "xs" / f"{projectile}_{symbol}.parquet"
+        xs_path = (
+            self._data_dir / self._library / "xs" / f"{projectile}_{symbol}.parquet"
+        )
         return xs_path.exists()
