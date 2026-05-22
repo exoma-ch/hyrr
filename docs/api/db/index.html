@@ -924,6 +924,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hyrr.db.DataStore.db" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        db
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hyrr.db.DataStore.available_libraries" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -972,6 +983,17 @@
     <span class="md-ellipsis">
       
         get_decay_data
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyrr.db.DataStore.get_dose_constant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_dose_constant
       
     </span>
   </a>
@@ -1466,6 +1488,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hyrr.db.DataStore.db" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        db
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hyrr.db.DataStore.available_libraries" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1514,6 +1547,17 @@
     <span class="md-ellipsis">
       
         get_decay_data
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hyrr.db.DataStore.get_dose_constant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_dose_constant
       
     </span>
   </a>
@@ -1935,14 +1979,16 @@ with mock databases.</p>
 
 
 
-        <p>Parquet/Polars-backed nuclear data store implementing :class:<code>DatabaseProtocol</code>.</p>
+        <p>Nuclear data store backed by the <code>nucl-parquet</code> Python client.</p>
+<p>Delegates all data access to <code>nucl_parquet.connect()</code> which registers
+Parquet files as DuckDB views with catalog-driven path resolution. This
+mirrors the Rust <code>NpDataStore</code> pattern (PR #249).</p>
 <h5 id="hyrr.db.DataStore--parameters">Parameters<a class="headerlink" href="#hyrr.db.DataStore--parameters" title="Permanent link">&para;</a></h5>
 <p>data_dir:
     Path to the nucl-parquet root directory containing <code>meta/</code>,
     <code>stopping/</code>, and per-library <code>{library}/xs/</code> subdirectories.
 library:
-    Nuclear data library to use for cross-sections (e.g. <code>"tendl-2025"</code>).
-    Must correspond to a subdirectory with an <code>xs/</code> folder.</p>
+    Nuclear data library to use for cross-sections (e.g. <code>"tendl-2025"</code>).</p>
 
 
 
@@ -2005,6 +2051,30 @@ library:
     <div class="doc doc-contents ">
 
         <p>The active cross-section library name.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="hyrr.db.DataStore.db" class="doc doc-heading">
+            <span class="doc doc-object-name doc-attribute-name">db</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#hyrr.db.DataStore.db" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="doc-signature highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">db</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>The underlying DuckDB connection (for advanced queries).</p>
 
     </div>
 
@@ -2107,6 +2177,26 @@ library:
     <div class="doc doc-contents ">
 
         <p>Get decay data for a nuclide. Returns None if not found.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hyrr.db.DataStore.get_dose_constant" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">get_dose_constant</span>
+
+
+<a href="#hyrr.db.DataStore.get_dose_constant" class="headerlink" title="Permanent link">&para;</a></h4>
+<div class="doc-signature highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">get_dose_constant</span><span class="p">(</span><span class="n">Z</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">A</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">state</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Get gamma dose rate constant k (µSv·m²/MBq·h) and source quality tag.</p>
 
 
     </div>

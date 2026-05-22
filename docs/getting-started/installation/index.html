@@ -1284,7 +1284,7 @@
 </tr>
 </tbody>
 </table>
-<p>The installer ships with the always-needed <code>meta/</code> and <code>stopping/</code> data (~54 MB) bundled. The chosen cross-section library (default <code>tendl-2025</code>, ~50 MB) is downloaded on first launch into <code>~/.hyrr/nucl-parquet/v{version}/</code>. A returning user pays no network cost; switching libraries triggers another small download. <strong>Installer size ~80 MB</strong> (was ~15 MB before #52 — the difference is bundled meta+stopping).</p>
+<p>The installer ships with the always-needed <code>meta/</code> and <code>stopping/</code> data (~54 MB) bundled. The chosen cross-section library (default <code>tendl-2023-iso</code>, ~50 MB) is downloaded on first launch into <code>~/.hyrr/nucl-parquet/v{version}/</code>. A returning user pays no network cost; switching libraries triggers another small download. <strong>Installer size ~80 MB</strong> (was ~15 MB before #52 — the difference is bundled meta+stopping).</p>
 <h2 id="python-package">Python Package<a class="headerlink" href="#python-package" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>uv<span class="w"> </span>add<span class="w"> </span>hyrr
 </code></pre></div>
@@ -1304,10 +1304,10 @@
 <h3 id="fetching-data">Fetching data<a class="headerlink" href="#fetching-data" title="Permanent link">&para;</a></h3>
 <p>The Python CLI populates the same managed cache the desktop app uses:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>hyrr<span class="w"> </span>fetch-data<span class="w">                       </span><span class="c1"># default: meta + stopping</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>hyrr<span class="w"> </span>fetch-data<span class="w"> </span>--library<span class="w"> </span>tendl-2025<span class="w">  </span><span class="c1"># specific library (~50 MB)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>hyrr<span class="w"> </span>fetch-data<span class="w"> </span>--library<span class="w"> </span>tendl-2023-iso<span class="w">  </span><span class="c1"># specific library (~50 MB)</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>hyrr<span class="w"> </span>fetch-data<span class="w"> </span>--all<span class="w">                 </span><span class="c1"># every library (~400 MB)</span>
 </code></pre></div>
-<p>The default library is <code>tendl-2025</code>. Override with <code>--library</code> or <code>HYRR_LIBRARY</code> env var. The cache is sentinel-protected: a partial download or interrupted extract leaves the dir behind for cleanup but is never picked up as a usable cache.</p>
+<p>The default library is <code>tendl-2023-iso</code>. Override with <code>--library</code> or <code>HYRR_LIBRARY</code> env var. The cache is sentinel-protected: a partial download or interrupted extract leaves the dir behind for cleanup but is never picked up as a usable cache.</p>
 <h3 id="air-gapped-install">Air-gapped install<a class="headerlink" href="#air-gapped-install" title="Permanent link">&para;</a></h3>
 <p>For machines without internet (Faraday-cage labs, isolated networks):</p>
 <ol>
