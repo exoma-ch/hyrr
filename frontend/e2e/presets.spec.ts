@@ -55,18 +55,17 @@ const PRESETS = [
 test.describe("preset golden tests", { tag: "@preset" }, () => {
   for (const preset of PRESETS) {
     test(`${preset.name} produces ${preset.expectIsotope.source}`, async ({ page }) => {
-      if (preset.slow) test.slow(); // triples timeout to 360s
-      test.setTimeout(120_000);
+      // Heavy presets (Ge-68, At-211, Ac-225) need >120s for WASM
+      // simulation on CI runners with shared, throttled CPUs.
+      const wait = preset.slow ? 300_000 : 60_000;
+      test.setTimeout(wait + 30_000); // headroom for assertions after wait
 
       const errors: string[] = [];
       page.on("pageerror", (e) => errors.push(e.message));
 
       await page.goto(preset.url);
-      // Heavy presets need up to ~120s for WASM simulation on CI runners.
-      // test.slow() triples the base timeout; selector waits use 110s as
-      // a safety margin under the 120s base (or 360s with slow()).
-      await page.waitForSelector(".status-bar", { state: "hidden", timeout: 110_000 }).catch(() => {});
-      await page.waitForSelector(".activity-table-enhanced", { timeout: 110_000 });
+      await page.waitForSelector(".status-bar", { state: "hidden", timeout: wait }).catch(() => {});
+      await page.waitForSelector(".activity-table-enhanced", { timeout: wait });
 
       // No fatal errors
       const fatal = errors.filter(
