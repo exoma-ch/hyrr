@@ -29,6 +29,10 @@ jobs:
   build:
     name: build (${{ matrix.target.name }})
     runs-on: ${{ matrix.target.runner }}
+    # linux-aarch64 cross-compiles ring via QEMU/manylinux and is fragile
+    # (ring's ARM asm needs __ARM_ARCH from the cross-compiler). Don't let
+    # it block parity-test + publish for the other 3 targets.
+    continue-on-error: ${{ matrix.target.name == 'linux-aarch64' }}
     strategy:
       fail-fast: false
       matrix:
