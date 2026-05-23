@@ -26,6 +26,8 @@ export interface AggregatedIsotope {
   name: string;
   Z: number;
   A: number;
+  /** Nuclear state: "" for ground, "m" for metastable, "m2" etc. */
+  state: string;
   half_life_s: number | null;
   /** Summed end-of-cooling activity (Bq). */
   activity_Bq: number;
@@ -40,25 +42,49 @@ export interface AggregatedIsotope {
 }
 
 /**
+ * Normalize nuclear state: "g" → "" (ground state convention — no suffix).
+ * Metastable states ("m", "m2", …) pass through unchanged.
+ */
+function normalizeState(state: string): string {
+  return state === "g" ? "" : state;
+}
+
+/**
+ * Canonical isotope name without the "g" suffix.
+ * "Sc-44g" → "Sc-44", "Sc-44m" → "Sc-44m", "Sc-44" → "Sc-44".
+ */
+function canonicalName(name: string, state: string): string {
+  // Strip trailing "g" that we normalized away (ground state has no suffix)
+  if (state === "g" && name.endsWith("g")) {
+    return name.slice(0, -1);
+  }
+  return name;
+}
+
+/**
  * Collapse a list of per-layer isotope rows into one aggregated entry per
- * isotope name. Rows lacking `time_grid_s` / `activity_vs_time_Bq` are
- * skipped (they can't contribute to a time series). If no rows for a name
- * have a time grid the name is dropped entirely.
+ * unique (Z, A, normalizedState). Rows lacking `time_grid_s` /
+ * `activity_vs_time_Bq` are skipped. Ground-state variants ("Sc-44" with
+ * state="" and "Sc-44g" with state="g") are merged into a single entry
+ * with state="" and canonical name "Sc-44" (#302).
  */
 export function aggregateByIsotopeName(
   rows: PerLayerIsotope[],
 ): AggregatedIsotope[] {
-  const byName = new Map<string, AggregatedIsotope>();
+  const byKey = new Map<string, AggregatedIsotope>();
 
   for (const { iso, layerIdx } of rows) {
     if (!iso.time_grid_s || !iso.activity_vs_time_Bq) continue;
 
-    const existing = byName.get(iso.name);
+    const normState = normalizeState(iso.state);
+    const key = `${iso.Z}-${iso.A}-${normState}`;
+    const existing = byKey.get(key);
     if (!existing) {
-      byName.set(iso.name, {
-        name: iso.name,
+      byKey.set(key, {
+        name: canonicalName(iso.name, iso.state),
         Z: iso.Z,
         A: iso.A,
+        state: normState,
         half_life_s: iso.half_life_s,
         activity_Bq: iso.activity_Bq,
         time_grid_s: [...iso.time_grid_s],
@@ -89,5 +115,5 @@ export function aggregateByIsotopeName(
     }
   }
 
-  return [...byName.values()];
+  return [...byKey.values()];
 }

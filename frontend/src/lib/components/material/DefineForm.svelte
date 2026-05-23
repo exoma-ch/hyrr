@@ -21,6 +21,7 @@
   } from "../../stores/custom-materials.svelte";
   import {
     applyRowPatch,
+    collectRowEnrichments,
     generateRowId,
     isTabulatedDensity,
     parseMaterialInput,
@@ -514,6 +515,18 @@
     saving = true;
     formError = null;
     try {
+      // Merge row-level enrichments with layer-level enrichment (#304).
+      // Row enrichments (from the "enr" button) take precedence.
+      const rowEnrichment = collectRowEnrichments(rows);
+      const mergedEnrichment = (currentEnrichment || rowEnrichment)
+        ? { ...currentEnrichment, ...rowEnrichment }
+        : undefined;
+      // Snapshot to escape Svelte 5 $state proxies — IndexedDB's structured
+      // clone rejects Proxy exotic objects (#304).
+      const enrichmentForSave = mergedEnrichment
+        ? JSON.parse(JSON.stringify(mergedEnrichment))
+        : undefined;
+
       const overwriteId = intent === "overwrite"
         ? (editingCustomId ?? lastSavedSession?.id)
         : null;
@@ -525,7 +538,7 @@
           densityVal,
           massFractions,
           serialised,
-          currentEnrichment,
+          enrichmentForSave,
         );
         lastSavedSession = { id: overwriteId, name: nameVal };
       } else {
@@ -535,7 +548,7 @@
           densityVal,
           massFractions,
           serialised,
-          currentEnrichment,
+          enrichmentForSave,
         );
         lastSavedSession = { id: newId, name: nameVal };
       }
@@ -543,7 +556,7 @@
       // slot so the round-2 race (Save at second 28 silently drops
       // demoted rows) can't fire. (#95)
       clearDemote();
-      oncommit(nameVal, currentEnrichment);
+      oncommit(nameVal, enrichmentForSave);
       // Mark first-time guidance done after a successful save.
       dismissModeFirstTime();
     } catch {
@@ -617,7 +630,7 @@
               issues={issuesByRow.get(r.id) ?? []}
               onchange={(patch) => patchRow(r.id, patch)}
               onremove={() => removeRow(r.id)}
-              oneditenrichment={mode !== "single" ? openRowEnrichmentEditor : undefined}
+              oneditenrichment={openRowEnrichmentEditor}
             />
           {/each}
         {/if}

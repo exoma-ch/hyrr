@@ -75,7 +75,7 @@
       aria-label={`Edit isotope enrichment for ${singleElement}`}
       title={hasRowEnrichment ? `Row enrichment set for ${singleElement} — click to edit` : `Override natural isotope abundance for ${singleElement}`}
       onclick={() => oneditenrichment(row.id, singleElement)}
-    >E</button>
+    >enr</button>
   {/if}
 
   <button
@@ -98,7 +98,7 @@
 <style>
   .row {
     display: grid;
-    grid-template-columns: minmax(2.5rem, auto) minmax(0, 1fr) auto auto 1.5rem;
+    grid-template-columns: minmax(2.5rem, auto) minmax(0, 5rem) auto auto 1.5rem;
     gap: 0.4rem;
     align-items: center;
     padding: 0.25rem 0.4rem;
@@ -113,12 +113,13 @@
     border: 1px solid var(--c-border);
     border-radius: 3px;
     color: var(--c-text-muted);
-    font-size: 0.65rem;
-    width: 1.4rem;
+    font-size: 0.6rem;
+    padding: 0.1rem 0.25rem;
     height: 1.4rem;
     line-height: 1;
     cursor: pointer;
     font-weight: 600;
+    white-space: nowrap;
   }
   .enrich-btn:hover { color: var(--c-accent); border-color: var(--c-accent); }
   .enrich-btn.active {
