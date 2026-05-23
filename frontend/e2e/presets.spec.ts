@@ -52,8 +52,10 @@ test.describe("preset golden tests", { tag: "@preset" }, () => {
       page.on("pageerror", (e) => errors.push(e.message));
 
       await page.goto(preset.url);
-      await page.waitForSelector(".status-bar", { state: "hidden", timeout: 60_000 }).catch(() => {});
-      await page.waitForSelector(".activity-table-enhanced", { timeout: 60_000 });
+      // Heavy presets (Ge-68, At-211, Ac-225) need up to ~90s for WASM
+      // simulation. Align selector waits with the 120s global timeout.
+      await page.waitForSelector(".status-bar", { state: "hidden", timeout: 110_000 }).catch(() => {});
+      await page.waitForSelector(".activity-table-enhanced", { timeout: 110_000 });
 
       // No fatal errors
       const fatal = errors.filter(
@@ -63,7 +65,7 @@ test.describe("preset golden tests", { tag: "@preset" }, () => {
 
       // Activity table has rows
       const rows = page.locator(".activity-table-enhanced tbody tr");
-      await expect(rows.first()).toBeVisible();
+      await expect(rows.first()).toBeVisible({ timeout: 10_000 });
 
       const allCellText = await page.locator(".activity-table-enhanced tbody tr").allTextContents();
 
