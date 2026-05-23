@@ -60,19 +60,19 @@
     if (!db?.emissionDataLoaded) return {};
     const has: Record<string, boolean> = {};
     // Collect all isotopes passing the filter (same logic as render)
-    const isos: { Z: number; A: number }[] = [];
+    const isos: { Z: number; A: number; state: string }[] = [];
     for (const layer of (result?.layers ?? [])) {
       if (sharedFilter.layers.size > 0 && !sharedFilter.layers.has(layer.layer_index)) continue;
       for (const iso of layer.isotopes) {
         if (iso.half_life_s === null || iso.activity_Bq <= 0) continue;
         if (sharedFilter.text && !iso.name.toLowerCase().includes(sharedFilter.text.toLowerCase())) continue;
         if (selected.size > 0 && !selected.has(iso.name)) continue;
-        isos.push({ Z: iso.Z, A: iso.A });
+        isos.push({ Z: iso.Z, A: iso.A, state: iso.state ?? "" });
       }
     }
     for (const tab of EMISSION_TABS) {
       has[tab.id] = isos.some((iso) => {
-        const emissions = db.getEmissions(iso.Z, iso.A);
+        const emissions = db.getEmissions(iso.Z, iso.A, iso.state);
         return emissions.some((e) => tab.radTypes.includes(e.radType));
       });
     }
@@ -254,7 +254,7 @@
 
     for (const agg of aggregated) {
       const tabRadTypes = EMISSION_TABS.find((t) => t.id === activeEmTab)?.radTypes ?? ["gamma"];
-      const emissions: EmissionLine[] = db.getEmissions(agg.Z, agg.A)
+      const emissions: EmissionLine[] = db.getEmissions(agg.Z, agg.A, agg.state)
         .filter((e) => tabRadTypes.includes(e.radType));
       if (emissions.length === 0) continue;
 

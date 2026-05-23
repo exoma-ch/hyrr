@@ -257,6 +257,46 @@ describe("serialise", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// #304 / #305: enrichment collection from rows
+// ---------------------------------------------------------------------------
+describe("collectRowEnrichments (#304)", () => {
+  // When the user sets per-row isotopic overrides via the "enr" button,
+  // the save flow must gather them into a single enrichment record.
+  // This helper is the unit-testable core of that logic.
+  it("merges per-row enrichment into a single record", async () => {
+    const { collectRowEnrichments } = await import("./define-form-rows");
+    const rows: Row[] = [
+      row({ formula: "Zn", value: 50, enrichment: { Zn: { 68: 0.98, 66: 0.01, 67: 0.004, 64: 0.003, 70: 0.001 } } }),
+      row({ formula: "O", value: 50 }),
+    ];
+    const result = collectRowEnrichments(rows);
+    expect(result).toEqual({ Zn: { 68: 0.98, 66: 0.01, 67: 0.004, 64: 0.003, 70: 0.001 } });
+  });
+
+  it("returns undefined when no rows have enrichment", async () => {
+    const { collectRowEnrichments } = await import("./define-form-rows");
+    const rows: Row[] = [
+      row({ formula: "Cu", value: 100 }),
+    ];
+    const result = collectRowEnrichments(rows);
+    expect(result).toBeUndefined();
+  });
+
+  it("merges enrichments from multiple rows", async () => {
+    const { collectRowEnrichments } = await import("./define-form-rows");
+    const rows: Row[] = [
+      row({ formula: "Zn", value: 50, enrichment: { Zn: { 68: 0.98 } } }),
+      row({ formula: "O", value: 50, enrichment: { O: { 18: 0.5, 16: 0.5 } } }),
+    ];
+    const result = collectRowEnrichments(rows);
+    expect(result).toEqual({
+      Zn: { 68: 0.98 },
+      O: { 18: 0.5, 16: 0.5 },
+    });
+  });
+});
+
 describe("round-trip", () => {
   it("text → parse → serialise is canonical for mass mode with balance", () => {
     const r = parseMaterialInput("Al 80%, Cu 5%, Zn bal");

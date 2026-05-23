@@ -451,6 +451,24 @@ export function isTabulatedDensity(formula: string): boolean {
   return elements.length === 1 && elements[0] in ELEMENT_DENSITIES;
 }
 
+/**
+ * Collect per-row enrichment overrides into a single merged record.
+ * Returns undefined when no rows carry enrichment. (#304)
+ */
+export function collectRowEnrichments(
+  rows: Row[],
+): Record<string, Record<number, number>> | undefined {
+  let result: Record<string, Record<number, number>> | undefined;
+  for (const r of rows) {
+    if (!r.enrichment) continue;
+    for (const [el, vec] of Object.entries(r.enrichment)) {
+      if (!result) result = {};
+      result[el] = { ...vec };
+    }
+  }
+  return result;
+}
+
 /** Average atomic weight per row (used by the atom-mixture density estimator). */
 export function rowAverageAtomicMass(formula: string): number {
   const counts = parseFormula(formula);
