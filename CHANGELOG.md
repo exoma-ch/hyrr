@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1](https://github.com/exoma-ch/hyrr/compare/v0.9.0...v0.9.1) (2026-05-24)
+
+
+### Bug Fixes
+
+* **ci:** mark MCP linux-aarch64 continue-on-error ([#308](https://github.com/exoma-ch/hyrr/issues/308)) ([9f06f0f](https://github.com/exoma-ch/hyrr/commit/9f06f0f16598b612fc5f1e31855f8fb89ea8b5db))
+* **ci:** sort JSON keys in MCP parity test (non-deterministic HashMap order) ([#309](https://github.com/exoma-ch/hyrr/issues/309)) ([75ff860](https://github.com/exoma-ch/hyrr/commit/75ff860729de79616f2f1c1dd803ee65786acb95))
+* **e2e:** 300s wait for heavy presets (was 110s hardcoded) ([#313](https://github.com/exoma-ch/hyrr/issues/313)) ([65ba9cc](https://github.com/exoma-ch/hyrr/commit/65ba9cc028ec404a67f75f28ae1b8b7eb4837bd5))
+* **e2e:** increase preset golden test timeouts for heavy targets ([#311](https://github.com/exoma-ch/hyrr/issues/311)) ([ca9f5b0](https://github.com/exoma-ch/hyrr/commit/ca9f5b01bfc11ae05883f1e2804497fea0f96291))
+* **e2e:** split presets into [@preset](https://github.com/preset) (fast) and [@preset-heavy](https://github.com/preset-heavy) ([#314](https://github.com/exoma-ch/hyrr/issues/314)) ([665e0f4](https://github.com/exoma-ch/hyrr/commit/665e0f4f4d241249ce7327ec80256a15fb6da263))
+* **e2e:** use test.slow() for heavy preset golden tests ([#312](https://github.com/exoma-ch/hyrr/issues/312)) ([efebd83](https://github.com/exoma-ch/hyrr/commit/efebd83dc1f204c41575cd8912dae127082eb247))
+* **frontend:** isomeric state consolidation, emission SSoT, enrichment save ([#302](https://github.com/exoma-ch/hyrr/issues/302) [#303](https://github.com/exoma-ch/hyrr/issues/303) [#304](https://github.com/exoma-ch/hyrr/issues/304) [#305](https://github.com/exoma-ch/hyrr/issues/305)) ([#307](https://github.com/exoma-ch/hyrr/issues/307)) ([368007e](https://github.com/exoma-ch/hyrr/commit/368007e50aac855f5f400ec6ab18a91f0daac2f4))
+* **mcp:** deterministic output ordering in MCP tools ([#310](https://github.com/exoma-ch/hyrr/issues/310)) ([dc8341c](https://github.com/exoma-ch/hyrr/commit/dc8341c85f2df781a3c4bcd6add554fb2588f54e))
+
+
+### Miscellaneous
+
+* **deps:** bump googleapis/release-please-action from 4 to 5 ([#301](https://github.com/exoma-ch/hyrr/issues/301)) ([0131519](https://github.com/exoma-ch/hyrr/commit/0131519fbe74239caa2d266e83548ee2a05cb990))
+* **deps:** bump nucl-parquet from `9da1521` to `ee2a8f0` ([#300](https://github.com/exoma-ch/hyrr/issues/300)) ([650175b](https://github.com/exoma-ch/hyrr/commit/650175bdd2aa0e5bea4db5f373790314065d1134))
+
 ## [0.9.0](https://github.com/exoma-ch/hyrr/compare/v0.8.0...v0.9.0) (2026-05-22)
 
 
