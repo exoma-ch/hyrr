@@ -68,10 +68,10 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: https://exoma-ch.github.io/hyrr/tst/
           CI: "1"
-        # All 5 presets must produce the expected isotope in the expected
-        # layer. Catches silent WASM/data regressions that break production
-        # for non-alloy materials, enriched targets, etc.
-        run: npx playwright test --grep @preset --project=desktop-1280 --reporter=list,html
+        # @preset = fast presets only (Tc-99m, F-18) — ~10s each.
+        # Heavy presets (Ge-68, At-211, Ac-225) are @preset-heavy and run
+        # in the full e2e suite only (>5 min WASM compute on CI runners).
+        run: npx playwright test --grep '@preset(?!-)' --project=desktop-1280 --reporter=list,html
 
       - name: Upload Playwright report
         if: always()
