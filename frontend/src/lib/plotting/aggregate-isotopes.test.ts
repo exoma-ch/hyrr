@@ -10,6 +10,8 @@
 import { describe, it, expect } from "vitest";
 import {
   aggregateByIsotopeName,
+  canonicalName,
+  canonicalState,
   type PerLayerIsotope,
   type AggregatedIsotope,
 } from "./aggregate-isotopes";
@@ -177,6 +179,27 @@ describe("aggregateByIsotopeName", () => {
 
       const result = aggregateByIsotopeName(rows);
       expect(result).toHaveLength(0);
+    });
+  });
+
+  describe("canonicalName / canonicalState (#315)", () => {
+    it('strips trailing "g" from ground-state names', () => {
+      expect(canonicalName("Sc-44g", "g")).toBe("Sc-44");
+    });
+    it("preserves metastable names", () => {
+      expect(canonicalName("Sc-44m", "m")).toBe("Sc-44m");
+    });
+    it("preserves names with no state suffix", () => {
+      expect(canonicalName("Sc-44", "")).toBe("Sc-44");
+    });
+    it('normalizes state "g" to ""', () => {
+      expect(canonicalState("g")).toBe("");
+    });
+    it('preserves state "m"', () => {
+      expect(canonicalState("m")).toBe("m");
+    });
+    it('preserves state ""', () => {
+      expect(canonicalState("")).toBe("");
     });
   });
 });

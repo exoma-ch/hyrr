@@ -53,8 +53,16 @@ function normalizeState(state: string): string {
  * Canonical isotope name without the "g" suffix.
  * "Sc-44g" → "Sc-44", "Sc-44m" → "Sc-44m", "Sc-44" → "Sc-44".
  */
-function canonicalName(name: string, state: string): string {
-  // Strip trailing "g" that we normalized away (ground state has no suffix)
+/** Normalize ground-state marker: "g" → "" (ground has no suffix). */
+export function canonicalState(state: string): string {
+  return state === "g" ? "" : state;
+}
+
+/**
+ * Canonical isotope name without the "g" suffix.
+ * "Sc-44g" → "Sc-44", "Sc-44m" → "Sc-44m", "Sc-44" → "Sc-44".
+ */
+export function canonicalName(name: string, state: string): string {
   if (state === "g" && name.endsWith("g")) {
     return name.slice(0, -1);
   }
