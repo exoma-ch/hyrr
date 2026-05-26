@@ -1,6 +1,7 @@
 <script lang="ts">
   import { toggleHistory, getHistoryOpen } from "../stores/ui.svelte";
   import { setConfig, resetConfig, getSerializableConfig, restoreSerializableConfig } from "../stores/config.svelte";
+  import { encodeConfigV2 } from "../config-url-v2";
   import { PRESETS } from "../presets";
   import SessionTabs from "./SessionTabs.svelte";
   import HelpModal from "./HelpModal.svelte";
@@ -10,14 +11,38 @@
   import { buildSessionFile, downloadSessionFile, pickSessionFile } from "../session-io";
   import { getDisplayThresholds, setDisplayThresholds } from "../stores/display-thresholds.svelte";
   import { openExternalUrl } from "../utils/open-url";
-  import { Bug, CircleHelp, History, Monitor, Moon, Save, Sun } from "lucide-svelte";
+  import { Bug, Check, CircleHelp, Clipboard, History, Link, Monitor, Moon, Save, Sun } from "lucide-svelte";
   import logoUrl from "/logo.svg?url";
+
+  const SHARE_BASE = "https://exoma-ch.github.io/hyrr/";
 
   let historyOpen = $derived(getHistoryOpen());
   let helpOpen = $state(false);
   let themeMode = $derived(getThemeMode());
   let resolved = $derived(getResolvedTheme());
   let saveMenuOpen = $state(false);
+  let copied = $state<"hash" | "share" | null>(null);
+
+  let currentHash = $derived(encodeConfigV2(getSerializableConfig()));
+  let shareUrl = $derived(`${SHARE_BASE}${currentHash}`);
+
+  async function copyToClipboard(text: string, which: "hash" | "share") {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Fallback for non-secure contexts (e.g. Tauri webview)
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    copied = which;
+    setTimeout(() => { if (copied === which) copied = null; }, 1500);
+  }
 
   function toggleSaveMenu(e: MouseEvent) {
     e.stopPropagation();
@@ -94,6 +119,41 @@
       </button>
       {#if saveMenuOpen}
         <div class="save-menu" role="menu">
+          <div class="share-section">
+            <label class="share-label">Share link</label>
+            <div class="share-row">
+              <input
+                class="share-input"
+                type="text"
+                readonly
+                value={shareUrl}
+                onclick={(e) => (e.target as HTMLInputElement).select()}
+              />
+              <button
+                class="share-btn"
+                title="Copy hash"
+                onclick={() => copyToClipboard(currentHash, "hash")}
+              >
+                {#if copied === "hash"}
+                  <Check size={14} aria-hidden="true" />
+                {:else}
+                  <Clipboard size={14} aria-hidden="true" />
+                {/if}
+              </button>
+              <button
+                class="share-btn"
+                title="Copy share URL"
+                onclick={() => copyToClipboard(shareUrl, "share")}
+              >
+                {#if copied === "share"}
+                  <Check size={14} aria-hidden="true" />
+                {:else}
+                  <Link size={14} aria-hidden="true" />
+                {/if}
+              </button>
+            </div>
+          </div>
+          <div class="menu-sep"></div>
           <button class="menu-item" role="menuitem" onclick={() => saveSession(true)}>
             Save session <span class="menu-hint">(config + result)</span>
           </button>
@@ -160,7 +220,7 @@
     position: absolute;
     top: calc(100% + 4px);
     right: 0;
-    min-width: 260px;
+    min-width: 320px;
     background: var(--c-bg-subtle);
     border: 1px solid var(--c-border);
     border-radius: 6px;
@@ -187,6 +247,49 @@
   .menu-item:hover { background: var(--c-bg-muted); }
   .menu-hint { color: var(--c-text-muted); font-size: 0.72rem; }
   .menu-sep { height: 1px; background: var(--c-border); margin: 4px 0; }
+
+  .share-section { padding: 6px 8px; }
+  .share-label {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--c-text-muted);
+    margin-bottom: 4px;
+    font-weight: 500;
+  }
+  .share-row {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+  }
+  .share-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.72rem;
+    font-family: monospace;
+    padding: 3px 6px;
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    background: var(--c-bg);
+    color: var(--c-text);
+    outline: none;
+  }
+  .share-input:focus { border-color: var(--c-accent); }
+  .share-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    color: var(--c-text-muted);
+    padding: 3px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .share-btn:hover {
+    color: var(--c-text);
+    border-color: var(--c-text-muted);
+  }
   .header-bar {
     display: flex;
     align-items: stretch;
