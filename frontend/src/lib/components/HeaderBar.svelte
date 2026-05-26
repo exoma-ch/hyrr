@@ -1,7 +1,7 @@
 <script lang="ts">
   import { toggleHistory, getHistoryOpen } from "../stores/ui.svelte";
   import { setConfig, resetConfig, getSerializableConfig, restoreSerializableConfig, getCurrentProfile } from "../stores/config.svelte";
-  import { encodeConfigV2 } from "../config-url-v2";
+  import { encodeConfigV2, decodeSerializableFromString } from "../config-url-v2";
   import { PRESETS } from "../presets";
   import SessionTabs from "./SessionTabs.svelte";
   import HelpModal from "./HelpModal.svelte";
@@ -22,6 +22,20 @@
   let resolved = $derived(getResolvedTheme());
   let saveMenuOpen = $state(false);
   let copied = $state<"hash" | "share" | null>(null);
+  let loadError = $state("");
+
+  function loadFromUrl(input: string) {
+    loadError = "";
+    const trimmed = input.trim();
+    if (!trimmed) return;
+    const config = decodeSerializableFromString(trimmed);
+    if (config) {
+      restoreSerializableConfig(config);
+      saveMenuOpen = false;
+    } else {
+      loadError = "Could not parse config from URL";
+    }
+  }
 
   let hasProfile = $derived(getCurrentProfile() !== null);
   // encodeConfigV2 receives full config — currentProfile is stripped by config-url layer
@@ -122,14 +136,25 @@
       {#if saveMenuOpen}
         <div class="save-menu" role="menu">
           <div class="share-section">
-            <label class="share-label">Share link</label>
+            <label class="share-label" for="share-url-input">Share / load config</label>
             <div class="share-row">
               <input
+                id="share-url-input"
                 class="share-input"
                 type="text"
-                readonly
                 value={shareUrl}
-                onclick={(e) => (e.target as HTMLInputElement).select()}
+                placeholder="Paste a HYRR URL to load…"
+                onfocus={(e) => (e.target as HTMLInputElement).select()}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") loadFromUrl((e.target as HTMLInputElement).value);
+                }}
+                onpaste={(e) => {
+                  const text = e.clipboardData?.getData("text");
+                  if (text && text.includes("#config=")) {
+                    e.preventDefault();
+                    loadFromUrl(text);
+                  }
+                }}
               />
               <button
                 class="share-btn"
@@ -156,6 +181,9 @@
             </div>
             {#if hasProfile}
               <p class="share-warning">Current profile not included in share link — recipient will need the CSV file.</p>
+            {/if}
+            {#if loadError}
+              <p class="load-error">{loadError}</p>
             {/if}
           </div>
           <div class="menu-sep"></div>
@@ -279,6 +307,11 @@
     outline: none;
   }
   .share-input:focus { border-color: var(--c-accent); }
+  .load-error {
+    margin: 4px 0 0;
+    font-size: 0.7rem;
+    color: var(--c-red, #c00);
+  }
   .share-btn {
     display: flex;
     align-items: center;

@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2](https://github.com/exoma-ch/hyrr/compare/v0.10.1...v0.10.2) (2026-05-26)
+
+
+### Bug Fixes
+
+* **desktop:** update prompt + sticky topbar polish ([#329](https://github.com/exoma-ch/hyrr/issues/329)) ([c49d999](https://github.com/exoma-ch/hyrr/commit/c49d999d8bd82a4621bd6330d9922dbd0f6be4f5))
+
+## [0.10.1](https://github.com/exoma-ch/hyrr/compare/v0.10.0...v0.10.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* **compute:** normalize state in chain-solver result ([#323](https://github.com/exoma-ch/hyrr/issues/323)) ([#325](https://github.com/exoma-ch/hyrr/issues/325)) ([f77da3f](https://github.com/exoma-ch/hyrr/commit/f77da3f268a3ae30cc3bc26f9fdc5b4ba5a7ff01))
+* **frontend:** stack emission bars instead of overlay ([#324](https://github.com/exoma-ch/hyrr/issues/324)) ([#327](https://github.com/exoma-ch/hyrr/issues/327)) ([6ee08aa](https://github.com/exoma-ch/hyrr/commit/6ee08aae8ca93a8c5a53561dd03f465ebbdd3dea))
+
+## [0.10.0](https://github.com/exoma-ch/hyrr/compare/v0.9.1...v0.10.0) (2026-05-26)
+
+
+### Features
+
+* **frontend:** sticky top bar + share link in save menu ([#320](https://github.com/exoma-ch/hyrr/issues/320)) ([aa252e1](https://github.com/exoma-ch/hyrr/commit/aa252e1c84933753e4a0e1124cae9b161a927a30))
+* **mcp:** auto-fetch nuclear data for uvx hyrr-mcp ([#322](https://github.com/exoma-ch/hyrr/issues/322)) ([382e473](https://github.com/exoma-ch/hyrr/commit/382e47381ccc8115dacdbf744e0b778ca0ebbde9))
+
+
+### Bug Fixes
+
+* **build:** SSoT script for frontend data copy — bundle emissions ([#315](https://github.com/exoma-ch/hyrr/issues/315)) ([#318](https://github.com/exoma-ch/hyrr/issues/318)) ([45dc4ea](https://github.com/exoma-ch/hyrr/commit/45dc4ea29de3742d7fdc4abf089a94731e8bbe75))
+* **frontend:** normalize isomeric state in activity table ([#315](https://github.com/exoma-ch/hyrr/issues/315)) ([#316](https://github.com/exoma-ch/hyrr/issues/316)) ([99a59cd](https://github.com/exoma-ch/hyrr/commit/99a59cd30825fb4dca03b4c4ad1976f623444f9b))
+
+
+### Tests
+
+* **desktop:** golden simulation e2e + workflow_dispatch trigger ([#321](https://github.com/exoma-ch/hyrr/issues/321)) ([8579432](https://github.com/exoma-ch/hyrr/commit/857943228eb13f0d3a57722a7395689f5ceee528))
+
 ## [0.9.1](https://github.com/exoma-ch/hyrr/compare/v0.9.0...v0.9.1) (2026-05-24)
 
 

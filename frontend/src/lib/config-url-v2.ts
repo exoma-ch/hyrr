@@ -225,9 +225,16 @@ export function decodeConfigV2(encoded: string): SimulationConfig | null {
   }
 }
 
-/** Decode from hash — returns SerializableConfig (preserving groups). */
-export function decodeSerializableFromHash(): SerializableConfig | null {
-  const hash = window.location.hash.slice(1);
+/**
+ * Decode a config from a hash fragment string (without the leading "#").
+ * Accepts both v1 (plain base64) and v2 (compressed) formats.
+ * Works with raw hash ("config=1:...") or full URLs ("https://...#config=1:...").
+ */
+export function decodeSerializableFromString(input: string): SerializableConfig | null {
+  // Extract hash fragment from full URL if needed
+  const hashIdx = input.indexOf("#");
+  const hash = hashIdx >= 0 ? input.slice(hashIdx + 1) : input;
+
   if (!hash.startsWith("config=")) return null;
   const payload = hash.slice("config=".length);
 
@@ -249,6 +256,11 @@ export function decodeSerializableFromHash(): SerializableConfig | null {
   } catch {
     return null;
   }
+}
+
+/** Decode from current window hash. */
+export function decodeSerializableFromHash(): SerializableConfig | null {
+  return decodeSerializableFromString(window.location.hash.slice(1));
 }
 
 /** Decode from hash — flat SimulationConfig (legacy, for backward compat). */

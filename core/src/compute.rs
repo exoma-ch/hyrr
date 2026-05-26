@@ -555,7 +555,7 @@ fn apply_chain_solver_by_component(
                     name,
                     z: ciso.z,
                     a: ciso.a,
-                    state: ciso.state.clone(),
+                    state: if ciso.state == "g" { String::new() } else { ciso.state.clone() },
                     half_life_s: ciso.half_life_s,
                     production_rate: prod_rate,
                     saturation_yield_bq_ua: sat_yield,
