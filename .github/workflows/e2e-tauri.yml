@@ -8,6 +8,7 @@ name: E2E Tauri (WebDriver smoke)
 # support (no WKWebView driver exists).
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main]
     paths:
