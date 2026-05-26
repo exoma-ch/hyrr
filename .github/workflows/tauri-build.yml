@@ -55,11 +55,7 @@ jobs:
 
       - name: Copy parquet data to frontend public dir
         shell: bash
-        run: |
-          mkdir -p frontend/public/data/parquet/{xs,meta,stopping}
-          cp nucl-parquet/data/tendl-2023-iso/xs/*.parquet frontend/public/data/parquet/xs/
-          cp nucl-parquet/data/meta/*.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
-          cp nucl-parquet/data/stopping/*.parquet frontend/public/data/parquet/stopping/
+        run: scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet tendl-2023-iso
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
