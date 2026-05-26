@@ -4,12 +4,65 @@
  */
 
 import type { SimulationConfig } from "./types";
+import type { CurrentProfile } from "@hyrr/compute";
 
 export interface Preset {
   id: string;
   name: string;
   description: string;
   config: SimulationConfig;
+}
+
+/**
+ * Build a synthetic trapezoidal beam-current profile with noise + beam trip.
+ * Mimics a real 2-hour cyclotron irradiation log.
+ */
+function buildMockProfile(): CurrentProfile {
+  const dt = 5; // 5 s sampling (realistic DAQ rate for clinical runs)
+  const duration = 7200; // 2 h
+  const rampUp = 300; // 5 min ramp
+  const rampDown = 180; // 3 min ramp
+  const plateau = 0.030; // 30 µA
+
+  const n = Math.floor(duration / dt);
+  const times = new Float64Array(n);
+  const currents = new Float64Array(n);
+
+  // Simple seeded LCG for deterministic "noise" (no Math.random)
+  let seed = 42;
+  const rand = () => {
+    seed = (seed * 1664525 + 1013904223) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  // Box-Muller-ish: uniform → approximate normal
+  const randn = () => {
+    const u1 = rand() || 0.001;
+    const u2 = rand();
+    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  };
+
+  const rampDownStart = duration - rampDown;
+  for (let i = 0; i < n; i++) {
+    const t = i * dt;
+    times[i] = t;
+
+    // Trapezoidal envelope
+    let env: number;
+    if (t < rampUp) env = plateau * (t / rampUp);
+    else if (t < rampDownStart) env = plateau;
+    else env = plateau * ((duration - t) / rampDown);
+
+    // 2% Gaussian noise
+    currents[i] = Math.max(0, env + 0.02 * plateau * randn());
+  }
+
+  // Beam trip at ~40 min for ~20 s (4 samples)
+  const tripStart = Math.floor(2400 / dt);
+  for (let j = tripStart; j < tripStart + 4 && j < n; j++) {
+    currents[j] = Math.max(0, 0.001 * rand());
+  }
+
+  return { timesS: times, currentsMA: currents };
 }
 
 export const PRESETS: Preset[] = [
@@ -80,6 +133,22 @@ export const PRESETS: Preset[] = [
       ],
       irradiation_s: 86400 * 10,
       cooling_s: 86400 * 5,
+    },
+  },
+  {
+    id: "sc44-profile",
+    name: "Sc-44 + beam profile",
+    description:
+      "Sc-44 theranostics with a realistic 2 h beam-current profile (ramp, noise, beam trip)",
+    config: {
+      beam: { projectile: "p", energy_MeV: 16, current_mA: 0.030 },
+      layers: [
+        { material: "havar", thickness_cm: 0.0025 },
+        { material: "Ca-44", enrichment: { Ca: { 44: 0.98 } }, energy_out_MeV: 6 },
+      ],
+      irradiation_s: 7200,
+      cooling_s: 3600,
+      currentProfile: buildMockProfile(),
     },
   },
 ];
