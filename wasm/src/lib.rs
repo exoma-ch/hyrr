@@ -203,13 +203,18 @@ impl WasmDataStore {
 
         let layers = config_to_layers(&self.inner, &config);
 
+        let current_profile = config.current_profile.map(|cp| CurrentProfile {
+            times_s: cp.times_s,
+            currents_ma: cp.currents_ma,
+        });
+
         let mut stack = TargetStack {
             beam: Beam::new(projectile, config.beam.energy_mev, config.beam.current_ma),
             layers,
             irradiation_time_s: config.irradiation_s,
             cooling_time_s: config.cooling_s,
             area_cm2: 1.0,
-            current_profile: None,
+            current_profile,
         };
 
         let result = compute_stack(&self.inner, &mut stack, true)
@@ -537,6 +542,17 @@ struct SimulationConfig {
     layers: Vec<LayerConfig>,
     irradiation_s: f64,
     cooling_s: f64,
+    /// Time-varying beam current (piecewise-constant).
+    #[serde(default, alias = "currentProfile")]
+    current_profile: Option<CurrentProfileConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CurrentProfileConfig {
+    #[serde(alias = "timesS")]
+    times_s: Vec<f64>,
+    #[serde(alias = "currentsMA")]
+    currents_ma: Vec<f64>,
 }
 
 #[derive(Debug, Deserialize)]

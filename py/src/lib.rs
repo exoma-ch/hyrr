@@ -67,13 +67,18 @@ impl PyDataStore {
 
         let layers = config_to_layers(&*db, &config);
 
+        let current_profile = config.current_profile.map(|cp| CurrentProfile {
+            times_s: cp.times_s,
+            currents_ma: cp.currents_ma,
+        });
+
         let mut stack = TargetStack {
             beam: Beam::new(projectile, config.beam.energy_mev, config.beam.current_ma),
             layers,
             irradiation_time_s: config.irradiation_s,
             cooling_time_s: config.cooling_s,
             area_cm2: 1.0,
-            current_profile: None,
+            current_profile,
         };
 
         let result = compute_stack(&*db, &mut stack, true);
@@ -388,6 +393,15 @@ struct SimConfig {
     layers: Vec<LayerCfg>,
     irradiation_s: f64,
     cooling_s: f64,
+    /// Time-varying beam current (piecewise-constant).
+    #[serde(default)]
+    current_profile: Option<CurrentProfileCfg>,
+}
+
+#[derive(serde::Deserialize)]
+struct CurrentProfileCfg {
+    times_s: Vec<f64>,
+    currents_ma: Vec<f64>,
 }
 
 #[derive(serde::Deserialize)]
