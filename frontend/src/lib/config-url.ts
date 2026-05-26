@@ -26,13 +26,21 @@ export function decodeConfigFromHash(): SimulationConfig | null {
   return decodeConfigFromHashV2();
 }
 
-/** Update the URL hash with the given serializable config (preserves groups). */
-export function setConfigInHash(config: SerializableConfig): void {
-  setConfigInHashV2(config);
+/** Strip currentProfile before URL encoding — too large for URL hash. */
+function stripProfile(config: SerializableConfig): SerializableConfig {
+  const { currentProfile: _, ...rest } = config;
+  return rest as SerializableConfig;
 }
 
-/** Generate a full shareable URL for a config. */
+/** Update the URL hash with the given serializable config (preserves groups).
+ *  CurrentProfile is excluded — it's too large for URL encoding. */
+export function setConfigInHash(config: SerializableConfig): void {
+  setConfigInHashV2(stripProfile(config));
+}
+
+/** Generate a full shareable URL for a config.
+ *  CurrentProfile is excluded — it's too large for URL encoding. */
 export function getShareableUrl(config: SerializableConfig): string {
-  const hash = encodeConfigV2(config);
+  const hash = encodeConfigV2(stripProfile(config));
   return `${window.location.origin}${window.location.pathname}${hash}`;
 }
