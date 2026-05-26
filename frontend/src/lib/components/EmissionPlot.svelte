@@ -339,7 +339,7 @@
           y: rates,
           type: "bar",
           name: nucLabel(agg.name),
-          marker: { color },
+          marker: { color, opacity: 0.85 },
           hovertemplate: `%{x:.1f} keV<br>%{y:.2e} /s<br>${nucLabel(agg.name)}<extra></extra>`,
         });
         colorIdx++;
@@ -433,7 +433,7 @@
         gridcolor: tc.border,
         type: logY ? "log" : "linear",
       },
-      barmode: "overlay",
+      barmode: "stack",
       bargap: 0,
       hovermode: "closest",
       hoverdistance: 30,
