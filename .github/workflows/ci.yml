@@ -197,6 +197,16 @@ jobs:
             exit 1
           fi
 
+      # All frontend-building workflows must use the SSoT copy script.
+      - name: Assert workflows use copy-frontend-data.sh
+        run: |
+          for wf in tauri-build deploy-frontend promote-to-prod e2e e2e-tauri; do
+            if ! grep -q 'copy-frontend-data.sh' ".github/workflows/${wf}.yml"; then
+              echo "::error::${wf}.yml doesn't use scripts/copy-frontend-data.sh — data copy will drift."
+              exit 1
+            fi
+          done
+
       # release-hyrr-mcp build/sdist jobs must init the nucl-parquet
       # submodule — core depends on it via path.
       - name: Assert release-hyrr-mcp.yml inits submodule in all build jobs
