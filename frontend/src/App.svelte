@@ -340,8 +340,6 @@
 </script>
 
 <main>
-  <HeaderBar />
-
   {#if showSchemaBreakBanner}
     <div class="schema-break-banner" role="status">
       <span>
@@ -359,6 +357,15 @@
     </div>
   {/if}
 
+  <div class="top-bar">
+    <HeaderBar />
+    {#if ready}
+      <div class="config-row">
+        <BeamConfigBar />
+      </div>
+    {/if}
+  </div>
+
   {#if !ready}
     <DataFetchSplash
       {loadingState}
@@ -368,9 +375,6 @@
     />
   {:else}
     <div class="app-flow">
-      <div class="config-row">
-        <BeamConfigBar />
-      </div>
 
       {#if hasLayers && result}
         <nav class="section-nav" aria-label="Jump to section">
@@ -658,7 +662,7 @@
   main {
     max-width: 1600px;
     margin: 0 auto;
-    padding: 0.5rem 1rem 2rem;
+    padding: 0 1rem 2rem;
   }
 
   /* `.loading` / `.progress-bar` / `.progress-fill` / `.loading-error`
@@ -670,17 +674,29 @@
     gap: 0.75rem;
   }
 
-  .config-row {
-    display: flex;
-    gap: 0.75rem;
-    flex-wrap: wrap;
+  .top-bar {
     position: sticky;
     top: 0;
     z-index: 20;
     background: var(--c-bg);
-    padding: 0.4rem 0;
-    margin: -0.4rem 0 0;
     border-bottom: 1px solid var(--c-border);
+    margin: 0 -1rem;
+    padding: 0 1rem;
+  }
+
+  .top-bar :global(.header-bar) {
+    margin: 0;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+  }
+
+  .config-row {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    padding: 0.4rem 0;
   }
 
   .section-nav {
