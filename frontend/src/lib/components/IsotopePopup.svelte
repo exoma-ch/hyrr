@@ -282,7 +282,7 @@
                 seenIso.add(isoKey);
                 const sym = Z_TO_SYMBOL[xs.residualZ] ?? `Z${xs.residualZ}`;
                 produced.push({
-                  name: `${sym}-${xs.residualA}${xs.state ? ` (${xs.state})` : ""}`,
+                  name: `${sym}-${xs.residualA}${xs.state === "g" ? "" : xs.state}`,
                   Z: xs.residualZ, A: xs.residualA, state: xs.state || "",
                 });
               }
@@ -715,7 +715,7 @@
       }
       if (!best || !best.time_grid_s || !best.activity_vs_time_Bq) return null;
       return {
-        name: best.name + (best.state ? ` (${best.state})` : ""),
+        name: best.name,
         times: [...best.time_grid_s],
         activities: [...best.activity_vs_time_Bq],
         productionRate: best.production_rate,
