@@ -30,6 +30,8 @@ def _print_help() -> None:
         "ENVIRONMENT:\n"
         "    HYRR_DATA         Nucl-parquet data directory (if --data-dir not set)\n"
         "    HYRR_LIBRARY      Nuclear data library (if --library not set)\n\n"
+        "On first run, required data files are fetched lazily from GitHub\n"
+        "(~30 MB for a typical session). Cached in ~/.nucl-parquet/.\n\n"
         "Register with Claude Code:\n"
         "    claude mcp add hyrr -- uvx hyrr-mcp\n"
     )
@@ -51,14 +53,14 @@ def main() -> int:
         _print_help()
         return 0
 
-    # Resolve data dir: explicit --data-dir wins, otherwise fall back to
-    # the shared Rust resolver (env + sibling + home).
-    data_dir = _arg_value(argv, "--data-dir")
-    if data_dir is None:
-        data_dir = os.environ.get("HYRR_DATA") or _native.resolve_data_dir()
-
     # Resolve library: --library arg → HYRR_LIBRARY env → DEFAULT_LIBRARY.
     library = _arg_value(argv, "--library") or os.environ.get("HYRR_LIBRARY") or None
+
+    # Resolve data dir: explicit --data-dir / HYRR_DATA wins, otherwise
+    # resolve locally → auto-fetch from GitHub on first run (~30 MB).
+    data_dir = _arg_value(argv, "--data-dir") or os.environ.get("HYRR_DATA")
+    if data_dir is None:
+        data_dir = _native.ensure_data(library)
 
     _native.run(data_dir, library)
     return 0

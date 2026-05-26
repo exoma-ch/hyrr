@@ -13,4 +13,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 hyrr-core = { path = "../core", features = ["mcp"] }
+nucl-parquet = { path = "../nucl-parquet/clients/rs/nucl-parquet", features = ["fetch"] }
 pyo3 = { version = "0.28", features = ["extension-module", "abi3-py311"] }
