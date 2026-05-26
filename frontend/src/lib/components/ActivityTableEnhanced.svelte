@@ -6,6 +6,7 @@
   import { toggleIsotope, isSelected, clearSelection, getSelectedIsotopes } from "../stores/selection.svelte";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
   import { formatReaction } from "../format";
+  import { canonicalName, canonicalState } from "../plotting/aggregate-isotopes";
   import {
     getDisplayMode,
     setDisplayMode,
@@ -126,11 +127,14 @@
         if (mechanisms.length === 0 && (iso.source ?? "direct") === "daughter") {
           mechanisms.push("decay");
         }
-        const doseResult = getDoseConstant(iso.name, iso.activity_Bq, iso.Z, iso.A, iso.state);
+        // Normalize "g" → "" so Sc-44g merges with Sc-44 (#315)
+        const isoName = canonicalName(iso.name, iso.state);
+        const isoState = canonicalState(iso.state);
+        const doseResult = getDoseConstant(isoName, iso.activity_Bq, iso.Z, iso.A, isoState);
         r.push({
           layerIndex: layer.layer_index,
-          name: iso.name,
-          Z: iso.Z, A: iso.A, state: iso.state,
+          name: isoName,
+          Z: iso.Z, A: iso.A, state: isoState,
           half_life_s: iso.half_life_s,
           activity_eob_Bq: eobAct,
           activity_Bq: iso.activity_Bq,

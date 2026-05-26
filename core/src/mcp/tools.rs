@@ -477,7 +477,12 @@ fn tool_simulate(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, Stri
         );
 
         let mut sorted: Vec<_> = lr.isotope_results.values().collect();
-        sorted.sort_by(|a, b| b.activity_bq.partial_cmp(&a.activity_bq).unwrap());
+        sorted.sort_by(|a, b| {
+            b.activity_bq
+                .partial_cmp(&a.activity_bq)
+                .unwrap()
+                .then_with(|| a.name.cmp(&b.name))
+        });
 
         for iso in sorted.iter().take(20) {
             let hl = match iso.half_life_s {
@@ -559,6 +564,14 @@ fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Resul
         output.push_str("No cross-section data found. Data may need to be loaded first.\n");
         return Ok(output);
     }
+
+    let mut xs_list = xs_list;
+    xs_list.sort_by(|a, b| {
+        a.residual_z
+            .cmp(&b.residual_z)
+            .then_with(|| a.residual_a.cmp(&b.residual_a))
+            .then_with(|| a.state.cmp(&b.state))
+    });
 
     for xs in &xs_list {
         let res_sym = db.get_element_symbol(xs.residual_z);

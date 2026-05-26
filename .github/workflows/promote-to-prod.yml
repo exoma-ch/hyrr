@@ -58,18 +58,8 @@ jobs:
 
       - name: Copy nuclear data for frontend
         run: |
-          mkdir -p frontend/public/data/parquet/{meta/ensdf,stopping,xs,hi-xs-prod,neutron-xs}
-          cp nucl-parquet/data/meta/abundances.parquet nucl-parquet/data/meta/decay.parquet nucl-parquet/data/meta/elements.parquet frontend/public/data/parquet/meta/
-          cp -f nucl-parquet/data/meta/dose_constants.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
-          cp -f nucl-parquet/data/meta/spectrum_xs.parquet frontend/public/data/parquet/meta/ 2>/dev/null || true
-          # Unified per-element emissions (absolute per-decay intensities, data-2026.5.2+)
-          cp -r nucl-parquet/data/meta/ensdf/emissions frontend/public/data/parquet/meta/ensdf/emissions 2>/dev/null || true
-          # He3STAR removed in nucl-parquet data-2026.5.0 — ³He routes through ASTAR with velocity-scaling at lookup time.
-          cp nucl-parquet/data/stopping/PSTAR.parquet nucl-parquet/data/stopping/ASTAR.parquet nucl-parquet/data/stopping/dSTAR.parquet nucl-parquet/data/stopping/tSTAR.parquet frontend/public/data/parquet/stopping/
-          cp nucl-parquet/data/stopping/catima_C12.parquet nucl-parquet/data/stopping/catima_O16.parquet nucl-parquet/data/stopping/catima_Ne20.parquet nucl-parquet/data/stopping/catima_Si28.parquet nucl-parquet/data/stopping/catima_Ar40.parquet nucl-parquet/data/stopping/catima_Fe56.parquet frontend/public/data/parquet/stopping/
-          cp nucl-parquet/data/tendl-2023-iso/xs/*.parquet frontend/public/data/parquet/xs/
-          cp nucl-parquet/data/hi-xs-prod/xs/*.parquet frontend/public/data/parquet/hi-xs-prod/
-          cp nucl-parquet/data/endfb-8.1/xs/n_*.parquet frontend/public/data/parquet/neutron-xs/
+          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
+            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

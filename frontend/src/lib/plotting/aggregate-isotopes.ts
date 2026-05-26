@@ -41,11 +41,8 @@ export interface AggregatedIsotope {
   reactions: string[];
 }
 
-/**
- * Normalize nuclear state: "g" → "" (ground state convention — no suffix).
- * Metastable states ("m", "m2", …) pass through unchanged.
- */
-function normalizeState(state: string): string {
+/** Normalize ground-state marker: "g" → "" (ground has no suffix). */
+export function canonicalState(state: string): string {
   return state === "g" ? "" : state;
 }
 
@@ -53,8 +50,7 @@ function normalizeState(state: string): string {
  * Canonical isotope name without the "g" suffix.
  * "Sc-44g" → "Sc-44", "Sc-44m" → "Sc-44m", "Sc-44" → "Sc-44".
  */
-function canonicalName(name: string, state: string): string {
-  // Strip trailing "g" that we normalized away (ground state has no suffix)
+export function canonicalName(name: string, state: string): string {
   if (state === "g" && name.endsWith("g")) {
     return name.slice(0, -1);
   }
@@ -76,7 +72,7 @@ export function aggregateByIsotopeName(
   for (const { iso, layerIdx } of rows) {
     if (!iso.time_grid_s || !iso.activity_vs_time_Bq) continue;
 
-    const normState = normalizeState(iso.state);
+    const normState = canonicalState(iso.state);
     const key = `${iso.Z}-${iso.A}-${normState}`;
     const existing = byKey.get(key);
     if (!existing) {

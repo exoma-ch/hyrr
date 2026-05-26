@@ -53,11 +53,11 @@ MCP_OUT="$(mktemp)"
 PY_OUT="$(mktemp)"
 trap 'rm -f "$DESKTOP_OUT" "$MCP_OUT" "$PY_OUT"' EXIT
 
-# Strip server.version from initialize responses — every entry point has
-# its own CARGO_PKG_VERSION, and that legitimately differs even though
-# every other byte should match. Filter to a sentinel for the diff.
+# Canonicalize each JSON-RPC response line:
+#  1. Sort keys recursively (HashMap iteration order is non-deterministic)
+#  2. Normalize server.version (each entry point has its own CARGO_PKG_VERSION)
 normalize() {
-  sed 's/"version":"[^"]*"/"version":"<normalized>"/g'
+  jq -c --sort-keys '.' | sed 's/"version":"[^"]*"/"version":"<normalized>"/g'
 }
 
 run_through() {

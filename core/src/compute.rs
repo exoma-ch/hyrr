@@ -242,7 +242,8 @@ fn compute_layer(
                 let half_life = decay.as_ref().and_then(|d| d.half_life_s);
 
                 let symbol = db.get_element_symbol(xs.residual_z);
-                let state_suffix = &xs.state;
+                // Normalize "g" → "" — ground state has no suffix (#315 SSoT)
+                let state_suffix = if xs.state == "g" { "" } else { &xs.state };
                 let name = format!("{}-{}{}", symbol, xs.residual_a, state_suffix);
 
                 // Depth-resolved rate for this channel. Same integrand as
@@ -290,7 +291,7 @@ fn compute_layer(
                             name,
                             z: xs.residual_z,
                             a: xs.residual_a,
-                            state: xs.state.clone(),
+                            state: if xs.state == "g" { String::new() } else { xs.state.clone() },
                             half_life_s: half_life,
                             production_rate: scaled_rate,
                             saturation_yield_bq_ua: sat_yield,
@@ -463,7 +464,8 @@ fn apply_chain_solver_by_component(
             // isotope as directly-produced and has no parent-graph context.
             for ciso in component {
                 let symbol = db.get_element_symbol(ciso.z);
-                let name = format!("{}-{}{}", symbol, ciso.a, ciso.state);
+                let state_suffix = if ciso.state == "g" { "" } else { ciso.state.as_str() };
+                let name = format!("{}-{}{}", symbol, ciso.a, state_suffix);
                 if let Some(existing) = isotope_results.get(&name) {
                     let mut iso = existing.clone();
                     iso.source = "direct".to_string();
@@ -489,7 +491,8 @@ fn apply_chain_solver_by_component(
 
         for (i, ciso) in solution.isotopes.iter().enumerate() {
             let symbol = db.get_element_symbol(ciso.z);
-            let name = format!("{}-{}{}", symbol, ciso.a, ciso.state);
+            let state_suffix = if ciso.state == "g" { "" } else { ciso.state.as_str() };
+            let name = format!("{}-{}{}", symbol, ciso.a, state_suffix);
 
             let total_activity = &solution.activities[i];
             let direct_activity = &solution.activities_direct[i];

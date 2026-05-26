@@ -180,6 +180,44 @@ jobs:
             exit 1
           }
 
+  release-workflow-guards:
+    # Catch release-workflow drift before it breaks a real release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # tauri.conf.json beforeBuildCommand runs from desktop/src-tauri/
+      # (Tauri v2 CWD semantics). All --prefix paths must use ../../ to
+      # reach the repo-root frontend/, matching frontendDist's depth.
+      - name: Assert tauri.conf.json paths resolve from src-tauri/
+        run: |
+          CONF=desktop/src-tauri/tauri.conf.json
+          if grep -qE '"before(Build|Dev)Command".*--prefix \.\./frontend"' "$CONF"; then
+            echo "::error::beforeBuildCommand/beforeDevCommand uses --prefix ../frontend (1 level up) but Tauri v2 runs from src-tauri/ (needs ../../frontend, 2 levels up)."
+            exit 1
+          fi
+
+      # All frontend-building workflows must use the SSoT copy script.
+      - name: Assert workflows use copy-frontend-data.sh
+        run: |
+          for wf in tauri-build deploy-frontend promote-to-prod e2e e2e-tauri; do
+            if ! grep -q 'copy-frontend-data.sh' ".github/workflows/${wf}.yml"; then
+              echo "::error::${wf}.yml doesn't use scripts/copy-frontend-data.sh — data copy will drift."
+              exit 1
+            fi
+          done
+
+      # release-hyrr-mcp build/sdist jobs must init the nucl-parquet
+      # submodule — core depends on it via path.
+      - name: Assert release-hyrr-mcp.yml inits submodule in all build jobs
+        run: |
+          WF=.github/workflows/release-hyrr-mcp.yml
+          COUNT=$(grep -c 'submodule update --init' "$WF")
+          if [ "$COUNT" -lt 3 ]; then
+            echo "::error::release-hyrr-mcp.yml has only $COUNT submodule-init steps — build, sdist, and parity-test all need one (core path-depends on nucl-parquet)."
+            exit 1
+          fi
+
   supplier-catalog-freshness:
     runs-on: ubuntu-latest
     steps:

@@ -29,6 +29,10 @@ jobs:
   build:
     name: build (${{ matrix.target.name }})
     runs-on: ${{ matrix.target.runner }}
+    # linux-aarch64 cross-compiles ring via QEMU/manylinux and is fragile
+    # (ring's ARM asm needs __ARM_ARCH from the cross-compiler). Don't let
+    # it block parity-test + publish for the other 3 targets.
+    continue-on-error: ${{ matrix.target.name == 'linux-aarch64' }}
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +45,10 @@ jobs:
           - { name: windows-x86_64, runner: windows-latest, rust-target: x86_64-pc-windows-msvc,     maturin-target: x64,     manylinux: "" }
     steps:
       - uses: actions/checkout@v6
+      - name: Init nucl-parquet submodule (Rust client for core path dep)
+        shell: bash
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
 
       - uses: actions/setup-python@v6
         with:
@@ -88,6 +96,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Init nucl-parquet submodule (Rust client for core path dep)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"

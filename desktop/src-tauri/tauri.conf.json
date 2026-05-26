@@ -1,13 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
   "productName": "HYRR",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "identifier": "ch.exoma.hyrr",
   "build": {
     "frontendDist": "../../frontend/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm run dev --prefix ../frontend",
-    "beforeBuildCommand": "npm run build --prefix ../frontend"
+    "beforeDevCommand": "npm run dev --prefix ../../frontend",
+    "beforeBuildCommand": "npm run build --prefix ../../frontend"
   },
   "app": {
     "windows": [
