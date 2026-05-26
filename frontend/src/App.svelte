@@ -678,10 +678,10 @@
     position: sticky;
     top: 0;
     z-index: 20;
-    background: var(--c-bg);
-    border-bottom: 1px solid var(--c-border);
+    background: var(--c-bg, #1a1a2e);
+    border-bottom: 1px solid var(--c-border, #333);
     margin: 0 -1rem;
-    padding: 0 1rem;
+    padding: 0.35rem 1rem;
   }
 
   .top-bar :global(.header-bar) {

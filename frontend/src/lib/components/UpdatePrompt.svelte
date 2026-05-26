@@ -50,7 +50,7 @@
         onclick={install}
         disabled={installing}
       >
-        {installing ? "Installing…" : "Install now"}
+        {#if installing}<span class="spinner"></span> Installing…{:else}Install now{/if}
       </button>
       <button
         type="button"
@@ -78,11 +78,11 @@
   .update-card {
     max-width: 28rem;
     width: 100%;
-    background: var(--c-bg);
-    border: 1px solid var(--c-border);
+    background: var(--c-bg, #1a1a2e);
+    border: 1px solid var(--c-border, #333);
     border-radius: 6px;
     padding: 1.5rem;
-    color: var(--c-text);
+    color: var(--c-text, #e0e0e0);
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
   }
 
@@ -166,6 +166,22 @@
     cursor: not-allowed;
   }
 
+  .spinner {
+    display: inline-block;
+    width: 0.85em;
+    height: 0.85em;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -0.1em;
+    margin-right: 0.3em;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
   .btn-primary {
     background: var(--c-accent);
     color: var(--c-accent-fg, white);
@@ -173,8 +189,8 @@
   }
 
   .btn-secondary {
-    background: var(--c-bg-muted);
-    color: var(--c-text);
-    border: 1px solid var(--c-border);
+    background: var(--c-bg-muted, #252540);
+    color: var(--c-text, #e0e0e0);
+    border: 1px solid var(--c-border, #333);
   }
 </style>
