@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0](https://github.com/exoma-ch/hyrr/compare/v0.10.2...v0.11.0) (2026-05-26)
+
+
+### Features
+
+* **frontend:** add Cloudflare Web Analytics beacon ([#337](https://github.com/exoma-ch/hyrr/issues/337)) ([a660dad](https://github.com/exoma-ch/hyrr/commit/a660dad36f49a15918bcc6150664c37f1912be5c))
+* **frontend:** paste URL to load config ([#332](https://github.com/exoma-ch/hyrr/issues/332)) ([#334](https://github.com/exoma-ch/hyrr/issues/334)) ([8d8a2d9](https://github.com/exoma-ch/hyrr/commit/8d8a2d9dec2a8c98edebd632e89c9eb04406e9bf))
+
+
+### Bug Fixes
+
+* **frontend:** use canonical isotope name format in IsotopePopup ([#330](https://github.com/exoma-ch/hyrr/issues/330)) ([#335](https://github.com/exoma-ch/hyrr/issues/335)) ([eed20d4](https://github.com/exoma-ch/hyrr/commit/eed20d49e5f0ba228233da548db06cea73c3ea4c))
+
 ## [0.10.2](https://github.com/exoma-ch/hyrr/compare/v0.10.1...v0.10.2) (2026-05-26)
 
 
