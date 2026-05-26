@@ -137,8 +137,9 @@ fn print_help() {
              NUCL_PARQUET_DATA  Nucl-parquet data directory (alternative)\n    \
              HYRR_LIBRARY       Nuclear data library (if --library not set)\n\
          \n\
-         On first run, required data files are fetched lazily from GitHub\n\
-         (~30 MB for a typical session). Cached in ~/.nucl-parquet/.\n\
+         On first run, ~5 MB of metadata is fetched from GitHub.\n\
+         Cross-section data is fetched per-element on demand as tools\n\
+         query it. Cached in ~/.nucl-parquet/.\n\
          \n\
          Register with Claude Code:\n    \
              claude mcp add hyrr -- hyrr-mcp\n",
