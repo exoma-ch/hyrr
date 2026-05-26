@@ -8,7 +8,10 @@
     setCurrent,
     setIrradiation,
     setCooling,
+    getCurrentProfile,
+    setCurrentProfile,
   } from "../stores/config.svelte";
+  import { parseCurrentProfileCSV, type ParseResult, type ParseError } from "@hyrr/compute";
   import {
     toSeconds,
     fromSeconds,
@@ -92,20 +95,48 @@
     coolUnit = u;
   }
 
+  let uploadError = $state<string | null>(null);
+  let currentProfile = $derived(getCurrentProfile());
+
   function handleCurrentUpload(e: Event) {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
     if (!file) return;
-    // TODO: Parse CSV file with columns: time_s, current_uA
-    // For now just log it
+    uploadError = null;
+
     const reader = new FileReader();
     reader.onload = () => {
       const text = reader.result as string;
-      console.log("[BeamConfig] Current profile uploaded:", text.split("\n").length, "lines");
-      // Future: parse and set current profile on stack
+      const result = parseCurrentProfileCSV(text);
+
+      if ("error" in result) {
+        uploadError = (result as ParseError).error;
+        return;
+      }
+
+      const parsed = result as ParseResult;
+      setCurrentProfile(parsed.profile);
+      showCurrentUpload = false;
     };
     reader.readAsText(file);
-    showCurrentUpload = false;
+  }
+
+  function clearProfile() {
+    setCurrentProfile(null);
+    uploadError = null;
+  }
+
+  /** Format profile summary: point count, duration, charge. */
+  function profileSummary(profile: NonNullable<typeof currentProfile>): string {
+    const n = profile.timesS.length;
+    const dur = profile.timesS[n - 1] - profile.timesS[0];
+    let charge = 0;
+    for (let i = 0; i < n; i++) {
+      const dt = i + 1 < n ? profile.timesS[i + 1] - profile.timesS[i] : 0;
+      charge += profile.currentsMA[i] * dt;
+    }
+    const durMin = (dur / 60).toFixed(1);
+    return `${n} pts, ${durMin} min, ${(charge / 1000).toFixed(4)} C`;
   }
 </script>
 
@@ -187,12 +218,21 @@
   </div>
 
   <div class="current-profile">
-    {#if showCurrentUpload}
-      <div class="upload-row">
-        <input type="file" accept=".csv,.txt" onchange={handleCurrentUpload} class="file-input" />
-        <button class="cancel-btn" onclick={() => showCurrentUpload = false}>Cancel</button>
+    {#if currentProfile}
+      <div class="profile-active">
+        <span class="profile-label">Current profile</span>
+        <span class="profile-summary">{profileSummary(currentProfile)}</span>
+        <button class="clear-btn" onclick={clearProfile} title="Remove profile, use constant current">Clear</button>
       </div>
-      <span class="upload-hint">CSV: time_s, current_µA</span>
+    {:else if showCurrentUpload}
+      <div class="upload-row">
+        <input type="file" accept=".csv,.tsv,.txt" onchange={handleCurrentUpload} class="file-input" />
+        <button class="cancel-btn" onclick={() => { showCurrentUpload = false; uploadError = null; }}>Cancel</button>
+      </div>
+      <span class="upload-hint">CSV: time_s, current_mA</span>
+      {#if uploadError}
+        <span class="upload-error">{uploadError}</span>
+      {/if}
     {:else}
       <button class="profile-btn" onclick={() => showCurrentUpload = true}>
         Upload current profile
@@ -312,5 +352,51 @@
   .upload-hint {
     font-size: 0.65rem;
     color: var(--c-text-subtle);
+  }
+
+  .upload-error {
+    font-size: 0.65rem;
+    color: var(--c-error, #e53e3e);
+  }
+
+  .profile-active {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.5rem;
+    background: var(--c-bg-active);
+    border: 1px solid var(--c-accent);
+    border-radius: 4px;
+    font-size: 0.7rem;
+  }
+
+  .profile-label {
+    color: var(--c-accent);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .profile-summary {
+    color: var(--c-text-muted);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .clear-btn {
+    background: none;
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    color: var(--c-text-muted);
+    padding: 0.15rem 0.35rem;
+    font-size: 0.65rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .clear-btn:hover {
+    border-color: var(--c-error, #e53e3e);
+    color: var(--c-error, #e53e3e);
   }
 </style>

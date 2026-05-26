@@ -1,6 +1,6 @@
 <script lang="ts">
   import { toggleHistory, getHistoryOpen } from "../stores/ui.svelte";
-  import { setConfig, resetConfig, getSerializableConfig, restoreSerializableConfig } from "../stores/config.svelte";
+  import { setConfig, resetConfig, getSerializableConfig, restoreSerializableConfig, getCurrentProfile } from "../stores/config.svelte";
   import { encodeConfigV2, decodeSerializableFromString } from "../config-url-v2";
   import { PRESETS } from "../presets";
   import SessionTabs from "./SessionTabs.svelte";
@@ -37,6 +37,8 @@
     }
   }
 
+  let hasProfile = $derived(getCurrentProfile() !== null);
+  // encodeConfigV2 receives full config — currentProfile is stripped by config-url layer
   let currentHash = $derived(encodeConfigV2(getSerializableConfig()));
   let shareUrl = $derived(`${SHARE_BASE}${currentHash}`);
 
@@ -177,6 +179,9 @@
                 {/if}
               </button>
             </div>
+            {#if hasProfile}
+              <p class="share-warning">Current profile not included in share link — recipient will need the CSV file.</p>
+            {/if}
             {#if loadError}
               <p class="load-error">{loadError}</p>
             {/if}
@@ -322,6 +327,12 @@
   .share-btn:hover {
     color: var(--c-text);
     border-color: var(--c-text-muted);
+  }
+  .share-warning {
+    margin: 4px 0 0;
+    font-size: 0.65rem;
+    color: var(--c-warning, #dd6b20);
+    line-height: 1.3;
   }
   .header-bar {
     display: flex;

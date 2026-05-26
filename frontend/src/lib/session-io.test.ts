@@ -44,6 +44,52 @@ describe("session-io display-thresholds round-trip", () => {
   });
 });
 
+describe("session-io current profile round-trip", () => {
+  it("preserves currentProfile through save/parse cycle", () => {
+    const config: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 16, current_mA: 0.15 },
+      items: [],
+      irradiation_s: 7200,
+      cooling_s: 86400,
+      currentProfile: {
+        timesS: [0, 1, 2, 3],
+        currentsMA: [0.05, 0.05, 0.04, 0.0],
+      },
+    };
+
+    const file = buildSessionFile(config, null);
+    const json = JSON.stringify(file, null, 2);
+
+    const parsed = parseSessionJson(json);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const loaded = parsed.file.config as SerializableConfig;
+    expect(loaded.currentProfile).toBeDefined();
+    expect(loaded.currentProfile!.timesS).toEqual([0, 1, 2, 3]);
+    expect(loaded.currentProfile!.currentsMA).toEqual([0.05, 0.05, 0.04, 0.0]);
+  });
+
+  it("handles config without currentProfile (backward compat)", () => {
+    const config: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 16, current_mA: 0.15 },
+      items: [],
+      irradiation_s: 86400,
+      cooling_s: 86400,
+    };
+
+    const file = buildSessionFile(config, null);
+    const json = JSON.stringify(file, null, 2);
+
+    const parsed = parseSessionJson(json);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const loaded = parsed.file.config as SerializableConfig;
+    expect(loaded.currentProfile).toBeUndefined();
+  });
+});
+
 describe("session-io must NOT clamp result values", () => {
   // Issue #130 invariant: tiny values pass through the JSON model
   // unmodified. Display clamping is applied after deserialisation, only

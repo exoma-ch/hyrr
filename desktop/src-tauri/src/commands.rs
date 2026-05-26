@@ -33,6 +33,17 @@ pub struct SimulationConfig {
     /// Ignored by Rust — expansion happens on the TS side before invoking Tauri.
     #[serde(default)]
     pub repeat: Option<serde_json::Value>,
+    /// Time-varying beam current (piecewise-constant).
+    #[serde(default, alias = "currentProfile")]
+    pub current_profile: Option<CurrentProfileConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CurrentProfileConfig {
+    #[serde(alias = "timesS")]
+    pub times_s: Vec<f64>,
+    #[serde(alias = "currentsMA")]
+    pub currents_ma: Vec<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,13 +282,19 @@ pub fn run_compute_stack(
 
     let layers = config_to_layers(db, &config);
 
+    let current_profile = config
+        .current_profile
+        .map(|cp| CurrentProfile::from_values(cp.times_s, cp.currents_ma))
+        .transpose()
+        .map_err(|e| format!("Invalid current profile: {e}"))?;
+
     let mut stack = TargetStack {
         beam: Beam::new(projectile, config.beam.energy_MeV, config.beam.current_mA),
         layers,
         irradiation_time_s: config.irradiation_s,
         cooling_time_s: config.cooling_s,
         area_cm2: 1.0,
-        current_profile: None,
+        current_profile,
     };
 
     let result = compute_stack(db, &mut stack, true)

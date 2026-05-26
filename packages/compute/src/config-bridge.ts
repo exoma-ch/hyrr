@@ -55,6 +55,7 @@ export interface SimulationConfig {
   layers: LayerConfig[];
   irradiation_s: number;
   cooling_s: number;
+  currentProfile?: CurrentProfile | null;
 }
 
 /**
@@ -121,8 +122,8 @@ export interface SimulationResult {
 export function buildTargetStack(
   config: SimulationConfig,
   db: DatabaseProtocol,
-  currentProfile: CurrentProfile | null = null,
 ): TargetStack {
+  const currentProfile = config.currentProfile ?? null;
   const beam = createBeam(
     config.beam.projectile,
     config.beam.energy_MeV,

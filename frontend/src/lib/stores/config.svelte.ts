@@ -10,9 +10,34 @@ import type {
   LayerConfig,
   ProjectileType,
 } from "../types";
-import type { StackConfig } from "@hyrr/compute";
+import type { StackConfig, CurrentProfile } from "@hyrr/compute";
 import { expandLayers } from "@hyrr/compute";
 import { getDataStore } from "../scheduler/sim-scheduler.svelte";
+
+// ─── Typed-array-safe JSON helpers ──────────────────────────────────
+//
+// JSON.stringify silently serializes Float64Array as "{}" because typed
+// arrays have no enumerable keys. These helpers convert typed arrays to
+// tagged objects on serialization and reconstruct them on parse, so the
+// undo/redo stack preserves CurrentProfile data correctly.
+
+function jsonReplacer(_key: string, value: unknown): unknown {
+  if (value instanceof Float64Array) {
+    return { __typedArray: "Float64Array", data: Array.from(value) };
+  }
+  return value;
+}
+
+function jsonReviver(_key: string, value: unknown): unknown {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    (value as Record<string, unknown>).__typedArray === "Float64Array"
+  ) {
+    return new Float64Array((value as { data: number[] }).data);
+  }
+  return value;
+}
 
 /** Default beam config. */
 const DEFAULT_BEAM: BeamConfig = {
@@ -35,6 +60,7 @@ interface InternalState {
   items: Array<LayerConfig | InternalGroup>;
   irradiation_s: number;
   cooling_s: number;
+  currentProfile: CurrentProfile | null;
 }
 
 /** Default internal state. */
@@ -43,6 +69,7 @@ const DEFAULT_STATE: InternalState = {
   items: [],
   irradiation_s: 86400,
   cooling_s: 86400,
+  currentProfile: null,
 };
 
 // ─── Reactive state ─────────────────────────────────────────────────
@@ -63,16 +90,17 @@ function snapshot(): string {
 }
 
 function refreshSnapshot(): void {
-  // Use structuredClone to escape proxy, then stringify the plain object
+  // Use structuredClone to escape proxy, then stringify the plain object.
+  // jsonReplacer ensures Float64Array fields (e.g. CurrentProfile) survive.
   try {
-    lastSnapshot = JSON.stringify(structuredClone(state));
+    lastSnapshot = JSON.stringify(structuredClone(state), jsonReplacer);
   } catch {
     lastSnapshot = JSON.stringify({
       beam: { ...state.beam },
       items: state.items,
       irradiation_s: state.irradiation_s,
       cooling_s: state.cooling_s,
-    });
+    }, jsonReplacer);
   }
 }
 
@@ -96,7 +124,7 @@ export function undo(): void {
   redoStack.push(lastSnapshot);
   const prev = undoStack.pop()!;
   suppressSnapshot = true;
-  state = JSON.parse(prev);
+  state = JSON.parse(prev, jsonReviver);
   suppressSnapshot = false;
   invalidateExpansion();
 }
@@ -107,7 +135,7 @@ export function redo(): void {
   undoStack.push(lastSnapshot);
   const next = redoStack.pop()!;
   suppressSnapshot = true;
-  state = JSON.parse(next);
+  state = JSON.parse(next, jsonReviver);
   suppressSnapshot = false;
   invalidateExpansion();
 }
@@ -190,6 +218,7 @@ export function getConfig(): SimulationConfig {
     layers: expandedLayers,
     irradiation_s: state.irradiation_s,
     cooling_s: state.cooling_s,
+    currentProfile: state.currentProfile,
   };
 }
 
@@ -210,10 +239,12 @@ export interface SerializableConfig {
   items: Array<LayerConfig | (InternalGroup & { _group: true })>;
   irradiation_s: number;
   cooling_s: number;
+  currentProfile?: { timesS: number[]; currentsMA: number[] } | null;
 }
 
 /** Get the internal state in a JSON-serializable form (preserves groups). */
 export function getSerializableConfig(): SerializableConfig {
+  const profile = state.currentProfile;
   return JSON.parse(JSON.stringify({
     beam: state.beam,
     items: state.items.map((item) =>
@@ -221,12 +252,17 @@ export function getSerializableConfig(): SerializableConfig {
     ),
     irradiation_s: state.irradiation_s,
     cooling_s: state.cooling_s,
+    // Serialize Float64Array → plain number[] for JSON portability
+    currentProfile: profile
+      ? { timesS: Array.from(profile.timesS), currentsMA: Array.from(profile.currentsMA) }
+      : null,
   }));
 }
 
 /** Restore internal state from a serialized snapshot (preserves groups). */
 export function restoreSerializableConfig(c: SerializableConfig): void {
   pushUndo();
+  const profile = c.currentProfile;
   state = {
     beam: c.beam,
     items: c.items.map((item: any) => {
@@ -239,6 +275,10 @@ export function restoreSerializableConfig(c: SerializableConfig): void {
     }),
     irradiation_s: c.irradiation_s,
     cooling_s: c.cooling_s,
+    // Reconstruct Float64Array from plain number[] in saved config
+    currentProfile: profile
+      ? { timesS: new Float64Array(profile.timesS), currentsMA: new Float64Array(profile.currentsMA) }
+      : null,
   };
   invalidateExpansion();
 }
@@ -252,6 +292,7 @@ export function setConfig(c: SimulationConfig): void {
     items: c.layers.map((l) => ({ ...l })),
     irradiation_s: c.irradiation_s,
     cooling_s: c.cooling_s,
+    currentProfile: c.currentProfile ?? null,
   };
   invalidateExpansion();
 }
@@ -284,6 +325,15 @@ export function setIrradiation(seconds: number): void {
 export function setCooling(seconds: number): void {
   pushUndo();
   state.cooling_s = seconds;
+}
+
+export function getCurrentProfile(): CurrentProfile | null {
+  return state.currentProfile;
+}
+
+export function setCurrentProfile(profile: CurrentProfile | null): void {
+  pushUndo();
+  state.currentProfile = profile;
 }
 
 // ─── Internal item operations (for LayerStackHorizontal) ───────────

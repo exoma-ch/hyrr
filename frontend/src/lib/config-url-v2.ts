@@ -175,7 +175,9 @@ function expandConfigFlat(compact: any): SimulationConfig | null {
 
 /** Encode SerializableConfig to v2 compressed hash. */
 export function encodeConfigV2(config: SerializableConfig): string {
-  const compact = compactConfig(config);
+  // Strip currentProfile — too large for URL encoding
+  const { currentProfile: _cp, ...configWithoutProfile } = config;
+  const compact = compactConfig(configWithoutProfile as SerializableConfig);
   const json = JSON.stringify(compact);
   const bytes = new TextEncoder().encode(json);
   const compressed = deflateSync(bytes);

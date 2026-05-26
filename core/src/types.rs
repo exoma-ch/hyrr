@@ -178,6 +178,42 @@ pub struct CurrentProfile {
 }
 
 impl CurrentProfile {
+    /// Construct from time and current arrays with validation.
+    ///
+    /// # Errors
+    /// Returns `Err` if lengths mismatch, arrays are empty,
+    /// times are non-monotonic, or any current is negative.
+    pub fn from_values(times_s: Vec<f64>, currents_ma: Vec<f64>) -> Result<Self, String> {
+        if times_s.len() != currents_ma.len() {
+            return Err(format!(
+                "times_s and currents_ma must have the same length, got {} and {}",
+                times_s.len(),
+                currents_ma.len()
+            ));
+        }
+        if times_s.is_empty() {
+            return Err("CurrentProfile must have at least one entry".into());
+        }
+        if times_s.iter().chain(currents_ma.iter()).any(|v| v.is_nan()) {
+            return Err("times_s and currents_ma must not contain NaN".into());
+        }
+        for w in times_s.windows(2) {
+            if w[1] < w[0] {
+                return Err(format!(
+                    "times_s must be monotonically increasing, got {} followed by {}",
+                    w[0], w[1]
+                ));
+            }
+        }
+        if currents_ma.iter().any(|&c| c < 0.0) {
+            return Err("currents_ma must be non-negative".into());
+        }
+        Ok(Self {
+            times_s,
+            currents_ma,
+        })
+    }
+
     /// Return intervals as [(t_start, t_end, current_mA)].
     pub fn intervals(&self, t_end: f64) -> Vec<(f64, f64, f64)> {
         let mut result = Vec::new();
@@ -347,4 +383,69 @@ pub struct ChainSolution {
     /// `ChainIsotope::key`) and `decay_mode` is the raw `DecayMode::mode`
     /// string from the nuclear data (e.g. "β-", "EC", "IT").
     pub parent_info: Vec<Vec<(String, f64, String)>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_values_valid() {
+        let cp = CurrentProfile::from_values(vec![0.0, 1.0, 2.0], vec![0.05, 0.05, 0.04]);
+        assert!(cp.is_ok());
+        let cp = cp.unwrap();
+        assert_eq!(cp.times_s.len(), 3);
+        assert_eq!(cp.currents_ma.len(), 3);
+    }
+
+    #[test]
+    fn from_values_single_entry() {
+        let cp = CurrentProfile::from_values(vec![0.0], vec![0.05]);
+        assert!(cp.is_ok());
+    }
+
+    #[test]
+    fn from_values_length_mismatch() {
+        let cp = CurrentProfile::from_values(vec![0.0, 1.0], vec![0.05]);
+        assert!(cp.is_err());
+        assert!(cp.unwrap_err().contains("same length"));
+    }
+
+    #[test]
+    fn from_values_empty() {
+        let cp = CurrentProfile::from_values(vec![], vec![]);
+        assert!(cp.is_err());
+        assert!(cp.unwrap_err().contains("at least one"));
+    }
+
+    #[test]
+    fn from_values_non_monotonic() {
+        let cp = CurrentProfile::from_values(vec![0.0, 2.0, 1.0], vec![0.05, 0.05, 0.04]);
+        assert!(cp.is_err());
+        assert!(cp.unwrap_err().contains("monotonically increasing"));
+    }
+
+    #[test]
+    fn from_values_negative_current() {
+        let cp = CurrentProfile::from_values(vec![0.0, 1.0], vec![0.05, -0.01]);
+        assert!(cp.is_err());
+        assert!(cp.unwrap_err().contains("non-negative"));
+    }
+
+    #[test]
+    fn from_values_zero_current_allowed() {
+        let cp = CurrentProfile::from_values(vec![0.0, 1.0], vec![0.05, 0.0]);
+        assert!(cp.is_ok());
+    }
+
+    #[test]
+    fn from_values_nan_rejected() {
+        let cp = CurrentProfile::from_values(vec![0.0, f64::NAN], vec![0.05, 0.05]);
+        assert!(cp.is_err());
+        assert!(cp.unwrap_err().contains("NaN"));
+
+        let cp = CurrentProfile::from_values(vec![0.0, 1.0], vec![f64::NAN, 0.05]);
+        assert!(cp.is_err());
+        assert!(cp.unwrap_err().contains("NaN"));
+    }
 }

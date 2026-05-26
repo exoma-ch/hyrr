@@ -164,7 +164,10 @@ export async function computeStackBackend(
   // (e.g. H2O-custom → "H2O") resolve cleanly; wt%-based customs fall
   // back to formula with element-density heuristic (not exact wt%).
   const expanded = expandCustomMaterials(config);
-  const configJson = JSON.stringify(expanded);
+  // Float64Array → plain array for JSON (Rust serde expects number[])
+  const configJson = JSON.stringify(expanded, (_k, v) =>
+    v instanceof Float64Array ? Array.from(v) : v,
+  );
 
   switch (activeBackend) {
     case "tauri": {
