@@ -222,7 +222,7 @@ function parseISO8601(s: string): number | null {
 // Validation
 // ---------------------------------------------------------------------------
 
-function validate(result: ParseResult): ParseResult {
+function validate(result: ParseResult): ParseResult | ParseError {
   const { timesS, currentsMA } = result.profile;
   const warnings = result.warnings;
 

@@ -282,10 +282,11 @@ pub fn run_compute_stack(
 
     let layers = config_to_layers(db, &config);
 
-    let current_profile = config.current_profile.map(|cp| CurrentProfile {
-        times_s: cp.times_s,
-        currents_ma: cp.currents_ma,
-    });
+    let current_profile = config
+        .current_profile
+        .map(|cp| CurrentProfile::from_values(cp.times_s, cp.currents_ma))
+        .transpose()
+        .map_err(|e| format!("Invalid current profile: {e}"))?;
 
     let mut stack = TargetStack {
         beam: Beam::new(projectile, config.beam.energy_MeV, config.beam.current_mA),

@@ -226,7 +226,7 @@
       </div>
     {:else if showCurrentUpload}
       <div class="upload-row">
-        <input type="file" accept=".csv,.tsv,.txt,.parquet" onchange={handleCurrentUpload} class="file-input" />
+        <input type="file" accept=".csv,.tsv,.txt" onchange={handleCurrentUpload} class="file-input" />
         <button class="cancel-btn" onclick={() => { showCurrentUpload = false; uploadError = null; }}>Cancel</button>
       </div>
       <span class="upload-hint">CSV: time_s, current_mA</span>
