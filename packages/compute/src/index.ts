@@ -109,6 +109,10 @@ export { expandLayers, expandedLayerCount } from "./expand-layers";
 export { registerSSoT, getSSoT } from "./ssot";
 export type { SSoTImpl } from "./ssot";
 
+// --- Current profile CSV parser ---
+export { parseCurrentProfileCSV } from "./current-profile-csv";
+export type { ParseResult, ParseError } from "./current-profile-csv";
+
 // --- Interpolation utility (for XS plotting) ---
 export { interp } from "./_interp";
 
