@@ -64,6 +64,44 @@ describe("configHash", () => {
     expect(configHash(BASE_CONFIG)).not.toBe(configHash(modified));
   });
 
+  it("handles Float64Array in nested objects", () => {
+    // Simulates a config with currentProfile containing Float64Arrays
+    const configWithTypedArrays = {
+      ...BASE_CONFIG,
+      currentProfile: {
+        timesS: new Float64Array([0, 1, 2, 3]),
+        currentsMA: new Float64Array([0.05, 0.05, 0.04, 0.0]),
+      },
+    };
+    const h1 = configHash(configWithTypedArrays as any);
+
+    // Same data — should produce identical hash
+    const h2 = configHash(configWithTypedArrays as any);
+    expect(h1).toBe(h2);
+
+    // Different data — should produce different hash
+    const modified = {
+      ...BASE_CONFIG,
+      currentProfile: {
+        timesS: new Float64Array([0, 1, 2, 3]),
+        currentsMA: new Float64Array([0.05, 0.05, 0.04, 0.01]),
+      },
+    };
+    expect(h1).not.toBe(configHash(modified as any));
+  });
+
+  it("Float64Array hashes differently from missing field", () => {
+    const withProfile = {
+      ...BASE_CONFIG,
+      currentProfile: {
+        timesS: new Float64Array([0, 1]),
+        currentsMA: new Float64Array([0.05, 0.05]),
+      },
+    };
+    // Without profile — hash must differ
+    expect(configHash(BASE_CONFIG)).not.toBe(configHash(withProfile as any));
+  });
+
   it("handles null and undefined values", () => {
     const a: SimulationConfig = {
       beam: { projectile: "p", energy_MeV: 10, current_mA: 0.1 },

@@ -14,6 +14,31 @@ import type { StackConfig } from "@hyrr/compute";
 import { expandLayers } from "@hyrr/compute";
 import { getDataStore } from "../scheduler/sim-scheduler.svelte";
 
+// ─── Typed-array-safe JSON helpers ──────────────────────────────────
+//
+// JSON.stringify silently serializes Float64Array as "{}" because typed
+// arrays have no enumerable keys. These helpers convert typed arrays to
+// tagged objects on serialization and reconstruct them on parse, so the
+// undo/redo stack preserves CurrentProfile data correctly.
+
+function jsonReplacer(_key: string, value: unknown): unknown {
+  if (value instanceof Float64Array) {
+    return { __typedArray: "Float64Array", data: Array.from(value) };
+  }
+  return value;
+}
+
+function jsonReviver(_key: string, value: unknown): unknown {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    (value as Record<string, unknown>).__typedArray === "Float64Array"
+  ) {
+    return new Float64Array((value as { data: number[] }).data);
+  }
+  return value;
+}
+
 /** Default beam config. */
 const DEFAULT_BEAM: BeamConfig = {
   projectile: "p",
@@ -63,16 +88,17 @@ function snapshot(): string {
 }
 
 function refreshSnapshot(): void {
-  // Use structuredClone to escape proxy, then stringify the plain object
+  // Use structuredClone to escape proxy, then stringify the plain object.
+  // jsonReplacer ensures Float64Array fields (e.g. CurrentProfile) survive.
   try {
-    lastSnapshot = JSON.stringify(structuredClone(state));
+    lastSnapshot = JSON.stringify(structuredClone(state), jsonReplacer);
   } catch {
     lastSnapshot = JSON.stringify({
       beam: { ...state.beam },
       items: state.items,
       irradiation_s: state.irradiation_s,
       cooling_s: state.cooling_s,
-    });
+    }, jsonReplacer);
   }
 }
 
@@ -96,7 +122,7 @@ export function undo(): void {
   redoStack.push(lastSnapshot);
   const prev = undoStack.pop()!;
   suppressSnapshot = true;
-  state = JSON.parse(prev);
+  state = JSON.parse(prev, jsonReviver);
   suppressSnapshot = false;
   invalidateExpansion();
 }
@@ -107,7 +133,7 @@ export function redo(): void {
   undoStack.push(lastSnapshot);
   const next = redoStack.pop()!;
   suppressSnapshot = true;
-  state = JSON.parse(next);
+  state = JSON.parse(next, jsonReviver);
   suppressSnapshot = false;
   invalidateExpansion();
 }
@@ -221,7 +247,7 @@ export function getSerializableConfig(): SerializableConfig {
     ),
     irradiation_s: state.irradiation_s,
     cooling_s: state.cooling_s,
-  }));
+  }, jsonReplacer), jsonReviver);
 }
 
 /** Restore internal state from a serialized snapshot (preserves groups). */
