@@ -194,6 +194,9 @@ impl CurrentProfile {
         if times_s.is_empty() {
             return Err("CurrentProfile must have at least one entry".into());
         }
+        if times_s.iter().chain(currents_ma.iter()).any(|v| v.is_nan()) {
+            return Err("times_s and currents_ma must not contain NaN".into());
+        }
         for w in times_s.windows(2) {
             if w[1] < w[0] {
                 return Err(format!(
@@ -433,5 +436,16 @@ mod tests {
     fn from_values_zero_current_allowed() {
         let cp = CurrentProfile::from_values(vec![0.0, 1.0], vec![0.05, 0.0]);
         assert!(cp.is_ok());
+    }
+
+    #[test]
+    fn from_values_nan_rejected() {
+        let cp = CurrentProfile::from_values(vec![0.0, f64::NAN], vec![0.05, 0.05]);
+        assert!(cp.is_err());
+        assert!(cp.unwrap_err().contains("NaN"));
+
+        let cp = CurrentProfile::from_values(vec![0.0, 1.0], vec![f64::NAN, 0.05]);
+        assert!(cp.is_err());
+        assert!(cp.unwrap_err().contains("NaN"));
     }
 }
