@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0](https://github.com/exoma-ch/hyrr/compare/v0.11.3...v0.12.0) (2026-05-27)
+
+
+### Features
+
+* current profile Phase 2 — preview plot, radio toggle, Python parsers, MCP schema ([#328](https://github.com/exoma-ch/hyrr/issues/328)) ([#347](https://github.com/exoma-ch/hyrr/issues/347)) ([6fad02d](https://github.com/exoma-ch/hyrr/commit/6fad02db064405ddf326b0490297bd6af920ae56))
+* **mcp:** define_material tool + density override + remove 5.0 fallback ([#348](https://github.com/exoma-ch/hyrr/issues/348)) ([9b06925](https://github.com/exoma-ch/hyrr/commit/9b069250e40adccb7323df1b72131aff0d461696)), closes [#328](https://github.com/exoma-ch/hyrr/issues/328)
+
+
+### Tests
+
+* **core:** RED/GREEN regression guard for density override ([#345](https://github.com/exoma-ch/hyrr/issues/345)) ([#349](https://github.com/exoma-ch/hyrr/issues/349)) ([ba9ef54](https://github.com/exoma-ch/hyrr/commit/ba9ef5465f53c0e067598468e422901f703b684d))
+
 ## [0.11.3](https://github.com/exoma-ch/hyrr/compare/v0.11.2...v0.11.3) (2026-05-27)
 
 

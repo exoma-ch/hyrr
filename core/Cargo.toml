@@ -1,6 +1,6 @@
 [package]
 name = "hyrr-core"
-version = "0.11.3"
+version = "0.12.0"
 edition = "2021"
 description = "Rust physics core for HYRR — Hierarchical Yield and Radionuclide Rates"
 license = "MIT"
