@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.3](https://github.com/exoma-ch/hyrr/compare/v0.11.2...v0.11.3) (2026-05-27)
+
+
+### Bug Fixes
+
+* custom material density now affects implantation depth ([#345](https://github.com/exoma-ch/hyrr/issues/345)) ([021372f](https://github.com/exoma-ch/hyrr/commit/021372fdb44e6487d2c80987bc05ca7f49533aa5))
+
 ## [0.11.2](https://github.com/exoma-ch/hyrr/compare/v0.11.1...v0.11.2) (2026-05-27)
 
 
