@@ -363,6 +363,14 @@
       <div class="config-row">
         <BeamConfigBar />
       </div>
+      {#if hasLayers && result}
+        <nav class="section-nav" aria-label="Jump to section">
+          <button class="section-nav-btn" onclick={() => document.getElementById('sec-depth')?.scrollIntoView({ behavior: 'smooth' })}>Depth</button>
+          <button class="section-nav-btn" onclick={() => document.getElementById('sec-activity')?.scrollIntoView({ behavior: 'smooth' })}>Activity</button>
+          <button class="section-nav-btn" onclick={() => document.getElementById('sec-emission')?.scrollIntoView({ behavior: 'smooth' })}>Emissions</button>
+          <button class="section-nav-btn" onclick={() => document.getElementById('sec-table')?.scrollIntoView({ behavior: 'smooth' })}>Table</button>
+        </nav>
+      {/if}
     {/if}
   </div>
 
@@ -375,15 +383,6 @@
     />
   {:else}
     <div class="app-flow">
-
-      {#if hasLayers && result}
-        <nav class="section-nav" aria-label="Jump to section">
-          <button class="section-nav-btn" onclick={() => document.getElementById('sec-depth')?.scrollIntoView({ behavior: 'smooth' })}>Depth</button>
-          <button class="section-nav-btn" onclick={() => document.getElementById('sec-activity')?.scrollIntoView({ behavior: 'smooth' })}>Activity</button>
-          <button class="section-nav-btn" onclick={() => document.getElementById('sec-emission')?.scrollIntoView({ behavior: 'smooth' })}>Emissions</button>
-          <button class="section-nav-btn" onclick={() => document.getElementById('sec-table')?.scrollIntoView({ behavior: 'smooth' })}>Table</button>
-        </nav>
-      {/if}
 
       <LayerStackHorizontal onmaterialclick={openMaterialPopup} onelementclick={openElementPopup} />
 
@@ -678,18 +677,17 @@
     position: sticky;
     top: 0;
     z-index: 20;
-    background: var(--c-bg, #1a1a2e);
-    border-bottom: 1px solid var(--c-border, #333);
-    margin: 0 -1rem;
-    padding: 0.35rem 1rem;
+    background: var(--c-bg-subtle, var(--c-bg, #1a1a2e));
+    border: 1px solid var(--c-border, #333);
+    border-radius: 3px;
+    padding: 0.35rem 0.5rem;
+    margin-bottom: 0.75rem;
   }
 
   .top-bar :global(.header-bar) {
     margin: 0;
+    border: none;
     border-radius: 0;
-    border-left: none;
-    border-right: none;
-    border-top: none;
   }
 
   .config-row {
