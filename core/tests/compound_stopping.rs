@@ -17,7 +17,7 @@ use hyrr_core::types::*;
 fn water_uses_nist_compound_stopping() {
     let db = EmbeddedDataStore::new("tendl-2023-iso").unwrap();
 
-    let resolution = resolve_material(&db, "H2O", None);
+    let resolution = resolve_material(&db, "H2O", None, None).unwrap();
     eprintln!("H2O resolution: nist_compound={:?}", resolution.nist_compound);
     assert_eq!(
         resolution.nist_compound.as_deref(),
@@ -63,7 +63,7 @@ fn water_simulation_produces_f18_with_nist_stopping() {
     let db = EmbeddedDataStore::new("tendl-2023-iso").unwrap();
 
     // F-18 PET stack with NIST compound stopping on the water target
-    let havar = resolve_material(&db, "havar", None);
+    let havar = resolve_material(&db, "havar", None, None).unwrap();
     let layer1 = Layer {
         density_g_cm3: havar.density,
         elements: havar.elements,
@@ -81,7 +81,7 @@ fn water_simulation_produces_f18_with_nist_stopping() {
     let mut o_override = std::collections::HashMap::new();
     o_override.insert(18, 0.97);
     enrichment.insert("O".to_string(), o_override);
-    let h2o = resolve_material(&db, "H2O-18", Some(&enrichment));
+    let h2o = resolve_material(&db, "H2O-18", Some(&enrichment), None).unwrap();
     assert_eq!(h2o.nist_compound.as_deref(), Some("WATER_LIQUID"));
 
     let layer2 = Layer {
