@@ -328,6 +328,18 @@ pub struct CatalogEntry {
     pub nist_compound: Option<&'static str>,
 }
 
+/// A material registered at runtime via MCP `define_material`.
+/// Mirrors CatalogEntry but owns its strings (no 'static lifetimes).
+#[derive(Debug, Clone)]
+pub struct RuntimeMaterial {
+    pub density_g_cm3: f64,
+    pub mass_fractions: HashMap<String, f64>,
+    pub nist_compound: Option<String>,
+}
+
+/// Session-scoped registry of user-defined materials.
+pub type MaterialRegistry = HashMap<String, RuntimeMaterial>;
+
 /// Map common material identifiers/formulas to NIST PSTAR/ASTAR compound
 /// names. These are SCREAMING_SNAKE_CASE keys matching the names in
 /// `stopping/compounds/PSTAR_compounds.parquet`.
@@ -475,14 +487,33 @@ pub struct MaterialResolution {
 }
 
 /// Resolve a material identifier (name, formula, or element symbol).
+///
+/// Resolution order: runtime `registry` → static `MATERIAL_CATALOG` →
+/// isotope notation → formula parsing. Returns `Err` when density
+/// cannot be determined (no silent 5.0 g/cm³ fallback).
 pub fn resolve_material(
     db: &dyn DatabaseProtocol,
     identifier: &str,
     overrides: Option<&HashMap<String, HashMap<u32, f64>>>,
-) -> MaterialResolution {
+    registry: Option<&MaterialRegistry>,
+) -> Result<MaterialResolution, String> {
     let lower = identifier.to_lowercase();
 
-    // Check catalog first
+    // Check runtime registry first (session-defined materials override built-ins)
+    if let Some(reg) = registry {
+        if let Some(entry) = reg.get(&lower) {
+            let composition: HashMap<String, f64> = entry.mass_fractions.clone();
+            let elements = resolve_isotopics(db, &composition, false, overrides);
+            return Ok(MaterialResolution {
+                elements,
+                density: entry.density_g_cm3,
+                molecular_weight: 0.0,
+                nist_compound: entry.nist_compound.clone(),
+            });
+        }
+    }
+
+    // Check static catalog
     if let Some(entry) = MATERIAL_CATALOG.get(lower.as_str()) {
         let composition: HashMap<String, f64> = entry
             .mass_fractions
@@ -490,12 +521,12 @@ pub fn resolve_material(
             .map(|(&k, &v)| (k.to_string(), v))
             .collect();
         let elements = resolve_isotopics(db, &composition, false, overrides);
-        return MaterialResolution {
+        return Ok(MaterialResolution {
             elements,
             density: entry.density,
             molecular_weight: 0.0,
             nist_compound: entry.nist_compound.map(|s| s.to_string()),
-        };
+        });
     }
 
     // Check for isotope notation: "Mo-100" → 100% enriched single isotope
@@ -505,20 +536,21 @@ pub fn resolve_material(
             let sym = caps.get(1).unwrap().as_str();
             let mass_num: u32 = caps.get(2).unwrap().as_str().parse().unwrap_or(0);
             if SYMBOL_TO_Z_MAP.contains_key(sym) && mass_num > 0 {
-                // Build 100% enriched single isotope
                 let mut enrichment = HashMap::new();
                 enrichment.insert(mass_num, 1.0);
                 let element = resolve_element(db, sym, Some(&enrichment));
-                let density = ELEMENT_DENSITIES
-                    .get(sym)
-                    .copied()
-                    .unwrap_or(5.0);
-                return MaterialResolution {
+                let density = *ELEMENT_DENSITIES.get(sym).ok_or_else(|| {
+                    format!(
+                        "No density known for element '{sym}'. \
+                         Provide density_g_cm3 on the layer or use define_material."
+                    )
+                })?;
+                return Ok(MaterialResolution {
                     elements: vec![(element, 1.0)],
                     density,
                     molecular_weight: mass_num as f64,
                     nist_compound: None,
-                };
+                });
             }
         }
     }
@@ -529,7 +561,7 @@ pub fn resolve_material(
 
     let (elements, molecular_weight) = resolve_formula(db, &formula_clean, overrides);
 
-    // Determine density
+    // Determine density — error instead of silent 5.0 g/cm³ fallback
     let density = if let Some(&d) = COMPOUND_DENSITIES.get(identifier) {
         d
     } else if let Some(&d) = COMPOUND_DENSITIES.get(formula_clean.as_str()) {
@@ -538,13 +570,18 @@ pub fn resolve_material(
         let parsed = parse_formula(&formula_clean);
         let symbols: Vec<&String> = parsed.keys().collect();
         if symbols.len() == 1 {
-            if let Some(&d) = ELEMENT_DENSITIES.get(symbols[0].as_str()) {
-                d
-            } else {
-                5.0
-            }
+            *ELEMENT_DENSITIES.get(symbols[0].as_str()).ok_or_else(|| {
+                format!(
+                    "No density known for element '{}'. \
+                     Provide density_g_cm3 on the layer or use define_material.",
+                    symbols[0]
+                )
+            })?
         } else {
-            5.0
+            return Err(format!(
+                "No density known for compound '{identifier}'. \
+                 Provide density_g_cm3 on the layer or use define_material."
+            ));
         }
     };
 
@@ -553,10 +590,10 @@ pub fn resolve_material(
         .or_else(|| nist_compound_name(&formula_clean))
         .map(|s| s.to_string());
 
-    MaterialResolution {
+    Ok(MaterialResolution {
         elements,
         density,
         molecular_weight,
         nist_compound: nist,
-    }
+    })
 }

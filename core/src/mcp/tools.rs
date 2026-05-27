@@ -1,9 +1,13 @@
 //! MCP tool implementations for HYRR.
 
 use crate::db::DatabaseProtocol;
-use crate::materials::{resolve_material, ELEMENT_DENSITIES, MATERIAL_CATALOG};
+use crate::materials::{
+    resolve_material, MaterialRegistry, RuntimeMaterial, ELEMENT_DENSITIES, MATERIAL_CATALOG,
+    SYMBOL_TO_Z_MAP,
+};
 use crate::types::*;
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// JSON Schema for a single target layer. Shared by every tool that takes
 /// `layers`. `require_thickness` toggles whether `thickness_cm` is required —
@@ -30,6 +34,10 @@ fn layer_schema(require_thickness: bool) -> Value {
             "energy_out_mev": {
                 "type": "number",
                 "description": "Target exit energy in MeV. Used as a degrader spec when thickness_cm is omitted."
+            },
+            "density_g_cm3": {
+                "type": "number",
+                "description": "Override density [g/cm³] for this layer. Replaces the material's resolved density."
             },
             "enrichment": {
                 "type": "array",
@@ -107,10 +115,44 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "list_materials",
-            "description": "List available materials in HYRR's catalog, including named alloys and elements with known densities.",
+            "description": "List available materials in HYRR's catalog, including named alloys, session-defined materials, and elements with known densities.",
             "inputSchema": {
                 "type": "object",
                 "properties": {}
+            }
+        }),
+        serde_json::json!({
+            "name": "define_material",
+            "description": "Register a custom material (alloy, compound, etc.) for this session. Once defined, the name can be used in any layer's 'material' field. Session-scoped — lost when the server restarts.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Material identifier (e.g. 'nb3sn', 'inconel-718'). Case-insensitive."
+                    },
+                    "density_g_cm3": {
+                        "type": "number",
+                        "description": "Bulk density in g/cm³"
+                    },
+                    "composition": {
+                        "type": "array",
+                        "description": "Mass fractions. Each entry: {element, fraction}. Fractions must sum to ~1.0.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "element": { "type": "string", "description": "Element symbol, e.g. 'Ni'" },
+                                "fraction": { "type": "number", "description": "Mass fraction (0-1)" }
+                            },
+                            "required": ["element", "fraction"]
+                        }
+                    },
+                    "nist_compound": {
+                        "type": "string",
+                        "description": "Optional NIST PSTAR compound name for stopping power lookup (e.g. 'WATER_LIQUID')"
+                    }
+                },
+                "required": ["name", "density_g_cm3", "composition"]
             }
         }),
         serde_json::json!({
@@ -237,18 +279,20 @@ pub fn list_tools() -> Vec<Value> {
 /// trust a hidden default).
 pub fn call_tool(
     db: &dyn DatabaseProtocol,
+    materials: &mut MaterialRegistry,
     name: &str,
     arguments: &Value,
 ) -> Result<String, String> {
     let body = match name {
-        "simulate" => tool_simulate(db, arguments),
-        "list_materials" => tool_list_materials(),
+        "define_material" => tool_define_material(materials, arguments),
+        "simulate" => tool_simulate(db, &*materials, arguments),
+        "list_materials" => tool_list_materials(&*materials),
         "list_reaction_channels" => tool_list_reaction_channels(db, arguments),
         "get_decay_data" => tool_get_decay_data(db, arguments),
-        "compare_simulations" => tool_compare_simulations(db, arguments),
-        "get_stack_energy_budget" => tool_get_stack_energy_budget(db, arguments),
-        "get_stopping_power" => tool_get_stopping_power(db, arguments),
-        "get_isotope_production_curve" => tool_get_isotope_production_curve(db, arguments),
+        "compare_simulations" => tool_compare_simulations(db, &*materials, arguments),
+        "get_stack_energy_budget" => tool_get_stack_energy_budget(db, &*materials, arguments),
+        "get_stopping_power" => tool_get_stopping_power(db, &*materials, arguments),
+        "get_isotope_production_curve" => tool_get_isotope_production_curve(db, &*materials, arguments),
         _ => return Err(format!("Unknown tool: {}", name)),
     }?;
     Ok(format!("{body}\n\n---\n*Library: {}*\n", db.library()))
@@ -296,6 +340,7 @@ fn parse_enrichment(
 /// schema stays a single definition site.
 fn build_and_run_sim(
     db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<(TargetStack, crate::types::StackResult, String, f64, f64), String> {
     let projectile_str = args
@@ -336,12 +381,16 @@ fn build_and_run_sim(
 
         // enrichment: [{element, A, fraction}] — flat, array-of-records shape.
         let overrides = parse_enrichment(layer_val.get("enrichment"))?;
-        let resolution = resolve_material(db, material, overrides.as_ref());
+        let resolution = resolve_material(db, material, overrides.as_ref(), Some(registry))?;
         let thickness_cm = layer_val.get("thickness_cm").and_then(|v| v.as_f64());
         let energy_out = layer_val.get("energy_out_mev").and_then(|v| v.as_f64());
+        let density = layer_val
+            .get("density_g_cm3")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(resolution.density);
 
         layers.push(Layer {
-            density_g_cm3: resolution.density,
+            density_g_cm3: density,
             elements: resolution.elements,
             thickness_cm,
             areal_density_g_cm2: None,
@@ -403,6 +452,7 @@ fn build_and_run_sim(
 /// different compute path — skips activation entirely.
 fn build_and_run_stopping_only(
     db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<(crate::types::StackResult, String, f64, f64), String> {
     let projectile_str = args
@@ -433,12 +483,16 @@ fn build_and_run_stopping_only(
             .and_then(|v| v.as_str())
             .ok_or("Layer missing 'material'")?;
         let overrides = parse_enrichment(layer_val.get("enrichment"))?;
-        let resolution = resolve_material(db, material, overrides.as_ref());
+        let resolution = resolve_material(db, material, overrides.as_ref(), Some(registry))?;
         let thickness_cm = layer_val.get("thickness_cm").and_then(|v| v.as_f64());
         let energy_out = layer_val.get("energy_out_mev").and_then(|v| v.as_f64());
+        let density = layer_val
+            .get("density_g_cm3")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(resolution.density);
 
         layers.push(Layer {
-            density_g_cm3: resolution.density,
+            density_g_cm3: density,
             elements: resolution.elements,
             thickness_cm,
             areal_density_g_cm2: None,
@@ -474,8 +528,85 @@ fn build_and_run_stopping_only(
     Ok((result, projectile_str.to_string(), energy_mev, current_ma))
 }
 
-fn tool_simulate(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
-    let (stack, result, projectile_str, energy_mev, current_ma) = build_and_run_sim(db, args)?;
+fn tool_define_material(
+    materials: &mut MaterialRegistry,
+    args: &Value,
+) -> Result<String, String> {
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'name'")?;
+    let density = args
+        .get("density_g_cm3")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing 'density_g_cm3'")?;
+    if density <= 0.0 {
+        return Err("density_g_cm3 must be positive".to_string());
+    }
+    let comp_arr = args
+        .get("composition")
+        .and_then(|v| v.as_array())
+        .ok_or("Missing 'composition'")?;
+    if comp_arr.is_empty() {
+        return Err("'composition' must be non-empty".to_string());
+    }
+
+    let mut mass_fractions = HashMap::new();
+    let mut total = 0.0;
+    for entry in comp_arr {
+        let elem = entry
+            .get("element")
+            .and_then(|v| v.as_str())
+            .ok_or("composition entry missing 'element'")?;
+        let frac = entry
+            .get("fraction")
+            .and_then(|v| v.as_f64())
+            .ok_or("composition entry missing 'fraction'")?;
+        if !(0.0..=1.0).contains(&frac) {
+            return Err(format!(
+                "fraction for '{}' out of range [0, 1]: {}",
+                elem, frac
+            ));
+        }
+        if !SYMBOL_TO_Z_MAP.contains_key(elem) {
+            return Err(format!("Unknown element symbol: '{}'", elem));
+        }
+        mass_fractions.insert(elem.to_string(), frac);
+        total += frac;
+    }
+    if (total - 1.0).abs() > 0.02 {
+        return Err(format!(
+            "Mass fractions sum to {:.4}, expected ~1.0 (tolerance ±0.02)",
+            total
+        ));
+    }
+
+    let nist = args
+        .get("nist_compound")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let key = name.to_lowercase();
+    let replaced = materials.contains_key(&key);
+    materials.insert(
+        key,
+        RuntimeMaterial {
+            density_g_cm3: density,
+            mass_fractions,
+            nist_compound: nist,
+        },
+    );
+
+    Ok(format!(
+        "{} material '{}' (density: {:.3} g/cm³, {} components)",
+        if replaced { "Updated" } else { "Registered" },
+        name,
+        density,
+        comp_arr.len()
+    ))
+}
+
+fn tool_simulate(db: &dyn DatabaseProtocol, registry: &MaterialRegistry, args: &Value) -> Result<String, String> {
+    let (stack, result, projectile_str, energy_mev, current_ma) = build_and_run_sim(db, registry, args)?;
     let irr_time = stack.irradiation_time_s;
     let cool_time = stack.cooling_time_s;
 
@@ -543,7 +674,7 @@ fn tool_simulate(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, Stri
     Ok(output)
 }
 
-fn tool_list_materials() -> Result<String, String> {
+fn tool_list_materials(registry: &MaterialRegistry) -> Result<String, String> {
     let mut output = String::new();
     output.push_str("# Available Materials\n\n");
 
@@ -563,6 +694,26 @@ fn tool_list_materials() -> Result<String, String> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+    }
+
+    if !registry.is_empty() {
+        output.push_str("\n## Session Materials\n\n");
+        let mut session: Vec<_> = registry.iter().collect();
+        session.sort_by_key(|(name, _)| (*name).clone());
+        for (name, entry) in session {
+            let mut fractions: Vec<_> = entry.mass_fractions.iter().collect();
+            fractions.sort_by_key(|(k, _)| (*k).clone());
+            output.push_str(&format!(
+                "- **{}** — density: {:.2} g/cm³, composition: {}\n",
+                name,
+                entry.density_g_cm3,
+                fractions
+                    .iter()
+                    .map(|(k, v)| format!("{}: {:.1}%", k, *v * 100.0))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
     }
 
     output.push_str("\n## Elements with Known Densities\n\n");
@@ -683,7 +834,7 @@ fn tool_get_decay_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String
     }
 }
 
-fn tool_compare_simulations(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+fn tool_compare_simulations(db: &dyn DatabaseProtocol, registry: &MaterialRegistry, args: &Value) -> Result<String, String> {
     let config_a = args
         .get("config_a")
         .ok_or("Missing 'config_a'")?;
@@ -702,8 +853,8 @@ fn tool_compare_simulations(db: &dyn DatabaseProtocol, args: &Value) -> Result<S
         .unwrap_or("Config B")
         .to_string();
 
-    let (_stack_a, result_a, _, _, _) = build_and_run_sim(db, config_a)?;
-    let (_stack_b, result_b, _, _, _) = build_and_run_sim(db, config_b)?;
+    let (_stack_a, result_a, _, _, _) = build_and_run_sim(db, registry, config_a)?;
+    let (_stack_b, result_b, _, _, _) = build_and_run_sim(db, registry, config_b)?;
 
     use std::collections::BTreeMap;
     let mut iso_a: BTreeMap<String, f64> = BTreeMap::new();
@@ -757,12 +908,12 @@ fn tool_compare_simulations(db: &dyn DatabaseProtocol, args: &Value) -> Result<S
     Ok(output)
 }
 
-fn tool_get_stack_energy_budget(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+fn tool_get_stack_energy_budget(db: &dyn DatabaseProtocol, registry: &MaterialRegistry, args: &Value) -> Result<String, String> {
     // Stopping-only fast path — skips the activation pipeline that
     // build_and_run_sim would invoke. Identical energy/heat numbers, much
     // less work for stacks with many cross-section channels.
     let (result, projectile_str, energy_mev, current_ma) =
-        build_and_run_stopping_only(db, args)?;
+        build_and_run_stopping_only(db, registry, args)?;
 
     let mut output = String::new();
     output.push_str(&format!(
@@ -801,7 +952,7 @@ fn tool_get_stack_energy_budget(db: &dyn DatabaseProtocol, args: &Value) -> Resu
     Ok(output)
 }
 
-fn tool_get_stopping_power(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+fn tool_get_stopping_power(db: &dyn DatabaseProtocol, registry: &MaterialRegistry, args: &Value) -> Result<String, String> {
     let projectile_str = args
         .get("projectile")
         .and_then(|v| v.as_str())
@@ -823,7 +974,11 @@ fn tool_get_stopping_power(db: &dyn DatabaseProtocol, args: &Value) -> Result<St
         return Err("'energies_mev' must be a non-empty array of numbers".to_string());
     }
 
-    let resolution = resolve_material(db, material, None);
+    let resolution = resolve_material(db, material, None, Some(registry))?;
+    let density = args
+        .get("density_g_cm3")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(resolution.density);
     // Convert (Element, atom_fraction) → (Z, mass_fraction) for compound_dedx.
     let composition: Vec<(u32, f64)> = {
         let mut raw: Vec<(u32, f64)> = Vec::new();
@@ -845,13 +1000,13 @@ fn tool_get_stopping_power(db: &dyn DatabaseProtocol, args: &Value) -> Result<St
         .map_err(|e| e.to_string())?;
     let lin_dedx: Vec<f64> = mass_dedx
         .iter()
-        .map(|s| s * resolution.density)
+        .map(|s| s * density)
         .collect();
 
     let mut output = String::new();
     output.push_str(&format!(
         "# Stopping Power\n\n**Projectile:** {}  \n**Material:** {} (ρ = {:.3} g/cm³)\n\n",
-        projectile_str, material, resolution.density
+        projectile_str, material, density
     ));
     output.push_str("| Energy [MeV] | Mass S [MeV·cm²/g] | Linear dE/dx [MeV/cm] |\n");
     output.push_str("|--------------|---------------------|------------------------|\n");
@@ -866,6 +1021,7 @@ fn tool_get_stopping_power(db: &dyn DatabaseProtocol, args: &Value) -> Result<St
 
 fn tool_get_isotope_production_curve(
     db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
     let isotope = args
@@ -878,7 +1034,7 @@ fn tool_get_isotope_production_curve(
         return Err(format!("'vs' must be one of: time, cooling, depth (got '{}')", vs));
     }
 
-    let (_stack, result, _, _, _) = build_and_run_sim(db, args)?;
+    let (_stack, result, _, _, _) = build_and_run_sim(db, registry, args)?;
 
     // Find the first layer containing the named isotope.
     let (layer_idx, lr, iso) = result

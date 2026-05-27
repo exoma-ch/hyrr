@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 
+use crate::materials::MaterialRegistry;
 use super::tools;
 
 /// JSON-RPC 2.0 request.
@@ -127,6 +128,8 @@ pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
         }
     };
 
+    let mut materials: MaterialRegistry = std::collections::HashMap::new();
+
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
@@ -152,7 +155,7 @@ pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
             }
         };
 
-        let response = handle_request(&db, request);
+        let response = handle_request(&db, &mut materials, request);
         let _ = writeln!(stdout, "{}", serde_json::to_string(&response).unwrap());
         let _ = stdout.flush();
     }
@@ -160,6 +163,7 @@ pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
 
 fn handle_request(
     db: &crate::db::ParquetDataStore,
+    materials: &mut MaterialRegistry,
     request: JsonRpcRequest,
 ) -> JsonRpcResponse {
     let id = request.id.clone();
@@ -204,7 +208,7 @@ fn handle_request(
                 .cloned()
                 .unwrap_or(Value::Object(serde_json::Map::new()));
 
-            match tools::call_tool(db, name, &arguments) {
+            match tools::call_tool(db, materials, name, &arguments) {
                 Ok(result) => {
                     let response = serde_json::json!({
                         "content": [{

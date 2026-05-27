@@ -19,7 +19,7 @@ mod tests {
         let db = EmbeddedDataStore::new("tendl-2023-iso").unwrap();
 
         // Layer 1: havar window (25 µm)
-        let havar = resolve_material(&db, "havar", None);
+        let havar = resolve_material(&db, "havar", None, None).unwrap();
         let layer1 = Layer {
             density_g_cm3: havar.density,
             elements: havar.elements,
@@ -38,7 +38,7 @@ mod tests {
         let mut o_override = HashMap::new();
         o_override.insert(18, 0.97);
         enrichment.insert("O".to_string(), o_override);
-        let h2o = resolve_material(&db, "H2O-18", Some(&enrichment));
+        let h2o = resolve_material(&db, "H2O-18", Some(&enrichment), None).unwrap();
 
         eprintln!("H2O-18 resolution: density={}, elements:", h2o.density);
         for (elem, frac) in &h2o.elements {

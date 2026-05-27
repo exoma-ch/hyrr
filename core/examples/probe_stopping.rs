@@ -12,8 +12,8 @@ fn main() {
         std::env::var("HYRR_DATA").unwrap_or_else(|_| "../nucl-parquet/data".to_string());
     let db = ParquetDataStore::new(&data_dir, "tendl-2023-iso").unwrap();
 
-    let al = resolve_material(&db, "Al", None);
-    let ti = resolve_material(&db, "Ti", None);
+    let al = resolve_material(&db, "Al", None, None).unwrap();
+    let ti = resolve_material(&db, "Ti", None, None).unwrap();
 
     let al_comp: Vec<(u32, f64)> = {
         let mut raw: Vec<(u32, f64)> = Vec::new();
@@ -40,7 +40,7 @@ fn main() {
         raw.iter().map(|&(z, w)| (z, w / total)).collect()
     };
 
-    let he = resolve_material(&db, "He", None);
+    let he = resolve_material(&db, "He", None, None).unwrap();
     let he_comp: Vec<(u32, f64)> = {
         let mut raw: Vec<(u32, f64)> = Vec::new();
         for (elem, atom_frac) in &he.elements {

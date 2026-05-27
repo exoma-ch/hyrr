@@ -13,7 +13,7 @@ fn run(cool_s: f64) {
     db.load_xs("p", 1).unwrap();
     db.load_xs("p", 8).unwrap();
 
-    let h2o = resolve_material(&db, "H2O", None);
+    let h2o = resolve_material(&db, "H2O", None, None).unwrap();
     let layer = Layer {
         density_g_cm3: h2o.density,
         elements: h2o.elements.clone(),
