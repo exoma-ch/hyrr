@@ -61,10 +61,10 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="HYRR" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <script type="module" crossorigin src="/hyrr/assets/index-BSsiY9Ij.js"></script>
+    <script type="module" crossorigin src="/hyrr/assets/index-CvMKPFod.js"></script>
     <link rel="modulepreload" crossorigin href="/hyrr/assets/utils-DDViMjAj.js">
     <link rel="modulepreload" crossorigin href="/hyrr/assets/src-W1VOhqRv.js">
-    <link rel="stylesheet" crossorigin href="/hyrr/assets/index-BY8oIoag.css">
+    <link rel="stylesheet" crossorigin href="/hyrr/assets/index-CnwnuDhw.css">
   </head>
   <body>
     <script>
@@ -83,5 +83,18 @@
         results. All computation runs locally in your browser — no server, no data upload.</p>
       <p>JavaScript is required to use this application.</p>
     </noscript>
+
+    <!-- Cloudflare Web Analytics — privacy-respecting, no cookies, no PII.
+         Only loads on the web (not in Tauri desktop webview).
+         Token is public (shipped to every browser, write-only beacon). -->
+    <script>
+      if (!window.__TAURI_INTERNALS__) {
+        var s = document.createElement('script');
+        s.defer = true;
+        s.src = 'https://static.cloudflareinsights.com/beacon.min.js';
+        s.dataset.cfBeacon = '{"token": "eeee810c098b467bb2e2ef5aacae9d2c"}';
+        document.body.appendChild(s);
+      }
+    </script>
   </body>
 </html>
