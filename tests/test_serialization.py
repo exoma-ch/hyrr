@@ -9,6 +9,7 @@ import pytest
 
 from hyrr.models import (
     Beam,
+    CurrentProfile,
     DepthPoint,
     Element,
     IsotopeResult,
@@ -228,6 +229,34 @@ class TestConfigRoundTrip:
         # json.dumps will raise if any numpy types remain
         json_str = json.dumps(config)
         assert isinstance(json_str, str)
+
+    def test_stack_to_config_with_current_profile(self) -> None:
+        """CurrentProfile should appear in serialized config."""
+        elem = Element(symbol="Cu", Z=29, isotopes={63: 0.69, 65: 0.31})
+        layer = Layer(density_g_cm3=8.96, elements=[(elem, 1.0)], thickness_cm=0.1)
+        beam = Beam(projectile="p", energy_MeV=16.0, current_mA=0.15)
+        profile = CurrentProfile(
+            times_s=np.array([0.0, 5.0, 10.0]),
+            currents_mA=np.array([0.10, 0.15, 0.12]),
+        )
+        stack = TargetStack(beam=beam, layers=[layer], current_profile=profile)
+        config = stack_to_config(stack)
+
+        assert "current_profile" in config
+        assert config["current_profile"]["times_s"] == [0.0, 5.0, 10.0]
+        assert config["current_profile"]["currents_mA"] == pytest.approx(
+            [0.10, 0.15, 0.12]
+        )
+        # Must be pure Python lists, not numpy
+        json_str = json.dumps(config)
+        assert isinstance(json_str, str)
+
+    def test_stack_to_config_without_current_profile(
+        self, sample_stack_result: StackResult
+    ) -> None:
+        """No current_profile key when profile is None."""
+        config = stack_to_config(sample_stack_result.stack)
+        assert "current_profile" not in config
 
     def test_config_enrichment_preserved(self) -> None:
         """Enriched isotopes should round-trip correctly."""
