@@ -30,6 +30,9 @@ export interface LayerConfig {
   areal_density_g_cm2?: number;
   energy_out_MeV?: number;
   is_monitor?: boolean;
+  /** Override resolved density (g/cm³). If set, takes precedence over
+   *  the density from resolve_material / custom material catalog. */
+  density_g_cm3?: number;
 }
 
 export interface LayerGroup {
@@ -146,7 +149,7 @@ export function buildTargetStack(
     const { elements, density } = resolveMaterial(db, layerCfg.material, overrides);
 
     return {
-      densityGCm3: density,
+      densityGCm3: layerCfg.density_g_cm3 ?? density,
       elements,
       thicknessCm: layerCfg.thickness_cm ?? null,
       arealDensityGCm2: layerCfg.areal_density_g_cm2 ?? null,

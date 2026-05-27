@@ -141,8 +141,8 @@ export async function initBackend(
 /** Optional hook injected by the UI so the compute backend can expand custom
  *  material names (e.g. "H2O-custom") into something the Rust resolver can
  *  handle. Returns the formula to substitute, or null to leave unchanged. */
-let customMaterialExpander: ((name: string) => string | null) | null = null;
-export function setCustomMaterialExpander(fn: (name: string) => string | null): void {
+let customMaterialExpander: ((name: string) => { formula: string; density: number } | null) | null = null;
+export function setCustomMaterialExpander(fn: (name: string) => { formula: string; density: number } | null): void {
   customMaterialExpander = fn;
 }
 
@@ -150,8 +150,13 @@ function expandCustomMaterials(config: SimulationConfig): SimulationConfig {
   if (!customMaterialExpander) return config;
   const expand = customMaterialExpander;
   const layers = config.layers.map((layer) => {
-    const formula = expand(layer.material);
-    return formula && formula !== layer.material ? { ...layer, material: formula } : layer;
+    const result = expand(layer.material);
+    if (!result) return layer;
+    return {
+      ...layer,
+      material: result.formula,
+      density_g_cm3: layer.density_g_cm3 ?? result.density,
+    };
   });
   return { ...config, layers };
 }

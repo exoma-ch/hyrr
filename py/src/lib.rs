@@ -423,6 +423,7 @@ struct LayerCfg {
     #[serde(alias = "energy_out_MeV")]
     energy_out_mev: Option<f64>,
     is_monitor: Option<bool>,
+    density_g_cm3: Option<f64>,
 }
 
 fn config_to_layers(db: &ParquetDataStore, config: &SimConfig) -> Vec<Layer> {
@@ -432,7 +433,7 @@ fn config_to_layers(db: &ParquetDataStore, config: &SimConfig) -> Vec<Layer> {
         .map(|lc| {
             let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref());
             Layer {
-                density_g_cm3: resolution.density,
+                density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,
                 thickness_cm: lc.thickness_cm,
                 areal_density_g_cm2: lc.areal_density_g_cm2,

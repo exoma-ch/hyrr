@@ -61,6 +61,9 @@ pub struct LayerConfig {
     pub areal_density_g_cm2: Option<f64>,
     pub energy_out_MeV: Option<f64>,
     pub is_monitor: Option<bool>,
+    /// Override resolved density (g/cm³). If set, takes precedence over
+    /// the density from resolve_material / material catalog.
+    pub density_g_cm3: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,7 +155,7 @@ fn config_to_layers(
             let overrides = lc.enrichment.as_ref();
             let resolution = resolve_material(db, &lc.material, overrides);
             Layer {
-                density_g_cm3: resolution.density,
+                density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,
                 thickness_cm: lc.thickness_cm,
                 areal_density_g_cm2: lc.areal_density_g_cm2,

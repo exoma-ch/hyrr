@@ -176,7 +176,7 @@
     setPkgCustomCompositionLookup(compositionFn);
     setCustomMaterialExpander((name) => {
       const cm = getCustomMaterials().find((m) => m.name === name);
-      return cm ? cm.formula : null;
+      return cm ? { formula: cm.formula, density: cm.density } : null;
     });
     setCustomMaterialResolver((identifier) => {
       const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
