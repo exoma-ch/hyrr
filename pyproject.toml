@@ -1,6 +1,6 @@
 [project]
 name = "hyrr"
-version = "0.11.3"
+version = "0.12.0"
 description = "Hierarchical Yield and Radionuclide Rates — isotope production in stacked target assemblies"
 authors = [
     {name = "MorePET"},
