@@ -2,7 +2,7 @@
 
 # Version is kept in sync with pyproject.toml manually for now.
 # TODO: Consider hatch-vcs or setuptools-scm for automatic versioning from git tags.
-__version__ = "0.11.0"
+__version__ = "0.11.1"
 
 from hyrr.api import run_simulation, run_simulation_from_json
 from hyrr.db import (
