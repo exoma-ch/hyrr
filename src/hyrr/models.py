@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from collections.abc import Sequence
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -284,6 +286,70 @@ class CurrentProfile:
             result.append((0.0, t_end, float(currents[0])))
 
         return result
+
+    @classmethod
+    def from_csv(cls, path: str | Path) -> "CurrentProfile":
+        """Load a current profile from a CSV/TSV file.
+
+        Accepts two-column files with optional header row (time_s, current_mA).
+        Auto-detects comma or tab delimiter.
+        """
+        import csv
+
+        path = Path(path)
+        with open(path, newline="") as f:
+            sample = f.read(4096)
+            f.seek(0)
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=",\t")
+            except csv.Error:
+                dialect = csv.excel  # default to comma
+            has_header = csv.Sniffer().has_header(sample)
+            reader = csv.reader(f, dialect)
+            if has_header:
+                next(reader)
+            times: list[float] = []
+            currents: list[float] = []
+            for row in reader:
+                if len(row) < 2 or not row[0].strip():
+                    continue
+                times.append(float(row[0]))
+                currents.append(float(row[1]))
+        return cls(
+            times_s=np.array(times, dtype=np.float64),
+            currents_mA=np.array(currents, dtype=np.float64),
+        )
+
+    @classmethod
+    def from_parquet(cls, path: str | Path) -> "CurrentProfile":
+        """Load a current profile from a Parquet file.
+
+        Expects columns named ``time_s`` and ``current_mA``.
+        """
+        import polars as pl
+
+        df = pl.read_parquet(path)
+        return cls(
+            times_s=df["time_s"].to_numpy().astype(np.float64),
+            currents_mA=df["current_mA"].to_numpy().astype(np.float64),
+        )
+
+    @classmethod
+    def from_values(
+        cls, values: Sequence[float], dt: float
+    ) -> "CurrentProfile":
+        """Create a profile from current values at uniform time spacing.
+
+        Args:
+            values: Current values in mA.
+            dt: Time step in seconds.
+        """
+        n = len(values)
+        times = np.arange(n, dtype=np.float64) * dt
+        return cls(
+            times_s=times,
+            currents_mA=np.array(values, dtype=np.float64),
+        )
 
 
 @dataclass

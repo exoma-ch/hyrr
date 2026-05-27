@@ -146,13 +146,21 @@ def stack_to_config(stack: TargetStack) -> dict[str, Any]:
 
         layers_list.append(layer_dict)
 
-    return {
+    result = {
         "beam": beam_dict,
         "layers": layers_list,
         "irradiation_time_s": float(stack.irradiation_time_s),
         "cooling_time_s": float(stack.cooling_time_s),
         "area_cm2": float(stack.area_cm2),
     }
+
+    if stack.current_profile is not None:
+        result["current_profile"] = {
+            "times_s": stack.current_profile.times_s.tolist(),
+            "currents_mA": stack.current_profile.currents_mA.tolist(),
+        }
+
+    return result
 
 
 def config_to_json(stack: TargetStack) -> str:

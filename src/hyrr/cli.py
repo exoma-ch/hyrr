@@ -55,6 +55,12 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument(
         "--format", choices=["text", "excel", "both"], default="text"
     )
+    run_parser.add_argument(
+        "--current-profile",
+        type=Path,
+        default=None,
+        help="CSV or Parquet file with time-varying beam current (columns: time_s, current_mA)",
+    )
 
     # hyrr compare
     compare_parser = subparsers.add_parser(
@@ -372,6 +378,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     # Convert TOML to the config dict format expected by config_to_stack
     config = _toml_to_config(toml_config)
+
+    # Attach current profile from CLI flag or TOML
+    if args.current_profile:
+        from hyrr.models import CurrentProfile
+
+        p = args.current_profile
+        if p.suffix == ".parquet":
+            profile = CurrentProfile.from_parquet(p)
+        else:
+            profile = CurrentProfile.from_csv(p)
+        config["current_profile"] = {
+            "times_s": profile.times_s.tolist(),
+            "currents_mA": profile.currents_mA.tolist(),
+        }
 
     # Run simulation through Rust backend
     import json

@@ -83,6 +83,23 @@ pub fn list_tools() -> Vec<Value> {
                     "cooling_time_s": {
                         "type": "number",
                         "description": "Cooling time in seconds (default: 86400)"
+                    },
+                    "current_profile": {
+                        "type": "object",
+                        "description": "Optional time-varying beam current profile (piecewise-constant). When present, overrides current_ma for activation calculations.",
+                        "properties": {
+                            "times_s": {
+                                "type": "array",
+                                "items": { "type": "number" },
+                                "description": "Monotonically increasing time points starting at 0 [seconds]"
+                            },
+                            "currents_ma": {
+                                "type": "array",
+                                "items": { "type": "number" },
+                                "description": "Beam current at each time point [mA]. Must be non-negative. Same length as times_s."
+                            }
+                        },
+                        "required": ["times_s", "currents_ma"]
                     }
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
@@ -346,13 +363,34 @@ fn build_and_run_sim(
         }
     }
 
+    let current_profile = match args.get("current_profile") {
+        Some(cp) if !cp.is_null() => {
+            let times: Vec<f64> = cp
+                .get("times_s")
+                .and_then(|v| v.as_array())
+                .ok_or("current_profile.times_s must be an array")?
+                .iter()
+                .filter_map(|v| v.as_f64())
+                .collect();
+            let currents: Vec<f64> = cp
+                .get("currents_ma")
+                .and_then(|v| v.as_array())
+                .ok_or("current_profile.currents_ma must be an array")?
+                .iter()
+                .filter_map(|v| v.as_f64())
+                .collect();
+            Some(CurrentProfile::from_values(times, currents).map_err(|e| e.to_string())?)
+        }
+        _ => None,
+    };
+
     let mut stack = TargetStack {
         beam,
         layers,
         irradiation_time_s: irr_time,
         cooling_time_s: cool_time,
         area_cm2: 1.0,
-        current_profile: None,
+        current_profile,
     };
 
     let result = crate::compute::compute_stack(db, &mut stack, true)
