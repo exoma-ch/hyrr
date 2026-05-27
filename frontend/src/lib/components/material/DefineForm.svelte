@@ -575,11 +575,6 @@
 <svelte:window onclick={onModeMenuWindow} onkeydown={onModeMenuWindow} />
 
 <div class="define-section">
-  <button class="define-toggle" onclick={() => { defineOpen = !defineOpen; }}>
-    <span class="toggle-icon">{defineOpen ? "▾" : "▸"}</span>
-    Define &amp; save material
-  </button>
-
   {#if defineOpen}
     <div class="define-form">
       <div class="mode-chip-row">

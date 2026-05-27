@@ -92,6 +92,7 @@
   let materialPopupOpen = $state(false);
   let materialPopupLayerIndex = $state(0);
   let materialPopupEditId = $state<string | null>(null);
+  let materialPopupQuery = $state("");
   let elementPopupOpen = $state(false);
   let elementPopupSymbol = $state("");
   let elementPopupEnrichment = $state<Record<number, number> | undefined>(undefined);
@@ -270,6 +271,7 @@
     }
     const cm = mat ? getCustomMaterials().find((m) => m.name === mat || m.formula === mat) : null;
     materialPopupEditId = cm?.id ?? null;
+    materialPopupQuery = cm ? "" : (mat ?? "");
     materialPopupOpen = true;
   }
 
@@ -465,6 +467,7 @@
         : (() => { const item = getInternalItems()[materialPopupLayerIndex]; return item && !('mode' in item) ? item.enrichment : undefined; })()}
       materials={[]}
       editMaterialId={materialPopupEditId}
+      initialQuery={materialPopupQuery}
       {projectile}
     />
 

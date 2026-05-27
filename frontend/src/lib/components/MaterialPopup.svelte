@@ -27,6 +27,8 @@
     /** Active beam projectile ("p", "d", "a", …). Used to compute the
      *  PeriodicTable's TENDL-coverage disabled set in a later commit. */
     projectile?: string;
+    /** Pre-fill search query when opening (e.g. clicked material name) */
+    initialQuery?: string;
   }
 
   let {
@@ -38,6 +40,7 @@
     materials,
     editMaterialId = null,
     projectile,
+    initialQuery = "",
   }: Props = $props();
 
   let query = $state("");
@@ -99,7 +102,7 @@
 
   $effect(() => {
     if (open) {
-      query = "";
+      query = initialQuery || "";
       editInitial = null;
       view = "search";
       // Force a clean state so a stale disabledSet from a previous
