@@ -23,14 +23,37 @@ info:
 # PROJECT-SPECIFIC RECIPES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Uncomment and customize for your project:
+# Full local dev: build WASM + copy data + start vite
+[group('dev')]
+dev *args:
+    scripts/dev.sh {{args}}
 
-# # Run the application
-# [group('app')]
-# run *args:
-#     uv run python -m {{project}} {{args}}
+# Dev server without WASM rebuild (fast restart)
+[group('dev')]
+dev-fast *args:
+    scripts/dev.sh --skip-wasm {{args}}
 
-# # Run database migrations (if using sidecar)
-# [group('app')]
-# migrate:
-#     just sidecar postgres migrate
+# Build WASM only
+[group('dev')]
+wasm:
+    wasm-pack build wasm/ --target web --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+
+# Copy nuclear data to frontend
+[group('dev')]
+data:
+    scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet tendl-2023-iso
+
+# Manual deploy to GitHub Pages tst/
+[group('deploy')]
+deploy-tst:
+    scripts/deploy-staging-manual.sh
+
+# Run frontend unit tests
+[group('test')]
+test-frontend:
+    cd frontend && npx vitest run
+
+# Run Playwright e2e tests (requires running dev server)
+[group('test')]
+test-e2e project="desktop-1280":
+    cd frontend && npx playwright test --project={{project}}
