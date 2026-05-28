@@ -364,11 +364,13 @@ export function addGroup(index?: number): void {
 export function updateGroup(index: number, group: InternalGroup): void {
   pushUndo();
   state.items = state.items.map((item, i) => (i === index && isInternalGroup(item) ? group : item));
+  invalidateExpansion();
 }
 
 export function removeGroup(index: number): void {
   pushUndo();
   state.items = state.items.filter((_, i) => i !== index);
+  invalidateExpansion();
 }
 
 export function getGroup(index: number): InternalGroup | undefined {
@@ -413,12 +415,12 @@ export function removeLayer(index: number, groupIndex?: number): void {
     // Remove standalone layer
     state.items = state.items.filter((_, i) => i !== index);
   }
+  invalidateExpansion();
 }
 
 export function updateLayer(index: number, layer: LayerConfig, groupIndex?: number): void {
   pushUndo();
   if (groupIndex !== undefined) {
-    // Update layer in a specific group
     state.items = state.items.map((item, i) => {
       if (i === groupIndex && isInternalGroup(item)) {
         return { ...item, layers: item.layers.map((l, li) => (li === index ? layer : l)) };
@@ -426,7 +428,6 @@ export function updateLayer(index: number, layer: LayerConfig, groupIndex?: numb
       return item;
     });
   } else {
-    // Update standalone layer
     state.items = state.items.map((item, i) => {
       if (i === index && !isInternalGroup(item)) {
         return layer;
@@ -434,6 +435,7 @@ export function updateLayer(index: number, layer: LayerConfig, groupIndex?: numb
       return item;
     });
   }
+  invalidateExpansion();
 }
 
 export function moveLayer(from: number, to: number, fromGroupIndex?: number, toGroupIndex?: number): void {
@@ -483,6 +485,7 @@ export function moveLayer(from: number, to: number, fromGroupIndex?: number, toG
     items.splice(to, 0, item);
     state.items = items;
   }
+  invalidateExpansion();
 }
 
 export function moveGroup(from: number, to: number): void {
@@ -491,11 +494,13 @@ export function moveGroup(from: number, to: number): void {
   const [item] = items.splice(from, 1);
   items.splice(to, 0, item);
   state.items = items;
+  invalidateExpansion();
 }
 
 export function clearLayers(): void {
   pushUndo();
   state.items = [];
+  invalidateExpansion();
 }
 
 // ─── Validators ─────────────────────────────────────────────────────
