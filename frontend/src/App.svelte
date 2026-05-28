@@ -406,14 +406,14 @@
       {/if}
 
       {#if hasLayers}
+        <LayerTable />
+
         <div id="sec-depth"></div>
         <PlotDepthProfileLive />
 
         {#if result}
           <PlotProductionDepth {result} />
         {/if}
-
-        <LayerTable />
 
         {#if status === "loading" || status === "running"}
           <div class="status-bar">
