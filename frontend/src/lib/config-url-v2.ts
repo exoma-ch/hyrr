@@ -55,6 +55,7 @@ function compactLayer(l: LayerConfig): any {
   if (l.energy_out_MeV !== undefined) cl.o = l.energy_out_MeV;
   if (l.enrichment) cl.n = l.enrichment;
   if (l.is_monitor) cl.f = true;
+  if (l.density_g_cm3 !== undefined) cl.d = l.density_g_cm3;
   // #96 v3 invariant: embed inline composition when the material is a
   // user-saved custom. Receiver registers via setCustomDensityLookup +
   // setCustomCompositionLookup so resolveMaterial finds it without the
@@ -115,6 +116,7 @@ function expandLayer(cl: any): LayerConfig {
   if (cl.o !== undefined) layer.energy_out_MeV = cl.o;
   if (cl.n) layer.enrichment = cl.n;
   if (cl.f) layer.is_monitor = true;
+  if (cl.d !== undefined) layer.density_g_cm3 = cl.d;
   // #96 v3: layer carries inline composition for ad-hoc / custom materials.
   // Register session-only so resolveMaterial finds it. Validate shape so a
   // malformed share URL doesn't poison the session.
