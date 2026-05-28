@@ -42,7 +42,7 @@
     currentEnrichment?: Record<string, Record<number, number>>;
     onenrichment?: (element: string) => void;
     /** Called when the user commits a material (save & use OR use-without-saving). */
-    oncommit: (material: string, enrichment?: Record<string, Record<number, number>>) => void;
+    oncommit: (material: string, enrichment?: Record<string, Record<number, number>>, density_g_cm3?: number) => void;
   }
 
   let { editInitial, currentEnrichment, onenrichment, oncommit }: Props = $props();
@@ -556,7 +556,7 @@
       // slot so the round-2 race (Save at second 28 silently drops
       // demoted rows) can't fire. (#95)
       clearDemote();
-      oncommit(nameVal, enrichmentForSave);
+      oncommit(nameVal, enrichmentForSave, effectiveDensity ?? undefined);
       // Mark first-time guidance done after a successful save.
       dismissModeFirstTime();
     } catch {
@@ -568,7 +568,7 @@
 
   function useFormula() {
     if (rows.length === 0) return;
-    oncommit(mode === "single" ? serialised : displayFormula);
+    oncommit(mode === "single" ? serialised : displayFormula, undefined, effectiveDensity ?? undefined);
   }
 </script>
 

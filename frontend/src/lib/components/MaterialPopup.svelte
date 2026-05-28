@@ -16,7 +16,7 @@
   interface Props {
     open: boolean;
     onclose: () => void;
-    onselect: (material: string, enrichment?: Record<string, Record<number, number>>) => void;
+    onselect: (material: string, enrichment?: Record<string, Record<number, number>>, density_g_cm3?: number) => void;
     /** Open the enrichment popup for an element */
     onenrichment?: (element: string) => void;
     /** Current layer's enrichment overrides (for display) */
@@ -186,8 +186,8 @@
     }
   }
 
-  function handleCommit(material: string, enrichment?: Record<string, Record<number, number>>) {
-    onselect(material, enrichment);
+  function handleCommit(material: string, enrichment?: Record<string, Record<number, number>>, density_g_cm3?: number) {
+    onselect(material, enrichment, density_g_cm3);
     onclose();
   }
 
