@@ -9,6 +9,7 @@
    * Issue #219 — P0: gamma sticks at EOB/EOC with per-isotope colors.
    */
   import { onMount, onDestroy } from "svelte";
+  import { betaSpectrum } from "../plotting/beta-spectrum";
   import type { SimulationResult, IsotopeResultData } from "../types";
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
   import type { CsvTrace } from "../plotting/csv-export";
@@ -106,9 +107,6 @@
   // β spectrum shape (Fermi function × phase space)
   // ---------------------------------------------------------------------------
 
-  const ME_KEV = 510.999; // electron rest mass in keV
-  const ALPHA_FS = 1 / 137.036; // fine-structure constant
-
   /**
    * Compute the allowed β spectrum shape N(E) for a single transition.
    * Returns arrays of (energy_keV, N) normalized so ∫N dE = 1.
@@ -118,44 +116,7 @@
    * @param isPlus - true for β⁺, false for β⁻
    * @param nPts - number of energy bins
    */
-  function betaSpectrum(
-    E0: number, Z: number, isPlus: boolean, nPts = 100,
-  ): { energies: number[]; shape: number[] } {
-    if (E0 <= 0) return { energies: [], shape: [] };
-    const energies: number[] = [];
-    const shape: number[] = [];
-    const dE = E0 / nPts;
-
-    for (let i = 1; i < nPts; i++) {
-      const E = i * dE; // kinetic energy
-      const Etot = E + ME_KEV; // total energy
-      const p = Math.sqrt(Etot * Etot - ME_KEV * ME_KEV); // momentum (keV/c)
-      const phasespace = p * Etot * (E0 - E) * (E0 - E);
-
-      // Fermi function (non-relativistic approximation)
-      const eta = (isPlus ? -1 : 1) * Z * ALPHA_FS * Etot / p;
-      const twoPiEta = 2 * Math.PI * eta;
-      const fermi = Math.abs(twoPiEta) < 1e-6
-        ? 1.0 // limit for small η
-        : twoPiEta / (1 - Math.exp(-twoPiEta));
-
-      energies.push(E);
-      shape.push(fermi * phasespace);
-    }
-
-    // Normalize to unit area
-    let area = 0;
-    for (let i = 0; i < shape.length - 1; i++) {
-      area += 0.5 * (shape[i] + shape[i + 1]) * dE;
-    }
-    if (area > 0) {
-      for (let i = 0; i < shape.length; i++) {
-        shape[i] /= area;
-      }
-    }
-
-    return { energies, shape };
-  }
+  // betaSpectrum extracted to plotting/beta-spectrum.ts for testability (#380)
 
   const BETA_TABS = new Set(["beta-", "beta+"]);
 
@@ -380,8 +341,8 @@
           type: "scatter",
           mode: "lines",
           line: { color: "#fff", width: 2, dash: "dash" },
-          name: "Sum",
-          hoverinfo: "skip",
+          name: "Σ Sum",
+          hovertemplate: "%{x:.1f} keV<br>Σ %{y:.2e} /s/keV<extra></extra>",
         });
       }
     }
