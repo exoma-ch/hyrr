@@ -368,6 +368,7 @@
       </div>
       {#if hasLayers && result}
         <nav class="section-nav" aria-label="Jump to section">
+          <button class="section-nav-btn" onclick={() => document.getElementById('sec-layers')?.scrollIntoView({ behavior: 'smooth' })}>Layers</button>
           <button class="section-nav-btn" onclick={() => document.getElementById('sec-depth')?.scrollIntoView({ behavior: 'smooth' })}>Depth</button>
           <button class="section-nav-btn" onclick={() => document.getElementById('sec-activity')?.scrollIntoView({ behavior: 'smooth' })}>Activity</button>
           <button class="section-nav-btn" onclick={() => document.getElementById('sec-emission')?.scrollIntoView({ behavior: 'smooth' })}>Emissions</button>
@@ -387,6 +388,7 @@
   {:else}
     <div class="app-flow">
 
+      <div id="sec-layers"></div>
       <LayerStackHorizontal onmaterialclick={openMaterialPopup} onelementclick={openElementPopup} />
 
       {#if computeError && !result}
@@ -703,21 +705,23 @@
 
   .section-nav {
     display: flex;
-    gap: 3px;
     align-items: center;
-    padding: 0.15rem 0;
-    flex-wrap: wrap;
+    padding: 0.1rem 0;
   }
 
   .section-nav-btn {
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--c-border);
     color: var(--c-text-muted);
-    padding: 0.1rem 0.4rem;
-    font-size: 0.6rem;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.72rem;
     cursor: pointer;
-    transition: all 0.1s;
+    transition: color 0.1s;
+  }
+
+  .section-nav-btn:last-child {
+    border-right: none;
   }
 
   .section-nav-btn:hover {
