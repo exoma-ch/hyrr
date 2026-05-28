@@ -74,9 +74,9 @@ export const PRESETS: Preset[] = [
     config: {
       beam: { projectile: "p", energy_MeV: 16, current_mA: 0.15 },
       layers: [
-        { material: "havar", thickness_cm: 0.0025 },
-        { material: "Mo-100", enrichment: { Mo: { 100: 0.995 } }, energy_out_MeV: 12 },
-        { material: "Cu", thickness_cm: 0.5 },
+        { material: "havar", thickness_cm: 0.0025, density_g_cm3: 8.3 },
+        { material: "Mo-100", enrichment: { Mo: { 100: 0.995 } }, energy_out_MeV: 12, density_g_cm3: 10.28 },
+        { material: "Cu", thickness_cm: 0.5, density_g_cm3: 8.96 },
       ],
       irradiation_s: 86400,
       cooling_s: 86400,
@@ -89,8 +89,8 @@ export const PRESETS: Preset[] = [
     config: {
       beam: { projectile: "p", energy_MeV: 18, current_mA: 0.04 },
       layers: [
-        { material: "havar", thickness_cm: 0.0025 },
-        { material: "H2O-18", enrichment: { O: { 18: 0.97 } }, thickness_cm: 0.3 },
+        { material: "havar", thickness_cm: 0.0025, density_g_cm3: 8.3 },
+        { material: "H2O-18", enrichment: { O: { 18: 0.97 } }, thickness_cm: 0.3, density_g_cm3: 1.11 },
       ],
       irradiation_s: 7200,
       cooling_s: 0,
@@ -103,7 +103,7 @@ export const PRESETS: Preset[] = [
     config: {
       beam: { projectile: "p", energy_MeV: 28, current_mA: 0.2 },
       layers: [
-        { material: "Ga", energy_out_MeV: 14 },
+        { material: "Ga", energy_out_MeV: 14, density_g_cm3: 5.91 },
       ],
       irradiation_s: 86400 * 7,
       cooling_s: 86400,
@@ -116,7 +116,7 @@ export const PRESETS: Preset[] = [
     config: {
       beam: { projectile: "a", energy_MeV: 28, current_mA: 0.02 },
       layers: [
-        { material: "Bi", energy_out_MeV: 20 },
+        { material: "Bi", energy_out_MeV: 20, density_g_cm3: 9.78 },
       ],
       irradiation_s: 7200,
       cooling_s: 3600,
@@ -129,7 +129,7 @@ export const PRESETS: Preset[] = [
     config: {
       beam: { projectile: "p", energy_MeV: 24, current_mA: 0.01 },
       layers: [
-        { material: "Ra-226", thickness_cm: 0.01 },
+        { material: "Ra-226", thickness_cm: 0.01, density_g_cm3: 5.50 },
       ],
       irradiation_s: 86400 * 10,
       cooling_s: 86400 * 5,
@@ -143,8 +143,8 @@ export const PRESETS: Preset[] = [
     config: {
       beam: { projectile: "p", energy_MeV: 16, current_mA: 0.030 },
       layers: [
-        { material: "havar", thickness_cm: 0.0025 },
-        { material: "Ca-44", enrichment: { Ca: { 44: 0.98 } }, energy_out_MeV: 6 },
+        { material: "havar", thickness_cm: 0.0025, density_g_cm3: 8.3 },
+        { material: "Ca-44", enrichment: { Ca: { 44: 0.98 } }, energy_out_MeV: 6, density_g_cm3: 1.55 },
       ],
       irradiation_s: 7200,
       cooling_s: 3600,
