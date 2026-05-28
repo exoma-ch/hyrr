@@ -340,7 +340,7 @@
           type: "bar",
           name: nucLabel(agg.name),
           marker: { color, opacity: 0.85 },
-          hovertemplate: `%{x:.1f} keV<br>%{y:.2e} /s<br>${nucLabel(agg.name)}<extra></extra>`,
+          hovertemplate: `%{y:.2e} /s<extra></extra>`,
         });
         colorIdx++;
       }
@@ -386,12 +386,13 @@
       }
     }
 
-    // For discrete tabs: sort by max rate (tallest bar frontmost for hover)
+    // For discrete tabs: sort by max rate descending so the unified tooltip
+    // lists contributions from strongest to weakest.
     if (!isBeta) {
       traces.sort((a, b) => {
         const maxA = Math.max(...(a.y as number[]));
         const maxB = Math.max(...(b.y as number[]));
-        return maxA - maxB;
+        return maxB - maxA;
       });
     }
 
@@ -435,7 +436,7 @@
       },
       barmode: "stack",
       bargap: 0,
-      hovermode: "closest",
+      hovermode: isBeta ? "closest" : "x unified",
       hoverdistance: 30,
       showlegend: traces.length <= 20,
       legend: {
