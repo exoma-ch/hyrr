@@ -8,6 +8,7 @@
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
   import type { CsvTrace } from "../plotting/csv-export";
   import SaveMenu from "./SaveMenu.svelte";
+  import SectionHeader from "./SectionHeader.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -303,20 +304,23 @@
 
 {#if hasData}
   <div class="production-depth">
-    <div class="controls">
-      <span class="plot-title">Production vs Depth</span>
-      <button class="ctrl-btn" class:active={logY} onclick={() => { logY = !logY; }}>
-        log Y
-      </button>
-      <SaveMenu
-        filenamePrefix="hyrr-depth-production"
-        xLabel={lastExport?.xLabel ?? "Depth (mm)"}
-        yLabel={lastExport?.yLabel ?? "Production rate (atoms/s/cm)"}
-        getTraces={() => lastExport?.traces ?? []}
-        notes={() => [`HYRR production-vs-depth export`, `generated ${new Date().toISOString()}`]}
-        title="Save / download plot data"
-      />
-    </div>
+    <SectionHeader title="Production vs Depth">
+      {#snippet controls()}
+        <button class="ctrl-btn" class:active={logY} onclick={() => { logY = !logY; }}>
+          log Y
+        </button>
+      {/snippet}
+      {#snippet actions()}
+        <SaveMenu
+          filenamePrefix="hyrr-depth-production"
+          xLabel={lastExport?.xLabel ?? "Depth (mm)"}
+          yLabel={lastExport?.yLabel ?? "Production rate (atoms/s/cm)"}
+          getTraces={() => lastExport?.traces ?? []}
+          notes={() => [`HYRR production-vs-depth export`, `generated ${new Date().toISOString()}`]}
+          title="Save / download plot data"
+        />
+      {/snippet}
+    </SectionHeader>
     <div class="plot" bind:this={plotDiv}></div>
   </div>
 {/if}
@@ -326,21 +330,12 @@
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    padding: 0.5rem;
   }
 
-  .controls {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.2rem 0;
-  }
-
-  .plot-title {
-    font-size: 0.75rem;
-    color: var(--c-text-muted);
-    font-weight: 500;
-    margin-right: auto;
-  }
 
   .ctrl-btn {
     background: var(--c-bg-muted);

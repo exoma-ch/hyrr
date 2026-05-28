@@ -4,6 +4,7 @@
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
   import type { CsvTrace } from "../plotting/csv-export";
   import SaveMenu from "./SaveMenu.svelte";
+  import SectionHeader from "./SectionHeader.svelte";
   import { getResolvedTheme } from "../stores/theme.svelte";
   import { bestActivityUnit, bestTimeUnit, nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes, clearSelection } from "../stores/selection.svelte";
@@ -581,7 +582,8 @@
 <svelte:window onclick={onWindowClick} />
 
 <div class="activity-curve">
-  <div class="controls">
+  <SectionHeader title="Activity">
+    {#snippet controls()}
     <button class="ctrl-btn" class:active={logY} onclick={() => { logY = !logY; }}>
       log Y
     </button>
@@ -669,7 +671,8 @@
       </div>
     {/if}
 
-    <span class="right-actions">
+    {/snippet}
+    {#snippet actions()}
       {#if selected.size > 0}
         <button class="ctrl-btn clear" onclick={clearSelection}>
           Clear ({selected.size})
@@ -683,8 +686,8 @@
         notes={() => [`HYRR activity plot export`, `generated ${new Date().toISOString()}`]}
         title="Save / download plot data"
       />
-    </span>
-  </div>
+    {/snippet}
+  </SectionHeader>
 
   <div bind:this={plotDiv} class="plot"></div>
 </div>
@@ -697,20 +700,6 @@
     padding: 0.5rem;
   }
 
-  .controls {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.25rem 0.5rem;
-    flex-wrap: wrap;
-  }
-
-  .right-actions {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
 
   .separator {
     width: 1px;

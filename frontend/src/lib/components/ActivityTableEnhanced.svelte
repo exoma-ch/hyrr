@@ -16,6 +16,7 @@
   import { formatWithThresholdEx } from "../utils/threshold-format";
   import { Save, Settings } from "lucide-svelte";
   import SettingsModal from "./SettingsModal.svelte";
+  import SectionHeader from "./SectionHeader.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -369,9 +370,12 @@
 </script>
 
 <div class="activity-table-enhanced">
-  <div class="toolbar">
-    <span class="row-count">{rows.length}/{allRows.length} isotopes</span>
-    <div class="toolbar-actions">
+  <SectionHeader title="Isotope Production">
+    {#snippet controls()}
+      <span class="row-count">{rows.length}/{allRows.length} isotopes</span>
+    {/snippet}
+    {#snippet actions()}
+      <div class="toolbar-actions">
       <button
         class="action-btn"
         class:active={groupByIsotope}
@@ -442,7 +446,8 @@
         {/if}
       </span>
     </div>
-  </div>
+    {/snippet}
+  </SectionHeader>
 
   <div class="table-wrapper">
     <table>
