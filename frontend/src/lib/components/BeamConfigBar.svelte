@@ -143,6 +143,7 @@
   // --- Current profile ---
   let currentProfile = $derived(getCurrentProfile());
   let profileMode = $derived<"constant" | "profile">(currentProfile ? "profile" : "constant");
+  let fileInputEl = $state<HTMLInputElement | null>(null);
   let uploadError = $state<string | null>(null);
   let parseWarnings = $state<string[]>([]);
   let showAllWarnings = $state(false);
@@ -227,12 +228,28 @@
     </div>
   </div>
 
-  <div class="field">
-    <label for="bcb-current">Current</label>
-    <div class="input-group">
-      <input id="bcb-current" type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
-      <span class="unit">µA</span>
+  <div class="field current-field">
+    <!-- Constant / Profile toggle replaces the label -->
+    <div class="current-toggle">
+      <button class="ct-btn" class:active={profileMode === "constant"} onclick={clearProfile}>Const</button>
+      <button class="ct-btn" class:active={profileMode === "profile"} onclick={() => fileInputEl?.click()}>Profile</button>
     </div>
+    {#if profileMode === "constant" && !currentProfile}
+      <div class="input-group">
+        <input id="bcb-current" type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
+        <span class="unit">µA</span>
+      </div>
+    {:else if currentProfile && stats}
+      <button class="profile-pill" onclick={clearProfile} title="Click to clear profile and revert to constant current">
+        {stats.n} pts · {stats.minI_uA.toFixed(0)}–{stats.maxI_uA.toFixed(0)} µA
+      </button>
+    {:else}
+      <button class="upload-pill" onclick={() => fileInputEl?.click()}>
+        Upload CSV
+      </button>
+    {/if}
+    <!-- Hidden file input -->
+    <input bind:this={fileInputEl} type="file" accept=".csv,.tsv,.txt" onchange={handleCurrentUpload} class="file-input-hidden" />
   </div>
 
   <div class="field">
@@ -269,30 +286,19 @@
     <span class="status-dot" class:busy={isBusy} class:ready={simStatus === "ready"} class:error={simStatus === "error"} title={schedulerState}></span>
   </div>
 
-  <!-- Current mode toggle -->
-  <div class="current-mode-toggle">
-    <button class="cm-btn" class:active={profileMode === "constant"} onclick={clearProfile}>Constant</button>
-    <button class="cm-btn" class:active={profileMode === "profile"} onclick={() => {}}>Profile</button>
   </div>
-</div>
 
-<!-- Profile section (below beam bar) -->
-{#if profileMode === "profile" && currentProfile && stats}
-  <div class="profile-section">
-    <div class="profile-card">
-      <div class="profile-card-header">
-        <span class="profile-label">Current profile</span>
-        <div class="profile-stats">
-          <span>{stats.n} pts</span>
-          <span>{stats.durMin.toFixed(1)} min</span>
-          <span>{stats.minI_uA.toFixed(0)}–{stats.maxI_uA.toFixed(0)} µA</span>
-          <span>{(stats.charge / 1000).toFixed(4)} C</span>
-        </div>
-        <button class="profile-clear-btn" onclick={clearProfile} title="Remove profile, use constant current">Clear</button>
-      </div>
+<!-- Profile detail (below beam bar, only when profile loaded) -->
+{#if currentProfile && stats}
+  <div class="profile-detail">
+    <div class="profile-detail-header">
+      <span class="profile-detail-stats">
+        {stats.n} pts · {stats.durMin.toFixed(1)} min · {stats.minI_uA.toFixed(0)}–{stats.maxI_uA.toFixed(0)} µA · {(stats.charge / 1000).toFixed(4)} C
+      </span>
       {#if chargeDiscrepancy !== null}
-        <div class="charge-warning">Charge differs from constant by {chargeDiscrepancy.toFixed(1)}%</div>
+        <span class="charge-warning">Δ {chargeDiscrepancy.toFixed(1)}% vs constant</span>
       {/if}
+      <button class="profile-clear-btn" onclick={clearProfile} title="Remove profile, use constant current">Clear</button>
     </div>
     <PlotCurrentProfile profile={currentProfile} />
     {#if parseWarnings.length > 0}
@@ -308,22 +314,9 @@
       </div>
     {/if}
   </div>
-{:else if profileMode === "constant" && !currentProfile}
-  <!-- Upload area only shows inline, below the toggle -->
 {/if}
-
-<!-- Upload area (always accessible when no profile is loaded) -->
-{#if !currentProfile}
-  <div class="profile-upload">
-    <div class="upload-row">
-      <input type="file" accept=".csv,.tsv,.txt" onchange={handleCurrentUpload} class="file-input" />
-      <button class="paste-btn" onclick={handlePaste} title="Paste tab/comma-separated data from clipboard">Paste</button>
-    </div>
-    <span class="upload-hint">CSV: time_s, current_mA (or paste from clipboard)</span>
-    {#if uploadError}
-      <span class="upload-error">{uploadError}</span>
-    {/if}
-  </div>
+{#if uploadError}
+  <div class="upload-error-bar">{uploadError}</div>
 {/if}
 
 <style>
@@ -493,65 +486,78 @@
     50% { opacity: 0.3; }
   }
 
-  /* --- Current mode toggle --- */
-  .current-mode-toggle {
+  /* ─── Merged current field: Const/Profile toggle ─── */
+  .current-field { min-width: 100px; }
+
+  .current-toggle {
     display: flex;
     border: 1px solid var(--c-border);
-    border-radius: 4px;
+    border-radius: 3px;
     overflow: hidden;
-    align-self: flex-end;
   }
 
-  .cm-btn {
-    padding: 0.25rem 0.5rem;
+  .ct-btn {
+    flex: 1;
+    padding: 0.1rem 0.35rem;
     background: var(--c-bg-default);
     border: none;
     border-right: 1px solid var(--c-border);
     color: var(--c-text-muted);
-    font-size: 0.7rem;
+    font-size: 0.6rem;
     font-weight: 500;
     cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
   }
 
-  .cm-btn:last-child { border-right: none; }
-  .cm-btn:hover { color: var(--c-text); }
-  .cm-btn.active { background: var(--c-bg-active); color: var(--c-accent); font-weight: 600; }
+  .ct-btn:last-child { border-right: none; }
+  .ct-btn:hover { color: var(--c-text); }
+  .ct-btn.active { background: var(--c-bg-active); color: var(--c-accent); font-weight: 600; }
 
-  /* --- Profile section --- */
-  .profile-section {
+  .file-input-hidden {
+    position: absolute;
+    width: 0;
+    height: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .upload-pill, .profile-pill {
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    color: var(--c-text-muted);
+    padding: 0.3rem 0.4rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    white-space: nowrap;
+    text-align: center;
+  }
+
+  .upload-pill:hover { border-color: var(--c-accent); color: var(--c-accent); }
+  .profile-pill { border-color: var(--c-accent); color: var(--c-accent); font-size: 0.65rem; }
+  .profile-pill:hover { border-color: var(--c-red); color: var(--c-red); }
+
+  /* ─── Profile detail (below beam bar) ─── */
+  .profile-detail {
     background: var(--c-bg-subtle);
     border: 1px solid var(--c-border);
     border-radius: 3px;
-    padding: 0.5rem;
+    padding: 0.4rem 0.5rem;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 0.3rem;
   }
 
-  .profile-card {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-
-  .profile-card-header {
+  .profile-detail-header {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
   }
 
-  .profile-label {
-    color: var(--c-accent);
-    font-weight: 600;
-    font-size: 0.7rem;
-    white-space: nowrap;
-  }
-
-  .profile-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.15rem 0.5rem;
+  .profile-detail-stats {
     font-size: 0.65rem;
     color: var(--c-text-muted);
   }
@@ -593,44 +599,11 @@
 
   .warnings-toggle:hover { color: var(--c-text-muted); }
 
-  /* --- Upload area --- */
-  .profile-upload {
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    padding: 0.4rem 0.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-
-  .upload-row {
-    display: flex;
-    gap: 0.3rem;
-    align-items: center;
-  }
-
-  .file-input {
-    flex: 1;
+  .upload-error-bar {
     font-size: 0.7rem;
-    color: var(--c-text-muted);
+    color: var(--c-red);
+    padding: 0.25rem 0.5rem;
   }
-
-  .paste-btn {
-    background: none;
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text-muted);
-    padding: 0.2rem 0.5rem;
-    font-size: 0.7rem;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .paste-btn:hover { border-color: var(--c-accent); color: var(--c-text); }
-
-  .upload-hint { font-size: 0.65rem; color: var(--c-text-subtle); }
-  .upload-error { font-size: 0.65rem; color: var(--c-red); }
 
   @media (max-width: 640px) {
     .beam-bar {

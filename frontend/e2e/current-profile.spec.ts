@@ -7,8 +7,15 @@ import os from "node:os";
  * E2e tests for current profile upload (#328, #395).
  *
  * Tests two paths:
- * 1. File upload via the UI: upload CSV → profile card → preview → simulation
+ * 1. File upload via the UI: upload CSV → profile pill → detail + plot → simulation
  * 2. Preset-based profile: Sc-44 preset (7200-pt beam profile)
+ *
+ * Expected CSV format: two columns, header row.
+ *   time_s,current_mA
+ *   0.0,0.000
+ *   2.0,0.015
+ *   ...
+ * Time in seconds from start, current in milliamperes.
  */
 
 const TC99M_HASH =
@@ -50,70 +57,59 @@ test.afterAll(() => {
 test.describe("current profile — file upload", () => {
   test.setTimeout(90_000);
 
-  test("upload CSV → profile card with stats + preview plot", async ({ page }) => {
+  test("upload CSV → profile pill with stats in beam bar", async ({ page }) => {
     await page.goto(`./${TC99M_HASH}`);
     await waitForSimulation(page);
 
-    // File input should be visible (upload area)
-    const fileInput = page.locator("input.file-input");
+    // Upload via hidden file input
+    const fileInput = page.locator("input.file-input-hidden");
     await expect(fileInput).toBeAttached();
-
-    // Upload test CSV
     await fileInput.setInputFiles(csvPath);
 
-    // Profile card should appear
-    const profileLabel = page.locator(".profile-label");
-    await expect(profileLabel).toBeVisible({ timeout: 5_000 });
-    await expect(profileLabel).toHaveText("Current profile");
+    // Profile pill should appear in beam bar
+    const pill = page.locator(".profile-pill");
+    await expect(pill).toBeVisible({ timeout: 5_000 });
+    const pillText = await pill.textContent();
+    expect(pillText).toContain("50 pts");
 
-    // Stats should show 50 pts
-    const statsText = await page.locator(".profile-stats").textContent();
-    expect(statsText, "Stats should show point count").toContain("50 pts");
-
-    // Profile toggle should show Profile as active
-    const profileBtn = page.locator(".cm-btn").nth(1);
+    // Profile toggle should show PROFILE as active
+    const profileBtn = page.locator(".ct-btn").nth(1);
     await expect(profileBtn).toHaveClass(/active/);
 
-    // Upload area should be gone (replaced by profile card)
-    await expect(fileInput).not.toBeAttached();
+    // Detail section should appear below beam bar
+    await expect(page.locator(".profile-detail")).toBeVisible();
   });
 
   test("upload CSV → simulation recomputes with profile", async ({ page }) => {
     await page.goto(`./${TC99M_HASH}`);
     await waitForSimulation(page);
 
-    // Upload profile
-    await page.locator("input.file-input").setInputFiles(csvPath);
-    await expect(page.locator(".profile-label")).toBeVisible({ timeout: 5_000 });
-
-    // Wait for recompute
+    await page.locator("input.file-input-hidden").setInputFiles(csvPath);
+    await expect(page.locator(".profile-pill")).toBeVisible({ timeout: 5_000 });
     await waitForSimulation(page);
 
-    // Results should exist
     const rows = page.locator(".activity-table-enhanced tbody tr");
     await expect(rows.first()).toBeVisible();
     expect(await rows.count()).toBeGreaterThan(0);
   });
 
-  test("clear profile → reverts to constant mode + upload reappears", async ({ page }) => {
+  test("clear profile → reverts to constant mode", async ({ page }) => {
     await page.goto(`./${TC99M_HASH}`);
     await waitForSimulation(page);
 
-    // Upload then clear
-    await page.locator("input.file-input").setInputFiles(csvPath);
-    await expect(page.locator(".profile-label")).toBeVisible({ timeout: 5_000 });
+    await page.locator("input.file-input-hidden").setInputFiles(csvPath);
+    await expect(page.locator(".profile-pill")).toBeVisible({ timeout: 5_000 });
 
-    await page.locator(".profile-clear-btn").click();
+    // Click the pill to clear (pill hover = red, click clears)
+    await page.locator(".profile-pill").click();
 
-    // Profile card should disappear
-    await expect(page.locator(".profile-label")).not.toBeVisible();
+    // Profile should disappear, constant input should return
+    await expect(page.locator(".profile-pill")).not.toBeVisible();
+    await expect(page.locator("#bcb-current")).toBeVisible();
 
-    // Upload area should reappear
-    await expect(page.locator("input.file-input")).toBeAttached();
-
-    // Constant toggle should be active
-    const constantBtn = page.locator(".cm-btn").first();
-    await expect(constantBtn).toHaveClass(/active/);
+    // CONST toggle should be active
+    const constBtn = page.locator(".ct-btn").first();
+    await expect(constBtn).toHaveClass(/active/);
   });
 
   test("invalid CSV shows error, no crash", async ({ page }) => {
@@ -123,13 +119,10 @@ test.describe("current profile — file upload", () => {
     const badPath = path.join(os.tmpdir(), "hyrr-e2e-bad.csv");
     fs.writeFileSync(badPath, "not,a,valid,profile\nfoo,bar,baz,qux\n");
 
-    await page.locator("input.file-input").setInputFiles(badPath);
+    await page.locator("input.file-input-hidden").setInputFiles(badPath);
 
-    // Error should show
-    await expect(page.locator(".upload-error")).toBeVisible({ timeout: 3_000 });
-
-    // Profile card should NOT appear
-    await expect(page.locator(".profile-label")).not.toBeVisible();
+    await expect(page.locator(".upload-error-bar")).toBeVisible({ timeout: 3_000 });
+    await expect(page.locator(".profile-pill")).not.toBeVisible();
 
     fs.unlinkSync(badPath);
   });
@@ -141,8 +134,8 @@ test.describe("current profile — file upload", () => {
     await page.goto(`./${TC99M_HASH}`);
     await waitForSimulation(page);
 
-    await page.locator("input.file-input").setInputFiles(csvPath);
-    await expect(page.locator(".profile-label")).toBeVisible({ timeout: 5_000 });
+    await page.locator("input.file-input-hidden").setInputFiles(csvPath);
+    await expect(page.locator(".profile-pill")).toBeVisible({ timeout: 5_000 });
     await waitForSimulation(page);
 
     const fatal = errors.filter(
@@ -154,7 +147,6 @@ test.describe("current profile — file upload", () => {
 
 // ─── Preset-based profile tests ────────────────────────────────────
 
-/** Click Feeling Lucky until Sc-44 preset loads (has "Ca-44" in layer stack). */
 async function loadSc44ViaFeelingLucky(page: import("@playwright/test").Page) {
   for (let i = 0; i < 40; i++) {
     await page.locator(".lucky-tab").click();
@@ -170,7 +162,7 @@ async function loadSc44ViaFeelingLucky(page: import("@playwright/test").Page) {
 test.describe("current profile — Sc-44 preset", () => {
   test.setTimeout(120_000);
 
-  test("Sc-44 preset shows profile card + produces Sc isotopes", async ({ page }) => {
+  test("Sc-44 preset shows profile pill + detail + produces Sc isotopes", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
 
@@ -178,17 +170,17 @@ test.describe("current profile — Sc-44 preset", () => {
     await waitForSimulation(page);
 
     const found = await loadSc44ViaFeelingLucky(page);
-    expect(found, "Could not load Sc-44 preset via Feeling Lucky after 40 tries").toBe(true);
+    expect(found, "Could not load Sc-44 preset after 40 tries").toBe(true);
 
-    // Profile card should be visible (Sc-44 preset has a built-in profile)
-    await expect(page.locator(".profile-label")).toBeVisible({ timeout: 5_000 });
+    // Profile pill should be visible (Sc-44 preset has a built-in profile)
+    await expect(page.locator(".profile-pill")).toBeVisible({ timeout: 5_000 });
+    // Detail section should show stats
+    await expect(page.locator(".profile-detail")).toBeVisible();
 
-    // Wait for recompute
     await page.waitForSelector(".status-dot.busy", { timeout: 5_000 }).catch(() => {});
     await page.waitForSelector(".status-dot.ready", { timeout: 60_000 }).catch(() => {});
     await page.waitForTimeout(1_000);
 
-    // Activity table should have Ca-44 reaction products
     const cellText = await page.locator(".activity-table-enhanced td").allTextContents();
     const hasCaProducts = cellText.some(
       (t) => t.includes("Sc") || t.includes("44K") || t.includes("Ti") || t.includes("Z21"),
