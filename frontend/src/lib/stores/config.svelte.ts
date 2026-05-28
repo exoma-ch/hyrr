@@ -124,8 +124,7 @@ function refreshSnapshot(): void {
   }
 }
 
-/** Push current state onto undo stack. Called before every mutation.
- *  Also schedules expansion invalidation (runs after the mutation completes). */
+/** Push current state onto undo stack. */
 function pushUndo(): void {
   if (suppressSnapshot) return;
   refreshSnapshot();
@@ -134,8 +133,14 @@ function pushUndo(): void {
   undoStack.push(snap);
   if (undoStack.length > MAX_UNDO) undoStack.shift();
   redoStack = [];
-  // Schedule expansion after the mutation (microtask so state is already updated)
-  queueMicrotask(() => invalidateExpansion());
+}
+
+/** Wrap a state mutation: snapshot for undo, run fn, auto-invalidate expansion.
+ *  This is the ONLY way to mutate config — prevents forgetting invalidation. */
+function mutate(fn: () => void): void {
+  pushUndo();
+  fn();
+  invalidateExpansion();
 }
 
 export function undo(): void {
@@ -281,75 +286,68 @@ export function getSerializableConfig(): SerializableConfig {
 
 /** Restore internal state from a serialized snapshot (preserves groups). */
 export function restoreSerializableConfig(c: SerializableConfig): void {
-  pushUndo();
-  const profile = c.currentProfile;
-  state = {
-    beam: c.beam,
-    items: (() => {
-      const mapped = c.items.map((item: any) => {
-        if (item._group || item.mode) {
-          const { _group, ...group } = item;
-          return group as InternalGroup;
-        }
-        return item as LayerConfig;
-      });
-      fillDensities(mapped);
-      return mapped;
-    })(),
-    irradiation_s: c.irradiation_s,
-    cooling_s: c.cooling_s,
-    // Reconstruct Float64Array from plain number[] in saved config
-    currentProfile: profile
-      ? { timesS: new Float64Array(profile.timesS), currentsMA: new Float64Array(profile.currentsMA) }
-      : null,
-  };
-  invalidateExpansion();
+  mutate(() => {
+    const profile = c.currentProfile;
+    state = {
+      beam: c.beam,
+      items: (() => {
+        const mapped = c.items.map((item: any) => {
+          if (item._group || item.mode) {
+            const { _group, ...group } = item;
+            return group as InternalGroup;
+          }
+          return item as LayerConfig;
+        });
+        fillDensities(mapped);
+        return mapped;
+      })(),
+      irradiation_s: c.irradiation_s,
+      cooling_s: c.cooling_s,
+      currentProfile: profile
+        ? { timesS: new Float64Array(profile.timesS), currentsMA: new Float64Array(profile.currentsMA) }
+        : null,
+    };
+  });
 }
 
 // ─── Setters ────────────────────────────────────────────────────────
 
 export function setConfig(c: SimulationConfig): void {
-  pushUndo();
-  const items: Array<LayerConfig | InternalGroup> = c.layers.map((l) => ({ ...l }));
-  fillDensities(items);
-  state = {
-    beam: c.beam,
-    items,
-    irradiation_s: c.irradiation_s,
-    cooling_s: c.cooling_s,
-    currentProfile: c.currentProfile ?? null,
-  };
-  invalidateExpansion();
+  mutate(() => {
+    const items: Array<LayerConfig | InternalGroup> = c.layers.map((l) => ({ ...l }));
+    fillDensities(items);
+    state = {
+      beam: c.beam,
+      items,
+      irradiation_s: c.irradiation_s,
+      cooling_s: c.cooling_s,
+      currentProfile: c.currentProfile ?? null,
+    };
+  });
 }
 
 export function setBeam(beam: BeamConfig): void {
-  pushUndo();
-  state.beam = { ...beam };
+  mutate(() => { state.beam = { ...beam }; });
 }
 
 export function setProjectile(p: string): void {
-  pushUndo();
-  state.beam.projectile = p;
+  mutate(() => { state.beam.projectile = p; });
 }
 
 export function setEnergy(e: number): void {
-  pushUndo();
-  state.beam.energy_MeV = e;
+  mutate(() => { state.beam.energy_MeV = e; });
 }
 
 export function setCurrent(c: number): void {
-  pushUndo();
-  state.beam.current_mA = c;
+  mutate(() => { state.beam.current_mA = c; });
 }
 
 export function setIrradiation(seconds: number): void {
-  pushUndo();
-  state.irradiation_s = seconds;
+  mutate(() => { state.irradiation_s = seconds; });
 }
 
 export function setCooling(seconds: number): void {
-  pushUndo();
-  state.cooling_s = seconds;
+  mutate(() => { state.cooling_s = seconds; });
 }
 
 export function getCurrentProfile(): CurrentProfile | null {
@@ -357,8 +355,7 @@ export function getCurrentProfile(): CurrentProfile | null {
 }
 
 export function setCurrentProfile(profile: CurrentProfile | null): void {
-  pushUndo();
-  state.currentProfile = profile;
+  mutate(() => { state.currentProfile = profile; });
 }
 
 // ─── Internal item operations (for LayerStackHorizontal) ───────────
@@ -369,33 +366,34 @@ export function getInternalItems(): Array<LayerConfig | InternalGroup> {
 }
 
 export function addGroup(index?: number): void {
-  pushUndo();
-  const newGroup: InternalGroup = {
-    layers: [{ material: "", thickness_cm: 0.01 }],
-    mode: "count",
-    count: 2,
-  };
-  if (index === undefined) {
-    state.items = [...state.items, newGroup];
-  } else {
-    state.items = [
-      ...state.items.slice(0, index),
-      newGroup,
-      ...state.items.slice(index),
-    ];
-  }
+  mutate(() => {
+    const newGroup: InternalGroup = {
+      layers: [{ material: "", thickness_cm: 0.01 }],
+      mode: "count",
+      count: 2,
+    };
+    if (index === undefined) {
+      state.items = [...state.items, newGroup];
+    } else {
+      state.items = [
+        ...state.items.slice(0, index),
+        newGroup,
+        ...state.items.slice(index),
+      ];
+    }
+  });
 }
 
 export function updateGroup(index: number, group: InternalGroup): void {
-  pushUndo();
-  state.items = state.items.map((item, i) => (i === index && isInternalGroup(item) ? group : item));
-  invalidateExpansion();
+  mutate(() => {
+    state.items = state.items.map((item, i) => (i === index && isInternalGroup(item) ? group : item));
+  });
 }
 
 export function removeGroup(index: number): void {
-  pushUndo();
-  state.items = state.items.filter((_, i) => i !== index);
-  invalidateExpansion();
+  mutate(() => {
+    state.items = state.items.filter((_, i) => i !== index);
+  });
 }
 
 export function getGroup(index: number): InternalGroup | undefined {
@@ -406,126 +404,111 @@ export function getGroup(index: number): InternalGroup | undefined {
 // ─── Layer operations ───────────────────────────────────────────────
 
 export function addLayer(layer: LayerConfig, groupIndex?: number): void {
-  pushUndo();
-  if (groupIndex !== undefined) {
-    // Add layer to a specific group
-    state.items = state.items.map((item, i) => {
-      if (i === groupIndex && isInternalGroup(item)) {
-        return { ...item, layers: [...item.layers, layer] };
-      }
-      return item;
-    });
-  } else {
-    // Add as standalone layer
-    state.items = [...state.items, layer];
-  }
+  mutate(() => {
+    if (groupIndex !== undefined) {
+      state.items = state.items.map((item, i) => {
+        if (i === groupIndex && isInternalGroup(item)) {
+          return { ...item, layers: [...item.layers, layer] };
+        }
+        return item;
+      });
+    } else {
+      state.items = [...state.items, layer];
+    }
+  });
 }
 
 export function removeLayer(index: number, groupIndex?: number): void {
-  pushUndo();
-  if (groupIndex !== undefined) {
-    // Remove layer from a specific group
-    state.items = state.items.map((item, i) => {
-      if (i === groupIndex && isInternalGroup(item)) {
-        const newLayers = item.layers.filter((_, li) => li !== index);
-        // If group becomes empty, remove the group entirely
-        if (newLayers.length === 0) {
-          return null;
+  mutate(() => {
+    if (groupIndex !== undefined) {
+      state.items = state.items.map((item, i) => {
+        if (i === groupIndex && isInternalGroup(item)) {
+          const newLayers = item.layers.filter((_, li) => li !== index);
+          if (newLayers.length === 0) return null;
+          return { ...item, layers: newLayers };
         }
-        return { ...item, layers: newLayers };
-      }
-      return item;
-    }).filter(Boolean) as Array<LayerConfig | InternalGroup>;
-  } else {
-    // Remove standalone layer
-    state.items = state.items.filter((_, i) => i !== index);
-  }
-  invalidateExpansion();
+        return item;
+      }).filter(Boolean) as Array<LayerConfig | InternalGroup>;
+    } else {
+      state.items = state.items.filter((_, i) => i !== index);
+    }
+  });
 }
 
 export function updateLayer(index: number, layer: LayerConfig, groupIndex?: number): void {
-  pushUndo();
-  if (groupIndex !== undefined) {
-    state.items = state.items.map((item, i) => {
-      if (i === groupIndex && isInternalGroup(item)) {
-        return { ...item, layers: item.layers.map((l, li) => (li === index ? layer : l)) };
-      }
-      return item;
-    });
-  } else {
-    state.items = state.items.map((item, i) => {
-      if (i === index && !isInternalGroup(item)) {
-        return layer;
-      }
-      return item;
-    });
-  }
-  invalidateExpansion();
+  mutate(() => {
+    if (groupIndex !== undefined) {
+      state.items = state.items.map((item, i) => {
+        if (i === groupIndex && isInternalGroup(item)) {
+          return { ...item, layers: item.layers.map((l, li) => (li === index ? layer : l)) };
+        }
+        return item;
+      });
+    } else {
+      state.items = state.items.map((item, i) => {
+        if (i === index && !isInternalGroup(item)) {
+          return layer;
+        }
+        return item;
+      });
+    }
+  });
 }
 
 export function moveLayer(from: number, to: number, fromGroupIndex?: number, toGroupIndex?: number): void {
-  pushUndo();
-  if (fromGroupIndex !== undefined && toGroupIndex !== undefined && fromGroupIndex === toGroupIndex) {
-    // Move within same group
-    const item = state.items[fromGroupIndex];
-    if (isInternalGroup(item)) {
-      const newLayers = [...item.layers];
-      const [layerToMove] = newLayers.splice(from, 1);
-      newLayers.splice(to, 0, layerToMove);
-      state.items = state.items.map((it, i) => 
-        i === fromGroupIndex ? { ...item, layers: newLayers } : it
-      );
-    }
-  } else if (fromGroupIndex !== undefined && toGroupIndex === undefined) {
-    // Move from group to standalone
-    const groupItem = state.items[fromGroupIndex] as InternalGroup;
-    const layer = groupItem.layers[from];
-    state.items = state.items.map((item, i) => {
-      if (i === fromGroupIndex && isInternalGroup(item)) {
-        const newLayers = item.layers.filter((_, li) => li !== from);
-        if (newLayers.length === 0) {
-          return null;
+  mutate(() => {
+    if (fromGroupIndex !== undefined && toGroupIndex !== undefined && fromGroupIndex === toGroupIndex) {
+      const item = state.items[fromGroupIndex];
+      if (isInternalGroup(item)) {
+        const newLayers = [...item.layers];
+        const [layerToMove] = newLayers.splice(from, 1);
+        newLayers.splice(to, 0, layerToMove);
+        state.items = state.items.map((it, i) =>
+          i === fromGroupIndex ? { ...item, layers: newLayers } : it
+        );
+      }
+    } else if (fromGroupIndex !== undefined && toGroupIndex === undefined) {
+      const groupItem = state.items[fromGroupIndex] as InternalGroup;
+      const layer = groupItem.layers[from];
+      state.items = state.items.map((item, i) => {
+        if (i === fromGroupIndex && isInternalGroup(item)) {
+          const newLayers = item.layers.filter((_, li) => li !== from);
+          if (newLayers.length === 0) return null;
+          return { ...item, layers: newLayers };
         }
-        return { ...item, layers: newLayers };
-      }
-      return item;
-    }).filter(Boolean) as Array<LayerConfig | InternalGroup>;
-    state.items = [...state.items, layer];
-  } else if (fromGroupIndex === undefined && toGroupIndex !== undefined) {
-    // Move from standalone to group
-    const layer = state.items[from] as LayerConfig;
-    // Adjust group index if the removed item is before the group
-    const adjustedGroupIdx = from < toGroupIndex ? toGroupIndex - 1 : toGroupIndex;
-    const newItems = state.items.filter((_, i) => i !== from);
-    state.items = newItems.map((item, i) => {
-      if (i === adjustedGroupIdx && isInternalGroup(item)) {
-        return { ...item, layers: [...item.layers, layer] };
-      }
-      return item;
-    });
-  } else {
-    // Move standalone to standalone
+        return item;
+      }).filter(Boolean) as Array<LayerConfig | InternalGroup>;
+      state.items = [...state.items, layer];
+    } else if (fromGroupIndex === undefined && toGroupIndex !== undefined) {
+      const layer = state.items[from] as LayerConfig;
+      const adjustedGroupIdx = from < toGroupIndex ? toGroupIndex - 1 : toGroupIndex;
+      const newItems = state.items.filter((_, i) => i !== from);
+      state.items = newItems.map((item, i) => {
+        if (i === adjustedGroupIdx && isInternalGroup(item)) {
+          return { ...item, layers: [...item.layers, layer] };
+        }
+        return item;
+      });
+    } else {
+      const items = [...state.items];
+      const [item] = items.splice(from, 1);
+      items.splice(to, 0, item);
+      state.items = items;
+    }
+  });
+}
+
+export function moveGroup(from: number, to: number): void {
+  mutate(() => {
     const items = [...state.items];
     const [item] = items.splice(from, 1);
     items.splice(to, 0, item);
     state.items = items;
-  }
-  invalidateExpansion();
-}
-
-export function moveGroup(from: number, to: number): void {
-  pushUndo();
-  const items = [...state.items];
-  const [item] = items.splice(from, 1);
-  items.splice(to, 0, item);
-  state.items = items;
-  invalidateExpansion();
+  });
 }
 
 export function clearLayers(): void {
-  pushUndo();
-  state.items = [];
-  invalidateExpansion();
+  mutate(() => { state.items = []; });
 }
 
 // ─── Validators ─────────────────────────────────────────────────────
@@ -573,6 +556,5 @@ export function isReadyToSimulate(): boolean {
 // ─── Reset ──────────────────────────────────────────────────────────
 
 export function resetConfig(): void {
-  pushUndo();
-  state = structuredClone(DEFAULT_STATE);
+  mutate(() => { state = structuredClone(DEFAULT_STATE); });
 }
