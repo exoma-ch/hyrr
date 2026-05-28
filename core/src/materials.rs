@@ -578,10 +578,15 @@ pub fn resolve_material(
                 )
             })?
         } else {
-            return Err(format!(
-                "No density known for compound '{identifier}'. \
-                 Provide density_g_cm3 on the layer or use define_material."
-            ));
+            // No known density — warn but don't crash. Use 1.0 g/cm³ as a
+            // placeholder so the simulation runs. The frontend should surface
+            // this warning to prompt the user to set the actual density.
+            eprintln!(
+                "Warning: no density known for '{}'. Using 1.0 g/cm³. \
+                 Set density_g_cm3 on the layer or use define_material for accurate results.",
+                identifier
+            );
+            1.0
         }
     };
 
