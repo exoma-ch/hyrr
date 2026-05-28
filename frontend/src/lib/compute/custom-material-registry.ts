@@ -3,28 +3,40 @@
  * custom material lookups across the frontend (#388).
  *
  * Replaces the 6 separate registration calls in App.svelte with one:
- *   registerCustomMaterials(getCustomMaterials())
+ *   initCustomMaterialRegistry(getCustomMaterials)
  *
  * Consumers (backend.ts, config-url-v2.ts, materials.ts) import lookup
  * functions from this module instead of maintaining their own closures.
+ *
+ * The registry is lazy — it calls the getter on every lookup, so it
+ * always reflects the current state (survives add/update/delete mutations).
  */
 
 import type { CustomMaterial } from "../stores/custom-materials.svelte";
+import {
+  setCustomDensityLookup as setPkgDensityLookup,
+  setCustomCompositionLookup as setPkgCompositionLookup,
+} from "@hyrr/compute";
 
-let materials: CustomMaterial[] = [];
+/** Lazy getter — called on every lookup so mutations are always visible. */
+let getMaterials: () => CustomMaterial[] = () => [];
 
-/** Register the current custom materials list. Call once after loading
- *  from IndexedDB, and again if the list changes. */
-export function registerCustomMaterials(mats: CustomMaterial[]): void {
-  materials = mats;
+/** Initialize the registry with a live getter. Call once after data load.
+ *  Also wires the @hyrr/compute package lookups for resolveMaterial(). */
+export function initCustomMaterialRegistry(getter: () => CustomMaterial[]): void {
+  getMaterials = getter;
+
+  // Wire the @hyrr/compute package lookups (used by config store's migrateMissingDensities)
+  setPkgDensityLookup((id) => lookupByIdentifier(id)?.density ?? null);
+  setPkgCompositionLookup((id) => lookupByIdentifier(id)?.massFractions ?? null);
 }
 
 /** Look up by exact name (for compute backend: name → formula + density). */
 export function lookupByName(name: string): CustomMaterial | undefined {
-  return materials.find((m) => m.name === name);
+  return getMaterials().find((m) => m.name === name);
 }
 
 /** Look up by name OR formula (for URL encoder, density/composition resolution). */
 export function lookupByIdentifier(id: string): CustomMaterial | undefined {
-  return materials.find((m) => m.name === id || m.formula === id);
+  return getMaterials().find((m) => m.name === id || m.formula === id);
 }

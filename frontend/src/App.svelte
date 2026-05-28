@@ -35,7 +35,7 @@
   import { initDepthPreview } from "./lib/stores/depth-preview.svelte";
   import { saveRun } from "./lib/history-db";
   import { restoreSessions, syncActiveTab, getActiveTabId } from "./lib/stores/sessions.svelte";
-  import { registerCustomMaterials } from "./lib/compute/custom-material-registry";
+  import { initCustomMaterialRegistry } from "./lib/compute/custom-material-registry";
   import { getCustomMaterials, loadCustomMaterials } from "./lib/stores/custom-materials.svelte";
   import { setProjectile } from "./lib/stores/config.svelte";
   import { openBugReport } from "./lib/stores/bugreport.svelte";
@@ -157,8 +157,9 @@
       if (!seen) showSchemaBreakBanner = true;
     } catch { /* no-op */ }
 
-    // Single registration point — replaces 6 separate closures (#388)
-    registerCustomMaterials(getCustomMaterials());
+    // Single registration point — replaces 6 separate closures (#388).
+    // Lazy: getter is called on every lookup, so add/update/delete mutations are visible.
+    initCustomMaterialRegistry(getCustomMaterials);
 
     loadingState = "Ready";
     loadingProgress = 1;

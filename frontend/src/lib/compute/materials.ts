@@ -12,6 +12,7 @@ import {
   STANDARD_ATOMIC_WEIGHT,
 } from "../utils/formula";
 import type { DatabaseProtocol, Element } from "@hyrr/compute";
+import { lookupByIdentifier } from "./custom-material-registry";
 
 export { parseFormula, formulaToMassFractions, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT };
 
@@ -394,8 +395,6 @@ export const ELEMENT_DENSITIES: Record<string, number> = {
 export const COMPOUND_DENSITIES: Record<string, number> = {
   H2O: 1.0, "H2O-18": 1.11, MoO3: 4.69, Al2O3: 3.95,
 };
-
-import { lookupByIdentifier } from "./custom-material-registry";
 
 /** @deprecated Use registerCustomMaterials() instead. Kept for backward compat. */
 let customDensityLookup: ((formula: string) => number | null) | null = null;

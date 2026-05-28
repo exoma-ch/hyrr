@@ -17,9 +17,9 @@ const V2_PREFIX = "1:";
 const MAX_URL_ITEMS = 30;
 
 /** Inline-composition data carried by a layer when its material is a
- *  user-saved custom (or hydrated catalog fork). Receiver registers it
- *  via setCustomDensityLookup + setCustomCompositionLookup so the
- *  simulator can resolve density and per-element fractions on the fly. */
+ *  user-saved custom (or hydrated catalog fork). On decode, the receiver
+ *  registers it as a session-only lookup so resolveMaterial finds density
+ *  and per-element fractions without the user redefining the material. */
 interface InlineComposition {
   /** density g/cm³ */
   d: number;

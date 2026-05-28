@@ -1,7 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { encodeConfigV2, decodeConfigV2, decodeConfigV2Ser } from "./config-url-v2";
-import { registerCustomMaterials } from "./compute/custom-material-registry";
+import { initCustomMaterialRegistry } from "./compute/custom-material-registry";
+import type { CustomMaterial } from "./stores/custom-materials.svelte";
 import type { SerializableConfig } from "./stores/config.svelte";
+
+/** Test helper: register custom materials via lazy getter, return a setter to update. */
+function setTestMaterials(mats: CustomMaterial[]): void {
+  testMaterials = mats;
+}
+let testMaterials: CustomMaterial[] = [];
+initCustomMaterialRegistry(() => testMaterials);
 
 const SIMPLE: SerializableConfig = {
   beam: { projectile: "p", energy_MeV: 16, current_mA: 0.15 },
@@ -136,7 +144,7 @@ describe("config-url-v2", () => {
 
 describe("v3 inline composition (#96)", () => {
   it("encodes a layer's composition inline when the resolver returns one", () => {
-    registerCustomMaterials([{
+    setTestMaterials([{
       id: "test", name: "soda-lime-glass", formula: "SiNaCaO",
       density: 2.5, timestamp: 0,
       massFractions: { Si: 0.34, Na: 0.10, Ca: 0.08, O: 0.48 },
@@ -152,11 +160,11 @@ describe("v3 inline composition (#96)", () => {
     const decoded = decodeConfigV2Ser(payload);
     expect(decoded).not.toBeNull();
     expect((decoded!.items[0] as { material: string }).material).toBe("soda-lime-glass");
-    registerCustomMaterials([]);
+    setTestMaterials([]);
   });
 
   it("registers a session lookup on decode so resolveMaterial finds the entry", async () => {
-    registerCustomMaterials([{
+    setTestMaterials([{
       id: "test", name: "soda-lime-glass", formula: "SiNaCaO",
       density: 2.5, timestamp: 0,
       massFractions: { Si: 0.34, Na: 0.10, Ca: 0.08, O: 0.48 },
@@ -169,7 +177,7 @@ describe("v3 inline composition (#96)", () => {
     };
     const hash = encodeConfigV2(cfg);
     // Drop the registry to simulate the receiver client.
-    registerCustomMaterials([]);
+    setTestMaterials([]);
     const payload = hash.replace("#config=1:", "");
     decodeConfigV2Ser(payload);
     // The decoder should have registered a session lookup so resolveMaterial
@@ -240,7 +248,7 @@ describe("density_g_cm3 roundtrip", () => {
 
   it("custom material density survives full encode→decode→compute roundtrip", () => {
     // Register custom material via unified registry (#388)
-    registerCustomMaterials([{
+    setTestMaterials([{
       id: "test", name: "Ca44O", formula: "Ca44O",
       density: 3.34, timestamp: 0,
       massFractions: { Ca: 0.524, O: 0.476 },
@@ -258,7 +266,7 @@ describe("density_g_cm3 roundtrip", () => {
     const hash = encodeConfigV2(cfg);
 
     // 3. Drop registry (simulate recipient with no IndexedDB)
-    registerCustomMaterials([]);
+    setTestMaterials([]);
 
     // 4. Decode from URL hash
     const payload = hash.replace("#config=1:", "");
