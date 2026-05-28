@@ -179,41 +179,44 @@
     </div>
   </div>
 
-  <div class="field current-field">
-    <label>Current</label>
+  <!-- Current + Irradiation group: toggle spans both -->
+  <div class="current-irrad-group">
     <div class="current-toggle">
       <button class="ct-btn" class:active={profileMode === "constant"} onclick={clearProfile}>Constant</button>
       <button class="ct-btn" class:active={profileMode === "profile"} onclick={openProfilePopup}>Profile</button>
     </div>
+
     {#if !currentProfile}
-      <div class="input-group">
-        <input id="bcb-current" type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
-        <span class="unit">µA</span>
+      <!-- Constant mode: current + irradiation side by side -->
+      <div class="const-fields">
+        <div class="field">
+          <label for="bcb-current">Current</label>
+          <div class="input-group">
+            <input id="bcb-current" type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
+            <span class="unit">µA</span>
+          </div>
+        </div>
+        <div class="field">
+          <label for="bcb-irrad">Irradiation</label>
+          <div class="input-with-feedback">
+            <input id="bcb-irrad" type="text" value={irradText} onfocus={(e) => (e.target as HTMLInputElement).select()} oninput={onIrradInput} onblur={commitIrrad} onkeydown={(e) => { if (e.key === 'Enter') { commitIrrad(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 24h" />
+            {#if irradFeedback && irradFeedback !== "invalid"}
+              <span class="feedback ok">{irradFeedback}</span>
+            {:else if irradFeedback === "invalid"}
+              <span class="feedback err">?</span>
+            {/if}
+          </div>
+        </div>
       </div>
     {:else if stats}
+      <!-- Profile mode: sparkline preview replaces both fields -->
       <div class="profile-preview-btn" onclick={openProfilePopup} role="button" tabindex="0" title="Click to edit or replace profile">
-        <ProfilePreviewMini profile={currentProfile} />
-        <span class="profile-dur">{formatSeconds(stats.durationS)}</span>
+        <ProfilePreviewMini profile={currentProfile} width={120} height={28} />
+        <div class="profile-info">
+          <span class="profile-dur">{formatSeconds(stats.durationS)}</span>
+          <span class="profile-stats-mini">{stats.minCurrentUA.toFixed(0)}–{stats.maxCurrentUA.toFixed(0)} µA</span>
+        </div>
         <button class="profile-x" onclick={(e) => { e.stopPropagation(); clearProfile(); }} title="Clear profile">×</button>
-      </div>
-    {/if}
-  </div>
-
-  <div class="field">
-    <label for="bcb-irrad">Irradiation</label>
-    {#if currentProfile}
-      <div class="input-group readonly">
-        <input id="bcb-irrad" type="text" value={formatSeconds(getEffectiveIrradiationS())} readonly disabled />
-        <span class="unit hint">from profile</span>
-      </div>
-    {:else}
-      <div class="input-with-feedback">
-        <input id="bcb-irrad" type="text" value={irradText} onfocus={(e) => (e.target as HTMLInputElement).select()} oninput={onIrradInput} onblur={commitIrrad} onkeydown={(e) => { if (e.key === 'Enter') { commitIrrad(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 24h" />
-        {#if irradFeedback && irradFeedback !== "invalid"}
-          <span class="feedback ok">{irradFeedback}</span>
-        {:else if irradFeedback === "invalid"}
-          <span class="feedback err">?</span>
-        {/if}
       </div>
     {/if}
   </div>
@@ -411,8 +414,18 @@
     50% { opacity: 0.3; }
   }
 
-  /* ─── Current field: Constant/Profile toggle ─── */
-  .current-field { min-width: 100px; }
+  /* ─── Current + Irradiation group ─── */
+  .current-irrad-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+  }
+
+  .const-fields {
+    display: flex;
+    gap: 0.75rem;
+  }
 
   .current-toggle {
     display: flex;
@@ -443,21 +456,34 @@
   .profile-preview-btn {
     display: flex;
     align-items: center;
-    gap: 0.3rem;
+    gap: 0.4rem;
     background: var(--c-bg-default);
     border: 1px solid var(--c-accent);
     border-radius: 4px;
-    padding: 0.2rem 0.3rem;
+    padding: 0.2rem 0.4rem;
     cursor: pointer;
     white-space: nowrap;
+    /* Same height as label + input row in const mode */
+    min-height: 42px;
   }
 
   .profile-preview-btn:hover { border-color: var(--c-text); }
 
+  .profile-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
   .profile-dur {
-    font-size: 0.7rem;
+    font-size: 0.75rem;
     color: var(--c-accent);
-    font-weight: 500;
+    font-weight: 600;
+  }
+
+  .profile-stats-mini {
+    font-size: 0.6rem;
+    color: var(--c-text-muted);
   }
 
   .profile-x {

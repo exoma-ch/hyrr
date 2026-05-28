@@ -1,6 +1,7 @@
 <script lang="ts">
   import { generateProfile, profileStats, type CurrentProfile } from "@hyrr/compute";
   import PlotCurrentProfile from "../PlotCurrentProfile.svelte";
+  import { parseTime } from "../../utils/time-parse";
 
   interface Props {
     onselect: (profile: CurrentProfile) => void;
@@ -15,7 +16,57 @@
   let lockMode = $state<"duration" | "charge">("duration");
   let chargeUAh = $state(0);
 
-  // Derived profile — recomputes on any param change
+  // Smart time input state
+  let rampUpText = $state("1min");
+  let rampDownText = $state("1min");
+  let durationText = $state("2h");
+  let rampUpFeedback = $state("");
+  let rampDownFeedback = $state("");
+  let durationFeedback = $state("");
+
+  function formatSeconds(s: number): string {
+    if (s >= 3600) return `${(s / 3600).toPrecision(3)}h`;
+    if (s >= 60) return `${(s / 60).toPrecision(3)}min`;
+    return `${s.toPrecision(3)}s`;
+  }
+
+  function handleTimeInput(text: string, setter: (s: number) => void): string {
+    const parsed = parseTime(text);
+    if (parsed) {
+      setter(parsed.seconds);
+      return parsed.display;
+    }
+    return text ? "?" : "";
+  }
+
+  function onRampUpInput(e: Event) {
+    rampUpText = (e.target as HTMLInputElement).value;
+    rampUpFeedback = handleTimeInput(rampUpText, (s) => { rampUpS = s; });
+  }
+  function commitRampUp() {
+    const parsed = parseTime(rampUpText);
+    if (parsed) rampUpS = parsed.seconds;
+  }
+
+  function onRampDownInput(e: Event) {
+    rampDownText = (e.target as HTMLInputElement).value;
+    rampDownFeedback = handleTimeInput(rampDownText, (s) => { rampDownS = s; });
+  }
+  function commitRampDown() {
+    const parsed = parseTime(rampDownText);
+    if (parsed) rampDownS = parsed.seconds;
+  }
+
+  function onDurationInput(e: Event) {
+    durationText = (e.target as HTMLInputElement).value;
+    durationFeedback = handleTimeInput(durationText, (s) => { totalDurationS = s; lockMode = "duration"; });
+  }
+  function commitDuration() {
+    const parsed = parseTime(durationText);
+    if (parsed) { totalDurationS = parsed.seconds; lockMode = "duration"; }
+  }
+
+  // Derived profile
   let profile = $derived(generateProfile({
     rampUpS,
     plateauCurrentMA: plateauUA / 1000,
@@ -37,18 +88,11 @@
     const v = parseFloat((e.target as HTMLInputElement).value);
     if (!isNaN(v) && v > 0) {
       chargeUAh = v;
-      // Solve: charge = plateauUA * (duration - (rampUp + rampDown)/2) / 3600
-      // → duration = charge * 3600 / plateauUA + (rampUp + rampDown) / 2
       if (plateauUA > 0) {
         totalDurationS = Math.max(rampUpS + rampDownS, chargeUAh * 3600 / plateauUA + (rampUpS + rampDownS) / 2);
+        durationText = formatSeconds(totalDurationS);
       }
     }
-  }
-
-  function formatDuration(s: number): string {
-    if (s >= 3600) return `${(s / 3600).toFixed(1)} h`;
-    if (s >= 60) return `${(s / 60).toFixed(1)} min`;
-    return `${s.toFixed(0)} s`;
   }
 </script>
 
@@ -57,8 +101,12 @@
     <div class="form-field">
       <label>Ramp up</label>
       <div class="input-row">
-        <input type="number" bind:value={rampUpS} min="0" step="10" />
-        <span class="unit">s</span>
+        <input type="text" value={rampUpText} oninput={onRampUpInput} onblur={commitRampUp} onkeydown={(e) => { if (e.key === 'Enter') commitRampUp(); }} placeholder="e.g. 1min" />
+        {#if rampUpFeedback && rampUpFeedback !== "?"}
+          <span class="feedback ok">{rampUpFeedback}</span>
+        {:else if rampUpFeedback === "?"}
+          <span class="feedback err">?</span>
+        {/if}
       </div>
     </div>
 
@@ -73,8 +121,12 @@
     <div class="form-field">
       <label>Ramp down</label>
       <div class="input-row">
-        <input type="number" bind:value={rampDownS} min="0" step="10" />
-        <span class="unit">s</span>
+        <input type="text" value={rampDownText} oninput={onRampDownInput} onblur={commitRampDown} onkeydown={(e) => { if (e.key === 'Enter') commitRampDown(); }} placeholder="e.g. 1min" />
+        {#if rampDownFeedback && rampDownFeedback !== "?"}
+          <span class="feedback ok">{rampDownFeedback}</span>
+        {:else if rampDownFeedback === "?"}
+          <span class="feedback err">?</span>
+        {/if}
       </div>
     </div>
 
@@ -85,13 +137,16 @@
     <div class="form-field">
       <label class="lock-label">
         <button class="lock-btn" class:locked={lockMode === "duration"} onclick={() => { lockMode = "duration"; }} title="Lock duration (derive charge)">
-          {lockMode === "duration" ? "Duration" : "Duration"}
+          Duration
         </button>
       </label>
       <div class="input-row">
-        <input type="number" value={totalDurationS} oninput={(e) => { totalDurationS = parseFloat((e.target as HTMLInputElement).value) || 0; lockMode = "duration"; }} min="1" step="60" />
-        <span class="unit">s</span>
-        <span class="hint">{formatDuration(totalDurationS)}</span>
+        <input type="text" value={durationText} oninput={onDurationInput} onblur={commitDuration} onkeydown={(e) => { if (e.key === 'Enter') commitDuration(); }} placeholder="e.g. 2h" />
+        {#if durationFeedback && durationFeedback !== "?"}
+          <span class="feedback ok">{durationFeedback}</span>
+        {:else if durationFeedback === "?"}
+          <span class="feedback err">?</span>
+        {/if}
       </div>
     </div>
 
@@ -111,7 +166,7 @@
   <PlotCurrentProfile {profile} />
 
   <div class="stats">
-    {stats.n} pts · {formatDuration(stats.durationS)} · {stats.minCurrentUA.toFixed(0)}–{stats.maxCurrentUA.toFixed(0)} µA · {stats.chargeUAh.toFixed(2)} µAh
+    {stats.n} pts · {formatSeconds(stats.durationS)} · {stats.minCurrentUA.toFixed(0)}–{stats.maxCurrentUA.toFixed(0)} µA · {stats.chargeUAh.toFixed(2)} µAh
   </div>
 
   <div class="actions">
@@ -162,7 +217,10 @@
   .input-row input:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .unit { font-size: 0.7rem; color: var(--c-text-muted); }
-  .hint { font-size: 0.65rem; color: var(--c-text-subtle); margin-left: 0.2rem; }
+
+  .feedback { font-size: 0.65rem; white-space: nowrap; }
+  .feedback.ok { color: var(--c-green-text); }
+  .feedback.err { color: var(--c-red); }
 
   .lock-label { display: flex; align-items: center; gap: 0.2rem; }
   .lock-btn {
