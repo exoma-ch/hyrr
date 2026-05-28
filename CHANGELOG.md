@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1](https://github.com/exoma-ch/hyrr/compare/v0.12.0...v0.12.1) (2026-05-28)
+
+
+### Bug Fixes
+
+* propagate inline density from share URL to Rust backend ([#359](https://github.com/exoma-ch/hyrr/issues/359)) ([f1e8c8f](https://github.com/exoma-ch/hyrr/commit/f1e8c8f01a9915880dff94751e35ccb2866c135e))
+* require explicit density for unknown compounds — no silent fallback ([#354](https://github.com/exoma-ch/hyrr/issues/354)) ([0fc0407](https://github.com/exoma-ch/hyrr/commit/0fc0407cc42b7560598af97b7608244dead162c7))
+* update resolve_material call sites for Result + registry param ([#351](https://github.com/exoma-ch/hyrr/issues/351)) ([912f96e](https://github.com/exoma-ch/hyrr/commit/912f96e3b0aaeda02b77bd831853e77b28791d12))
+* warn on unknown compound density instead of crashing ([#353](https://github.com/exoma-ch/hyrr/issues/353)) ([07854c8](https://github.com/exoma-ch/hyrr/commit/07854c836bb1da414fb0b326fbff9cf82ae3fa0e))
+
 ## [0.12.0](https://github.com/exoma-ch/hyrr/compare/v0.11.3...v0.12.0) (2026-05-27)
 
 
