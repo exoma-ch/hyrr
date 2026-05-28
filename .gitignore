@@ -226,6 +226,9 @@ data/hyrr.sqlite
 data/*.sqlite
 data/parquet/
 
+# WASM build output (built by `just wasm` / `just dev`, not committed)
+frontend/src/lib/compute/hyrr-wasm-pkg/
+
 # Tauri
 desktop/src-tauri/target/
 hyrr-*.png
