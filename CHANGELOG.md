@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0](https://github.com/exoma-ch/hyrr/compare/v0.12.1...v0.13.0) (2026-05-28)
+
+
+### Features
+
+* density prompt for unknown compounds in material popup ([#361](https://github.com/exoma-ch/hyrr/issues/361)) ([#375](https://github.com/exoma-ch/hyrr/issues/375)) ([4d23d88](https://github.com/exoma-ch/hyrr/commit/4d23d8817823ef18fb8b0a8fac948284cfdb48cc))
+* **frontend:** density input on layer card ([#361](https://github.com/exoma-ch/hyrr/issues/361)) ([#367](https://github.com/exoma-ch/hyrr/issues/367)) ([f736b95](https://github.com/exoma-ch/hyrr/commit/f736b95d1285b26f8bbc54f4b46ec2f132c27941))
+* **frontend:** layer table below layer cards + clickable layer filter ([#379](https://github.com/exoma-ch/hyrr/issues/379)) ([e4cabc3](https://github.com/exoma-ch/hyrr/commit/e4cabc398de9e2d2355bc009ab82702e97095fa9))
+
+
+### Bug Fixes
+
+* density_g_cm3 flows from material popup to layer config ([#365](https://github.com/exoma-ch/hyrr/issues/365)) ([815d246](https://github.com/exoma-ch/hyrr/commit/815d2464e0e607e515fc429bf9d0bcf5990bf870))
+* density_override param on resolve_material — SSoT for all paths ([#368](https://github.com/exoma-ch/hyrr/issues/368)) ([a755fb1](https://github.com/exoma-ch/hyrr/commit/a755fb185efc3534f0dad42c08f2c1106dfccf35))
+* emission tabs grey + hover info ([#384](https://github.com/exoma-ch/hyrr/issues/384)) ([9ee5756](https://github.com/exoma-ch/hyrr/commit/9ee575602035f0c11e349a04b9ed3d7bfdd12207))
+* **frontend:** emission plot legend always visible + sum in hover ([#378](https://github.com/exoma-ch/hyrr/issues/378)) ([5f9675d](https://github.com/exoma-ch/hyrr/commit/5f9675da29eb87bac1ec9e0c5f70063a7225b1fc))
+* **frontend:** harmonize section headers — shared SectionHeader component ([#383](https://github.com/exoma-ch/hyrr/issues/383)) ([#393](https://github.com/exoma-ch/hyrr/issues/393)) ([0bd95e1](https://github.com/exoma-ch/hyrr/commit/0bd95e1bc70a679803cb96f1f62a286c4b6e01d3))
+* invalidateExpansion on ALL config mutators — stale state root cause ([#372](https://github.com/exoma-ch/hyrr/issues/372)) ([574fc96](https://github.com/exoma-ch/hyrr/commit/574fc96d304b1b25148296a97c25deb5dbe0db79))
+* Layers in section nav + tab styling ([#377](https://github.com/exoma-ch/hyrr/issues/377)) ([2644e1a](https://github.com/exoma-ch/hyrr/commit/2644e1a26406099910ea9fdb9dcbf018b610130b))
+* SSoT — depth preview uses same config expansion as simulation ([#366](https://github.com/exoma-ch/hyrr/issues/366)) ([b7f2357](https://github.com/exoma-ch/hyrr/commit/b7f23573c303002589d9117d6d364f8860e57ac1))
+* SSoT config loading — fillDensities + single load path ([#374](https://github.com/exoma-ch/hyrr/issues/374)) ([793c493](https://github.com/exoma-ch/hyrr/commit/793c49394ff958428be66924601cfa5e8be4b041))
+* β spectrum starts at (0,0) + sum envelope shows in hover ([#380](https://github.com/exoma-ch/hyrr/issues/380) [#381](https://github.com/exoma-ch/hyrr/issues/381)) ([#382](https://github.com/exoma-ch/hyrr/issues/382)) ([0658b69](https://github.com/exoma-ch/hyrr/commit/0658b692931c43f8fe0d689cea23e450774e4aa0))
+
+
+### Tests
+
+* add Playwright e2e test for current profile simulation ([#328](https://github.com/exoma-ch/hyrr/issues/328)) ([#394](https://github.com/exoma-ch/hyrr/issues/394)) ([012b174](https://github.com/exoma-ch/hyrr/commit/012b174717d39d195f59156caa24f13ccaa10ee2))
+
+
+### Miscellaneous
+
+* add manual staging deploy script for when runners are stuck ([#364](https://github.com/exoma-ch/hyrr/issues/364)) ([32c91e2](https://github.com/exoma-ch/hyrr/commit/32c91e2c32bcb1cb1e600a0dda665e9bfd39806c))
+
+
+### CI
+
+* kick deploy ([#362](https://github.com/exoma-ch/hyrr/issues/362)) ([7669aaf](https://github.com/exoma-ch/hyrr/commit/7669aafa07f238c4680387d985f03a726b0c2829))
+
 ## [0.12.1](https://github.com/exoma-ch/hyrr/compare/v0.12.0...v0.12.1) (2026-05-28)
 
 
