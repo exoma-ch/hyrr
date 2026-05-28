@@ -65,7 +65,8 @@ impl PyDataStore {
             pyo3::exceptions::PyValueError::new_err(format!("Invalid projectile: {projectile_str}"))
         })?;
 
-        let layers = config_to_layers(&*db, &config);
+        let layers = config_to_layers(&*db, &config)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
 
         let current_profile = config
             .current_profile
@@ -426,13 +427,13 @@ struct LayerCfg {
     density_g_cm3: Option<f64>,
 }
 
-fn config_to_layers(db: &ParquetDataStore, config: &SimConfig) -> Vec<Layer> {
+fn config_to_layers(db: &ParquetDataStore, config: &SimConfig) -> Result<Vec<Layer>, String> {
     config
         .layers
         .iter()
         .map(|lc| {
-            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None).expect("resolve_material");
-            Layer {
+            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None)?;
+            Ok(Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,
                 thickness_cm: lc.thickness_cm,
@@ -443,7 +444,7 @@ fn config_to_layers(db: &ParquetDataStore, config: &SimConfig) -> Vec<Layer> {
                 computed_energy_in: 0.0,
                 computed_energy_out: 0.0,
                 computed_thickness: 0.0,
-            }
+            })
         })
         .collect()
 }
