@@ -9,10 +9,12 @@
     setCooling,
     getCurrentProfile,
     setCurrentProfile,
+    getEffectiveIrradiationS,
   } from "../stores/config.svelte";
-  import { parseCurrentProfileCSV, type ParseResult, type ParseError } from "@hyrr/compute";
+  import { profileStats as computeProfileStats } from "@hyrr/compute";
   import type { CurrentProfile } from "@hyrr/compute";
-  import PlotCurrentProfile from "./PlotCurrentProfile.svelte";
+  import ProfilePreviewMini from "./current-profile/ProfilePreviewMini.svelte";
+  import CurrentProfilePopup from "./CurrentProfilePopup.svelte";
   import {
     getSchedulerState,
     getSimMode,
@@ -86,10 +88,10 @@
 
   function formatSeconds(s: number): string {
     if (s >= 86400 * 365) return `${(s / (86400 * 365.25)).toPrecision(3)}y`;
-    if (s >= 86400) return `${s / 86400}d`;
-    if (s >= 3600) return `${s / 3600}h`;
-    if (s >= 60) return `${s / 60}min`;
-    return `${s}s`;
+    if (s >= 86400) return `${(s / 86400).toPrecision(3)}d`;
+    if (s >= 3600) return `${(s / 3600).toPrecision(3)}h`;
+    if (s >= 60) return `${(s / 60).toPrecision(3)}min`;
+    return `${s.toPrecision(3)}s`;
   }
 
   function onIrradInput(e: Event) {
@@ -143,71 +145,20 @@
   // --- Current profile ---
   let currentProfile = $derived(getCurrentProfile());
   let profileMode = $derived<"constant" | "profile">(currentProfile ? "profile" : "constant");
-  let fileInputEl = $state<HTMLInputElement | null>(null);
-  let uploadError = $state<string | null>(null);
-  let parseWarnings = $state<string[]>([]);
-  let showAllWarnings = $state(false);
-
-  function applyParseResult(result: ParseResult | ParseError) {
-    if ("error" in result) {
-      uploadError = (result as ParseError).error;
-      parseWarnings = [];
-      return;
-    }
-    const parsed = result as ParseResult;
-    setCurrentProfile(parsed.profile);
-    parseWarnings = parsed.warnings;
-    uploadError = null;
-  }
-
-  function handleCurrentUpload(e: Event) {
-    const input = e.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) return;
-    uploadError = null;
-    const reader = new FileReader();
-    reader.onload = () => applyParseResult(parseCurrentProfileCSV(reader.result as string));
-    reader.readAsText(file);
-  }
-
-  async function handlePaste() {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text.trim()) { uploadError = "Clipboard is empty"; return; }
-      if (text.split(/\r?\n/).filter(l => l.trim()).length > 10_000) { uploadError = "Pasted data exceeds 10,000 rows"; return; }
-      applyParseResult(parseCurrentProfileCSV(text));
-    } catch { uploadError = "Could not read clipboard"; }
-  }
+  let popupOpen = $state(false);
+  let stats = $derived(currentProfile ? computeProfileStats(currentProfile) : null);
 
   function clearProfile() {
     setCurrentProfile(null);
-    uploadError = null;
-    parseWarnings = [];
-    showAllWarnings = false;
   }
 
-  function profileStats(p: CurrentProfile) {
-    const n = p.timesS.length;
-    const dur = p.timesS[n - 1] - p.timesS[0];
-    let charge = 0, minI = Infinity, maxI = -Infinity;
-    for (let i = 0; i < n; i++) {
-      const dt = i + 1 < n ? p.timesS[i + 1] - p.timesS[i] : 0;
-      charge += p.currentsMA[i] * dt;
-      if (p.currentsMA[i] < minI) minI = p.currentsMA[i];
-      if (p.currentsMA[i] > maxI) maxI = p.currentsMA[i];
-    }
-    return { n, durMin: dur / 60, charge, minI_uA: minI * 1000, maxI_uA: maxI * 1000 };
+  function openProfilePopup() {
+    popupOpen = true;
   }
 
-  let stats = $derived(currentProfile ? profileStats(currentProfile) : null);
-
-  let chargeDiscrepancy = $derived.by(() => {
-    if (!stats) return null;
-    const constantCharge = beam.current_mA * config.irradiation_s;
-    if (constantCharge <= 0) return null;
-    const pctDiff = Math.abs(stats.charge - constantCharge) / constantCharge * 100;
-    return pctDiff > 3 ? pctDiff : null;
-  });
+  function onProfileSelected(profile: CurrentProfile) {
+    setCurrentProfile(profile);
+  }
 </script>
 
 <div class="beam-bar">
@@ -229,39 +180,42 @@
   </div>
 
   <div class="field current-field">
-    <!-- Constant / Profile toggle replaces the label -->
+    <label>Current</label>
     <div class="current-toggle">
-      <button class="ct-btn" class:active={profileMode === "constant"} onclick={clearProfile}>Const</button>
-      <button class="ct-btn" class:active={profileMode === "profile"} onclick={() => fileInputEl?.click()}>Profile</button>
+      <button class="ct-btn" class:active={profileMode === "constant"} onclick={clearProfile}>Constant</button>
+      <button class="ct-btn" class:active={profileMode === "profile"} onclick={openProfilePopup}>Profile</button>
     </div>
-    {#if profileMode === "constant" && !currentProfile}
+    {#if !currentProfile}
       <div class="input-group">
         <input id="bcb-current" type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
         <span class="unit">µA</span>
       </div>
-    {:else if currentProfile && stats}
-      <button class="profile-pill" onclick={clearProfile} title="Click to clear profile and revert to constant current">
-        {stats.n} pts · {stats.minI_uA.toFixed(0)}–{stats.maxI_uA.toFixed(0)} µA
-      </button>
-    {:else}
-      <button class="upload-pill" onclick={() => fileInputEl?.click()}>
-        Upload CSV
-      </button>
+    {:else if stats}
+      <div class="profile-preview-btn" onclick={openProfilePopup} role="button" tabindex="0" title="Click to edit or replace profile">
+        <ProfilePreviewMini profile={currentProfile} />
+        <span class="profile-dur">{formatSeconds(stats.durationS)}</span>
+        <button class="profile-x" onclick={(e) => { e.stopPropagation(); clearProfile(); }} title="Clear profile">×</button>
+      </div>
     {/if}
-    <!-- Hidden file input -->
-    <input bind:this={fileInputEl} type="file" accept=".csv,.tsv,.txt" onchange={handleCurrentUpload} class="file-input-hidden" />
   </div>
 
   <div class="field">
     <label for="bcb-irrad">Irradiation</label>
-    <div class="input-with-feedback">
-      <input id="bcb-irrad" type="text" value={irradText} onfocus={(e) => (e.target as HTMLInputElement).select()} oninput={onIrradInput} onblur={commitIrrad} onkeydown={(e) => { if (e.key === 'Enter') { commitIrrad(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 24h" />
-      {#if irradFeedback && irradFeedback !== "invalid"}
-        <span class="feedback ok">{irradFeedback}</span>
-      {:else if irradFeedback === "invalid"}
-        <span class="feedback err">?</span>
-      {/if}
-    </div>
+    {#if currentProfile}
+      <div class="input-group readonly">
+        <input id="bcb-irrad" type="text" value={formatSeconds(getEffectiveIrradiationS())} readonly disabled />
+        <span class="unit hint">from profile</span>
+      </div>
+    {:else}
+      <div class="input-with-feedback">
+        <input id="bcb-irrad" type="text" value={irradText} onfocus={(e) => (e.target as HTMLInputElement).select()} oninput={onIrradInput} onblur={commitIrrad} onkeydown={(e) => { if (e.key === 'Enter') { commitIrrad(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 24h" />
+        {#if irradFeedback && irradFeedback !== "invalid"}
+          <span class="feedback ok">{irradFeedback}</span>
+        {:else if irradFeedback === "invalid"}
+          <span class="feedback err">?</span>
+        {/if}
+      </div>
+    {/if}
   </div>
 
   <div class="field">
@@ -288,36 +242,7 @@
 
   </div>
 
-<!-- Profile detail (below beam bar, only when profile loaded) -->
-{#if currentProfile && stats}
-  <div class="profile-detail">
-    <div class="profile-detail-header">
-      <span class="profile-detail-stats">
-        {stats.n} pts · {stats.durMin.toFixed(1)} min · {stats.minI_uA.toFixed(0)}–{stats.maxI_uA.toFixed(0)} µA · {(stats.charge / 1000).toFixed(4)} C
-      </span>
-      {#if chargeDiscrepancy !== null}
-        <span class="charge-warning">Δ {chargeDiscrepancy.toFixed(1)}% vs constant</span>
-      {/if}
-      <button class="profile-clear-btn" onclick={clearProfile} title="Remove profile, use constant current">Clear</button>
-    </div>
-    <PlotCurrentProfile profile={currentProfile} />
-    {#if parseWarnings.length > 0}
-      <div class="profile-warnings">
-        {#each parseWarnings.slice(0, showAllWarnings ? undefined : 3) as w}
-          <span class="warning-item">{w}</span>
-        {/each}
-        {#if parseWarnings.length > 3}
-          <button class="warnings-toggle" onclick={() => showAllWarnings = !showAllWarnings}>
-            {showAllWarnings ? "Show less" : `+${parseWarnings.length - 3} more`}
-          </button>
-        {/if}
-      </div>
-    {/if}
-  </div>
-{/if}
-{#if uploadError}
-  <div class="upload-error-bar">{uploadError}</div>
-{/if}
+<CurrentProfilePopup open={popupOpen} onclose={() => { popupOpen = false; }} onselect={onProfileSelected} />
 
 <style>
   .beam-bar {
@@ -486,7 +411,7 @@
     50% { opacity: 0.3; }
   }
 
-  /* ─── Merged current field: Const/Profile toggle ─── */
+  /* ─── Current field: Constant/Profile toggle ─── */
   .current-field { min-width: 100px; }
 
   .current-toggle {
@@ -515,94 +440,47 @@
   .ct-btn:hover { color: var(--c-text); }
   .ct-btn.active { background: var(--c-bg-active); color: var(--c-accent); font-weight: 600; }
 
-  .file-input-hidden {
-    position: absolute;
-    width: 0;
-    height: 0;
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  .upload-pill, .profile-pill {
-    background: var(--c-bg-default);
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    color: var(--c-text-muted);
-    padding: 0.3rem 0.4rem;
-    font-size: 0.75rem;
-    cursor: pointer;
-    white-space: nowrap;
-    text-align: center;
-  }
-
-  .upload-pill:hover { border-color: var(--c-accent); color: var(--c-accent); }
-  .profile-pill { border-color: var(--c-accent); color: var(--c-accent); font-size: 0.65rem; }
-  .profile-pill:hover { border-color: var(--c-red); color: var(--c-red); }
-
-  /* ─── Profile detail (below beam bar) ─── */
-  .profile-detail {
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    padding: 0.4rem 0.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-
-  .profile-detail-header {
+  .profile-preview-btn {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-
-  .profile-detail-stats {
-    font-size: 0.65rem;
-    color: var(--c-text-muted);
-  }
-
-  .profile-clear-btn {
-    margin-left: auto;
-    background: none;
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    color: var(--c-text-muted);
-    padding: 0.15rem 0.35rem;
-    font-size: 0.65rem;
+    gap: 0.3rem;
+    background: var(--c-bg-default);
+    border: 1px solid var(--c-accent);
+    border-radius: 4px;
+    padding: 0.2rem 0.3rem;
     cursor: pointer;
     white-space: nowrap;
   }
 
-  .profile-clear-btn:hover { border-color: var(--c-red); color: var(--c-red); }
+  .profile-preview-btn:hover { border-color: var(--c-text); }
 
-  .charge-warning { font-size: 0.65rem; color: var(--c-orange); }
-
-  .profile-warnings {
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-    font-size: 0.65rem;
+  .profile-dur {
+    font-size: 0.7rem;
+    color: var(--c-accent);
+    font-weight: 500;
   }
 
-  .warning-item { color: var(--c-orange); }
-
-  .warnings-toggle {
+  .profile-x {
     background: none;
     border: none;
-    color: var(--c-text-subtle);
-    font-size: 0.6rem;
+    color: var(--c-text-muted);
+    font-size: 0.8rem;
     cursor: pointer;
-    padding: 0;
-    text-align: left;
+    padding: 0 0.15rem;
+    line-height: 1;
   }
 
-  .warnings-toggle:hover { color: var(--c-text-muted); }
+  .profile-x:hover { color: var(--c-red); }
 
-  .upload-error-bar {
-    font-size: 0.7rem;
-    color: var(--c-red);
-    padding: 0.25rem 0.5rem;
+  .readonly input {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .hint {
+    font-size: 0.6rem;
+    color: var(--c-text-subtle);
+    font-style: italic;
   }
 
   @media (max-width: 640px) {
