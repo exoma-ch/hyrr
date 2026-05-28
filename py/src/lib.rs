@@ -54,7 +54,7 @@ impl PyDataStore {
         // Load cross-sections
         let projectile_str = &config.beam.projectile;
         for lc in &config.layers {
-            let resolution = resolve_material(&*db, &lc.material, lc.enrichment.as_ref());
+            let resolution = resolve_material(&*db, &lc.material, lc.enrichment.as_ref(), None).expect("resolve_material");
             for (elem, _) in &resolution.elements {
                 db.load_xs(projectile_str, elem.z)
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
@@ -113,7 +113,7 @@ fn py_parse_formula(formula: &str) -> PyResult<HashMap<String, u32>> {
 fn resolve_material_json(data_dir: &str, library: &str, identifier: &str) -> PyResult<String> {
     let db = ParquetDataStore::new(data_dir, library)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
-    let resolution = resolve_material(&db, identifier, None);
+    let resolution = resolve_material(&db, identifier, None, None).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
     let result = serde_json::json!({
         "density": resolution.density,
         "molecular_weight": resolution.molecular_weight,
@@ -431,7 +431,7 @@ fn config_to_layers(db: &ParquetDataStore, config: &SimConfig) -> Vec<Layer> {
         .layers
         .iter()
         .map(|lc| {
-            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref());
+            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None).expect("resolve_material");
             Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,

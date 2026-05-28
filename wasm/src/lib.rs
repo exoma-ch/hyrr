@@ -263,7 +263,8 @@ impl WasmDataStore {
                 continue;
             }
 
-            let resolution = resolve_material(&self.inner, &lc.material, lc.enrichment.as_ref());
+            let resolution = resolve_material(&self.inner, &lc.material, lc.enrichment.as_ref(), None)
+                .map_err(|e| JsValue::from_str(&e))?;
             let composition = compute_composition(&resolution.elements);
             let density = resolution.density;
 
@@ -441,7 +442,8 @@ impl WasmDataStore {
     /// Resolve a material identifier. Returns JSON with elements, density, molecular_weight.
     #[wasm_bindgen(js_name = resolveMaterial)]
     pub fn resolve_material_js(&self, identifier: &str) -> Result<String, JsValue> {
-        let resolution = resolve_material(&self.inner, identifier, None);
+        let resolution = resolve_material(&self.inner, identifier, None, None)
+            .map_err(|e| JsValue::from_str(&e))?;
         let result = MaterialResolutionJson {
             density: resolution.density,
             molecular_weight: resolution.molecular_weight,
@@ -708,7 +710,8 @@ fn config_to_layers(db: &dyn DatabaseProtocol, config: &SimulationConfig) -> Vec
         .layers
         .iter()
         .map(|lc| {
-            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref());
+            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None)
+                .expect("resolve_material failed");
             Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,
