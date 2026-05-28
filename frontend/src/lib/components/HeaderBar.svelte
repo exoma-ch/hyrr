@@ -3,6 +3,7 @@
   import { resetConfig, getSerializableConfig, restoreSerializableConfig, getCurrentProfile } from "../stores/config.svelte";
   import { encodeConfigV2, decodeSerializableFromString } from "../config-url-v2";
   import { PRESETS } from "../presets";
+  import type { SimulationConfig } from "../types";
   import SessionTabs from "./SessionTabs.svelte";
   import HelpModal from "./HelpModal.svelte";
   import { openBugReport } from "../stores/bugreport.svelte";

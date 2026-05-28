@@ -4,7 +4,7 @@
     getCustomMaterials,
     deleteCustomMaterial,
   } from "../../stores/custom-materials.svelte";
-  import { ELEMENT_DENSITIES, COMPOUND_DENSITIES, MATERIAL_CATALOG, SYMBOL_TO_Z } from "@hyrr/compute";
+  import { ELEMENT_DENSITIES, COMPOUND_DENSITIES, MATERIAL_CATALOG, SYMBOL_TO_Z, parseFormula } from "@hyrr/compute";
   import type { MaterialInfo } from "../../types";
 
   interface Props {
@@ -28,6 +28,58 @@
   }
 
   let { query, onQueryChange, materials, onselect, onclose, oneditRequest, oncatalogedit, onbuiltinedit, onnewmaterial, betweenInputAndResults }: Props = $props();
+
+  // Density prompt state — shown when a material has no known density
+  let densityPrompt = $state<{ material: string; enrichment?: Record<string, Record<number, number>>; suggested: number | null } | null>(null);
+  let densityInput = $state("");
+
+  function hasKnownDensity(material: string): boolean {
+    const lower = material.toLowerCase();
+    if (MATERIAL_CATALOG[lower]) return true;
+    if (COMPOUND_DENSITIES[material] || COMPOUND_DENSITIES[lower]) return true;
+    if (ELEMENT_DENSITIES[material]) return true;
+    // Custom materials have density
+    if (getCustomMaterials().find((m) => m.name === material || m.formula === material)) return true;
+    return false;
+  }
+
+  function estimateDensity(material: string): number | null {
+    try {
+      const parsed = parseFormula(material);
+      const syms = Object.keys(parsed);
+      if (syms.length === 1 && ELEMENT_DENSITIES[syms[0]]) return ELEMENT_DENSITIES[syms[0]];
+      // Multi-element: rough mass-weighted estimate
+      let total = 0, weighted = 0;
+      for (const s of syms) {
+        const d = ELEMENT_DENSITIES[s];
+        if (!d) return null;
+        const count = parsed[s] || 1;
+        total += count;
+        weighted += count * d;
+      }
+      return total > 0 ? Math.round((weighted / total) * 100) / 100 : null;
+    } catch { return null; }
+  }
+
+  function commitWithDensity() {
+    if (!densityPrompt) return;
+    const d = parseFloat(densityInput);
+    if (!Number.isFinite(d) || d <= 0) return;
+    onselect(densityPrompt.material, densityPrompt.enrichment, d);
+    onclose();
+    densityPrompt = null;
+  }
+
+  function tryCommit(material: string, enrichment?: Record<string, Record<number, number>>, density?: number) {
+    if (density || hasKnownDensity(material)) {
+      onselect(material, enrichment, density);
+      onclose();
+    } else {
+      const suggested = estimateDensity(material);
+      densityInput = suggested ? String(suggested) : "";
+      densityPrompt = { material, enrichment, suggested };
+    }
+  }
 
   let searchInput: HTMLInputElement | undefined = $state();
 
@@ -132,11 +184,10 @@
     const custom = findCustomEntry(entry);
     if (custom) {
       const cm = getCustomMaterials().find((m) => m.id === custom.customId);
-      onselect(custom.name, cm?.enrichment, cm?.density ?? entry.density_g_cm3);
+      tryCommit(custom.name, cm?.enrichment, cm?.density ?? entry.density_g_cm3);
     } else {
-      onselect(entry.path, undefined, entry.density_g_cm3);
+      tryCommit(entry.path, undefined, entry.density_g_cm3);
     }
-    onclose();
   }
 
   function useQuery() {
@@ -146,8 +197,7 @@
     }
     const val = query.trim();
     if (!val) return;
-    onselect(val);
-    onclose();
+    tryCommit(val);
   }
 
   async function handleDelete(id: string, event: Event) {
@@ -200,6 +250,38 @@
   {/if}
 </div>
 
+{#if densityPrompt}
+  <div class="density-prompt">
+    <p class="density-prompt-msg">
+      No density known for <strong>{densityPrompt.material}</strong>. Set density to continue:
+    </p>
+    <div class="density-prompt-row">
+      <input
+        class="density-prompt-input"
+        type="number"
+        step="0.01"
+        min="0"
+        placeholder={densityPrompt.suggested ? String(densityPrompt.suggested) : "g/cm³"}
+        bind:value={densityInput}
+        onkeydown={(e) => { if (e.key === "Enter") commitWithDensity(); }}
+        autofocus
+      />
+      <span class="density-prompt-unit">g/cm³</span>
+      {#if densityPrompt.suggested}
+        <button class="density-prompt-suggest" onclick={() => { densityInput = String(densityPrompt?.suggested); }} title="Use estimated density">
+          ≈ {densityPrompt.suggested}
+        </button>
+      {/if}
+      <button class="density-prompt-accept" onclick={commitWithDensity} disabled={!densityInput || parseFloat(densityInput) <= 0}>
+        Accept
+      </button>
+      <button class="density-prompt-cancel" onclick={() => densityPrompt = null}>
+        Cancel
+      </button>
+    </div>
+  </div>
+{/if}
+
 {#if betweenInputAndResults}{@render betweenInputAndResults()}{/if}
 
 <ul class="results-list">
@@ -247,6 +329,40 @@
   .search-row {
     display: flex;
     gap: 0.3rem;
+  }
+
+  .density-prompt {
+    background: rgba(221, 107, 32, 0.08);
+    border: 1px solid var(--c-warning, #dd6b20);
+    border-radius: 4px;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+  .density-prompt-msg { margin: 0 0 0.4rem; font-size: 0.8rem; }
+  .density-prompt-row { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .density-prompt-input {
+    width: 5rem; padding: 3px 6px; font-size: 0.85rem;
+    border: 1px solid var(--c-warning, #dd6b20); border-radius: 3px;
+    background: var(--c-bg); color: var(--c-text); text-align: right;
+  }
+  .density-prompt-input:focus { outline: none; border-color: var(--c-accent); }
+  .density-prompt-unit { font-size: 0.75rem; color: var(--c-text-muted); }
+  .density-prompt-suggest {
+    font-size: 0.7rem; padding: 2px 6px;
+    background: var(--c-bg-muted); border: 1px solid var(--c-border);
+    border-radius: 3px; cursor: pointer; color: var(--c-text-muted);
+  }
+  .density-prompt-suggest:hover { color: var(--c-accent); border-color: var(--c-accent); }
+  .density-prompt-accept {
+    font-size: 0.75rem; padding: 2px 8px;
+    background: var(--c-accent); color: white; border: none;
+    border-radius: 3px; cursor: pointer;
+  }
+  .density-prompt-accept:disabled { opacity: 0.4; cursor: not-allowed; }
+  .density-prompt-cancel {
+    font-size: 0.7rem; padding: 2px 6px;
+    background: none; border: 1px solid var(--c-border);
+    border-radius: 3px; cursor: pointer; color: var(--c-text-muted);
   }
 
   .search {
