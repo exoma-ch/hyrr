@@ -23,13 +23,13 @@
   import { aggregateByIsotopeName } from "../plotting/aggregate-isotopes";
 
   const EMISSION_TABS = [
-    { id: "gamma", label: "\u03B3", radTypes: ["gamma", "annihilation"] as EmissionRadType[] },
-    { id: "alpha", label: "\u03B1", radTypes: ["alpha"] as EmissionRadType[] },
-    { id: "beta-", label: "\u03B2\u207B", radTypes: ["beta-"] as EmissionRadType[] },
-    { id: "beta+", label: "\u03B2\u207A", radTypes: ["beta+"] as EmissionRadType[] },
-    { id: "CE", label: "CE", radTypes: ["ce"] as EmissionRadType[] },
-    { id: "xray", label: "X-ray", radTypes: ["xray"] as EmissionRadType[] },
-    { id: "auger", label: "Auger", radTypes: ["auger"] as EmissionRadType[] },
+    { id: "gamma", label: "\u03B3", desc: "gamma", radTypes: ["gamma", "annihilation"] as EmissionRadType[] },
+    { id: "alpha", label: "\u03B1", desc: "alpha", radTypes: ["alpha"] as EmissionRadType[] },
+    { id: "beta-", label: "\u03B2\u207B", desc: "beta-minus", radTypes: ["beta-"] as EmissionRadType[] },
+    { id: "beta+", label: "\u03B2\u207A", desc: "beta-plus", radTypes: ["beta+"] as EmissionRadType[] },
+    { id: "CE", label: "CE", desc: "conversion electron", radTypes: ["ce"] as EmissionRadType[] },
+    { id: "xray", label: "X-ray", desc: "X-ray", radTypes: ["xray"] as EmissionRadType[] },
+    { id: "auger", label: "Auger", desc: "Auger electron", radTypes: ["auger"] as EmissionRadType[] },
   ] as const;
 
   type EmTabId = (typeof EMISSION_TABS)[number]["id"];
@@ -449,8 +449,12 @@
       <button
         class="ctrl-btn"
         class:active={activeEmTab === tab.id}
+        class:empty-tab={tabHasData[tab.id] === false}
         disabled={tabHasData[tab.id] === false}
         onclick={() => { activeEmTab = tab.id; }}
+        title={tabHasData[tab.id] === false
+          ? `No ${tab.desc} emissions`
+          : `Show ${tab.desc} emissions`}
       >
         {tab.label}
       </button>
@@ -557,6 +561,12 @@
     background: var(--c-bg-active);
     border-color: var(--c-accent);
     color: var(--c-accent);
+  }
+
+  .ctrl-btn.empty-tab {
+    opacity: 0.35;
+    cursor: not-allowed;
+    text-decoration: line-through;
   }
 
   .plot {
