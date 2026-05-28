@@ -161,18 +161,20 @@ function expandCustomMaterials(config: SimulationConfig): SimulationConfig {
   return { ...config, layers };
 }
 
+/** Prepare a SimulationConfig for the Rust backend: expand custom
+ *  materials (inject formula + density) and convert Float64Array to
+ *  plain arrays. SSoT — every path to Rust must use this. */
+function prepareConfigJson(config: SimulationConfig): string {
+  const expanded = expandCustomMaterials(config);
+  return JSON.stringify(expanded, (_k, v) =>
+    v instanceof Float64Array ? Array.from(v) : v,
+  );
+}
+
 export async function computeStackBackend(
   config: SimulationConfig,
 ): Promise<SimulationResult> {
-  // Rust/WASM resolve_material doesn't know user-defined custom materials;
-  // expand them to their base formula first. Stoichiometric customs
-  // (e.g. H2O-custom → "H2O") resolve cleanly; wt%-based customs fall
-  // back to formula with element-density heuristic (not exact wt%).
-  const expanded = expandCustomMaterials(config);
-  // Float64Array → plain array for JSON (Rust serde expects number[])
-  const configJson = JSON.stringify(expanded, (_k, v) =>
-    v instanceof Float64Array ? Array.from(v) : v,
-  );
+  const configJson = prepareConfigJson(config);
 
   switch (activeBackend) {
     case "tauri": {
@@ -216,7 +218,7 @@ export async function computeStackBackend(
 export async function computeDepthPreviewBackend(
   config: SimulationConfig,
 ): Promise<DepthPreviewLayer[]> {
-  const configJson = JSON.stringify(config);
+  const configJson = prepareConfigJson(config);
 
   switch (activeBackend) {
     case "tauri": {
