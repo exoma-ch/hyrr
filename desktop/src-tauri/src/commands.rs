@@ -153,7 +153,8 @@ fn config_to_layers(
         .iter()
         .map(|lc| {
             let overrides = lc.enrichment.as_ref();
-            let resolution = resolve_material(db, &lc.material, overrides);
+            let resolution = resolve_material(db, &lc.material, overrides, None)
+                .expect("resolve_material failed");
             Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,
@@ -353,9 +354,10 @@ pub fn compute_depth_preview(
             continue;
         }
 
-        let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref());
+        let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None)
+            .map_err(|e| format!("Material '{}': {e}", lc.material))?;
         let composition = compute_composition(&resolution.elements);
-        let density = resolution.density;
+        let density = lc.density_g_cm3.unwrap_or(resolution.density);
 
         let (thickness_cm, user_specified, layer_error) = if let Some(t) = lc.thickness_cm {
             (t, "thickness", None)
