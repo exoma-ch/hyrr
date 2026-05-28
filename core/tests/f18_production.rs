@@ -19,7 +19,7 @@ mod tests {
         let db = EmbeddedDataStore::new("tendl-2023-iso").unwrap();
 
         // Layer 1: havar window (25 µm)
-        let havar = resolve_material(&db, "havar", None, None).unwrap();
+        let havar = resolve_material(&db, "havar", None, None, None).unwrap();
         let layer1 = Layer {
             density_g_cm3: havar.density,
             elements: havar.elements,

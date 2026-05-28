@@ -29,7 +29,7 @@ fn registry_material_resolves_with_correct_density() {
         },
     );
 
-    let res = resolve_material(&db, "Inconel", None, Some(&registry)).unwrap();
+    let res = resolve_material(&db, "Inconel", None, Some(&registry), None).unwrap();
     assert!(
         (res.density - 8.19).abs() < 1e-6,
         "expected 8.19, got {}",
@@ -56,7 +56,7 @@ fn registry_overrides_static_catalog() {
         },
     );
 
-    let res = resolve_material(&db, "havar", None, Some(&registry)).unwrap();
+    let res = resolve_material(&db, "havar", None, Some(&registry), None).unwrap();
     assert!(
         (res.density - 9.99).abs() < 1e-6,
         "session havar should override static catalog, got density={}",
@@ -69,7 +69,7 @@ fn registry_overrides_static_catalog() {
 fn unknown_compound_returns_error_not_fallback() {
     let db = db();
 
-    let result = resolve_material(&db, "NbSn3", None, None);
+    let result = resolve_material(&db, "NbSn3", None, None, None);
     assert!(
         result.is_err(),
         "unknown compound should return Err, not a 5.0 g/cm³ fallback"
@@ -84,7 +84,7 @@ fn unknown_compound_returns_error_not_fallback() {
 #[test]
 fn known_element_still_resolves() {
     let db = db();
-    let res = resolve_material(&db, "Cu", None, None).unwrap();
+    let res = resolve_material(&db, "Cu", None, None, None).unwrap();
     assert!(
         (res.density - 8.96).abs() < 0.01,
         "Cu should resolve to ~8.96, got {}",
@@ -95,7 +95,7 @@ fn known_element_still_resolves() {
 #[test]
 fn known_compound_still_resolves() {
     let db = db();
-    let res = resolve_material(&db, "H2O", None, None).unwrap();
+    let res = resolve_material(&db, "H2O", None, None, None).unwrap();
     assert!(
         (res.density - 1.0).abs() < 0.01,
         "H2O should resolve to ~1.0, got {}",
@@ -108,7 +108,7 @@ fn density_override_with_unknown_compound_via_registry() {
     let db = db();
 
     // Without registry: NbSn should fail
-    assert!(resolve_material(&db, "NbSn", None, None).is_err());
+    assert!(resolve_material(&db, "NbSn", None, None, None).is_err());
 
     // With registry: NbSn should resolve
     let mut registry: MaterialRegistry = HashMap::new();
@@ -124,6 +124,6 @@ fn density_override_with_unknown_compound_via_registry() {
         },
     );
 
-    let res = resolve_material(&db, "NbSn", None, Some(&registry)).unwrap();
+    let res = resolve_material(&db, "NbSn", None, Some(&registry), None).unwrap();
     assert!((res.density - 6.5).abs() < 1e-6);
 }

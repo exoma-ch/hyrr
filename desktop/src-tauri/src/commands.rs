@@ -153,7 +153,7 @@ fn config_to_layers(
         .iter()
         .map(|lc| {
             let overrides = lc.enrichment.as_ref();
-            let resolution = resolve_material(db, &lc.material, overrides, None)?;
+            let resolution = resolve_material(db, &lc.material, overrides, None, lc.density_g_cm3)?;
             Ok(Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,
@@ -353,7 +353,7 @@ pub fn compute_depth_preview(
             continue;
         }
 
-        let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None)
+        let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)
             .map_err(|e| format!("Material '{}': {e}", lc.material))?;
         let composition = compute_composition(&resolution.elements);
         let density = lc.density_g_cm3.unwrap_or(resolution.density);

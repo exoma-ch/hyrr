@@ -88,7 +88,7 @@ fn embedded_store_runs_full_simulation() {
     use hyrr_core::materials::resolve_material;
     use hyrr_core::types::*;
 
-    let resolution = resolve_material(&db, "Mo", None, None).unwrap();
+    let resolution = resolve_material(&db, "Mo", None, None, None).unwrap();
     let layer = Layer {
         density_g_cm3: resolution.density,
         elements: resolution.elements,

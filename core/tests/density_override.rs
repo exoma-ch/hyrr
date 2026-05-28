@@ -17,7 +17,7 @@ fn data_dir() -> String {
 
 /// Build a single-layer Cu stack with the given density override.
 fn cu_stack_with_density(db: &ParquetDataStore, density: f64) -> TargetStack {
-    let cu = resolve_material(db, "Cu", None);
+    let cu = resolve_material(db, "Cu", None, None, None).unwrap();
     let layer = Layer {
         density_g_cm3: density,
         elements: cu.elements.clone(),
@@ -45,7 +45,7 @@ fn density_override_changes_thickness() {
     let db = ParquetDataStore::new(&data_dir(), "tendl-2023-iso")
         .expect("ParquetDataStore::new");
 
-    let default_density = resolve_material(&db, "Cu", None).density;
+    let default_density = resolve_material(&db, "Cu", None, None, None).unwrap().density;
     assert!((default_density - 8.96).abs() < 0.1, "Cu default density should be ~8.96");
 
     // Run with default density
@@ -75,5 +75,76 @@ fn density_override_changes_thickness() {
         ratio > 1.5 && ratio < 3.0,
         "Half density should give ~2× thickness, got ratio {ratio:.3} \
          (default={thickness_default:.6} cm, half={thickness_half:.6} cm)"
+    );
+}
+
+/// RED test: unknown compound (Ca44O) with density_g_cm3 override on the
+/// layer must NOT error. The density override should bypass the
+/// resolve_material density error.
+#[test]
+fn unknown_compound_with_density_override_runs() {
+    let db = ParquetDataStore::new(&data_dir(), "tendl-2023-iso")
+        .expect("ParquetDataStore::new");
+
+    // Ca44O — not in density catalog, would error without override
+    let ca44o = resolve_material(&db, "Ca44O", None, None, None);
+    assert!(ca44o.is_err(), "Ca44O should have no known density");
+
+    // But with density_g_cm3 on the layer, compute_stack should work
+    let elements = {
+        // Use the elements from the formula even though density fails
+        let ca = resolve_material(&db, "Ca", None, None, None).unwrap();
+        let o = resolve_material(&db, "O", None, None, None).unwrap();
+        let mut elems = Vec::new();
+        for (e, f) in &ca.elements { elems.push((e.clone(), f * 0.524)); }
+        for (e, f) in &o.elements { elems.push((e.clone(), f * 0.476)); }
+        elems
+    };
+
+    let layer = Layer {
+        density_g_cm3: 3.34, // user-supplied override
+        elements,
+        thickness_cm: Some(0.05),
+        areal_density_g_cm2: None,
+        energy_out_mev: None,
+        is_monitor: false,
+        nist_compound: None,
+        computed_energy_in: 0.0,
+        computed_energy_out: 0.0,
+        computed_thickness: 0.0,
+    };
+
+    // Prepend a havar window so the beam has realistic energy
+    let havar = resolve_material(&db, "havar", None, None, None).unwrap();
+    let window = Layer {
+        density_g_cm3: havar.density,
+        elements: havar.elements,
+        thickness_cm: Some(0.0025),
+        areal_density_g_cm2: None,
+        energy_out_mev: None,
+        is_monitor: false,
+        nist_compound: None,
+        computed_energy_in: 0.0,
+        computed_energy_out: 0.0,
+        computed_thickness: 0.0,
+    };
+
+    let mut stack = TargetStack {
+        beam: Beam::new(ProjectileType::Proton, 18.0, 0.04),
+        layers: vec![window, layer],
+        irradiation_time_s: 3600.0,
+        cooling_time_s: 3600.0,
+        area_cm2: 1.0,
+        current_profile: None,
+    };
+
+    let result = compute_stack(&db, &mut stack, false);
+    assert!(result.is_ok(), "compute_stack should succeed with density override: {:?}", result.err());
+
+    // Should produce isotopes in the Ca44O layer
+    let lr = &result.unwrap().layer_results[1];
+    assert!(
+        !lr.isotope_results.is_empty(),
+        "Ca44O layer should produce isotopes with density override"
     );
 }

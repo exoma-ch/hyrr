@@ -496,6 +496,7 @@ pub fn resolve_material(
     identifier: &str,
     overrides: Option<&HashMap<String, HashMap<u32, f64>>>,
     registry: Option<&MaterialRegistry>,
+    density_override: Option<f64>,
 ) -> Result<MaterialResolution, String> {
     let lower = identifier.to_lowercase();
 
@@ -561,8 +562,10 @@ pub fn resolve_material(
 
     let (elements, molecular_weight) = resolve_formula(db, &formula_clean, overrides);
 
-    // Determine density — error instead of silent 5.0 g/cm³ fallback
-    let density = if let Some(&d) = COMPOUND_DENSITIES.get(identifier) {
+    // Determine density — layer override takes precedence, then catalog, then error
+    let density = if let Some(d) = density_override {
+        d
+    } else if let Some(&d) = COMPOUND_DENSITIES.get(identifier) {
         d
     } else if let Some(&d) = COMPOUND_DENSITIES.get(formula_clean.as_str()) {
         d
