@@ -340,7 +340,7 @@
           type: "bar",
           name: nucLabel(agg.name),
           marker: { color, opacity: 0.85 },
-          hovertemplate: `%{y:.2e} /s<extra></extra>`,
+          hovertemplate: `%{x:.1f} keV<br>${nucLabel(agg.name)}: %{y:.2e} /s<extra></extra>`,
         });
         colorIdx++;
       }
@@ -396,6 +396,30 @@
       });
     }
 
+    // Compute per-energy sums for the hover tooltip (stacked total)
+    const barTraces = traces.filter((t: any) => t.type === "bar");
+    if (barTraces.length > 0) {
+      const sumByE = new Map<number, number>();
+      for (const t of barTraces) {
+        const xs = (t as any).x as number[];
+        const ys = (t as any).y as number[];
+        for (let i = 0; i < xs.length; i++) {
+          const key = Math.round(xs[i] * 100) / 100; // round to avoid float key issues
+          sumByE.set(key, (sumByE.get(key) ?? 0) + ys[i]);
+        }
+      }
+      // Inject sum into each trace's customdata + update hovertemplate
+      for (const t of barTraces) {
+        const xs = (t as any).x as number[];
+        const sums = xs.map((x) => sumByE.get(Math.round(x * 100) / 100) ?? 0);
+        (t as any).customdata = sums;
+        (t as any).hovertemplate = (t as any).hovertemplate.replace(
+          "<extra></extra>",
+          "<br>Σ %{customdata:.2e} /s<extra></extra>",
+        );
+      }
+    }
+
     // Adaptive bar width: ~0.3% of the energy range so sticks are
     // visible at any scale (X-rays ~0.1-100 keV vs gammas ~50-7000 keV).
     const allEnergies = traces.flatMap((t: any) => t.x as number[]);
@@ -438,7 +462,7 @@
       bargap: 0,
       hovermode: isBeta ? "closest" : "x unified",
       hoverdistance: 30,
-      showlegend: traces.length <= 20,
+      showlegend: true,
       legend: {
         x: 1,
         xanchor: "right",
