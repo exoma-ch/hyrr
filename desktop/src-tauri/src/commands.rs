@@ -147,15 +147,14 @@ pub struct DepthPreviewPoint {
 fn config_to_layers(
     db: &EmbeddedDataStore,
     config: &SimulationConfig,
-) -> Vec<Layer> {
+) -> Result<Vec<Layer>, String> {
     config
         .layers
         .iter()
         .map(|lc| {
             let overrides = lc.enrichment.as_ref();
-            let resolution = resolve_material(db, &lc.material, overrides, None)
-                .expect("resolve_material failed");
-            Layer {
+            let resolution = resolve_material(db, &lc.material, overrides, None)?;
+            Ok(Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,
                 thickness_cm: lc.thickness_cm,
@@ -166,7 +165,7 @@ fn config_to_layers(
                 computed_energy_in: 0.0,
                 computed_energy_out: 0.0,
                 computed_thickness: 0.0,
-            }
+            })
         })
         .collect()
 }
@@ -284,7 +283,7 @@ pub fn run_compute_stack(
     let projectile = ProjectileType::from_str(&config.beam.projectile)
         .ok_or_else(|| format!("Invalid projectile: {}", config.beam.projectile))?;
 
-    let layers = config_to_layers(db, &config);
+    let layers = config_to_layers(db, &config)?;
 
     let current_profile = config
         .current_profile

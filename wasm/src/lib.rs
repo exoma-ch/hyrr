@@ -201,7 +201,8 @@ impl WasmDataStore {
         let projectile = ProjectileType::from_str(&config.beam.projectile)
             .ok_or_else(|| JsValue::from_str(&format!("Invalid projectile: {}", config.beam.projectile)))?;
 
-        let layers = config_to_layers(&self.inner, &config);
+        let layers = config_to_layers(&self.inner, &config)
+            .map_err(|e| JsValue::from_str(&e))?;
 
         let current_profile = config
             .current_profile
@@ -705,14 +706,13 @@ fn stopping_error_to_jsvalue(err: StoppingError) -> JsValue {
     }
 }
 
-fn config_to_layers(db: &dyn DatabaseProtocol, config: &SimulationConfig) -> Vec<Layer> {
+fn config_to_layers(db: &dyn DatabaseProtocol, config: &SimulationConfig) -> Result<Vec<Layer>, String> {
     config
         .layers
         .iter()
         .map(|lc| {
-            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None)
-                .expect("resolve_material failed");
-            Layer {
+            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None)?;
+            Ok(Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,
                 thickness_cm: lc.thickness_cm,
@@ -723,7 +723,7 @@ fn config_to_layers(db: &dyn DatabaseProtocol, config: &SimulationConfig) -> Vec
                 computed_energy_in: 0.0,
                 computed_energy_out: 0.0,
                 computed_thickness: 0.0,
-            }
+            })
         })
         .collect()
 }
