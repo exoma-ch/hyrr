@@ -6,8 +6,8 @@ Beam, Element, Layer, TargetStack, DepthPoint, and result types.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 

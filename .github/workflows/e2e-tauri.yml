@@ -20,7 +20,6 @@ on:
       - "frontend/src/lib/compute/backend.ts"
       - "frontend/src/lib/utils/platform.ts"
       - ".github/workflows/e2e-tauri.yml"
-  workflow_dispatch:
 
 permissions:
   contents: read
