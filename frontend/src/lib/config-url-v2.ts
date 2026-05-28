@@ -120,6 +120,9 @@ function expandLayer(cl: any): LayerConfig {
   // malformed share URL doesn't poison the session.
   if (cl.x && typeof cl.x === "object" && typeof cl.x.d === "number" && cl.x.e && typeof cl.x.e === "object") {
     registerSessionComposition(layer.material, { d: cl.x.d, e: cl.x.e });
+    // Also set density_g_cm3 on the layer so the Rust backend (which
+    // doesn't see the TS session composition) gets the custom density.
+    layer.density_g_cm3 = cl.x.d;
   }
   return layer;
 }
