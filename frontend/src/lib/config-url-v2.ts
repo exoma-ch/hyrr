@@ -9,30 +9,17 @@
 
 import { deflateSync, inflateSync } from "fflate";
 import { setCustomDensityLookup, setCustomCompositionLookup } from "@hyrr/compute";
+import { lookupByIdentifier } from "./compute/custom-material-registry";
 import type { SimulationConfig, LayerConfig, BeamConfig } from "./types";
 import type { SerializableConfig } from "./stores/config.svelte";
 
 const V2_PREFIX = "1:";
 const MAX_URL_ITEMS = 30;
 
-/**
- * Custom-material resolver for inline-composition layers (#96). The
- * encoder calls this with each layer's material name; if the resolver
- * returns a non-null entry, the layer's compact form gains an `x` field
- * carrying density + per-element mass fractions inline. The decoder, on
- * seeing `x`, registers a session-only lookup so resolveMaterial finds
- * the entry on the receiving client.
- */
-let customResolver: ((name: string) => { density: number; massFractions: Record<string, number> } | null) | null = null;
-
-export function setCustomMaterialResolver(fn: typeof customResolver): void {
-  customResolver = fn;
-}
-
 /** Inline-composition data carried by a layer when its material is a
- *  user-saved custom (or hydrated catalog fork). Receiver registers it
- *  via setCustomDensityLookup + setCustomCompositionLookup so the
- *  simulator can resolve density and per-element fractions on the fly. */
+ *  user-saved custom (or hydrated catalog fork). On decode, the receiver
+ *  registers it as a session-only lookup so resolveMaterial finds density
+ *  and per-element fractions without the user redefining the material. */
 interface InlineComposition {
   /** density g/cm³ */
   d: number;
@@ -60,9 +47,9 @@ function compactLayer(l: LayerConfig): any {
   // user-saved custom. Receiver registers via setCustomDensityLookup +
   // setCustomCompositionLookup so resolveMaterial finds it without the
   // user having to redefine the material first.
-  if (customResolver) {
-    const x = customResolver(l.material);
-    if (x) cl.x = { d: x.density, e: x.massFractions };
+  const cm = lookupByIdentifier(l.material);
+  if (cm?.massFractions) {
+    cl.x = { d: cm.density, e: cm.massFractions };
   }
   return cl;
 }

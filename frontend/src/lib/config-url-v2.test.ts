@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { encodeConfigV2, decodeConfigV2, decodeConfigV2Ser } from "./config-url-v2";
+import { initCustomMaterialRegistry } from "./compute/custom-material-registry";
+import type { CustomMaterial } from "./stores/custom-materials.svelte";
 import type { SerializableConfig } from "./stores/config.svelte";
+
+/** Test helper: register custom materials via lazy getter, return a setter to update. */
+function setTestMaterials(mats: CustomMaterial[]): void {
+  testMaterials = mats;
+}
+let testMaterials: CustomMaterial[] = [];
+initCustomMaterialRegistry(() => testMaterials);
 
 const SIMPLE: SerializableConfig = {
   beam: { projectile: "p", energy_MeV: 16, current_mA: 0.15 },
@@ -134,13 +143,12 @@ describe("config-url-v2", () => {
 });
 
 describe("v3 inline composition (#96)", () => {
-  it("encodes a layer's composition inline when the resolver returns one", async () => {
-    const { setCustomMaterialResolver } = await import("./config-url-v2");
-    setCustomMaterialResolver((name) =>
-      name === "soda-lime-glass"
-        ? { density: 2.5, massFractions: { Si: 0.34, Na: 0.10, Ca: 0.08, O: 0.48 } }
-        : null,
-    );
+  it("encodes a layer's composition inline when the resolver returns one", () => {
+    setTestMaterials([{
+      id: "test", name: "soda-lime-glass", formula: "SiNaCaO",
+      density: 2.5, timestamp: 0,
+      massFractions: { Si: 0.34, Na: 0.10, Ca: 0.08, O: 0.48 },
+    }]);
     const cfg: SerializableConfig = {
       beam: { projectile: "p", energy_MeV: 16, current_mA: 0.150 },
       items: [{ material: "soda-lime-glass", thickness_cm: 0.025 }],
@@ -152,16 +160,15 @@ describe("v3 inline composition (#96)", () => {
     const decoded = decodeConfigV2Ser(payload);
     expect(decoded).not.toBeNull();
     expect((decoded!.items[0] as { material: string }).material).toBe("soda-lime-glass");
-    setCustomMaterialResolver(null);
+    setTestMaterials([]);
   });
 
   it("registers a session lookup on decode so resolveMaterial finds the entry", async () => {
-    const { setCustomMaterialResolver } = await import("./config-url-v2");
-    setCustomMaterialResolver((name) =>
-      name === "soda-lime-glass"
-        ? { density: 2.5, massFractions: { Si: 0.34, Na: 0.10, Ca: 0.08, O: 0.48 } }
-        : null,
-    );
+    setTestMaterials([{
+      id: "test", name: "soda-lime-glass", formula: "SiNaCaO",
+      density: 2.5, timestamp: 0,
+      massFractions: { Si: 0.34, Na: 0.10, Ca: 0.08, O: 0.48 },
+    }]);
     const cfg: SerializableConfig = {
       beam: { projectile: "p", energy_MeV: 16, current_mA: 0.150 },
       items: [{ material: "soda-lime-glass", thickness_cm: 0.025 }],
@@ -169,8 +176,8 @@ describe("v3 inline composition (#96)", () => {
       cooling_s: 600,
     };
     const hash = encodeConfigV2(cfg);
-    // Drop the resolver to simulate the receiver client.
-    setCustomMaterialResolver(null);
+    // Drop the registry to simulate the receiver client.
+    setTestMaterials([]);
     const payload = hash.replace("#config=1:", "");
     decodeConfigV2Ser(payload);
     // The decoder should have registered a session lookup so resolveMaterial
@@ -239,20 +246,13 @@ describe("density_g_cm3 roundtrip", () => {
     expect(layer.density_g_cm3).toBeUndefined();
   });
 
-  it("custom material density survives full encode→decode→compute roundtrip", async () => {
-    // Set up custom material resolver (simulates saved custom in IndexedDB)
-    const { setCustomMaterialResolver } = await import("./config-url-v2");
-    setCustomMaterialResolver((name) =>
-      name === "Ca44O"
-        ? { density: 3.34, massFractions: { Ca: 0.524, O: 0.476 } }
-        : null,
-    );
-
-    // Set up custom material expander (simulates what App.svelte registers)
-    const { setCustomMaterialExpander } = await import("./compute/backend");
-    setCustomMaterialExpander((name) =>
-      name === "Ca44O" ? { formula: "Ca44O", density: 3.34 } : null,
-    );
+  it("custom material density survives full encode→decode→compute roundtrip", () => {
+    // Register custom material via unified registry (#388)
+    setTestMaterials([{
+      id: "test", name: "Ca44O", formula: "Ca44O",
+      density: 3.34, timestamp: 0,
+      massFractions: { Ca: 0.524, O: 0.476 },
+    }]);
 
     // 1. Create config with custom material
     const cfg: SerializableConfig = {
@@ -265,9 +265,8 @@ describe("density_g_cm3 roundtrip", () => {
     // 2. Encode to URL hash
     const hash = encodeConfigV2(cfg);
 
-    // 3. Drop resolvers (simulate recipient with no IndexedDB)
-    setCustomMaterialResolver(null);
-    setCustomMaterialExpander(null);
+    // 3. Drop registry (simulate recipient with no IndexedDB)
+    setTestMaterials([]);
 
     // 4. Decode from URL hash
     const payload = hash.replace("#config=1:", "");
