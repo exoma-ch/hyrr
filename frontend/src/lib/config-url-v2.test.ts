@@ -190,3 +190,94 @@ describe("v3 inline composition (#96)", () => {
     expect(r.density).toBeCloseTo(2.5);
   });
 });
+
+describe("density_g_cm3 roundtrip", () => {
+  it("density_g_cm3 survives encode → decode", () => {
+    const cfg: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 18, current_mA: 0.04 },
+      items: [{ material: "Ca44O", thickness_cm: 0.05, density_g_cm3: 3.34 }],
+      irradiation_s: 3600,
+      cooling_s: 3600,
+    };
+    const hash = encodeConfigV2(cfg);
+    const payload = hash.replace("#config=1:", "");
+    const decoded = decodeConfigV2Ser(payload);
+    expect(decoded).not.toBeNull();
+    const layer = decoded!.items[0] as { density_g_cm3?: number };
+    expect(layer.density_g_cm3).toBeCloseTo(3.34);
+  });
+
+  it("layer with density_g_cm3 set preserves it through URL", () => {
+    // When the material popup correctly sets density_g_cm3, URLs carry it.
+    const cfg: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 18, current_mA: 0.04 },
+      items: [{ material: "Ca44O", thickness_cm: 0.05, density_g_cm3: 3.34 }],
+      irradiation_s: 3600,
+      cooling_s: 3600,
+    };
+    const hash = encodeConfigV2(cfg);
+    const payload = hash.replace("#config=1:", "");
+    const decoded = decodeConfigV2Ser(payload);
+    const layer = decoded!.items[0] as { density_g_cm3?: number };
+    expect(layer.density_g_cm3).toBeCloseTo(3.34);
+  });
+
+  it("layer WITHOUT density_g_cm3 does NOT carry it — the gap", () => {
+    // This documents the current gap: if density_g_cm3 is not set
+    // on the layer (because onMaterialSelected doesn't pass it),
+    // the URL can't preserve it. See #361.
+    const cfg: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 18, current_mA: 0.04 },
+      items: [{ material: "Ca44O", thickness_cm: 0.05 }],
+      irradiation_s: 3600,
+      cooling_s: 3600,
+    };
+    const hash = encodeConfigV2(cfg);
+    const payload = hash.replace("#config=1:", "");
+    const decoded = decodeConfigV2Ser(payload);
+    const layer = decoded!.items[0] as { density_g_cm3?: number };
+    expect(layer.density_g_cm3).toBeUndefined();
+  });
+
+  it("custom material density survives full encode→decode→compute roundtrip", async () => {
+    // Set up custom material resolver (simulates saved custom in IndexedDB)
+    const { setCustomMaterialResolver } = await import("./config-url-v2");
+    setCustomMaterialResolver((name) =>
+      name === "Ca44O"
+        ? { density: 3.34, massFractions: { Ca: 0.524, O: 0.476 } }
+        : null,
+    );
+
+    // Set up custom material expander (simulates what App.svelte registers)
+    const { setCustomMaterialExpander } = await import("./compute/backend");
+    setCustomMaterialExpander((name) =>
+      name === "Ca44O" ? { formula: "Ca44O", density: 3.34 } : null,
+    );
+
+    // 1. Create config with custom material
+    const cfg: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 18, current_mA: 0.04 },
+      items: [{ material: "Ca44O", thickness_cm: 0.05 }],
+      irradiation_s: 3600,
+      cooling_s: 3600,
+    };
+
+    // 2. Encode to URL hash
+    const hash = encodeConfigV2(cfg);
+
+    // 3. Drop resolvers (simulate recipient with no IndexedDB)
+    setCustomMaterialResolver(null);
+    setCustomMaterialExpander(null);
+
+    // 4. Decode from URL hash
+    const payload = hash.replace("#config=1:", "");
+    const decoded = decodeConfigV2Ser(payload);
+    expect(decoded).not.toBeNull();
+
+    // 5. The decoded layer MUST carry density_g_cm3 so the Rust backend
+    //    can use it even without a custom material in IndexedDB.
+    const layer = decoded!.items[0] as { material: string; density_g_cm3?: number };
+    expect(layer.material).toBe("Ca44O");
+    expect(layer.density_g_cm3).toBeCloseTo(3.34);
+  });
+});

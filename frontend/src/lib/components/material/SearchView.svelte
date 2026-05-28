@@ -11,7 +11,7 @@
     query: string;
     onQueryChange: (q: string) => void;
     materials: MaterialInfo[];
-    onselect: (material: string, enrichment?: Record<string, Record<number, number>>) => void;
+    onselect: (material: string, enrichment?: Record<string, Record<number, number>>, density_g_cm3?: number) => void;
     onclose: () => void;
     oneditRequest: (customId: string) => void;
     /** Catalog edit-as-fork: open DefineForm seeded with the catalog entry's
@@ -132,14 +132,9 @@
     const custom = findCustomEntry(entry);
     if (custom) {
       const cm = getCustomMaterials().find((m) => m.id === custom.customId);
-      onselect(custom.name, cm?.enrichment);
+      onselect(custom.name, cm?.enrichment, cm?.density ?? entry.density_g_cm3);
     } else {
-      // Pass the canonical path (catalog key like "havar", or the formula
-      // for compound/element entries) so picking Havar writes "havar" into
-      // the layer name rather than the expanded mass-fraction string. The
-      // resolver in core/src/materials.rs falls back to formula parsing if
-      // the path isn't a known catalog key. (#57)
-      onselect(entry.path);
+      onselect(entry.path, undefined, entry.density_g_cm3);
     }
     onclose();
   }

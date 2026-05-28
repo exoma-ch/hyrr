@@ -142,7 +142,7 @@ export async function initBackend(
  *  material names (e.g. "H2O-custom") into something the Rust resolver can
  *  handle. Returns the formula to substitute, or null to leave unchanged. */
 let customMaterialExpander: ((name: string) => { formula: string; density: number } | null) | null = null;
-export function setCustomMaterialExpander(fn: (name: string) => { formula: string; density: number } | null): void {
+export function setCustomMaterialExpander(fn: ((name: string) => { formula: string; density: number } | null) | null): void {
   customMaterialExpander = fn;
 }
 

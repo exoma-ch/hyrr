@@ -275,7 +275,7 @@
     materialPopupOpen = true;
   }
 
-  function onMaterialSelected(material: string, enrichment?: Record<string, Record<number, number>>) {
+  function onMaterialSelected(material: string, enrichment?: Record<string, Record<number, number>>, density_g_cm3?: number) {
     if (materialPopupGroupIndex !== undefined) {
       const group = getGroup(materialPopupGroupIndex);
       const existing = group?.layers[materialPopupLayerIndex];
@@ -283,9 +283,9 @@
         ...(existing ?? { thickness_cm: 0.01 }),
         material,
         enrichment,
+        density_g_cm3,
       }, materialPopupGroupIndex);
     } else {
-      // Use internal items (not expanded layers) — index matches the items array
       const items = getInternalItems();
       const existing = items[materialPopupLayerIndex];
       if (existing && !('mode' in existing)) {
@@ -293,6 +293,7 @@
           ...existing,
           material,
           enrichment,
+          density_g_cm3,
         });
       }
     }
