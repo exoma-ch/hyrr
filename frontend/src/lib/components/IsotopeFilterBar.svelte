@@ -11,6 +11,7 @@
   } from "../stores/isotope-filter.svelte";
   import type { SimulationResult } from "../types";
   import { formatReaction } from "../format";
+  import SectionHeader from "./SectionHeader.svelte";
 
   interface Props {
     result: SimulationResult;
@@ -58,6 +59,7 @@
 </script>
 
 <div class="filter-bar">
+  <SectionHeader title="Filters" />
   <div class="filter-main">
     <input
       class="search"

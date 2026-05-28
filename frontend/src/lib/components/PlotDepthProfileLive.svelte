@@ -5,6 +5,7 @@
   import { getResolvedTheme } from "../stores/theme.svelte";
   import type { CsvTrace } from "../plotting/csv-export";
   import SaveMenu from "./SaveMenu.svelte";
+  import SectionHeader from "./SectionHeader.svelte";
 
   let plotDiv = $state<HTMLDivElement | null>(null);
   let Plotly = $state<any>(null);
@@ -118,17 +119,18 @@
 </script>
 
 <div class="depth-profile-live">
-  <div class="toolbar">
-    <span class="label">Depth profile</span>
-    <SaveMenu
-      filenamePrefix="hyrr-depth-profile"
-      xLabel="Depth (mm)"
-      yLabel="Energy (MeV) | Heat (W/mm)"
-      getTraces={() => lastExport?.traces ?? []}
-      notes={() => [`HYRR depth profile live export`, `generated ${new Date().toISOString()}`]}
-      title="Save / download depth profile"
-    />
-  </div>
+  <SectionHeader title="Depth Profile">
+    {#snippet actions()}
+      <SaveMenu
+        filenamePrefix="hyrr-depth-profile"
+        xLabel="Depth (mm)"
+        yLabel="Energy (MeV) | Heat (W/mm)"
+        getTraces={() => lastExport?.traces ?? []}
+        notes={() => [`HYRR depth profile live export`, `generated ${new Date().toISOString()}`]}
+        title="Save / download depth profile"
+      />
+    {/snippet}
+  </SectionHeader>
   <div bind:this={plotDiv} class="plot"></div>
 </div>
 
@@ -138,17 +140,6 @@
     border: 1px solid var(--c-border);
     border-radius: 3px;
     padding: 0.5rem;
-  }
-  .toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 0.1rem 0.25rem;
-  }
-  .label {
-    font-size: 0.75rem;
-    color: var(--c-text-muted);
-    font-weight: 500;
   }
 
   .plot {

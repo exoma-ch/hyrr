@@ -14,6 +14,7 @@
   import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
   import type { CsvTrace } from "../plotting/csv-export";
   import SaveMenu from "./SaveMenu.svelte";
+  import SectionHeader from "./SectionHeader.svelte";
   import { getResolvedTheme } from "../stores/theme.svelte";
   import { nucLabel } from "@hyrr/compute";
   import { getDataStore } from "../scheduler/sim-scheduler.svelte";
@@ -442,51 +443,50 @@
 </script>
 
 <div class="emission-plot">
-  <div class="controls">
-    <span class="section-label">Emission spectrum</span>
+  <SectionHeader title="Emission Spectrum">
+    {#snippet controls()}
+      {#each EMISSION_TABS as tab}
+        <button
+          class="ctrl-btn"
+          class:active={activeEmTab === tab.id}
+          class:empty-tab={tabHasData[tab.id] === false}
+          disabled={tabHasData[tab.id] === false}
+          onclick={() => { activeEmTab = tab.id; }}
+          title={tabHasData[tab.id] === false
+            ? `No ${tab.desc} emissions`
+            : `Show ${tab.desc} emissions`}
+        >
+          {tab.label}
+        </button>
+      {/each}
 
-    {#each EMISSION_TABS as tab}
+      <div class="separator"></div>
+
       <button
         class="ctrl-btn"
-        class:active={activeEmTab === tab.id}
-        class:empty-tab={tabHasData[tab.id] === false}
-        disabled={tabHasData[tab.id] === false}
-        onclick={() => { activeEmTab = tab.id; }}
-        title={tabHasData[tab.id] === false
-          ? `No ${tab.desc} emissions`
-          : `Show ${tab.desc} emissions`}
+        class:active={timePoint === "eob"}
+        onclick={() => { timePoint = "eob"; }}
       >
-        {tab.label}
+        EOB
       </button>
-    {/each}
+      <button
+        class="ctrl-btn"
+        class:active={timePoint === "eoc"}
+        onclick={() => { timePoint = "eoc"; }}
+      >
+        EOC
+      </button>
 
-    <div class="separator"></div>
+      <div class="separator"></div>
 
-    <button
-      class="ctrl-btn"
-      class:active={timePoint === "eob"}
-      onclick={() => { timePoint = "eob"; }}
-    >
-      EOB
-    </button>
-    <button
-      class="ctrl-btn"
-      class:active={timePoint === "eoc"}
-      onclick={() => { timePoint = "eoc"; }}
-    >
-      EOC
-    </button>
-
-    <div class="separator"></div>
-
-    <button class="ctrl-btn" class:active={logX} onclick={() => { logX = !logX; }}>
-      log X
-    </button>
-    <button class="ctrl-btn" class:active={logY} onclick={() => { logY = !logY; }}>
-      log Y
-    </button>
-
-    <span class="right-actions">
+      <button class="ctrl-btn" class:active={logX} onclick={() => { logX = !logX; }}>
+        log X
+      </button>
+      <button class="ctrl-btn" class:active={logY} onclick={() => { logY = !logY; }}>
+        log Y
+      </button>
+    {/snippet}
+    {#snippet actions()}
       <SaveMenu
         filenamePrefix="hyrr-{activeEmTab}-emission"
         xLabel={lastExport?.xLabel ?? "Energy (keV)"}
@@ -498,8 +498,8 @@
         ]}
         title="Save / download emission data"
       />
-    </span>
-  </div>
+    {/snippet}
+  </SectionHeader>
 
   <div bind:this={plotDiv} class="plot"></div>
 </div>
@@ -512,29 +512,6 @@
     padding: 0.5rem;
   }
 
-  .controls {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.25rem 0.5rem;
-    flex-wrap: wrap;
-  }
-
-  .section-label {
-    font-size: 0.65rem;
-    color: var(--c-text-subtle);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    flex-shrink: 0;
-    margin-right: 0.3rem;
-  }
-
-  .right-actions {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
 
   .separator {
     width: 1px;

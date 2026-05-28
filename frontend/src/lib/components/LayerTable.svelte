@@ -5,6 +5,7 @@
   import { getDoseConstant } from "../utils/dose-constants";
   import { fmtDoseRate } from "@hyrr/compute";
   import { getIsotopeFilter, toggleFilterLayer, clearFilterLayers } from "../stores/isotope-filter.svelte";
+  import SectionHeader from "./SectionHeader.svelte";
 
   let sharedFilter = $derived(getIsotopeFilter());
   function isLayerSelected(idx: number): boolean {
@@ -44,6 +45,7 @@
 </script>
 
 <div class="layer-table">
+  <SectionHeader title="Layer Summary" />
   {#if preview.length > 0}
     <div class="table-wrapper">
       <table>

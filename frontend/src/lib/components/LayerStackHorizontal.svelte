@@ -17,6 +17,7 @@
   import ThicknessInput from "./ThicknessInput.svelte";
   import { parseFormula } from "@hyrr/compute";
   import { getCustomMaterials } from "../stores/custom-materials.svelte";
+  import SectionHeader from "./SectionHeader.svelte";
 
   interface Props {
     onmaterialclick?: (groupIndex: number | undefined, layerIndex: number) => void;
@@ -97,7 +98,9 @@
   }
 </script>
 
-<div class="layer-stack-h">
+<div class="layer-stack-section">
+  <SectionHeader title="Target Stack" />
+  <div class="layer-stack-h">
   {#if items.length === 0}
     <div class="empty">No layers configured</div>
   {/if}
@@ -220,18 +223,22 @@
       >×</button>
     {/if}
   </div>
+  </div>
 </div>
 
 <style>
+  .layer-stack-section {
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    padding: 0.5rem;
+  }
+
   .layer-stack-h {
     display: flex;
     align-items: center;
     gap: 0.25rem;
     overflow-x: auto;
-    padding: 0.5rem;
-    background: var(--c-bg-subtle);
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
     min-height: 120px;
   }
 
