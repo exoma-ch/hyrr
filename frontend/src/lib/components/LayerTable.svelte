@@ -4,6 +4,12 @@
   import { getResult } from "../stores/results.svelte";
   import { getDoseConstant } from "../utils/dose-constants";
   import { fmtDoseRate } from "@hyrr/compute";
+  import { getIsotopeFilter, toggleFilterLayer, clearFilterLayers } from "../stores/isotope-filter.svelte";
+
+  let sharedFilter = $derived(getIsotopeFilter());
+  function isLayerSelected(idx: number): boolean {
+    return sharedFilter.layers.size === 0 || sharedFilter.layers.has(idx);
+  }
 
   let preview = $derived(getDepthPreview());
   let result = $derived(getResult());
@@ -56,7 +62,14 @@
         </thead>
         <tbody>
           {#each preview as layer, i}
-            <tr class:has-error={!!layer.error}>
+            <tr
+              class:has-error={!!layer.error}
+              class:layer-selected={isLayerSelected(i)}
+              class:layer-dimmed={sharedFilter.layers.size > 0 && !sharedFilter.layers.has(i)}
+              onclick={() => toggleFilterLayer(i)}
+              style="cursor: pointer;"
+              title="Click to filter isotope table by this layer"
+            >
               <td class="col-idx">{i + 1}</td>
               <td class="col-mat">
                 {layer.material}
@@ -173,6 +186,10 @@
   .has-error td {
     background: var(--c-red-tint-faint);
   }
+
+  tbody tr:hover td { background: var(--c-bg-muted); }
+  .layer-dimmed td { opacity: 0.4; }
+  .layer-selected td { font-weight: 500; }
 
   .layer-error {
     display: block;
