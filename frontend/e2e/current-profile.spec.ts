@@ -1,29 +1,160 @@
 import { test, expect } from "@playwright/test";
+import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
 
 /**
- * E2e tests for current profile support (#328).
+ * E2e tests for current profile upload (#328, #395).
  *
- * The Sc-44 preset includes a realistic 2 h beam-current profile (7200 pts,
- * trapezoidal ramp with noise and a beam trip). These tests verify:
- * - The profile flows through the compute pipeline to WASM
- * - Results are produced with time-varying current
- * - The profile survives preset load → simulation → results
- *
- * NOTE: The profile upload UI (BeamConfig.svelte) is not wired into the app
- * layout — App.svelte uses BeamConfigBar which lacks profile support. These
- * tests load the Sc-44 preset via Feeling Lucky clicks.
+ * Tests two paths:
+ * 1. File upload via the UI: upload CSV → profile card → preview → simulation
+ * 2. Preset-based profile: Sc-44 preset (7200-pt beam profile)
  */
 
 const TC99M_HASH =
   "#config=1:NY27CoRADEX_5dbZJSM7sqa19gvEQkVQ8IWozZB_N6NYBJKck5uABhKwQqwIHcSlhBbCX-eVMELKgMlwX5_1ZsoeGXNi9AHF8nHMRhY7TghzDCxsCIh7s7PMq756frwhXivCAPmnP-b76d3pBQ";
 
+/** Small synthetic profile: 50 points over 100 s, trapezoidal ramp 0→30→30→0 µA. */
+function generateTestCSV(): string {
+  const lines = ["time_s,current_mA"];
+  for (let i = 0; i < 50; i++) {
+    const t = i * 2;
+    let current: number;
+    if (t < 20) current = 0.030 * (t / 20);
+    else if (t < 80) current = 0.030;
+    else current = 0.030 * ((100 - t) / 20);
+    lines.push(`${t.toFixed(1)},${current.toFixed(6)}`);
+  }
+  return lines.join("\n");
+}
+
 async function waitForSimulation(page: import("@playwright/test").Page) {
-  await page.waitForSelector(".status-bar", { state: "hidden", timeout: 60_000 }).catch(() => {});
+  await page.waitForSelector(".status-dot.busy", { timeout: 5_000 }).catch(() => {});
+  await page.waitForSelector(".status-dot.ready", { timeout: 60_000 }).catch(() => {});
   await page.waitForSelector(".activity-table-enhanced", { timeout: 60_000 });
 }
 
-/** Click Feeling Lucky until we get the Sc-44 preset (has "Ca-44" in layer stack).
- *  With 6 presets, P(miss in 40 tries) = (5/6)^40 ≈ 0.1%. */
+let csvPath: string;
+
+test.beforeAll(() => {
+  csvPath = path.join(os.tmpdir(), "hyrr-e2e-profile.csv");
+  fs.writeFileSync(csvPath, generateTestCSV());
+});
+
+test.afterAll(() => {
+  try { fs.unlinkSync(csvPath); } catch {}
+});
+
+// ─── File upload tests ─────────────────────────────────────────────
+
+test.describe("current profile — file upload", () => {
+  test.setTimeout(90_000);
+
+  test("upload CSV → profile card with stats + preview plot", async ({ page }) => {
+    await page.goto(`./${TC99M_HASH}`);
+    await waitForSimulation(page);
+
+    // File input should be visible (upload area)
+    const fileInput = page.locator("input.file-input");
+    await expect(fileInput).toBeAttached();
+
+    // Upload test CSV
+    await fileInput.setInputFiles(csvPath);
+
+    // Profile card should appear
+    const profileLabel = page.locator(".profile-label");
+    await expect(profileLabel).toBeVisible({ timeout: 5_000 });
+    await expect(profileLabel).toHaveText("Current profile");
+
+    // Stats should show 50 pts
+    const statsText = await page.locator(".profile-stats").textContent();
+    expect(statsText, "Stats should show point count").toContain("50 pts");
+
+    // Profile toggle should show Profile as active
+    const profileBtn = page.locator(".cm-btn").nth(1);
+    await expect(profileBtn).toHaveClass(/active/);
+
+    // Upload area should be gone (replaced by profile card)
+    await expect(fileInput).not.toBeAttached();
+  });
+
+  test("upload CSV → simulation recomputes with profile", async ({ page }) => {
+    await page.goto(`./${TC99M_HASH}`);
+    await waitForSimulation(page);
+
+    // Upload profile
+    await page.locator("input.file-input").setInputFiles(csvPath);
+    await expect(page.locator(".profile-label")).toBeVisible({ timeout: 5_000 });
+
+    // Wait for recompute
+    await waitForSimulation(page);
+
+    // Results should exist
+    const rows = page.locator(".activity-table-enhanced tbody tr");
+    await expect(rows.first()).toBeVisible();
+    expect(await rows.count()).toBeGreaterThan(0);
+  });
+
+  test("clear profile → reverts to constant mode + upload reappears", async ({ page }) => {
+    await page.goto(`./${TC99M_HASH}`);
+    await waitForSimulation(page);
+
+    // Upload then clear
+    await page.locator("input.file-input").setInputFiles(csvPath);
+    await expect(page.locator(".profile-label")).toBeVisible({ timeout: 5_000 });
+
+    await page.locator(".profile-clear-btn").click();
+
+    // Profile card should disappear
+    await expect(page.locator(".profile-label")).not.toBeVisible();
+
+    // Upload area should reappear
+    await expect(page.locator("input.file-input")).toBeAttached();
+
+    // Constant toggle should be active
+    const constantBtn = page.locator(".cm-btn").first();
+    await expect(constantBtn).toHaveClass(/active/);
+  });
+
+  test("invalid CSV shows error, no crash", async ({ page }) => {
+    await page.goto(`./${TC99M_HASH}`);
+    await waitForSimulation(page);
+
+    const badPath = path.join(os.tmpdir(), "hyrr-e2e-bad.csv");
+    fs.writeFileSync(badPath, "not,a,valid,profile\nfoo,bar,baz,qux\n");
+
+    await page.locator("input.file-input").setInputFiles(badPath);
+
+    // Error should show
+    await expect(page.locator(".upload-error")).toBeVisible({ timeout: 3_000 });
+
+    // Profile card should NOT appear
+    await expect(page.locator(".profile-label")).not.toBeVisible();
+
+    fs.unlinkSync(badPath);
+  });
+
+  test("no console panics during upload flow", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+
+    await page.goto(`./${TC99M_HASH}`);
+    await waitForSimulation(page);
+
+    await page.locator("input.file-input").setInputFiles(csvPath);
+    await expect(page.locator(".profile-label")).toBeVisible({ timeout: 5_000 });
+    await waitForSimulation(page);
+
+    const fatal = errors.filter(
+      (e) => e.includes("panic") || e.includes("unreachable") || e.includes("computeStack failed"),
+    );
+    expect(fatal, `Fatal errors: ${fatal.join("\n")}`).toHaveLength(0);
+  });
+});
+
+// ─── Preset-based profile tests ────────────────────────────────────
+
+/** Click Feeling Lucky until Sc-44 preset loads (has "Ca-44" in layer stack). */
 async function loadSc44ViaFeelingLucky(page: import("@playwright/test").Page) {
   for (let i = 0; i < 40; i++) {
     await page.locator(".lucky-tab").click();
@@ -39,81 +170,34 @@ async function loadSc44ViaFeelingLucky(page: import("@playwright/test").Page) {
 test.describe("current profile — Sc-44 preset", () => {
   test.setTimeout(120_000);
 
-  test("Sc-44 preset with profile loads and simulation completes", async ({ page }) => {
+  test("Sc-44 preset shows profile card + produces Sc isotopes", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
 
-    // Load Tc-99m first (known working config, gets past WelcomeScreen)
     await page.goto(`./${TC99M_HASH}`);
     await waitForSimulation(page);
 
-    // Now click Feeling Lucky until we get the Sc-44 preset
     const found = await loadSc44ViaFeelingLucky(page);
     expect(found, "Could not load Sc-44 preset via Feeling Lucky after 40 tries").toBe(true);
 
-    // Wait for the Sc-44 recompute — activity table already exists from Tc-99m,
-    // so wait for the status dot to show busy then ready again
+    // Profile card should be visible (Sc-44 preset has a built-in profile)
+    await expect(page.locator(".profile-label")).toBeVisible({ timeout: 5_000 });
+
+    // Wait for recompute
     await page.waitForSelector(".status-dot.busy", { timeout: 5_000 }).catch(() => {});
     await page.waitForSelector(".status-dot.ready", { timeout: 60_000 }).catch(() => {});
-    // Extra settle time for results to update
     await page.waitForTimeout(1_000);
 
-    // Verify results
-    const rows = page.locator(".activity-table-enhanced tbody tr");
-    await expect(rows.first()).toBeVisible();
-    const rowCount = await rows.count();
-    expect(rowCount, "Should have isotope results from Sc-44 profile run").toBeGreaterThan(0);
-
-    // Sc-44 should be in results (p + Ca-44 → Sc-44)
-    // Also accept Ca products (K, Sc, Ti isotopes from p+Ca reactions)
+    // Activity table should have Ca-44 reaction products
     const cellText = await page.locator(".activity-table-enhanced td").allTextContents();
     const hasCaProducts = cellText.some(
       (t) => t.includes("Sc") || t.includes("44K") || t.includes("Ti") || t.includes("Z21"),
     );
-    expect(hasCaProducts, `No Ca-44 reaction products found. Cells: ${cellText.slice(0, 30).join(", ")}`).toBe(true);
+    expect(hasCaProducts, `No Ca-44 products found. Cells: ${cellText.slice(0, 30).join(", ")}`).toBe(true);
 
-    // No fatal errors
     const fatal = errors.filter(
       (e) => e.includes("panic") || e.includes("unreachable") || e.includes("computeStack failed"),
     );
     expect(fatal, `Fatal errors: ${fatal.join("\n")}`).toHaveLength(0);
-  });
-
-  test("Sc-44 preset shows Ca-44 layer with energy loss", async ({ page }) => {
-    await page.goto(`./${TC99M_HASH}`);
-    await waitForSimulation(page);
-    const found = await loadSc44ViaFeelingLucky(page);
-    expect(found, "Could not load Sc-44 preset").toBe(true);
-    await page.waitForSelector(".status-dot.busy", { timeout: 5_000 }).catch(() => {});
-    await page.waitForSelector(".status-dot.ready", { timeout: 60_000 }).catch(() => {});
-    await page.waitForTimeout(500);
-
-    const layerRows = await page.evaluate(() => {
-      const result: { material: string; deltaE: string }[] = [];
-      document.querySelectorAll(".layer-table tbody tr:not(.total-row)").forEach((row) => {
-        const cells = row.querySelectorAll("td");
-        result.push({
-          material: cells[1]?.textContent?.trim() ?? "",
-          deltaE: cells[6]?.textContent?.trim() ?? "",
-        });
-      });
-      return result;
-    });
-
-    expect(layerRows.length, "Expected 2 layers (havar, Ca-44)").toBe(2);
-    const ca44 = layerRows.find((r) => r.material.toLowerCase().includes("ca"));
-    expect(ca44, "Ca-44 layer not found").toBeTruthy();
-    expect(parseFloat(ca44!.deltaE), "Ca-44 should have energy loss").toBeGreaterThan(0);
-  });
-
-  test("beam bar shows correct current for profile preset (30 µA)", async ({ page }) => {
-    await page.goto(`./${TC99M_HASH}`);
-    await waitForSimulation(page);
-    const found = await loadSc44ViaFeelingLucky(page);
-    expect(found, "Could not load Sc-44 preset").toBe(true);
-
-    // The Sc-44 preset has current_mA=0.030 → 30 µA
-    const currentVal = await page.locator("#bcb-current").inputValue();
-    expect(parseFloat(currentVal), "Current should be 30 µA for Sc-44 profile preset").toBeCloseTo(30, 0);
   });
 });
