@@ -114,6 +114,24 @@
         {/if}
       {/if}
 
+      <div class="density-row">
+        <input
+          class="density-input"
+          class:density-missing={!layer.density_g_cm3}
+          type="number"
+          step="0.01"
+          min="0"
+          placeholder="ρ?"
+          value={layer.density_g_cm3 ?? ""}
+          title={layer.density_g_cm3 ? `${layer.density_g_cm3} g/cm³` : "Set density (g/cm³)"}
+          onchange={(e) => {
+            const v = parseFloat((e.target as HTMLInputElement).value);
+            onUpdateLayer(i, { ...layer, density_g_cm3: Number.isFinite(v) && v > 0 ? v : undefined });
+          }}
+        />
+        <span class="density-unit">g/cm³</span>
+      </div>
+
       <ThicknessInput layer={layer} onchange={(l) => onUpdateLayer(i, l)} />
     </div>
   {/each}
@@ -249,6 +267,13 @@
 
   .cstm-badge { background: var(--c-accent-tint); color: var(--c-accent); }
   .enr-badge { background: var(--c-gold-tint); color: var(--c-gold); }
+
+  .density-row { display: flex; align-items: center; gap: 2px; }
+  .density-input { width: 3.5rem; font-size: 0.65rem; padding: 1px 3px; border: 1px solid var(--c-border); border-radius: 2px; background: var(--c-bg); color: var(--c-text); text-align: right; }
+  .density-input:focus { border-color: var(--c-accent); outline: none; }
+  .density-missing { border-color: var(--c-warning, #dd6b20); background: rgba(221, 107, 32, 0.08); }
+  .density-missing::placeholder { color: var(--c-warning, #dd6b20); }
+  .density-unit { font-size: 0.55rem; color: var(--c-text-muted); }
 
   .element-badges {
     display: flex;
