@@ -14,9 +14,10 @@ import type { StackConfig, CurrentProfile } from "@hyrr/compute";
 import { expandLayers, resolveMaterial } from "@hyrr/compute";
 import { getDataStore } from "../scheduler/sim-scheduler.svelte";
 
-/** Fill density_g_cm3 on layers that don't have it, using resolveMaterial.
- *  SSoT: every config load path calls this so density is always set. */
-function fillDensities(items: Array<LayerConfig | InternalGroup>): void {
+/** Backward-compat migration: fill density_g_cm3 on layers from configs
+ *  that predate density-as-first-class (old URLs, legacy session files).
+ *  New configs always carry density from material-select time (#387). */
+function migrateMissingDensities(items: Array<LayerConfig | InternalGroup>): void {
   const db = getDataStore();
   if (!db) return;
   for (let i = 0; i < items.length; i++) {
@@ -298,7 +299,7 @@ export function restoreSerializableConfig(c: SerializableConfig): void {
           }
           return item as LayerConfig;
         });
-        fillDensities(mapped);
+        migrateMissingDensities(mapped);
         return mapped;
       })(),
       irradiation_s: c.irradiation_s,
@@ -314,11 +315,9 @@ export function restoreSerializableConfig(c: SerializableConfig): void {
 
 export function setConfig(c: SimulationConfig): void {
   mutate(() => {
-    const items: Array<LayerConfig | InternalGroup> = c.layers.map((l) => ({ ...l }));
-    fillDensities(items);
     state = {
       beam: c.beam,
-      items,
+      items: c.layers.map((l) => ({ ...l })),
       irradiation_s: c.irradiation_s,
       cooling_s: c.cooling_s,
       currentProfile: c.currentProfile ?? null,
