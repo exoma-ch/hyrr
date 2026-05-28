@@ -395,20 +395,32 @@ export const COMPOUND_DENSITIES: Record<string, number> = {
   H2O: 1.0, "H2O-18": 1.11, MoO3: 4.69, Al2O3: 3.95,
 };
 
-/** Optional custom density override lookup — set by the UI layer. */
-let customDensityLookup: ((formula: string) => number | null) | null = null;
+import { lookupByIdentifier } from "./custom-material-registry";
 
-/** Register a function that returns custom material densities. */
+/** @deprecated Use registerCustomMaterials() instead. Kept for backward compat. */
+let customDensityLookup: ((formula: string) => number | null) | null = null;
+/** @deprecated Use registerCustomMaterials() instead. Kept for backward compat. */
 export function setCustomDensityLookup(fn: (formula: string) => number | null): void {
   customDensityLookup = fn;
 }
-
-/** Custom material composition lookup — returns mass fractions if available. */
+/** @deprecated Use registerCustomMaterials() instead. Kept for backward compat. */
 let customCompositionLookup: ((identifier: string) => Record<string, number> | null) | null = null;
-
-/** Register a function that returns custom material mass-fraction compositions. */
+/** @deprecated Use registerCustomMaterials() instead. Kept for backward compat. */
 export function setCustomCompositionLookup(fn: (identifier: string) => Record<string, number> | null): void {
   customCompositionLookup = fn;
+}
+
+/** Unified lookup: try registry first, fall back to legacy setters. */
+function resolveCustomDensity(identifier: string): number | null {
+  const cm = lookupByIdentifier(identifier);
+  if (cm) return cm.density;
+  return customDensityLookup?.(identifier) ?? null;
+}
+
+function resolveCustomComposition(identifier: string): Record<string, number> | null {
+  const cm = lookupByIdentifier(identifier);
+  if (cm?.massFractions) return cm.massFractions;
+  return customCompositionLookup?.(identifier) ?? null;
 }
 
 /**
@@ -430,18 +442,11 @@ export function resolveMaterial(
   }
 
   // Check for custom material with stored mass fractions (wt% materials)
-  if (customCompositionLookup) {
-    const massFracs = customCompositionLookup(identifier);
-    if (massFracs) {
-      const elements = resolveIsotopics(db, massFracs, false, overrides);
-      let density: number | undefined;
-      if (customDensityLookup) {
-        const d = customDensityLookup(identifier);
-        if (d !== null) density = d;
-      }
-      if (density === undefined) density = 5.0;
-      return { elements, density, molecularWeight: 0 };
-    }
+  const customMassFracs = resolveCustomComposition(identifier);
+  if (customMassFracs) {
+    const elements = resolveIsotopics(db, customMassFracs, false, overrides);
+    const density = resolveCustomDensity(identifier) ?? 5.0;
+    return { elements, density, molecularWeight: 0 };
   }
 
   // Strip mass numbers from element identifiers: "Mo-100" → "Mo", "Ra-226" → "Ra"
@@ -453,11 +458,9 @@ export function resolveMaterial(
   // Determine density
   let density: number | undefined;
 
-  // Check custom materials first
-  if (customDensityLookup) {
-    const custom = customDensityLookup(identifier) ?? customDensityLookup(formulaClean);
-    if (custom !== null) density = custom;
-  }
+  // Check custom materials first (registry + legacy setters)
+  const customDensity = resolveCustomDensity(identifier) ?? resolveCustomDensity(formulaClean);
+  if (customDensity !== null) density = customDensity;
 
   if (density === undefined) {
     if (COMPOUND_DENSITIES[identifier]) {

@@ -10,6 +10,7 @@
 
 import { isTauri } from "../utils/platform";
 import { DEFAULT_LIBRARY } from "./data-fetch-meta";
+import { lookupByName } from "./custom-material-registry";
 import type { SimulationConfig, SimulationResult } from "@hyrr/compute";
 import type { DepthPreviewLayer } from "../stores/depth-preview.svelte";
 
@@ -138,24 +139,16 @@ export async function initBackend(
  * Run a full stack simulation.
  * Routes to the active backend automatically.
  */
-/** Optional hook injected by the UI so the compute backend can expand custom
- *  material names (e.g. "H2O-custom") into something the Rust resolver can
- *  handle. Returns the formula to substitute, or null to leave unchanged. */
-let customMaterialExpander: ((name: string) => { formula: string; density: number } | null) | null = null;
-export function setCustomMaterialExpander(fn: ((name: string) => { formula: string; density: number } | null) | null): void {
-  customMaterialExpander = fn;
-}
-
+/** Expand custom material names to their formulas + densities before
+ *  sending to the Rust backend. Uses the unified custom material registry. */
 function expandCustomMaterials(config: SimulationConfig): SimulationConfig {
-  if (!customMaterialExpander) return config;
-  const expand = customMaterialExpander;
   const layers = config.layers.map((layer) => {
-    const result = expand(layer.material);
-    if (!result) return layer;
+    const cm = lookupByName(layer.material);
+    if (!cm) return layer;
     return {
       ...layer,
-      material: result.formula,
-      density_g_cm3: layer.density_g_cm3 ?? result.density,
+      material: cm.formula,
+      density_g_cm3: layer.density_g_cm3 ?? cm.density,
     };
   });
   return { ...config, layers };

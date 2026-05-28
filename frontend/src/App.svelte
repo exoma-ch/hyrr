@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import "./lib/stores/theme.svelte"; // initialise theme (applies data-theme attribute)
   import { registerServiceWorker } from "./lib/sw-register";
-  import { decodeSerializableConfigFromHash, setConfigInHash, setCustomMaterialResolver } from "./lib/config-url";
+  import { decodeSerializableConfigFromHash, setConfigInHash } from "./lib/config-url";
   import {
     getConfig,
     setConfig,
@@ -35,12 +35,7 @@
   import { initDepthPreview } from "./lib/stores/depth-preview.svelte";
   import { saveRun } from "./lib/history-db";
   import { restoreSessions, syncActiveTab, getActiveTabId } from "./lib/stores/sessions.svelte";
-  import { setCustomDensityLookup, setCustomCompositionLookup } from "./lib/compute/materials";
-  import {
-    setCustomDensityLookup as setPkgCustomDensityLookup,
-    setCustomCompositionLookup as setPkgCustomCompositionLookup,
-  } from "@hyrr/compute";
-  import { setCustomMaterialExpander } from "./lib/compute/backend";
+  import { registerCustomMaterials } from "./lib/compute/custom-material-registry";
   import { getCustomMaterials, loadCustomMaterials } from "./lib/stores/custom-materials.svelte";
   import { setProjectile } from "./lib/stores/config.svelte";
   import { openBugReport } from "./lib/stores/bugreport.svelte";
@@ -162,27 +157,8 @@
       if (!seen) showSchemaBreakBanner = true;
     } catch { /* no-op */ }
 
-    const densityFn = (identifier: string): number | null => {
-      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
-      return cm ? cm.density : null;
-    };
-    const compositionFn = (identifier: string): Record<string, number> | null => {
-      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
-      return cm?.massFractions ?? null;
-    };
-    setCustomDensityLookup(densityFn);
-    setCustomCompositionLookup(compositionFn);
-    setPkgCustomDensityLookup(densityFn);
-    setPkgCustomCompositionLookup(compositionFn);
-    setCustomMaterialExpander((name) => {
-      const cm = getCustomMaterials().find((m) => m.name === name);
-      return cm ? { formula: cm.formula, density: cm.density } : null;
-    });
-    setCustomMaterialResolver((identifier) => {
-      const cm = getCustomMaterials().find((m) => m.name === identifier || m.formula === identifier);
-      if (!cm || !cm.massFractions) return null;
-      return { density: cm.density, massFractions: cm.massFractions };
-    });
+    // Single registration point — replaces 6 separate closures (#388)
+    registerCustomMaterials(getCustomMaterials());
 
     loadingState = "Ready";
     loadingProgress = 1;
