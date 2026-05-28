@@ -11,8 +11,28 @@ import type {
   ProjectileType,
 } from "../types";
 import type { StackConfig, CurrentProfile } from "@hyrr/compute";
-import { expandLayers } from "@hyrr/compute";
+import { expandLayers, resolveMaterial } from "@hyrr/compute";
 import { getDataStore } from "../scheduler/sim-scheduler.svelte";
+
+/** Fill density_g_cm3 on layers that don't have it, using resolveMaterial.
+ *  SSoT: every config load path calls this so density is always set. */
+function fillDensities(items: Array<LayerConfig | InternalGroup>): void {
+  const db = getDataStore();
+  if (!db) return;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (isInternalGroup(it)) {
+      for (let j = 0; j < it.layers.length; j++) {
+        const l = it.layers[j];
+        if (!l.density_g_cm3 && l.material) {
+          try { it.layers[j] = { ...l, density_g_cm3: resolveMaterial(db, l.material).density }; } catch {}
+        }
+      }
+    } else if (!it.density_g_cm3 && it.material) {
+      try { items[i] = { ...it, density_g_cm3: resolveMaterial(db, it.material).density } as LayerConfig; } catch {}
+    }
+  }
+}
 
 // ─── Typed-array-safe JSON helpers ──────────────────────────────────
 //
@@ -265,14 +285,17 @@ export function restoreSerializableConfig(c: SerializableConfig): void {
   const profile = c.currentProfile;
   state = {
     beam: c.beam,
-    items: c.items.map((item: any) => {
-      if (item._group || item.mode) {
-        // It's a group
-        const { _group, ...group } = item;
-        return group as InternalGroup;
-      }
-      return item as LayerConfig;
-    }),
+    items: (() => {
+      const mapped = c.items.map((item: any) => {
+        if (item._group || item.mode) {
+          const { _group, ...group } = item;
+          return group as InternalGroup;
+        }
+        return item as LayerConfig;
+      });
+      fillDensities(mapped);
+      return mapped;
+    })(),
     irradiation_s: c.irradiation_s,
     cooling_s: c.cooling_s,
     // Reconstruct Float64Array from plain number[] in saved config
@@ -287,9 +310,11 @@ export function restoreSerializableConfig(c: SerializableConfig): void {
 
 export function setConfig(c: SimulationConfig): void {
   pushUndo();
+  const items: Array<LayerConfig | InternalGroup> = c.layers.map((l) => ({ ...l }));
+  fillDensities(items);
   state = {
     beam: c.beam,
-    items: c.layers.map((l) => ({ ...l })),
+    items,
     irradiation_s: c.irradiation_s,
     cooling_s: c.cooling_s,
     currentProfile: c.currentProfile ?? null,

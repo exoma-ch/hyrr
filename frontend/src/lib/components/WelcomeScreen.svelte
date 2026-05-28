@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { setConfig } from "../stores/config.svelte";
+  import { restoreSerializableConfig } from "../stores/config.svelte";
   import { PRESETS } from "../presets";
+  import type { SimulationConfig } from "../types";
   import logoUrl from "/logo.svg?url";
 
   interface Props {
@@ -10,14 +11,26 @@
   let { onstart }: Props = $props();
 
   function loadPreset(idx: number) {
-    setConfig({ ...PRESETS[idx].config });
+    loadSimConfig(PRESETS[idx].config);
     onstart?.();
   }
 
   function feelingLucky() {
     const idx = Math.floor(Math.random() * PRESETS.length);
-    setConfig({ ...PRESETS[idx].config });
+    loadSimConfig(PRESETS[idx].config);
     onstart?.();
+  }
+
+  function loadSimConfig(c: SimulationConfig) {
+    restoreSerializableConfig({
+      beam: c.beam,
+      items: c.layers,
+      irradiation_s: c.irradiation_s,
+      cooling_s: c.cooling_s,
+      currentProfile: c.currentProfile
+        ? { timesS: Array.from(c.currentProfile.timesS), currentsMA: Array.from(c.currentProfile.currentsMA) }
+        : undefined,
+    });
   }
 </script>
 
