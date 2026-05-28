@@ -238,11 +238,20 @@ function invalidateExpansion(): void {
 
 // ─── Getters (always return expanded/flat) ─────────────────────────
 
+/** Effective irradiation time: profile duration when profile active, else user-set value. */
+export function getEffectiveIrradiationS(): number {
+  if (state.currentProfile) {
+    const t = state.currentProfile.timesS;
+    return t.length > 1 ? t[t.length - 1] - t[0] : state.irradiation_s;
+  }
+  return state.irradiation_s;
+}
+
 export function getConfig(): SimulationConfig {
   return {
     beam: state.beam,
     layers: expandedLayers,
-    irradiation_s: state.irradiation_s,
+    irradiation_s: getEffectiveIrradiationS(),
     cooling_s: state.cooling_s,
     currentProfile: state.currentProfile,
   };

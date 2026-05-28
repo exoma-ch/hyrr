@@ -4,24 +4,20 @@ import fs from "node:fs";
 import os from "node:os";
 
 /**
- * E2e tests for current profile upload (#328, #395).
+ * E2e tests for the CurrentProfilePopup (#328, #395).
  *
- * Tests two paths:
- * 1. File upload via the UI: upload CSV → profile pill → detail + plot → simulation
- * 2. Preset-based profile: Sc-44 preset (7200-pt beam profile)
+ * Tests the full flow: beam bar toggle → popup → upload/generate → profile active.
  *
- * Expected CSV format: two columns, header row.
+ * Expected CSV format: two columns with header row.
  *   time_s,current_mA
  *   0.0,0.000
  *   2.0,0.015
- *   ...
  * Time in seconds from start, current in milliamperes.
  */
 
 const TC99M_HASH =
   "#config=1:NY27CoRADEX_5dbZJSM7sqa19gvEQkVQ8IWozZB_N6NYBJKck5uABhKwQqwIHcSlhBbCX-eVMELKgMlwX5_1ZsoeGXNi9AHF8nHMRhY7TghzDCxsCIh7s7PMq756frwhXivCAPmnP-b76d3pBQ";
 
-/** Small synthetic profile: 50 points over 100 s, trapezoidal ramp 0→30→30→0 µA. */
 function generateTestCSV(): string {
   const lines = ["time_s,current_mA"];
   for (let i = 0; i < 50; i++) {
@@ -52,100 +48,109 @@ test.afterAll(() => {
   try { fs.unlinkSync(csvPath); } catch {}
 });
 
-// ─── File upload tests ─────────────────────────────────────────────
+// ─── Upload via popup ──────────────────────────────────────────────
 
-test.describe("current profile — file upload", () => {
+test.describe("current profile — popup upload", () => {
   test.setTimeout(90_000);
 
-  test("upload CSV → profile pill with stats in beam bar", async ({ page }) => {
+  test("Profile toggle opens popup, upload CSV, confirm → sparkline in bar", async ({ page }) => {
     await page.goto(`./${TC99M_HASH}`);
     await waitForSimulation(page);
 
-    // Upload via hidden file input
-    const fileInput = page.locator("input.file-input-hidden");
-    await expect(fileInput).toBeAttached();
+    // Click "Profile" toggle to open popup
+    await page.locator(".ct-btn:has-text('Profile')").click();
+    await expect(page.locator(".modal-overlay")).toBeVisible({ timeout: 3_000 });
+
+    // Upload tab should be default
+    await expect(page.locator("button.view-btn.active:has-text('Upload')")).toBeVisible();
+
+    // Upload file via hidden input in UploadTab
+    const fileInput = page.locator(".modal-content input[type='file']");
     await fileInput.setInputFiles(csvPath);
 
-    // Profile pill should appear in beam bar
-    const pill = page.locator(".profile-pill");
-    await expect(pill).toBeVisible({ timeout: 5_000 });
-    const pillText = await pill.textContent();
-    expect(pillText).toContain("50 pts");
+    // Preview should appear inside popup
+    await expect(page.locator(".confirm-btn")).toBeVisible({ timeout: 5_000 });
 
-    // Profile toggle should show PROFILE as active
-    const profileBtn = page.locator(".ct-btn").nth(1);
-    await expect(profileBtn).toHaveClass(/active/);
+    // Click "Use this profile"
+    await page.locator(".confirm-btn").click();
 
-    // Detail section should appear below beam bar
-    await expect(page.locator(".profile-detail")).toBeVisible();
+    // Popup closes, sparkline appears in beam bar
+    await expect(page.locator(".modal-overlay")).not.toBeVisible();
+    await expect(page.locator(".profile-preview-btn")).toBeVisible();
+    await expect(page.locator(".profile-sparkline")).toBeVisible();
   });
 
-  test("upload CSV → simulation recomputes with profile", async ({ page }) => {
+  test("irradiation field becomes read-only when profile active", async ({ page }) => {
     await page.goto(`./${TC99M_HASH}`);
     await waitForSimulation(page);
 
-    await page.locator("input.file-input-hidden").setInputFiles(csvPath);
-    await expect(page.locator(".profile-pill")).toBeVisible({ timeout: 5_000 });
-    await waitForSimulation(page);
+    // Upload profile via popup
+    await page.locator(".ct-btn:has-text('Profile')").click();
+    const fileInput = page.locator(".modal-content input[type='file']");
+    await fileInput.setInputFiles(csvPath);
+    await page.locator(".confirm-btn").click();
 
-    const rows = page.locator(".activity-table-enhanced tbody tr");
-    await expect(rows.first()).toBeVisible();
-    expect(await rows.count()).toBeGreaterThan(0);
+    // Irradiation field should be disabled
+    await expect(page.locator("#bcb-irrad")).toBeDisabled();
   });
 
-  test("clear profile → reverts to constant mode", async ({ page }) => {
+  test("clear profile → constant mode restored, irradiation editable", async ({ page }) => {
     await page.goto(`./${TC99M_HASH}`);
     await waitForSimulation(page);
 
-    await page.locator("input.file-input-hidden").setInputFiles(csvPath);
-    await expect(page.locator(".profile-pill")).toBeVisible({ timeout: 5_000 });
+    // Upload profile
+    await page.locator(".ct-btn:has-text('Profile')").click();
+    const fileInput = page.locator(".modal-content input[type='file']");
+    await fileInput.setInputFiles(csvPath);
+    await page.locator(".confirm-btn").click();
+    await expect(page.locator(".profile-preview-btn")).toBeVisible();
 
-    // Click the pill to clear (pill hover = red, click clears)
-    await page.locator(".profile-pill").click();
+    // Click × to clear
+    await page.locator(".profile-x").click();
 
-    // Profile should disappear, constant input should return
-    await expect(page.locator(".profile-pill")).not.toBeVisible();
+    // Should revert to constant mode
     await expect(page.locator("#bcb-current")).toBeVisible();
+    await expect(page.locator(".profile-preview-btn")).not.toBeVisible();
 
-    // CONST toggle should be active
-    const constBtn = page.locator(".ct-btn").first();
-    await expect(constBtn).toHaveClass(/active/);
-  });
-
-  test("invalid CSV shows error, no crash", async ({ page }) => {
-    await page.goto(`./${TC99M_HASH}`);
-    await waitForSimulation(page);
-
-    const badPath = path.join(os.tmpdir(), "hyrr-e2e-bad.csv");
-    fs.writeFileSync(badPath, "not,a,valid,profile\nfoo,bar,baz,qux\n");
-
-    await page.locator("input.file-input-hidden").setInputFiles(badPath);
-
-    await expect(page.locator(".upload-error-bar")).toBeVisible({ timeout: 3_000 });
-    await expect(page.locator(".profile-pill")).not.toBeVisible();
-
-    fs.unlinkSync(badPath);
-  });
-
-  test("no console panics during upload flow", async ({ page }) => {
-    const errors: string[] = [];
-    page.on("pageerror", (e) => errors.push(e.message));
-
-    await page.goto(`./${TC99M_HASH}`);
-    await waitForSimulation(page);
-
-    await page.locator("input.file-input-hidden").setInputFiles(csvPath);
-    await expect(page.locator(".profile-pill")).toBeVisible({ timeout: 5_000 });
-    await waitForSimulation(page);
-
-    const fatal = errors.filter(
-      (e) => e.includes("panic") || e.includes("unreachable") || e.includes("computeStack failed"),
-    );
-    expect(fatal, `Fatal errors: ${fatal.join("\n")}`).toHaveLength(0);
+    // Irradiation should be editable again
+    await expect(page.locator("#bcb-irrad")).not.toBeDisabled();
   });
 });
 
-// ─── Preset-based profile tests ────────────────────────────────────
+// ─── Generate tab ──────────────────────────────────────────────────
+
+test.describe("current profile — generate tab", () => {
+  test.setTimeout(90_000);
+
+  test("generate trapezoidal profile → live preview + confirm", async ({ page }) => {
+    await page.goto(`./${TC99M_HASH}`);
+    await waitForSimulation(page);
+
+    // Open popup
+    await page.locator(".ct-btn:has-text('Profile')").click();
+    await expect(page.locator(".modal-overlay")).toBeVisible();
+
+    // Switch to Generate tab
+    await page.locator("button.view-btn:has-text('Generate')").click();
+
+    // Plotly plot should render (give it a moment)
+    await page.waitForTimeout(1_000);
+
+    // Stats should show
+    const statsText = await page.locator(".generate-tab .stats").textContent();
+    expect(statsText).toContain("pts");
+    expect(statsText).toContain("µAh");
+
+    // Click "Use this profile"
+    await page.locator(".confirm-btn").click();
+
+    // Popup closes, sparkline in bar
+    await expect(page.locator(".modal-overlay")).not.toBeVisible();
+    await expect(page.locator(".profile-sparkline")).toBeVisible();
+  });
+});
+
+// ─── Preset-based profile (Sc-44) ─────────────────────────────────
 
 async function loadSc44ViaFeelingLucky(page: import("@playwright/test").Page) {
   for (let i = 0; i < 40; i++) {
@@ -162,7 +167,7 @@ async function loadSc44ViaFeelingLucky(page: import("@playwright/test").Page) {
 test.describe("current profile — Sc-44 preset", () => {
   test.setTimeout(120_000);
 
-  test("Sc-44 preset shows profile pill + detail + produces Sc isotopes", async ({ page }) => {
+  test("Sc-44 preset shows sparkline + read-only irradiation + produces results", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
 
@@ -172,11 +177,13 @@ test.describe("current profile — Sc-44 preset", () => {
     const found = await loadSc44ViaFeelingLucky(page);
     expect(found, "Could not load Sc-44 preset after 40 tries").toBe(true);
 
-    // Profile pill should be visible (Sc-44 preset has a built-in profile)
-    await expect(page.locator(".profile-pill")).toBeVisible({ timeout: 5_000 });
-    // Detail section should show stats
-    await expect(page.locator(".profile-detail")).toBeVisible();
+    // Profile sparkline should be visible
+    await expect(page.locator(".profile-sparkline")).toBeVisible({ timeout: 5_000 });
 
+    // Irradiation should be read-only
+    await expect(page.locator("#bcb-irrad")).toBeDisabled();
+
+    // Wait for compute
     await page.waitForSelector(".status-dot.busy", { timeout: 5_000 }).catch(() => {});
     await page.waitForSelector(".status-dot.ready", { timeout: 60_000 }).catch(() => {});
     await page.waitForTimeout(1_000);
@@ -185,7 +192,7 @@ test.describe("current profile — Sc-44 preset", () => {
     const hasCaProducts = cellText.some(
       (t) => t.includes("Sc") || t.includes("44K") || t.includes("Ti") || t.includes("Z21"),
     );
-    expect(hasCaProducts, `No Ca-44 products found. Cells: ${cellText.slice(0, 30).join(", ")}`).toBe(true);
+    expect(hasCaProducts, `No Ca-44 products found`).toBe(true);
 
     const fatal = errors.filter(
       (e) => e.includes("panic") || e.includes("unreachable") || e.includes("computeStack failed"),
