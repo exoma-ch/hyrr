@@ -15,8 +15,8 @@ fn main() {
     db.load_xs("p", 8).unwrap();
     db.load_xs("p", 13).unwrap();
 
-    let h2o = resolve_material(&db, "H2O", None, None).unwrap();
-    let al = resolve_material(&db, "Al", None, None).unwrap();
+    let h2o = resolve_material(&db, "H2O", None, None, None).unwrap();
+    let al = resolve_material(&db, "Al", None, None, None).unwrap();
 
     let mk = |r: &hyrr_core::materials::MaterialResolution, t: f64| Layer {
         density_g_cm3: r.density,

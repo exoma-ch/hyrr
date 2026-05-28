@@ -38,7 +38,7 @@ fn make_db(library: &str) -> Option<ParquetDataStore> {
 /// density are picked so heavy ions don't stop short of the back of the layer
 /// (sub-MeV outgoing energy trips the catima table-min at 0.012 MeV).
 fn trivial_cu_stack(db: &ParquetDataStore, projectile: ProjectileType, energy_mev: f64) -> TargetStack {
-    let cu = resolve_material(db, "Cu", None, None).unwrap();
+    let cu = resolve_material(db, "Cu", None, None, None).unwrap();
     let layer = Layer {
         density_g_cm3: cu.density,
         elements: cu.elements.clone(),
@@ -165,7 +165,7 @@ fn thick_target_residual_below_table_min_returns_typed_error_not_panic() {
     // 100 µm Cu (ρ=8.96 g/cm³ → 0.0896 g/cm² areal) at only 5 MeV is
     // intentionally too thick — the integration WILL drive residual energy
     // through the table_min boundary.
-    let cu = resolve_material(&db, "Cu", None, None).unwrap();
+    let cu = resolve_material(&db, "Cu", None, None, None).unwrap();
     let layer = Layer {
         density_g_cm3: cu.density,
         elements: cu.elements.clone(),
@@ -224,8 +224,8 @@ fn beam_stopped_upstream_yields_empty_downstream_layers_not_error() {
     let _ = db.load_xs("p", 22); // Ti
     let _ = db.load_xs("p", 13); // Al
 
-    let ti = resolve_material(&db, "Ti", None, None).unwrap();
-    let al = resolve_material(&db, "Al", None, None).unwrap();
+    let ti = resolve_material(&db, "Ti", None, None, None).unwrap();
+    let al = resolve_material(&db, "Al", None, None, None).unwrap();
 
     let mk = |elems: &Vec<(Element, f64)>, dens: f64, t: Option<f64>, eo: Option<f64>| -> Layer {
         Layer {

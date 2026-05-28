@@ -24,7 +24,7 @@ fn main() {
     ca_map.insert(44, 0.99);
     ca_map.insert(40, 0.01);
     enrichment.insert("Ca".to_string(), ca_map);
-    let ca = resolve_material(&db, "Ca", Some(&enrichment), None).unwrap();
+    let ca = resolve_material(&db, "Ca", Some(&enrichment), None, None).unwrap();
 
     // Thick-target: 2 mm Ca (range of 15 MeV p in Ca ≈ 1.6 mm so it stops the
     // 5-15 MeV scan range). 1 µA beam, 1 h irradiation — activity at EOB in

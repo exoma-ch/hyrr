@@ -381,7 +381,7 @@ fn build_and_run_sim(
 
         // enrichment: [{element, A, fraction}] — flat, array-of-records shape.
         let overrides = parse_enrichment(layer_val.get("enrichment"))?;
-        let resolution = resolve_material(db, material, overrides.as_ref(), Some(registry))?;
+        let resolution = resolve_material(db, material, overrides.as_ref(), Some(registry), None)?;
         let thickness_cm = layer_val.get("thickness_cm").and_then(|v| v.as_f64());
         let energy_out = layer_val.get("energy_out_mev").and_then(|v| v.as_f64());
         let density = layer_val
@@ -483,7 +483,7 @@ fn build_and_run_stopping_only(
             .and_then(|v| v.as_str())
             .ok_or("Layer missing 'material'")?;
         let overrides = parse_enrichment(layer_val.get("enrichment"))?;
-        let resolution = resolve_material(db, material, overrides.as_ref(), Some(registry))?;
+        let resolution = resolve_material(db, material, overrides.as_ref(), Some(registry), None)?;
         let thickness_cm = layer_val.get("thickness_cm").and_then(|v| v.as_f64());
         let energy_out = layer_val.get("energy_out_mev").and_then(|v| v.as_f64());
         let density = layer_val
@@ -974,7 +974,7 @@ fn tool_get_stopping_power(db: &dyn DatabaseProtocol, registry: &MaterialRegistr
         return Err("'energies_mev' must be a non-empty array of numbers".to_string());
     }
 
-    let resolution = resolve_material(db, material, None, Some(registry))?;
+    let resolution = resolve_material(db, material, None, Some(registry), None)?;
     let density = args
         .get("density_g_cm3")
         .and_then(|v| v.as_f64())
