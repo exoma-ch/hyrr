@@ -11,10 +11,10 @@
 
   // --- User-editable $state (only written by event handlers, never by $effect) ---
   let rampUpS = $state(60);
-  let plateauUA = $state(30);
+  let plateauUA = $state(30);       // user-set when derivedField !== "current"
   let rampDownS = $state(60);
-  let totalDurationS = $state(7200);
-  let itcUAh = $state(0);
+  let totalDurationS = $state(7200); // user-set when derivedField !== "duration"
+  let itcUAh = $state(0);           // user-set when derivedField !== "itc"
 
   /** Which field is computed from the other two. */
   let derivedField = $state<"current" | "duration" | "itc">("itc");
@@ -26,6 +26,7 @@
   let rampUpFeedback = $state("");
   let rampDownFeedback = $state("");
   let durationFeedback = $state("");
+  let itcText = $state("");
 
   function formatSeconds(s: number): string {
     if (s >= 3600) return `${(s / 3600).toPrecision(3)}h`;
@@ -42,27 +43,24 @@
     return text ? "?" : "";
   }
 
-  /** On commit (blur/Enter): resolve and replace input text with canonical form. */
-  function commitTime(text: string, setter: (s: number) => void, textSetter: (t: string) => void) {
-    const parsed = parseTime(text);
-    if (parsed) {
-      setter(parsed.seconds);
-      textSetter(formatSeconds(parsed.seconds));
-    }
-  }
-
-  // --- Ramp handlers ---
+  // --- Ramp handlers (don't change derivedField) ---
   function onRampUpInput(e: Event) {
     rampUpText = (e.target as HTMLInputElement).value;
     rampUpFeedback = handleTimeInput(rampUpText, (s) => { rampUpS = s; });
   }
-  function commitRampUp() { commitTime(rampUpText, (s) => { rampUpS = s; }, (t) => { rampUpText = t; rampUpFeedback = ""; }); }
+  function commitRampUp() {
+    const parsed = parseTime(rampUpText);
+    if (parsed) rampUpS = parsed.seconds;
+  }
 
   function onRampDownInput(e: Event) {
     rampDownText = (e.target as HTMLInputElement).value;
     rampDownFeedback = handleTimeInput(rampDownText, (s) => { rampDownS = s; });
   }
-  function commitRampDown() { commitTime(rampDownText, (s) => { rampDownS = s; }, (t) => { rampDownText = t; rampDownFeedback = ""; }); }
+  function commitRampDown() {
+    const parsed = parseTime(rampDownText);
+    if (parsed) rampDownS = parsed.seconds;
+  }
 
   // --- Field handlers (only active when field is NOT derived) ---
   function onCurrentInput(e: Event) {
@@ -74,7 +72,10 @@
     durationText = (e.target as HTMLInputElement).value;
     durationFeedback = handleTimeInput(durationText, (s) => { totalDurationS = s; });
   }
-  function commitDuration() { commitTime(durationText, (s) => { totalDurationS = s; }, (t) => { durationText = t; durationFeedback = ""; }); }
+  function commitDuration() {
+    const parsed = parseTime(durationText);
+    if (parsed) totalDurationS = parsed.seconds;
+  }
 
   function onItcInput(e: Event) {
     const v = parseFloat((e.target as HTMLInputElement).value);
@@ -82,7 +83,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Pure $derived DAG — analytical solver, no cycles
+  // Pure $derived DAG — analytical solver, no $effect, no cycles
   // ---------------------------------------------------------------------------
 
   let solveResultCurrent: SolveResult = $derived(
@@ -103,6 +104,7 @@
       : { value: itcUAh, ok: true },
   );
 
+  /** Effective values fed to the profile generator — always valid numbers. */
   let effCurrentUA = $derived(solveResultCurrent.ok ? solveResultCurrent.value : 0);
   let effDurationS = $derived(solveResultDuration.ok ? solveResultDuration.value : 0);
   let effItcUAh = $derived(solveResultItc.ok ? solveResultItc.value : 0);
@@ -117,10 +119,20 @@
 
   let stats = $derived(profileStats(profile));
 
-  // Sync display text for derived fields
-  $effect(() => { if (derivedField === "duration") { durationText = formatSeconds(effDurationS); durationFeedback = ""; } });
-  $effect(() => { if (derivedField === "itc") { /* itc shown via effItcUAh directly */ } });
+  // Sync display text for derived fields so the user sees the computed value
+  $effect(() => {
+    if (derivedField === "duration") {
+      durationText = formatSeconds(effDurationS);
+      durationFeedback = "";
+    }
+  });
+  $effect(() => {
+    if (derivedField === "itc") {
+      itcText = effItcUAh.toFixed(2);
+    }
+  });
 
+  /** Error message for the currently derived field, if infeasible. */
   let derivedError = $derived.by(() => {
     if (derivedField === "current" && !solveResultCurrent.ok) return solveResultCurrent.error;
     if (derivedField === "duration" && !solveResultDuration.ok) return solveResultDuration.error;
@@ -130,7 +142,7 @@
 </script>
 
 <div class="generate-tab">
-  <!-- "Calculate" radio toggle -->
+  <!-- "Calculate:" radio selector -->
   <fieldset class="calculate-selector">
     <legend>Calculate</legend>
     <label class:active={derivedField === "current"}>
@@ -148,11 +160,10 @@
   </fieldset>
 
   <div class="form-grid">
-    <!-- Ramp up (always editable) -->
     <div class="form-field">
       <label>Ramp up</label>
       <div class="input-row">
-        <input type="text" value={rampUpText} oninput={onRampUpInput} onblur={commitRampUp} onkeydown={(e) => { if (e.key === 'Enter') { commitRampUp(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 1min" />
+        <input type="text" value={rampUpText} oninput={onRampUpInput} onblur={commitRampUp} onkeydown={(e) => { if (e.key === 'Enter') commitRampUp(); }} placeholder="e.g. 1min" />
         {#if rampUpFeedback && rampUpFeedback !== "?"}
           <span class="feedback ok">{rampUpFeedback}</span>
         {:else if rampUpFeedback === "?"}
@@ -161,12 +172,12 @@
       </div>
     </div>
 
-    <!-- Plateau current -->
     <div class="form-field" class:derived={derivedField === "current"}>
       <label>Plateau current</label>
       <div class="input-row">
         {#if derivedField === "current"}
-          <span class="derived-value">= {effCurrentUA.toFixed(1)}</span>
+          <span class="derived-prefix">=</span>
+          <input type="text" value={effCurrentUA.toFixed(1)} disabled tabindex={-1} />
         {:else}
           <input type="number" bind:value={plateauUA} oninput={onCurrentInput} min="0" step="1" />
         {/if}
@@ -174,11 +185,10 @@
       </div>
     </div>
 
-    <!-- Ramp down (always editable) -->
     <div class="form-field">
       <label>Ramp down</label>
       <div class="input-row">
-        <input type="text" value={rampDownText} oninput={onRampDownInput} onblur={commitRampDown} onkeydown={(e) => { if (e.key === 'Enter') { commitRampDown(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 1min" />
+        <input type="text" value={rampDownText} oninput={onRampDownInput} onblur={commitRampDown} onkeydown={(e) => { if (e.key === 'Enter') commitRampDown(); }} placeholder="e.g. 1min" />
         {#if rampDownFeedback && rampDownFeedback !== "?"}
           <span class="feedback ok">{rampDownFeedback}</span>
         {:else if rampDownFeedback === "?"}
@@ -187,17 +197,20 @@
       </div>
     </div>
 
-    <!-- Spacer -->
-    <div class="form-field"></div>
+    <div class="form-field">
+      <!-- spacer -->
+    </div>
 
-    <!-- Duration -->
     <div class="form-field" class:derived={derivedField === "duration"}>
       <label>Duration</label>
       <div class="input-row">
         {#if derivedField === "duration"}
-          <span class="derived-value">= {formatSeconds(effDurationS)}</span>
+          <span class="derived-prefix">=</span>
+          <input type="text" value={durationText} disabled tabindex={-1} />
         {:else}
-          <input type="text" value={durationText} oninput={onDurationInput} onblur={commitDuration} onkeydown={(e) => { if (e.key === 'Enter') { commitDuration(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 2h" />
+          <input type="text" value={durationText} oninput={onDurationInput} onblur={commitDuration} onkeydown={(e) => { if (e.key === 'Enter') commitDuration(); }} placeholder="e.g. 2h" />
+        {/if}
+        {#if derivedField !== "duration"}
           {#if durationFeedback && durationFeedback !== "?"}
             <span class="feedback ok">{durationFeedback}</span>
           {:else if durationFeedback === "?"}
@@ -207,12 +220,12 @@
       </div>
     </div>
 
-    <!-- ITC (integrated target current) -->
     <div class="form-field" class:derived={derivedField === "itc"}>
-      <label>ITC</label>
+      <label title="Integrated Target Current">ITC</label>
       <div class="input-row">
         {#if derivedField === "itc"}
-          <span class="derived-value">= {effItcUAh.toFixed(2)}</span>
+          <span class="derived-prefix">=</span>
+          <input type="number" value={effItcUAh.toFixed(2)} disabled tabindex={-1} />
         {:else}
           <input type="number" value={itcUAh.toFixed(2)} oninput={onItcInput} min="0" step="0.1" />
         {/if}
@@ -222,17 +235,17 @@
   </div>
 
   {#if derivedError}
-    <span class="solve-error">{derivedError}</span>
+    <div class="error-msg">{derivedError}</div>
   {/if}
 
   <PlotCurrentProfile {profile} />
 
   <div class="stats">
-    {stats.n} pts · {formatSeconds(stats.durationS)} · {stats.minCurrentUA.toFixed(0)}–{stats.maxCurrentUA.toFixed(0)} µA · {stats.chargeUAh.toFixed(2)} µAh
+    {stats.n} pts · {formatSeconds(stats.durationS)} · {stats.minCurrentUA.toFixed(0)}–{stats.maxCurrentUA.toFixed(0)} µA · {effItcUAh.toFixed(2)} µAh
   </div>
 
   <div class="actions">
-    <button class="confirm-btn" onclick={() => onselect(profile)}>Use this profile</button>
+    <button class="confirm-btn" onclick={() => onselect(profile)} disabled={!!derivedError}>Use this profile</button>
   </div>
 </div>
 
@@ -242,20 +255,19 @@
   .calculate-selector {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    border: none;
-    padding: 0;
+    gap: 0.6rem;
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
     margin: 0;
   }
 
   .calculate-selector legend {
-    font-size: 0.65rem;
-    color: var(--c-text-subtle);
+    font-size: 0.6rem;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    float: left;
-    margin-right: 0.5rem;
-    padding-top: 0.15rem;
+    letter-spacing: 0.05em;
+    color: var(--c-text-muted);
+    padding: 0 0.3rem;
   }
 
   .calculate-selector label {
@@ -265,15 +277,19 @@
     font-size: 0.75rem;
     color: var(--c-text-muted);
     cursor: pointer;
-    padding: 0.15rem 0.4rem;
-    border: 1px solid var(--c-border);
-    border-radius: 3px;
-    background: var(--c-bg-default);
   }
 
-  .calculate-selector label:hover { border-color: var(--c-accent); color: var(--c-text); }
-  .calculate-selector label.active { border-color: var(--c-accent); color: var(--c-accent); font-weight: 600; background: var(--c-bg-active); }
-  .calculate-selector input[type="radio"] { display: none; }
+  .calculate-selector label.active {
+    color: var(--c-accent);
+    font-weight: 600;
+  }
+
+  .calculate-selector input[type="radio"] {
+    accent-color: var(--c-accent);
+    margin: 0;
+    width: 12px;
+    height: 12px;
+  }
 
   .form-grid {
     display: grid;
@@ -287,13 +303,18 @@
     gap: 0.15rem;
   }
 
-  .form-field.derived { opacity: 0.7; }
-
   .form-field label {
     font-size: 0.65rem;
     color: var(--c-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
+  }
+
+  .form-field.derived {
+    background: var(--c-accent-tint, rgba(255, 165, 0, 0.06));
+    border-radius: 4px;
+    padding: 0.2rem 0.3rem;
+    margin: -0.2rem -0.3rem;
   }
 
   .input-row {
@@ -314,12 +335,13 @@
   }
 
   .input-row input:focus { outline: none; border-color: var(--c-accent); }
+  .input-row input:disabled { opacity: 0.7; cursor: default; border-style: dashed; }
 
-  .derived-value {
-    font-size: 0.8rem;
+  .derived-prefix {
+    font-size: 0.85rem;
+    font-weight: 600;
     color: var(--c-accent);
-    font-weight: 500;
-    padding: 0.3rem 0;
+    margin-right: -0.1rem;
   }
 
   .unit { font-size: 0.7rem; color: var(--c-text-muted); }
@@ -328,7 +350,13 @@
   .feedback.ok { color: var(--c-green-text); }
   .feedback.err { color: var(--c-red); }
 
-  .solve-error { font-size: 0.75rem; color: var(--c-red); }
+  .error-msg {
+    font-size: 0.75rem;
+    color: var(--c-red);
+    padding: 0.2rem 0.4rem;
+    background: var(--c-red-tint, rgba(255, 0, 0, 0.06));
+    border-radius: 4px;
+  }
 
   .stats { font-size: 0.75rem; color: var(--c-text-muted); }
 
@@ -344,4 +372,5 @@
     cursor: pointer;
   }
   .confirm-btn:hover { background: var(--c-accent); color: var(--c-bg-default); }
+  .confirm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

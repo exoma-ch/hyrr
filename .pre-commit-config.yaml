@@ -60,6 +60,16 @@ repos:
         files: ^justfile(\..*)?$
         pass_filenames: false
 
+  # Lockfile staleness check
+  - repo: local
+    hooks:
+      - id: check-lockfiles
+        name: check lockfiles in sync
+        entry: scripts/check-lockfiles.sh
+        language: system
+        files: (pyproject\.toml|uv\.lock|wasm/Cargo\.(toml|lock))$
+        pass_filenames: false
+
   # Typo Linting
   - repo: https://github.com/crate-ci/typos
     rev: v1.39.0

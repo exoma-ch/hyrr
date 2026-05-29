@@ -73,8 +73,8 @@ export function generateProfile(params: GenerateProfileParams): CurrentProfile {
 //
 // Two regimes:
 //   Trapezoidal (T >= r_u + r_d): ITC = I × (T - (r_u + r_d) / 2)
-//   Triangle    (T <  r_u + r_d): ITC = I × T² / (2 × (r_u + r_d))
-//     (ramps scaled proportionally, peak = I × T / (r_u + r_d))
+//   Triangle    (T <  r_u + r_d): ITC = I × T / 2
+//     (ramps scaled proportionally to fit T, peak still reaches I)
 // ---------------------------------------------------------------------------
 
 export interface SolveResult {
@@ -102,8 +102,8 @@ export function solveForITC(
     // Trapezoidal: full ramps fit
     chargeUAs = plateauUA * (totalDurationS - rSum / 2);
   } else {
-    // Triangle: ramps scaled, peak = plateauUA × T / rSum
-    chargeUAs = plateauUA * totalDurationS * totalDurationS / (2 * rSum);
+    // Triangle: ramps scaled to fit T, peak still reaches plateauUA
+    chargeUAs = plateauUA * totalDurationS / 2;
   }
   return { value: chargeUAs / 3600, ok: true };
 }
@@ -127,8 +127,8 @@ export function solveForDuration(
     return { value: tTrap, ok: true };
   }
 
-  // Triangle regime: chargeUAs = I × T² / (2 × rSum) → T = sqrt(2 × rSum × chargeUAs / I)
-  const tTri = rSum > 0 ? Math.sqrt(2 * rSum * chargeUAs / plateauUA) : 0;
+  // Triangle regime: chargeUAs = I × T / 2 → T = 2 × chargeUAs / I
+  const tTri = 2 * chargeUAs / plateauUA;
   if (tTri <= 0) return { value: 0, ok: false, error: "ITC too small for these ramps" };
   return { value: tTri, ok: true };
 }
@@ -155,8 +155,8 @@ export function solveForCurrent(
     return { value: chargeUAs / effectiveT, ok: true };
   }
 
-  // Triangle: I = chargeUAs × 2 × rSum / T²
-  const current = chargeUAs * 2 * rSum / (totalDurationS * totalDurationS);
+  // Triangle: chargeUAs = I × T / 2 → I = 2 × chargeUAs / T
+  const current = 2 * chargeUAs / totalDurationS;
   return { value: current, ok: true };
 }
 

@@ -7,6 +7,19 @@ on:
     branches: [main]
 
 jobs:
+  lockfile-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check lockfiles in sync
+        run: bash scripts/check-lockfiles.sh
+
   lint:
     runs-on: ubuntu-latest
     steps:

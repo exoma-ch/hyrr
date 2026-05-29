@@ -288,7 +288,7 @@ class CurrentProfile:
         return result
 
     @classmethod
-    def from_csv(cls, path: str | Path) -> "CurrentProfile":
+    def from_csv(cls, path: str | Path) -> CurrentProfile:
         """Load a current profile from a CSV/TSV file.
 
         Accepts two-column files with optional header row (time_s, current_mA).
@@ -321,7 +321,7 @@ class CurrentProfile:
         )
 
     @classmethod
-    def from_parquet(cls, path: str | Path) -> "CurrentProfile":
+    def from_parquet(cls, path: str | Path) -> CurrentProfile:
         """Load a current profile from a Parquet file.
 
         Expects columns named ``time_s`` and ``current_mA``.
@@ -337,7 +337,7 @@ class CurrentProfile:
     @classmethod
     def from_values(
         cls, values: Sequence[float], dt: float
-    ) -> "CurrentProfile":
+    ) -> CurrentProfile:
         """Create a profile from current values at uniform time spacing.
 
         Args:
