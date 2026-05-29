@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import textwrap
-
 import numpy as np
 import pytest
 
 from hyrr.models import CurrentProfile
-
 
 # ---------------------------------------------------------------------------
 # from_csv
