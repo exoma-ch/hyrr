@@ -70,18 +70,18 @@
       const xMax = maxT / tu.divisor;
       // Shaded "removed" regions + two draggable vertical handles
       layoutOpts.shapes = [
-        // dimmed left (removed)
+        // dimmed left (removed) — not draggable
         { type: "rect", xref: "x", yref: "paper", x0: 0, x1: x0, y0: 0, y1: 1,
-          fillcolor: "rgba(128,128,128,0.18)", line: { width: 0 }, layer: "below" },
-        // dimmed right (removed)
+          fillcolor: "rgba(128,128,128,0.18)", line: { width: 0 }, layer: "below", editable: false },
+        // dimmed right (removed) — not draggable
         { type: "rect", xref: "x", yref: "paper", x0: x1, x1: xMax, y0: 0, y1: 1,
-          fillcolor: "rgba(128,128,128,0.18)", line: { width: 0 }, layer: "below" },
-        // start handle
+          fillcolor: "rgba(128,128,128,0.18)", line: { width: 0 }, layer: "below", editable: false },
+        // start handle (draggable)
         { type: "line", xref: "x", yref: "paper", x0, x1: x0, y0: 0, y1: 1,
-          line: { color: TRACE_COLORS[0], width: 2, dash: "solid" } },
-        // end handle
+          line: { color: TRACE_COLORS[0], width: 2, dash: "solid" }, editable: true },
+        // end handle (draggable)
         { type: "line", xref: "x", yref: "paper", x0: x1, x1, y0: 0, y1: 1,
-          line: { color: TRACE_COLORS[0], width: 2, dash: "solid" } },
+          line: { color: TRACE_COLORS[0], width: 2, dash: "solid" }, editable: true },
       ];
       config = { ...PLOTLY_CONFIG, edits: { shapePosition: true } };
     }

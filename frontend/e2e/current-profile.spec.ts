@@ -219,11 +219,20 @@ test.describe("current profile — editor (trim + table)", () => {
 
   // Small 5-point profile so the table renders all rows (no virtualization).
   let smallCsv: string;
+  // Large 200-point profile to exercise the virtualized table path (>50 pts).
+  let bigCsv: string;
   test.beforeAll(() => {
     smallCsv = path.join(os.tmpdir(), "hyrr-e2e-small-profile.csv");
     fs.writeFileSync(smallCsv, "time_s,current_mA\n0,0\n30,0.03\n60,0.03\n90,0.03\n120,0\n");
+    const big = ["time_s,current_mA"];
+    for (let i = 0; i < 200; i++) big.push(`${i * 10},${(0.03).toFixed(4)}`);
+    bigCsv = path.join(os.tmpdir(), "hyrr-e2e-big-profile.csv");
+    fs.writeFileSync(bigCsv, big.join("\n"));
   });
-  test.afterAll(() => { try { fs.unlinkSync(smallCsv); } catch {} });
+  test.afterAll(() => {
+    try { fs.unlinkSync(smallCsv); } catch {}
+    try { fs.unlinkSync(bigCsv); } catch {}
+  });
 
   async function openUpload(page: import("@playwright/test").Page, file: string) {
     await page.goto(`./${TC99M_HASH}`);
@@ -278,5 +287,17 @@ test.describe("current profile — editor (trim + table)", () => {
     // Sparkline present; profile pill shows the edited max (77 µA)
     await expect(page.locator(".profile-sparkline")).toBeVisible();
     await expect(page.locator(".profile-preview-btn")).toContainText("77");
+  });
+
+  test("large profile (>50 pts) virtualizes the table", async ({ page }) => {
+    await openUpload(page, bigCsv);
+    await page.locator(".mini-btn:has-text('Edit points')").click();
+    await expect(page.locator(".point-table")).toBeVisible();
+    // 200 points, but only a windowed subset is rendered to the DOM.
+    const rendered = await page.locator(".point-table .td-cur").count();
+    expect(rendered).toBeGreaterThan(0);
+    expect(rendered).toBeLessThan(200);
+    // The toggle reports the true total.
+    await expect(page.locator(".mini-btn:has-text('Edit points'), .mini-btn:has-text('Hide points')")).toBeVisible();
   });
 });

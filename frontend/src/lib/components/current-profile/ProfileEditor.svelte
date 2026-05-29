@@ -103,7 +103,7 @@
 
   {#if showTable}
     <div class="point-table" onscroll={onScroll} style="max-height: {VIEWPORT_H}px;">
-      <div class="table-inner" style="height: {virtualize ? nPoints * ROW_H : 'auto'}px; position: {virtualize ? 'relative' : 'static'};">
+      <div class="table-inner" style="height: {virtualize ? (nPoints + 1) * ROW_H : 'auto'}px; position: {virtualize ? 'relative' : 'static'};">
         <div class="thead" style={virtualize ? 'position: sticky; top: 0; z-index: 1;' : ''}>
           <span class="th-idx">#</span>
           <span class="th-time">TIME</span>

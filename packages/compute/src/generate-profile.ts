@@ -179,7 +179,7 @@ export function profileChargeUAh(p: CurrentProfile): number {
 // Profile editing — crop, point edit, point delete (pure transforms)
 // ---------------------------------------------------------------------------
 
-/** Sample-and-hold value at time x (piecewise-constant, matches DAQ + plot). */
+/** Sample-and-hold value at time x (piecewise-constant, matches the plot's hv shape). */
 export function sampleProfileAt(p: CurrentProfile, x: number): number {
   const t = p.timesS;
   const c = p.currentsMA;
