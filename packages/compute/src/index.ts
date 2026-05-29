@@ -113,8 +113,12 @@ export type { SSoTImpl } from "./ssot";
 export { parseCurrentProfileCSV } from "./current-profile-csv";
 export type { ParseResult, ParseError } from "./current-profile-csv";
 
-// --- Current profile generator ---
-export { generateProfile, profileChargeMS, profileChargeUAh, profileStats, solveForITC, solveForDuration, solveForCurrent } from "./generate-profile";
+// --- Current profile generator + editing ---
+export {
+  generateProfile, profileChargeMS, profileChargeUAh, profileStats,
+  solveForITC, solveForDuration, solveForCurrent,
+  cropProfile, sampleProfileAt, editProfilePoint, deleteProfilePoint,
+} from "./generate-profile";
 export type { GenerateProfileParams, SolveResult } from "./generate-profile";
 
 // --- Interpolation utility (for XS plotting) ---

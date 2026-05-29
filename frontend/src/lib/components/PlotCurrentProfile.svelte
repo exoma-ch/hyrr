@@ -7,9 +7,16 @@
 
   interface Props {
     profile: CurrentProfile;
+    /** Enable draggable trim handles for cropping the time range. */
+    trimmable?: boolean;
+    /** Trim window in seconds (only used when trimmable). */
+    trimStartS?: number;
+    trimEndS?: number;
+    /** Called when a trim handle is dragged. Seconds. */
+    ontrim?: (startS: number, endS: number) => void;
   }
 
-  let { profile }: Props = $props();
+  let { profile, trimmable = false, trimStartS = 0, trimEndS = 0, ontrim }: Props = $props();
   let plotDiv = $state<HTMLDivElement | null>(null);
   let Plotly = $state<any>(null);
 
@@ -20,7 +27,10 @@
   });
 
   onDestroy(() => {
-    if (Plotly && plotDiv) Plotly.purge(plotDiv);
+    if (Plotly && plotDiv) {
+      plotDiv.removeAllListeners?.("plotly_relayout");
+      Plotly.purge(plotDiv);
+    }
   });
 
   function render() {
@@ -44,23 +54,73 @@
       hovertemplate: "%{x:.2f} " + tu.label + "<br>%{y:.1f} µA<extra></extra>",
     };
 
-    const layout = darkLayout({
+    const layoutOpts: Record<string, unknown> = {
       xaxis: { title: { text: `Time (${tu.label})` } },
       yaxis: { title: { text: "Current (µA)" }, rangemode: "tozero" },
       margin: { t: 10, r: 10, b: 40, l: 50 },
       showlegend: false,
       height: 150,
-    });
+    };
 
-    Plotly.react(plotDiv, [trace], layout, PLOTLY_CONFIG);
+    let config = PLOTLY_CONFIG;
+
+    if (trimmable) {
+      const x0 = trimStartS / tu.divisor;
+      const x1 = trimEndS / tu.divisor;
+      const xMax = maxT / tu.divisor;
+      // Shaded "removed" regions + two draggable vertical handles
+      layoutOpts.shapes = [
+        // dimmed left (removed)
+        { type: "rect", xref: "x", yref: "paper", x0: 0, x1: x0, y0: 0, y1: 1,
+          fillcolor: "rgba(128,128,128,0.18)", line: { width: 0 }, layer: "below" },
+        // dimmed right (removed)
+        { type: "rect", xref: "x", yref: "paper", x0: x1, x1: xMax, y0: 0, y1: 1,
+          fillcolor: "rgba(128,128,128,0.18)", line: { width: 0 }, layer: "below" },
+        // start handle
+        { type: "line", xref: "x", yref: "paper", x0, x1: x0, y0: 0, y1: 1,
+          line: { color: TRACE_COLORS[0], width: 2, dash: "solid" } },
+        // end handle
+        { type: "line", xref: "x", yref: "paper", x0: x1, x1, y0: 0, y1: 1,
+          line: { color: TRACE_COLORS[0], width: 2, dash: "solid" } },
+      ];
+      config = { ...PLOTLY_CONFIG, edits: { shapePosition: true } };
+    }
+
+    Plotly.react(plotDiv, [trace], darkLayout(layoutOpts), config);
+
+    if (trimmable) {
+      plotDiv.removeAllListeners?.("plotly_relayout");
+      plotDiv.on("plotly_relayout", (ev: Record<string, number>) => {
+        // Handle shapes are indices 2 (start) and 3 (end)
+        let newStart = trimStartS;
+        let newEnd = trimEndS;
+        let changed = false;
+        for (const key of Object.keys(ev)) {
+          const m = key.match(/^shapes\[(\d+)\]\.x[01]$/);
+          if (!m) continue;
+          const idx = Number(m[1]);
+          const valS = ev[key] * tu.divisor;
+          if (idx === 2) { newStart = valS; changed = true; }
+          if (idx === 3) { newEnd = valS; changed = true; }
+        }
+        if (changed && ontrim) {
+          // Clamp + keep ordering
+          const lo = Math.max(0, Math.min(newStart, newEnd));
+          const hi = Math.min(maxT, Math.max(newStart, newEnd));
+          if (hi > lo) ontrim(lo, hi);
+        }
+      });
+    }
   }
 
   $effect(() => {
-    // Re-render on profile change, Plotly load, or theme change
     void profile;
     void Plotly;
     void plotDiv;
     void theme;
+    void trimmable;
+    void trimStartS;
+    void trimEndS;
     render();
   });
 </script>

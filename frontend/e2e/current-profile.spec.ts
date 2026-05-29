@@ -80,18 +80,28 @@ test.describe("current profile — popup upload", () => {
     await expect(page.locator(".profile-sparkline")).toBeVisible();
   });
 
-  test("irradiation field becomes read-only when profile active", async ({ page }) => {
+  test("profile mode replaces current + irradiation inputs with sparkline", async ({ page }) => {
     await page.goto(`./${TC99M_HASH}`);
     await waitForSimulation(page);
+
+    // Constant mode: both inputs present
+    await expect(page.locator("#bcb-current")).toBeVisible();
+    await expect(page.locator("#bcb-irrad")).toBeVisible();
 
     // Upload profile via popup
     await page.locator(".ct-btn:has-text('Profile')").click();
     const fileInput = page.locator(".modal-content input[type='file']");
     await fileInput.setInputFiles(csvPath);
+    await expect(page.locator(".confirm-btn")).toBeVisible({ timeout: 5_000 });
     await page.locator(".confirm-btn").click();
 
-    // Irradiation field should be disabled
-    await expect(page.locator("#bcb-irrad")).toBeDisabled();
+    // Profile mode: current + irradiation inputs are gone, replaced by sparkline
+    // (the profile carries its own duration — irradiation is derived from it).
+    await expect(page.locator(".profile-preview-btn")).toBeVisible();
+    await expect(page.locator("#bcb-current")).toHaveCount(0);
+    await expect(page.locator("#bcb-irrad")).toHaveCount(0);
+    // Duration shown in the sparkline pill
+    await expect(page.locator(".profile-dur")).toBeVisible();
   });
 
   test("clear profile → constant mode restored, irradiation editable", async ({ page }) => {
@@ -102,6 +112,7 @@ test.describe("current profile — popup upload", () => {
     await page.locator(".ct-btn:has-text('Profile')").click();
     const fileInput = page.locator(".modal-content input[type='file']");
     await fileInput.setInputFiles(csvPath);
+    await expect(page.locator(".confirm-btn")).toBeVisible({ timeout: 5_000 });
     await page.locator(".confirm-btn").click();
     await expect(page.locator(".profile-preview-btn")).toBeVisible();
 
@@ -167,7 +178,7 @@ async function loadSc44ViaFeelingLucky(page: import("@playwright/test").Page) {
 test.describe("current profile — Sc-44 preset", () => {
   test.setTimeout(120_000);
 
-  test("Sc-44 preset shows sparkline + read-only irradiation + produces results", async ({ page }) => {
+  test("Sc-44 preset shows sparkline (no irradiation input) + produces results", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
 
@@ -180,8 +191,8 @@ test.describe("current profile — Sc-44 preset", () => {
     // Profile sparkline should be visible
     await expect(page.locator(".profile-sparkline")).toBeVisible({ timeout: 5_000 });
 
-    // Irradiation should be read-only
-    await expect(page.locator("#bcb-irrad")).toBeDisabled();
+    // Profile mode replaces the irradiation input (duration comes from profile)
+    await expect(page.locator("#bcb-irrad")).toHaveCount(0);
 
     // Wait for compute
     await page.waitForSelector(".status-dot.busy", { timeout: 5_000 }).catch(() => {});
@@ -198,5 +209,74 @@ test.describe("current profile — Sc-44 preset", () => {
       (e) => e.includes("panic") || e.includes("unreachable") || e.includes("computeStack failed"),
     );
     expect(fatal, `Fatal errors: ${fatal.join("\n")}`).toHaveLength(0);
+  });
+});
+
+// ─── Profile editor: trim + point table (#328) ────────────────────
+
+test.describe("current profile — editor (trim + table)", () => {
+  test.setTimeout(90_000);
+
+  // Small 5-point profile so the table renders all rows (no virtualization).
+  let smallCsv: string;
+  test.beforeAll(() => {
+    smallCsv = path.join(os.tmpdir(), "hyrr-e2e-small-profile.csv");
+    fs.writeFileSync(smallCsv, "time_s,current_mA\n0,0\n30,0.03\n60,0.03\n90,0.03\n120,0\n");
+  });
+  test.afterAll(() => { try { fs.unlinkSync(smallCsv); } catch {} });
+
+  async function openUpload(page: import("@playwright/test").Page, file: string) {
+    await page.goto(`./${TC99M_HASH}`);
+    await waitForSimulation(page);
+    await page.locator(".ct-btn:has-text('Profile')").click();
+    await expect(page.locator(".modal-overlay")).toBeVisible({ timeout: 3_000 });
+    await page.locator(".modal-content input[type='file']").setInputFiles(file);
+    await expect(page.locator(".profile-editor")).toBeVisible({ timeout: 5_000 });
+  }
+
+  test("editor shows trim hint + edit-points toggle", async ({ page }) => {
+    await openUpload(page, smallCsv);
+    await expect(page.locator(".trim-hint")).toBeVisible();
+    await expect(page.locator(".mini-btn:has-text('Edit points')")).toBeVisible();
+  });
+
+  test("edit points table opens and shows all rows", async ({ page }) => {
+    await openUpload(page, smallCsv);
+    await page.locator(".mini-btn:has-text('Edit points')").click();
+    await expect(page.locator(".point-table")).toBeVisible();
+    // 5-point profile → 5 editable current inputs
+    await expect(page.locator(".point-table .td-cur")).toHaveCount(5);
+  });
+
+  test("editing a point's current updates stats", async ({ page }) => {
+    await openUpload(page, smallCsv);
+    await page.locator(".mini-btn:has-text('Edit points')").click();
+    // Edit the 2nd point (index 1) from 30 → 50 µA
+    const input = page.locator(".point-table .td-cur").nth(1);
+    await input.fill("50");
+    await input.press("Enter");
+    // Stats max current should now reflect 50 µA
+    await expect(page.locator(".profile-editor .stats")).toContainText("50 µA");
+  });
+
+  test("deleting a point reduces row count", async ({ page }) => {
+    await openUpload(page, smallCsv);
+    await page.locator(".mini-btn:has-text('Edit points')").click();
+    await expect(page.locator(".point-table .td-cur")).toHaveCount(5);
+    await page.locator(".point-table .td-del").first().click();
+    await expect(page.locator(".point-table .td-cur")).toHaveCount(4);
+  });
+
+  test("edited profile is used on confirm", async ({ page }) => {
+    await openUpload(page, smallCsv);
+    await page.locator(".mini-btn:has-text('Edit points')").click();
+    const input = page.locator(".point-table .td-cur").nth(1);
+    await input.fill("77");
+    await input.press("Enter");
+    await page.locator(".confirm-btn").click();
+    await expect(page.locator(".modal-overlay")).not.toBeVisible();
+    // Sparkline present; profile pill shows the edited max (77 µA)
+    await expect(page.locator(".profile-sparkline")).toBeVisible();
+    await expect(page.locator(".profile-preview-btn")).toContainText("77");
   });
 });
