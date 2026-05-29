@@ -63,7 +63,11 @@
             darwin.apple_sdk.frameworks.AppKit
           ];
 
-          # Expose native libs for Rust builds on NixOS
+          # Expose native libs on NixOS for both Rust builds (webkit/gtk for
+          # Tauri) and Python manylinux wheels (numpy/polars/scipy need
+          # libstdc++ + libz + libgcc_s, which NixOS doesn't put on the default
+          # loader path). Without zlib here, `import numpy` fails with
+          # "libz.so.1: cannot open shared object file".
           LD_LIBRARY_PATH = pkgs.lib.optionalString isLinux
             (pkgs.lib.makeLibraryPath (with pkgs; [
               webkitgtk_4_1
@@ -71,7 +75,8 @@
               glib-networking
               libsoup_3
               openssl
-              stdenv.cc.cc.lib
+              stdenv.cc.cc.lib  # libstdc++.so.6, libgcc_s.so.1
+              zlib              # libz.so.1 — required by numpy/polars wheels
             ]));
 
           shellHook = ''

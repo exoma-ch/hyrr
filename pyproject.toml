@@ -52,8 +52,8 @@ plotting = [
     "plotly>=5.17",
 ]
 geometry = [
-    "build123d>=0.7",
-    "tetgen>=0.6",
+    "build123d>=0.10.0",
+    "tetgen>=0.8.3",
     "meshio>=5.3",
 ]
 docs = [
@@ -77,8 +77,12 @@ build-backend = "hatchling.build"
 packages = ["src/hyrr"]
 
 [dependency-groups]
+# NOTE: build123d/tetgen/meshio (→ cadquery-ocp → vtk) live ONLY in the
+# `geometry` optional extra — NOT here. vtk ships cp312-only wheels with no
+# sdist, which breaks `uv sync --dev` on Python 3.13 and on NixOS. The geometry
+# math tests (tests/test_geometry.py) use only numpy; STEP/mesh support is
+# lazy-imported and opt-in via `uv sync --extra geometry`.
 dev = [
-    "build123d>=0.10.0",
     "hatchling>=1.25",
     "ipykernel>=6.31.0",
     "jupyter>=1.1.1",
@@ -92,7 +96,6 @@ dev = [
     "pytest-cov>=7.0.0",
     "rich>=13.0.0",
     "ruff>=0.8",
-    "tetgen>=0.8.3",
 ]
 
 # Ruff
