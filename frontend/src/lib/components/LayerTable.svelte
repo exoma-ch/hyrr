@@ -74,7 +74,7 @@
             >
               <td class="col-idx">{i + 1}</td>
               <td class="col-mat">
-                {layer.material}
+                {templateLayers[i]?.material ?? layer.material}
                 {#if layer.error}
                   <span class="layer-error" title={layer.error}>{layer.error}</span>
                 {/if}
