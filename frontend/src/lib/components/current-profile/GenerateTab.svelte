@@ -177,7 +177,7 @@
       <div class="input-row">
         {#if derivedField === "current"}
           <span class="derived-prefix">=</span>
-          <input type="number" value={effCurrentUA.toFixed(1)} disabled tabindex={-1} />
+          <input type="text" value={effCurrentUA.toFixed(1)} disabled tabindex={-1} />
         {:else}
           <input type="number" bind:value={plateauUA} oninput={onCurrentInput} min="0" step="1" />
         {/if}

@@ -179,13 +179,8 @@ describe("solveForCurrent", () => {
     expect(cur.value).toBeCloseTo(30, 3);
   });
 
-  it("duration equals rSum/2 → error (zero effective plateau)", () => {
-    // T = 60, ramps = 60+60 → rSum=120, T >= rSum is false (triangle)
-    // Actually T=60 < rSum=120, so triangle formula applies, which is fine.
-    // The error case is T >= rSum and T = rSum/2 — but that's impossible (T >= rSum > rSum/2).
-    // Real error: T >= rSum and effectiveT = T - rSum/2 ≤ 0 → T ≤ rSum/2 < rSum → contradiction.
-    // So the error only happens when we'd need rSum/2 > T but T >= rSum — impossible.
-    // Test the triangle edge: very short T relative to ramps
+  it("very short T relative to ramps uses triangle formula", () => {
+    // T=1 < rSum=200 → triangle regime, always valid (I = 2 × ITC / T)
     const cur = solveForCurrent(1, 1, 100, 100);
     expect(cur.ok).toBe(true);
     expect(cur.value).toBeGreaterThan(0);
@@ -219,7 +214,7 @@ describe("analytical vs numerical charge agreement", () => {
   ];
 
   for (const { name, I, T, rU, rD } of cases) {
-    it(`${name}: analytical ≈ numerical (< 0.5% error)`, () => {
+    it(`${name}: analytical ≈ numerical (< 2% error)`, () => {
       const analytical = solveForITC(I, T, rU, rD);
       const profile = generateProfile({
         rampUpS: rU,
