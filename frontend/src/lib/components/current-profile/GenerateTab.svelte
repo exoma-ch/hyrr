@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { generateProfile, profileStats, type CurrentProfile } from "@hyrr/compute";
+  import { generateProfile, profileStats, solveForITC, solveForDuration, solveForCurrent, type CurrentProfile, type SolveResult } from "@hyrr/compute";
   import PlotCurrentProfile from "../PlotCurrentProfile.svelte";
   import { parseTime } from "../../utils/time-parse";
 
@@ -9,12 +9,15 @@
 
   let { onselect }: Props = $props();
 
+  // --- User-editable $state (only written by event handlers, never by $effect) ---
   let rampUpS = $state(60);
   let plateauUA = $state(30);
   let rampDownS = $state(60);
   let totalDurationS = $state(7200);
-  let lockMode = $state<"duration" | "charge">("duration");
-  let chargeUAh = $state(0);
+  let itcUAh = $state(0);
+
+  /** Which field is computed from the other two. */
+  let derivedField = $state<"current" | "duration" | "itc">("itc");
 
   // Smart time input state
   let rampUpText = $state("1min");
@@ -39,69 +42,117 @@
     return text ? "?" : "";
   }
 
+  /** On commit (blur/Enter): resolve and replace input text with canonical form. */
+  function commitTime(text: string, setter: (s: number) => void, textSetter: (t: string) => void) {
+    const parsed = parseTime(text);
+    if (parsed) {
+      setter(parsed.seconds);
+      textSetter(formatSeconds(parsed.seconds));
+    }
+  }
+
+  // --- Ramp handlers ---
   function onRampUpInput(e: Event) {
     rampUpText = (e.target as HTMLInputElement).value;
     rampUpFeedback = handleTimeInput(rampUpText, (s) => { rampUpS = s; });
   }
-  function commitRampUp() {
-    const parsed = parseTime(rampUpText);
-    if (parsed) rampUpS = parsed.seconds;
-  }
+  function commitRampUp() { commitTime(rampUpText, (s) => { rampUpS = s; }, (t) => { rampUpText = t; rampUpFeedback = ""; }); }
 
   function onRampDownInput(e: Event) {
     rampDownText = (e.target as HTMLInputElement).value;
     rampDownFeedback = handleTimeInput(rampDownText, (s) => { rampDownS = s; });
   }
-  function commitRampDown() {
-    const parsed = parseTime(rampDownText);
-    if (parsed) rampDownS = parsed.seconds;
+  function commitRampDown() { commitTime(rampDownText, (s) => { rampDownS = s; }, (t) => { rampDownText = t; rampDownFeedback = ""; }); }
+
+  // --- Field handlers (only active when field is NOT derived) ---
+  function onCurrentInput(e: Event) {
+    const v = parseFloat((e.target as HTMLInputElement).value);
+    if (!isNaN(v) && v >= 0) plateauUA = v;
   }
 
   function onDurationInput(e: Event) {
     durationText = (e.target as HTMLInputElement).value;
-    durationFeedback = handleTimeInput(durationText, (s) => { totalDurationS = s; lockMode = "duration"; });
+    durationFeedback = handleTimeInput(durationText, (s) => { totalDurationS = s; });
   }
-  function commitDuration() {
-    const parsed = parseTime(durationText);
-    if (parsed) { totalDurationS = parsed.seconds; lockMode = "duration"; }
+  function commitDuration() { commitTime(durationText, (s) => { totalDurationS = s; }, (t) => { durationText = t; durationFeedback = ""; }); }
+
+  function onItcInput(e: Event) {
+    const v = parseFloat((e.target as HTMLInputElement).value);
+    if (!isNaN(v) && v >= 0) itcUAh = v;
   }
 
-  // Derived profile
+  // ---------------------------------------------------------------------------
+  // Pure $derived DAG — analytical solver, no cycles
+  // ---------------------------------------------------------------------------
+
+  let solveResultCurrent: SolveResult = $derived(
+    derivedField === "current"
+      ? solveForCurrent(itcUAh, totalDurationS, rampUpS, rampDownS)
+      : { value: plateauUA, ok: true },
+  );
+
+  let solveResultDuration: SolveResult = $derived(
+    derivedField === "duration"
+      ? solveForDuration(itcUAh, plateauUA, rampUpS, rampDownS)
+      : { value: totalDurationS, ok: true },
+  );
+
+  let solveResultItc: SolveResult = $derived(
+    derivedField === "itc"
+      ? solveForITC(plateauUA, totalDurationS, rampUpS, rampDownS)
+      : { value: itcUAh, ok: true },
+  );
+
+  let effCurrentUA = $derived(solveResultCurrent.ok ? solveResultCurrent.value : 0);
+  let effDurationS = $derived(solveResultDuration.ok ? solveResultDuration.value : 0);
+  let effItcUAh = $derived(solveResultItc.ok ? solveResultItc.value : 0);
+
   let profile = $derived(generateProfile({
     rampUpS,
-    plateauCurrentMA: plateauUA / 1000,
+    plateauCurrentMA: effCurrentUA / 1000,
     rampDownS,
-    totalDurationS,
-    timeStepS: totalDurationS > 36000 ? 10 : totalDurationS > 3600 ? 5 : 1,
+    totalDurationS: effDurationS,
+    timeStepS: effDurationS > 36000 ? 10 : effDurationS > 3600 ? 5 : 1,
   }));
 
   let stats = $derived(profileStats(profile));
 
-  // Bidirectional charge/duration coupling
-  $effect(() => {
-    if (lockMode === "duration") {
-      chargeUAh = stats.chargeUAh;
-    }
-  });
+  // Sync display text for derived fields
+  $effect(() => { if (derivedField === "duration") { durationText = formatSeconds(effDurationS); durationFeedback = ""; } });
+  $effect(() => { if (derivedField === "itc") { /* itc shown via effItcUAh directly */ } });
 
-  function onChargeInput(e: Event) {
-    const v = parseFloat((e.target as HTMLInputElement).value);
-    if (!isNaN(v) && v > 0) {
-      chargeUAh = v;
-      if (plateauUA > 0) {
-        totalDurationS = Math.max(rampUpS + rampDownS, chargeUAh * 3600 / plateauUA + (rampUpS + rampDownS) / 2);
-        durationText = formatSeconds(totalDurationS);
-      }
-    }
-  }
+  let derivedError = $derived.by(() => {
+    if (derivedField === "current" && !solveResultCurrent.ok) return solveResultCurrent.error;
+    if (derivedField === "duration" && !solveResultDuration.ok) return solveResultDuration.error;
+    if (derivedField === "itc" && !solveResultItc.ok) return solveResultItc.error;
+    return undefined;
+  });
 </script>
 
 <div class="generate-tab">
+  <!-- "Calculate" radio toggle -->
+  <fieldset class="calculate-selector">
+    <legend>Calculate</legend>
+    <label class:active={derivedField === "current"}>
+      <input type="radio" name="derived" value="current" bind:group={derivedField} />
+      Current
+    </label>
+    <label class:active={derivedField === "duration"}>
+      <input type="radio" name="derived" value="duration" bind:group={derivedField} />
+      Duration
+    </label>
+    <label class:active={derivedField === "itc"}>
+      <input type="radio" name="derived" value="itc" bind:group={derivedField} />
+      ITC
+    </label>
+  </fieldset>
+
   <div class="form-grid">
+    <!-- Ramp up (always editable) -->
     <div class="form-field">
       <label>Ramp up</label>
       <div class="input-row">
-        <input type="text" value={rampUpText} oninput={onRampUpInput} onblur={commitRampUp} onkeydown={(e) => { if (e.key === 'Enter') commitRampUp(); }} placeholder="e.g. 1min" />
+        <input type="text" value={rampUpText} oninput={onRampUpInput} onblur={commitRampUp} onkeydown={(e) => { if (e.key === 'Enter') { commitRampUp(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 1min" />
         {#if rampUpFeedback && rampUpFeedback !== "?"}
           <span class="feedback ok">{rampUpFeedback}</span>
         {:else if rampUpFeedback === "?"}
@@ -110,18 +161,24 @@
       </div>
     </div>
 
-    <div class="form-field">
+    <!-- Plateau current -->
+    <div class="form-field" class:derived={derivedField === "current"}>
       <label>Plateau current</label>
       <div class="input-row">
-        <input type="number" bind:value={plateauUA} min="0" step="1" />
+        {#if derivedField === "current"}
+          <span class="derived-value">= {effCurrentUA.toFixed(1)}</span>
+        {:else}
+          <input type="number" bind:value={plateauUA} oninput={onCurrentInput} min="0" step="1" />
+        {/if}
         <span class="unit">µA</span>
       </div>
     </div>
 
+    <!-- Ramp down (always editable) -->
     <div class="form-field">
       <label>Ramp down</label>
       <div class="input-row">
-        <input type="text" value={rampDownText} oninput={onRampDownInput} onblur={commitRampDown} onkeydown={(e) => { if (e.key === 'Enter') commitRampDown(); }} placeholder="e.g. 1min" />
+        <input type="text" value={rampDownText} oninput={onRampDownInput} onblur={commitRampDown} onkeydown={(e) => { if (e.key === 'Enter') { commitRampDown(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 1min" />
         {#if rampDownFeedback && rampDownFeedback !== "?"}
           <span class="feedback ok">{rampDownFeedback}</span>
         {:else if rampDownFeedback === "?"}
@@ -130,38 +187,43 @@
       </div>
     </div>
 
-    <div class="form-field">
-      <!-- spacer -->
-    </div>
+    <!-- Spacer -->
+    <div class="form-field"></div>
 
-    <div class="form-field">
-      <label class="lock-label">
-        <button class="lock-btn" class:locked={lockMode === "duration"} onclick={() => { lockMode = "duration"; }} title="Lock duration (derive charge)">
-          Duration
-        </button>
-      </label>
+    <!-- Duration -->
+    <div class="form-field" class:derived={derivedField === "duration"}>
+      <label>Duration</label>
       <div class="input-row">
-        <input type="text" value={durationText} oninput={onDurationInput} onblur={commitDuration} onkeydown={(e) => { if (e.key === 'Enter') commitDuration(); }} placeholder="e.g. 2h" />
-        {#if durationFeedback && durationFeedback !== "?"}
-          <span class="feedback ok">{durationFeedback}</span>
-        {:else if durationFeedback === "?"}
-          <span class="feedback err">?</span>
+        {#if derivedField === "duration"}
+          <span class="derived-value">= {formatSeconds(effDurationS)}</span>
+        {:else}
+          <input type="text" value={durationText} oninput={onDurationInput} onblur={commitDuration} onkeydown={(e) => { if (e.key === 'Enter') { commitDuration(); (e.target as HTMLInputElement).blur(); }}} placeholder="e.g. 2h" />
+          {#if durationFeedback && durationFeedback !== "?"}
+            <span class="feedback ok">{durationFeedback}</span>
+          {:else if durationFeedback === "?"}
+            <span class="feedback err">?</span>
+          {/if}
         {/if}
       </div>
     </div>
 
-    <div class="form-field">
-      <label class="lock-label">
-        <button class="lock-btn" class:locked={lockMode === "charge"} onclick={() => { lockMode = "charge"; }} title="Lock charge (derive duration)">
-          Charge
-        </button>
-      </label>
+    <!-- ITC (integrated target current) -->
+    <div class="form-field" class:derived={derivedField === "itc"}>
+      <label>ITC</label>
       <div class="input-row">
-        <input type="number" value={chargeUAh.toFixed(2)} oninput={onChargeInput} disabled={lockMode === "duration"} min="0" step="0.1" />
+        {#if derivedField === "itc"}
+          <span class="derived-value">= {effItcUAh.toFixed(2)}</span>
+        {:else}
+          <input type="number" value={itcUAh.toFixed(2)} oninput={onItcInput} min="0" step="0.1" />
+        {/if}
         <span class="unit">µAh</span>
       </div>
     </div>
   </div>
+
+  {#if derivedError}
+    <span class="solve-error">{derivedError}</span>
+  {/if}
 
   <PlotCurrentProfile {profile} />
 
@@ -177,6 +239,42 @@
 <style>
   .generate-tab { display: flex; flex-direction: column; gap: 0.5rem; }
 
+  .calculate-selector {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .calculate-selector legend {
+    font-size: 0.65rem;
+    color: var(--c-text-subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    float: left;
+    margin-right: 0.5rem;
+    padding-top: 0.15rem;
+  }
+
+  .calculate-selector label {
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+    font-size: 0.75rem;
+    color: var(--c-text-muted);
+    cursor: pointer;
+    padding: 0.15rem 0.4rem;
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    background: var(--c-bg-default);
+  }
+
+  .calculate-selector label:hover { border-color: var(--c-accent); color: var(--c-text); }
+  .calculate-selector label.active { border-color: var(--c-accent); color: var(--c-accent); font-weight: 600; background: var(--c-bg-active); }
+  .calculate-selector input[type="radio"] { display: none; }
+
   .form-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -188,6 +286,8 @@
     flex-direction: column;
     gap: 0.15rem;
   }
+
+  .form-field.derived { opacity: 0.7; }
 
   .form-field label {
     font-size: 0.65rem;
@@ -214,7 +314,13 @@
   }
 
   .input-row input:focus { outline: none; border-color: var(--c-accent); }
-  .input-row input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .derived-value {
+    font-size: 0.8rem;
+    color: var(--c-accent);
+    font-weight: 500;
+    padding: 0.3rem 0;
+  }
 
   .unit { font-size: 0.7rem; color: var(--c-text-muted); }
 
@@ -222,19 +328,7 @@
   .feedback.ok { color: var(--c-green-text); }
   .feedback.err { color: var(--c-red); }
 
-  .lock-label { display: flex; align-items: center; gap: 0.2rem; }
-  .lock-btn {
-    background: none;
-    border: none;
-    color: var(--c-text-muted);
-    font-size: 0.65rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    padding: 0;
-  }
-  .lock-btn.locked { color: var(--c-accent); font-weight: 600; }
-  .lock-btn:hover { color: var(--c-text); }
+  .solve-error { font-size: 0.75rem; color: var(--c-red); }
 
   .stats { font-size: 0.75rem; color: var(--c-text-muted); }
 
