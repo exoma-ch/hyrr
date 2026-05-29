@@ -143,9 +143,9 @@
 
 <div class="generate-tab">
   <div class="form-columns">
-    <!-- Left column: ramp inputs (always editable) -->
+    <!-- Left column: ramp inputs -->
     <div class="col-ramps">
-      <div class="form-field">
+      <div class="form-field ramp-field">
         <label>Ramp up</label>
         <div class="input-row">
           <input type="text" value={rampUpText} oninput={onRampUpInput} onblur={commitRampUp} onkeydown={(e) => { if (e.key === 'Enter') commitRampUp(); }} placeholder="e.g. 1min" />
@@ -157,7 +157,7 @@
         </div>
       </div>
 
-      <div class="form-field">
+      <div class="form-field ramp-field">
         <label>Ramp down</label>
         <div class="input-row">
           <input type="text" value={rampDownText} oninput={onRampDownInput} onblur={commitRampDown} onkeydown={(e) => { if (e.key === 'Enter') commitRampDown(); }} placeholder="e.g. 1min" />
@@ -170,66 +170,53 @@
       </div>
     </div>
 
-    <!-- Right column: vertical radio strip + value fields -->
+    <!-- Right column: clickable derive fields (click row = select derived) -->
     <div class="col-values">
-      <!-- Vertical derive radio strip -->
-      <div class="derive-strip" role="radiogroup" aria-label="Derive field">
-        <label class="derive-radio" class:active={derivedField === "current"} title="Derive I_max">
-          <input type="radio" name="derived" value="current" bind:group={derivedField} />
-        </label>
-        <label class="derive-radio" class:active={derivedField === "duration"} title="Derive Duration">
-          <input type="radio" name="derived" value="duration" bind:group={derivedField} />
-        </label>
-        <label class="derive-radio" class:active={derivedField === "itc"} title="Derive ITC">
-          <input type="radio" name="derived" value="itc" bind:group={derivedField} />
-        </label>
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="form-field" class:derived={derivedField === "current"} onclick={() => { derivedField = "current"; }}>
+        <label>I<sub>max</sub></label>
+        <div class="input-row">
+          <span class="derived-prefix" class:visible={derivedField === "current"}>=</span>
+          {#if derivedField === "current"}
+            <input type="text" value={effCurrentUA.toFixed(1)} disabled tabindex={-1} />
+          {:else}
+            <input type="text" inputmode="decimal" value={plateauUA} oninput={onCurrentInput} onclick={(e) => e.stopPropagation()} />
+          {/if}
+          <span class="unit">µA</span>
+        </div>
       </div>
 
-      <!-- Value fields -->
-      <div class="value-fields">
-        <div class="form-field" class:derived={derivedField === "current"}>
-          <label>I<sub>max</sub></label>
-          <div class="input-row">
-            <span class="derived-prefix" class:visible={derivedField === "current"}>=</span>
-            {#if derivedField === "current"}
-              <input type="text" value={effCurrentUA.toFixed(1)} disabled tabindex={-1} />
-            {:else}
-              <input type="number" bind:value={plateauUA} oninput={onCurrentInput} min="0" step="1" />
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="form-field" class:derived={derivedField === "duration"} onclick={() => { derivedField = "duration"; }}>
+        <label>Duration</label>
+        <div class="input-row">
+          <span class="derived-prefix" class:visible={derivedField === "duration"}>=</span>
+          {#if derivedField === "duration"}
+            <input type="text" value={durationText} disabled tabindex={-1} />
+          {:else}
+            <input type="text" value={durationText} oninput={onDurationInput} onblur={commitDuration} onkeydown={(e) => { if (e.key === 'Enter') commitDuration(); }} onclick={(e) => e.stopPropagation()} placeholder="e.g. 2h" />
+          {/if}
+          {#if derivedField !== "duration"}
+            {#if durationFeedback && durationFeedback !== "?"}
+              <span class="feedback ok">{durationFeedback}</span>
+            {:else if durationFeedback === "?"}
+              <span class="feedback err">?</span>
             {/if}
-            <span class="unit">µA</span>
-          </div>
+          {/if}
         </div>
+      </div>
 
-        <div class="form-field" class:derived={derivedField === "duration"}>
-          <label>Duration</label>
-          <div class="input-row">
-            <span class="derived-prefix" class:visible={derivedField === "duration"}>=</span>
-            {#if derivedField === "duration"}
-              <input type="text" value={durationText} disabled tabindex={-1} />
-            {:else}
-              <input type="text" value={durationText} oninput={onDurationInput} onblur={commitDuration} onkeydown={(e) => { if (e.key === 'Enter') commitDuration(); }} placeholder="e.g. 2h" />
-            {/if}
-            {#if derivedField !== "duration"}
-              {#if durationFeedback && durationFeedback !== "?"}
-                <span class="feedback ok">{durationFeedback}</span>
-              {:else if durationFeedback === "?"}
-                <span class="feedback err">?</span>
-              {/if}
-            {/if}
-          </div>
-        </div>
-
-        <div class="form-field" class:derived={derivedField === "itc"}>
-          <label title="Integrated Target Current">ITC</label>
-          <div class="input-row">
-            <span class="derived-prefix" class:visible={derivedField === "itc"}>=</span>
-            {#if derivedField === "itc"}
-              <input type="number" value={effItcUAh.toFixed(2)} disabled tabindex={-1} />
-            {:else}
-              <input type="number" value={itcUAh.toFixed(2)} oninput={onItcInput} min="0" step="0.1" />
-            {/if}
-            <span class="unit">µAh</span>
-          </div>
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="form-field" class:derived={derivedField === "itc"} onclick={() => { derivedField = "itc"; }}>
+        <label title="Integrated Target Current">ITC</label>
+        <div class="input-row">
+          <span class="derived-prefix" class:visible={derivedField === "itc"}>=</span>
+          {#if derivedField === "itc"}
+            <input type="text" inputmode="decimal" value={effItcUAh.toFixed(2)} disabled tabindex={-1} />
+          {:else}
+            <input type="text" inputmode="decimal" value={itcUAh.toFixed(2)} oninput={onItcInput} onclick={(e) => e.stopPropagation()} />
+          {/if}
+          <span class="unit">µAh</span>
         </div>
       </div>
     </div>
@@ -259,76 +246,36 @@
     gap: 1rem;
   }
 
-  .col-ramps {
+  .col-ramps, .col-values {
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
     flex: 1;
   }
 
-  .col-values {
-    display: flex;
-    gap: 0.3rem;
-    flex: 1;
-  }
-
-  /* Vertical derive radio strip */
-  .derive-strip {
-    display: flex;
-    flex-direction: column;
-    justify-content: stretch;
-    gap: 0;
-    border: 1px solid var(--c-border);
-    border-radius: 4px;
-    overflow: hidden;
-    align-self: stretch;
-    margin-top: 0.15rem; /* align with first label */
-  }
-
-  .derive-radio {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.2rem 0.25rem;
-    cursor: pointer;
-    border-bottom: 1px solid var(--c-border);
-    background: var(--c-bg-default);
-  }
-
-  .derive-radio:last-child { border-bottom: none; }
-  .derive-radio:hover { background: var(--c-bg-hover); }
-  .derive-radio.active { background: var(--c-accent-tint-subtle, rgba(59, 130, 246, 0.1)); }
-
-  .derive-radio input[type="radio"] {
-    accent-color: var(--c-accent);
-    margin: 0;
-    width: 12px;
-    height: 12px;
-    cursor: pointer;
-  }
-
-  .value-fields {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    flex: 1;
-  }
-
-  /* Form fields */
+  /* Form fields — shared */
   .form-field {
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
     padding: 0.2rem 0.3rem;
     border-radius: 4px;
-    /* Reserve space for derived highlight — no jitter */
     border: 1px solid transparent;
+  }
+
+  /* Right-column fields are clickable to toggle derived */
+  .col-values .form-field {
+    cursor: pointer;
+  }
+
+  .col-values .form-field:hover {
+    border-color: var(--c-border);
   }
 
   .form-field.derived {
     border-color: var(--c-accent);
     background: var(--c-accent-tint, rgba(59, 130, 246, 0.05));
+    cursor: default;
   }
 
   .form-field label {
@@ -336,8 +283,16 @@
     color: var(--c-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    /* Align with input box, not with the = prefix */
-    margin-left: calc(0.7em + 0.25rem); /* = prefix width + gap */
+  }
+
+  /* Value field labels align with input boxes (skip the = prefix space) */
+  .col-values .form-field label {
+    margin-left: calc(0.7em + 0.25rem);
+  }
+
+  /* Ramp field labels align directly with their boxes */
+  .ramp-field label {
+    margin-left: 0;
   }
 
   .input-row {
