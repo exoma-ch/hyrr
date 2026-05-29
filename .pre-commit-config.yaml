@@ -20,13 +20,23 @@ repos:
       - id: mixed-line-ending
       - id: trailing-whitespace
 
-  # Python Linting and Formatting (Ruff)
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.3
+  # Python Linting and Formatting (Ruff) — use the flake's ruff (on PATH via
+  # direnv `use flake`) so there's ONE pinned ruff version across pre-commit,
+  # local dev, and CI. Avoids the pre-commit/uv/CI version drift.
+  - repo: local
     hooks:
       - id: ruff
-        args: [--fix]
+        name: ruff (lint, --fix)
+        entry: ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
       - id: ruff-format
+        name: ruff (format)
+        entry: ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
 
   # YAML Linting
   - repo: https://github.com/adrienverge/yamllint

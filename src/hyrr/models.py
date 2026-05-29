@@ -335,9 +335,7 @@ class CurrentProfile:
         )
 
     @classmethod
-    def from_values(
-        cls, values: Sequence[float], dt: float
-    ) -> CurrentProfile:
+    def from_values(cls, values: Sequence[float], dt: float) -> CurrentProfile:
         """Create a profile from current values at uniform time spacing.
 
         Args:

@@ -951,7 +951,6 @@ server = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "build123d" },
     { name = "hatchling" },
     { name = "ipykernel" },
     { name = "jupyter" },
@@ -959,18 +958,15 @@ dev = [
     { name = "nbmake" },
     { name = "pandas" },
     { name = "plotly" },
-    { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-benchmark" },
     { name = "pytest-cov" },
     { name = "rich" },
-    { name = "ruff" },
-    { name = "tetgen" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "build123d", marker = "extra == 'geometry'", specifier = ">=0.7" },
+    { name = "build123d", marker = "extra == 'geometry'", specifier = ">=0.10.0" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "hyrr", extras = ["dev", "pandas", "plotting", "docs", "server"], marker = "extra == 'all'" },
     { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.0" },
@@ -994,7 +990,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
     { name = "scipy", specifier = ">=1.14" },
-    { name = "tetgen", marker = "extra == 'geometry'", specifier = ">=0.6" },
+    { name = "tetgen", marker = "extra == 'geometry'", specifier = ">=0.8.3" },
     { name = "tqdm", specifier = ">=4.67.3" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.34" },
     { name = "xlsxwriter", specifier = ">=3.2.9" },
@@ -1003,7 +999,6 @@ provides-extras = ["dev", "server", "pandas", "plotting", "geometry", "docs", "a
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "build123d", specifier = ">=0.10.0" },
     { name = "hatchling", specifier = ">=1.25" },
     { name = "ipykernel", specifier = ">=6.31.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
@@ -1011,13 +1006,10 @@ dev = [
     { name = "nbmake", specifier = ">=1.5" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "plotly", specifier = ">=6.6.0" },
-    { name = "pyright", specifier = ">=1.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-benchmark", specifier = ">=4.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
-    { name = "ruff", specifier = ">=0.8" },
-    { name = "tetgen", specifier = ">=0.8.3" },
 ]
 
 [[package]]
