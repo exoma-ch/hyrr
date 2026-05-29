@@ -144,6 +144,19 @@
     }
   });
 
+  /** Capture current effective values into state before switching derivedField.
+   *  This way the previously-derived value becomes the new input. */
+  function switchDerived(newField: "current" | "duration" | "itc") {
+    if (newField === derivedField) return;
+    // Sync effective values into state so the solver has correct inputs
+    plateauUA = effCurrentUA;
+    totalDurationS = effDurationS;
+    itcUAh = effItcUAh;
+    durationText = formatSeconds(effDurationS);
+    durationFeedback = "";
+    derivedField = newField;
+  }
+
   /** Error message for the currently derived field, if infeasible. */
   let derivedError = $derived.by(() => {
     if (derivedField === "current" && !solveResultCurrent.ok) return solveResultCurrent.error;
@@ -185,7 +198,7 @@
     <!-- Right column: clickable derive fields (click row = select derived) -->
     <div class="col-values">
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="form-field" class:derived={derivedField === "current"} onclick={() => { derivedField = "current"; }}>
+      <div class="form-field" class:derived={derivedField === "current"} onclick={() => switchDerived("current")}>
         <label>I<sub>max</sub></label>
         <div class="input-row">
           <span class="derived-prefix" class:visible={derivedField === "current"}>=</span>
@@ -199,7 +212,7 @@
       </div>
 
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="form-field" class:derived={derivedField === "duration"} onclick={() => { derivedField = "duration"; }}>
+      <div class="form-field" class:derived={derivedField === "duration"} onclick={() => switchDerived("duration")}>
         <label>Duration</label>
         <div class="input-row">
           <span class="derived-prefix" class:visible={derivedField === "duration"}>=</span>
@@ -219,7 +232,7 @@
       </div>
 
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="form-field" class:derived={derivedField === "itc"} onclick={() => { derivedField = "itc"; }}>
+      <div class="form-field" class:derived={derivedField === "itc"} onclick={() => switchDerived("itc")}>
         <label title="Integrated Target Current">ITC</label>
         <div class="input-row">
           <span class="derived-prefix" class:visible={derivedField === "itc"}>=</span>
