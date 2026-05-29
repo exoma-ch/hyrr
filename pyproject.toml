@@ -82,6 +82,10 @@ packages = ["src/hyrr"]
 # sdist, which breaks `uv sync --dev` on Python 3.13 and on NixOS. The geometry
 # math tests (tests/test_geometry.py) use only numpy; STEP/mesh support is
 # lazy-imported and opt-in via `uv sync --extra geometry`.
+# ruff + pyright are NOT here — the flake (flake.nix) is the single source
+# for lint/type tooling, used by both `nix develop` locally and CI's lint job.
+# This keeps one pinned ruff/pyright version (via flake.lock) instead of three
+# (pre-commit, uv, CI) drifting apart.
 dev = [
     "hatchling>=1.25",
     "ipykernel>=6.31.0",
@@ -90,12 +94,10 @@ dev = [
     "nbmake>=1.5",
     "pandas>=2.0",
     "plotly>=6.6.0",
-    "pyright>=1.1",
     "pytest>=9.0.2",
     "pytest-benchmark>=4.0",
     "pytest-cov>=7.0.0",
     "rich>=13.0.0",
-    "ruff>=0.8",
 ]
 
 # Ruff

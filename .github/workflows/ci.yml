@@ -20,29 +20,24 @@ jobs:
       - name: Check lockfiles in sync
         run: bash scripts/check-lockfiles.sh
 
+  # lint + test run inside the flake's lean `ci` devShell so ruff, pyright,
+  # uv, and Python 3.12 are the exact versions used by local dev
+  # (`nix develop`) — one pinned toolchain via flake.lock, no drift.
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-      - name: Install dependencies
-        run: uv sync --dev
-      - name: Ruff check
-        run: uv run ruff check src/ tests/ data/
-      - name: Ruff format check
-        run: uv run ruff format --check src/ tests/
-      - name: Pyright
-        run: uv run pyright src/hyrr/
+      - uses: DeterminateSystems/nix-installer-action@v16
+      - name: Lint (ruff + pyright via flake)
+        run: |
+          nix develop .#ci --command bash -c '
+            ruff check src/ tests/ data/
+            ruff format --check src/ tests/
+            pyright src/hyrr/
+          '
 
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -52,15 +47,13 @@ jobs:
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
           git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-      - name: Install dependencies
-        run: uv sync --dev
-      - name: Run tests with coverage
-        run: uv run pytest tests/ --cov --benchmark-disable --ignore=tests/integration
+      - uses: DeterminateSystems/nix-installer-action@v16
+      - name: Test (uv + pytest via flake, Python 3.12)
+        run: |
+          nix develop .#ci --command bash -c '
+            uv sync --dev
+            uv run pytest tests/ --cov --benchmark-disable --ignore=tests/integration
+          '
 
   rust-projectile-matrix:
     runs-on: ubuntu-latest
