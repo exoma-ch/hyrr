@@ -175,6 +175,64 @@ export function profileChargeUAh(p: CurrentProfile): number {
   return profileChargeMS(p) * 1000 / 3600; // mA·s → µA·s → µA·h
 }
 
+// ---------------------------------------------------------------------------
+// Profile editing — crop, point edit, point delete (pure transforms)
+// ---------------------------------------------------------------------------
+
+/** Sample-and-hold value at time x (piecewise-constant, matches the plot's hv shape). */
+export function sampleProfileAt(p: CurrentProfile, x: number): number {
+  const t = p.timesS;
+  const c = p.currentsMA;
+  if (t.length === 0) return 0;
+  if (x <= t[0]) return c[0];
+  let v = c[0];
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] <= x) v = c[i];
+    else break;
+  }
+  return v;
+}
+
+/**
+ * Crop a profile to the time window [startS, endS] and re-base times to 0.
+ * Boundary values are sampled (piecewise-constant). The cropped profile's
+ * duration is (endS - startS). Returns the original if the window is invalid.
+ */
+export function cropProfile(p: CurrentProfile, startS: number, endS: number): CurrentProfile {
+  if (endS <= startS || p.timesS.length === 0) return p;
+  const t = p.timesS;
+  const c = p.currentsMA;
+  const times: number[] = [0];
+  const currents: number[] = [sampleProfileAt(p, startS)];
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] > startS && t[i] < endS) {
+      times.push(t[i] - startS);
+      currents.push(c[i]);
+    }
+  }
+  times.push(endS - startS);
+  currents.push(sampleProfileAt(p, endS));
+  return { timesS: new Float64Array(times), currentsMA: new Float64Array(currents) };
+}
+
+/** Set the current (mA) of a single point, returning a new profile. */
+export function editProfilePoint(p: CurrentProfile, index: number, currentMA: number): CurrentProfile {
+  if (index < 0 || index >= p.currentsMA.length) return p;
+  const currents = Float64Array.from(p.currentsMA);
+  currents[index] = Math.max(0, currentMA);
+  return { timesS: Float64Array.from(p.timesS), currentsMA: currents };
+}
+
+/** Delete a single point, returning a new profile. Keeps at least 2 points. */
+export function deleteProfilePoint(p: CurrentProfile, index: number): CurrentProfile {
+  if (p.timesS.length <= 2 || index < 0 || index >= p.timesS.length) return p;
+  const times = Array.from(p.timesS);
+  const currents = Array.from(p.currentsMA);
+  times.splice(index, 1);
+  currents.splice(index, 1);
+  return { timesS: new Float64Array(times), currentsMA: new Float64Array(currents) };
+}
+
 /** Compute profile summary stats. */
 export function profileStats(p: CurrentProfile): {
   n: number;

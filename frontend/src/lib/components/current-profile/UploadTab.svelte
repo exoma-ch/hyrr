@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { parseCurrentProfileCSV, profileStats, type ParseResult, type ParseError } from "@hyrr/compute";
+  import { parseCurrentProfileCSV, type ParseResult, type ParseError } from "@hyrr/compute";
   import type { CurrentProfile } from "@hyrr/compute";
-  import PlotCurrentProfile from "../PlotCurrentProfile.svelte";
+  import ProfileEditor from "./ProfileEditor.svelte";
 
   interface Props {
     onselect: (profile: CurrentProfile) => void;
@@ -16,8 +16,6 @@
   let needsDt = $state(false);
   let dtInput = $state(1);
   let showAllWarnings = $state(false);
-
-  let stats = $derived(parsedProfile ? profileStats(parsedProfile) : null);
 
   function applyResult(result: ParseResult | ParseError) {
     if ("error" in result) {
@@ -106,12 +104,7 @@
     {/if}
   {:else}
     <div class="preview">
-      <PlotCurrentProfile profile={parsedProfile} />
-      {#if stats}
-        <div class="stats">
-          {stats.n} pts · {(stats.durationS / 60).toFixed(1)} min · {stats.minCurrentUA.toFixed(0)}–{stats.maxCurrentUA.toFixed(0)} µA · {stats.chargeUAh.toFixed(2)} µAh
-        </div>
-      {/if}
+      <ProfileEditor profile={parsedProfile} onchange={(p) => { parsedProfile = p; }} />
       {#if parseWarnings.length > 0}
         <div class="warnings">
           {#each parseWarnings.slice(0, showAllWarnings ? undefined : 3) as w}

@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { generateProfile, profileChargeMS, profileChargeUAh, profileStats, solveForITC, solveForDuration, solveForCurrent } from "./generate-profile";
+import { generateProfile, profileChargeMS, profileChargeUAh, profileStats, solveForITC, solveForDuration, solveForCurrent, cropProfile, sampleProfileAt, editProfilePoint, deleteProfilePoint } from "./generate-profile";
+
+function mkProfile(times: number[], currents: number[]) {
+  return { timesS: new Float64Array(times), currentsMA: new Float64Array(currents) };
+}
 
 describe("generateProfile", () => {
   it("produces correct number of points", () => {
@@ -236,4 +240,72 @@ describe("analytical vs numerical charge agreement", () => {
       }
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Profile editing
+// ---------------------------------------------------------------------------
+
+describe("sampleProfileAt", () => {
+  const p = mkProfile([0, 10, 20, 30], [0, 0.03, 0.03, 0]);
+  it("returns first value before start", () => {
+    expect(sampleProfileAt(p, -5)).toBe(0);
+  });
+  it("sample-and-hold (piecewise-constant)", () => {
+    expect(sampleProfileAt(p, 5)).toBe(0);      // hold value at t=0
+    expect(sampleProfileAt(p, 10)).toBe(0.03);  // exact sample
+    expect(sampleProfileAt(p, 15)).toBe(0.03);  // hold value at t=10
+    expect(sampleProfileAt(p, 25)).toBe(0.03);  // hold value at t=20
+    expect(sampleProfileAt(p, 30)).toBe(0);     // exact last sample
+  });
+});
+
+describe("cropProfile", () => {
+  const p = mkProfile([0, 10, 20, 30], [0, 0.03, 0.03, 0]);
+  it("crops to window and re-bases time to 0", () => {
+    const c = cropProfile(p, 10, 20);
+    expect(c.timesS[0]).toBe(0);
+    expect(c.timesS[c.timesS.length - 1]).toBe(10); // duration 20-10
+  });
+  it("keeps interior points (re-based)", () => {
+    const c = cropProfile(mkProfile([0, 5, 10, 15, 20], [0, 1, 2, 3, 4]), 4, 16);
+    // interior points at 5,10,15 → re-based to 1,6,11
+    expect(Array.from(c.timesS)).toEqual([0, 1, 6, 11, 12]);
+  });
+  it("samples boundary values (piecewise-constant)", () => {
+    const c = cropProfile(p, 5, 25);
+    expect(c.currentsMA[0]).toBe(0);    // sample at t=5 holds t=0 value
+    expect(c.currentsMA[c.currentsMA.length - 1]).toBe(0.03); // sample at t=25 holds t=20 value
+  });
+  it("returns original on invalid window", () => {
+    expect(cropProfile(p, 20, 10)).toBe(p);
+  });
+});
+
+describe("editProfilePoint", () => {
+  const p = mkProfile([0, 10, 20], [0, 0.03, 0]);
+  it("sets current of a point", () => {
+    const e = editProfilePoint(p, 1, 0.05);
+    expect(e.currentsMA[1]).toBe(0.05);
+    expect(p.currentsMA[1]).toBe(0.03); // original unchanged
+  });
+  it("clamps negative to 0", () => {
+    expect(editProfilePoint(p, 1, -5).currentsMA[1]).toBe(0);
+  });
+  it("ignores out-of-range index", () => {
+    expect(editProfilePoint(p, 99, 1)).toBe(p);
+  });
+});
+
+describe("deleteProfilePoint", () => {
+  it("removes a point", () => {
+    const p = mkProfile([0, 10, 20, 30], [0, 1, 2, 3]);
+    const d = deleteProfilePoint(p, 1);
+    expect(Array.from(d.timesS)).toEqual([0, 20, 30]);
+    expect(Array.from(d.currentsMA)).toEqual([0, 2, 3]);
+  });
+  it("refuses to drop below 2 points", () => {
+    const p = mkProfile([0, 10], [0, 1]);
+    expect(deleteProfilePoint(p, 0)).toBe(p);
+  });
 });

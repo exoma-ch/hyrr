@@ -140,6 +140,23 @@ describe("config-url-v2", () => {
     const hash = encodeConfigV2(SIMPLE);
     expect(hash.startsWith("#config=1:")).toBe(true);
   });
+  it("strips currentProfile from URL hash (#328 — too large for URL)", () => {
+    const withProfile: SerializableConfig = {
+      ...SIMPLE,
+      currentProfile: {
+        timesS: [0, 1, 2, 3],
+        currentsMA: [0.0, 0.05, 0.05, 0.0],
+      },
+    };
+    const hash = encodeConfigV2(withProfile);
+    const payload = hash.replace("#config=1:", "");
+    const decoded = decodeConfigV2Ser(payload)!;
+    // Profile must NOT survive the URL round-trip — it's excluded by design.
+    expect(decoded.currentProfile).toBeUndefined();
+    // But the rest of the config is intact.
+    expect(decoded.beam.energy_MeV).toBe(SIMPLE.beam.energy_MeV);
+    expect(decoded.items).toHaveLength(1);
+  });
 });
 
 describe("v3 inline composition (#96)", () => {
