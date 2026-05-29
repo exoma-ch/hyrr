@@ -142,94 +142,96 @@
 </script>
 
 <div class="generate-tab">
-  <!-- "Calculate:" radio selector -->
-  <fieldset class="calculate-selector">
-    <legend>Calculate</legend>
-    <label class:active={derivedField === "current"}>
-      <input type="radio" name="derived" value="current" bind:group={derivedField} />
-      Current
-    </label>
-    <label class:active={derivedField === "duration"}>
-      <input type="radio" name="derived" value="duration" bind:group={derivedField} />
-      Duration
-    </label>
-    <label class:active={derivedField === "itc"}>
-      <input type="radio" name="derived" value="itc" bind:group={derivedField} />
-      ITC
-    </label>
-  </fieldset>
-
-  <div class="form-grid">
-    <div class="form-field">
-      <label>Ramp up</label>
-      <div class="input-row">
-        <input type="text" value={rampUpText} oninput={onRampUpInput} onblur={commitRampUp} onkeydown={(e) => { if (e.key === 'Enter') commitRampUp(); }} placeholder="e.g. 1min" />
-        {#if rampUpFeedback && rampUpFeedback !== "?"}
-          <span class="feedback ok">{rampUpFeedback}</span>
-        {:else if rampUpFeedback === "?"}
-          <span class="feedback err">?</span>
-        {/if}
-      </div>
-    </div>
-
-    <div class="form-field" class:derived={derivedField === "current"}>
-      <label>Plateau current</label>
-      <div class="input-row">
-        {#if derivedField === "current"}
-          <span class="derived-prefix">=</span>
-          <input type="text" value={effCurrentUA.toFixed(1)} disabled tabindex={-1} />
-        {:else}
-          <input type="number" bind:value={plateauUA} oninput={onCurrentInput} min="0" step="1" />
-        {/if}
-        <span class="unit">µA</span>
-      </div>
-    </div>
-
-    <div class="form-field">
-      <label>Ramp down</label>
-      <div class="input-row">
-        <input type="text" value={rampDownText} oninput={onRampDownInput} onblur={commitRampDown} onkeydown={(e) => { if (e.key === 'Enter') commitRampDown(); }} placeholder="e.g. 1min" />
-        {#if rampDownFeedback && rampDownFeedback !== "?"}
-          <span class="feedback ok">{rampDownFeedback}</span>
-        {:else if rampDownFeedback === "?"}
-          <span class="feedback err">?</span>
-        {/if}
-      </div>
-    </div>
-
-    <div class="form-field">
-      <!-- spacer -->
-    </div>
-
-    <div class="form-field" class:derived={derivedField === "duration"}>
-      <label>Duration</label>
-      <div class="input-row">
-        {#if derivedField === "duration"}
-          <span class="derived-prefix">=</span>
-          <input type="text" value={durationText} disabled tabindex={-1} />
-        {:else}
-          <input type="text" value={durationText} oninput={onDurationInput} onblur={commitDuration} onkeydown={(e) => { if (e.key === 'Enter') commitDuration(); }} placeholder="e.g. 2h" />
-        {/if}
-        {#if derivedField !== "duration"}
-          {#if durationFeedback && durationFeedback !== "?"}
-            <span class="feedback ok">{durationFeedback}</span>
-          {:else if durationFeedback === "?"}
+  <div class="form-columns">
+    <!-- Left column: ramp inputs (always editable) -->
+    <div class="col-ramps">
+      <div class="form-field">
+        <label>Ramp up</label>
+        <div class="input-row">
+          <input type="text" value={rampUpText} oninput={onRampUpInput} onblur={commitRampUp} onkeydown={(e) => { if (e.key === 'Enter') commitRampUp(); }} placeholder="e.g. 1min" />
+          {#if rampUpFeedback && rampUpFeedback !== "?"}
+            <span class="feedback ok">{rampUpFeedback}</span>
+          {:else if rampUpFeedback === "?"}
             <span class="feedback err">?</span>
           {/if}
-        {/if}
+        </div>
+      </div>
+
+      <div class="form-field">
+        <label>Ramp down</label>
+        <div class="input-row">
+          <input type="text" value={rampDownText} oninput={onRampDownInput} onblur={commitRampDown} onkeydown={(e) => { if (e.key === 'Enter') commitRampDown(); }} placeholder="e.g. 1min" />
+          {#if rampDownFeedback && rampDownFeedback !== "?"}
+            <span class="feedback ok">{rampDownFeedback}</span>
+          {:else if rampDownFeedback === "?"}
+            <span class="feedback err">?</span>
+          {/if}
+        </div>
       </div>
     </div>
 
-    <div class="form-field" class:derived={derivedField === "itc"}>
-      <label title="Integrated Target Current">ITC</label>
-      <div class="input-row">
-        {#if derivedField === "itc"}
-          <span class="derived-prefix">=</span>
-          <input type="number" value={effItcUAh.toFixed(2)} disabled tabindex={-1} />
-        {:else}
-          <input type="number" value={itcUAh.toFixed(2)} oninput={onItcInput} min="0" step="0.1" />
-        {/if}
-        <span class="unit">µAh</span>
+    <!-- Right column: derive toggle + current / duration / ITC -->
+    <div class="col-values">
+      <!-- Derive toggle at top of right column -->
+      <fieldset class="calculate-selector">
+        <legend>Derive</legend>
+        <label class:active={derivedField === "current"}>
+          <input type="radio" name="derived" value="current" bind:group={derivedField} />
+          I<sub>max</sub>
+        </label>
+        <label class:active={derivedField === "duration"}>
+          <input type="radio" name="derived" value="duration" bind:group={derivedField} />
+          Duration
+        </label>
+        <label class:active={derivedField === "itc"}>
+          <input type="radio" name="derived" value="itc" bind:group={derivedField} />
+          ITC
+        </label>
+      </fieldset>
+
+      <div class="form-field" class:derived={derivedField === "current"}>
+        <label>I<sub>max</sub></label>
+        <div class="input-row">
+          <span class="derived-prefix" class:visible={derivedField === "current"}>=</span>
+          {#if derivedField === "current"}
+            <input type="text" value={effCurrentUA.toFixed(1)} disabled tabindex={-1} />
+          {:else}
+            <input type="number" bind:value={plateauUA} oninput={onCurrentInput} min="0" step="1" />
+          {/if}
+          <span class="unit">µA</span>
+        </div>
+      </div>
+
+      <div class="form-field" class:derived={derivedField === "duration"}>
+        <label>Duration</label>
+        <div class="input-row">
+          <span class="derived-prefix" class:visible={derivedField === "duration"}>=</span>
+          {#if derivedField === "duration"}
+            <input type="text" value={durationText} disabled tabindex={-1} />
+          {:else}
+            <input type="text" value={durationText} oninput={onDurationInput} onblur={commitDuration} onkeydown={(e) => { if (e.key === 'Enter') commitDuration(); }} placeholder="e.g. 2h" />
+          {/if}
+          {#if derivedField !== "duration"}
+            {#if durationFeedback && durationFeedback !== "?"}
+              <span class="feedback ok">{durationFeedback}</span>
+            {:else if durationFeedback === "?"}
+              <span class="feedback err">?</span>
+            {/if}
+          {/if}
+        </div>
+      </div>
+
+      <div class="form-field" class:derived={derivedField === "itc"}>
+        <label title="Integrated Target Current">ITC</label>
+        <div class="input-row">
+          <span class="derived-prefix" class:visible={derivedField === "itc"}>=</span>
+          {#if derivedField === "itc"}
+            <input type="number" value={effItcUAh.toFixed(2)} disabled tabindex={-1} />
+          {:else}
+            <input type="number" value={itcUAh.toFixed(2)} oninput={onItcInput} min="0" step="0.1" />
+          {/if}
+          <span class="unit">µAh</span>
+        </div>
       </div>
     </div>
   </div>
@@ -252,13 +254,27 @@
 <style>
   .generate-tab { display: flex; flex-direction: column; gap: 0.5rem; }
 
+  /* Two-column layout: ramps left, values right */
+  .form-columns {
+    display: flex;
+    gap: 1rem;
+  }
+
+  .col-ramps, .col-values {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    flex: 1;
+  }
+
+  /* Derive toggle */
   .calculate-selector {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.4rem;
     border: 1px solid var(--c-border);
     border-radius: 4px;
-    padding: 0.25rem 0.5rem;
+    padding: 0.2rem 0.4rem;
     margin: 0;
   }
 
@@ -267,14 +283,14 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--c-text-muted);
-    padding: 0 0.3rem;
+    padding: 0 0.25rem;
   }
 
   .calculate-selector label {
     display: flex;
     align-items: center;
-    gap: 0.2rem;
-    font-size: 0.75rem;
+    gap: 0.15rem;
+    font-size: 0.7rem;
     color: var(--c-text-muted);
     cursor: pointer;
   }
@@ -287,20 +303,24 @@
   .calculate-selector input[type="radio"] {
     accent-color: var(--c-accent);
     margin: 0;
-    width: 12px;
-    height: 12px;
+    width: 11px;
+    height: 11px;
   }
 
-  .form-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.4rem 0.8rem;
-  }
-
+  /* Form fields */
   .form-field {
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
+    padding: 0.2rem 0.3rem;
+    border-radius: 4px;
+    /* Reserve space for derived highlight — no jitter */
+    border: 1px solid transparent;
+  }
+
+  .form-field.derived {
+    border-color: var(--c-accent);
+    background: var(--c-accent-tint, rgba(59, 130, 246, 0.05));
   }
 
   .form-field label {
@@ -308,13 +328,6 @@
     color: var(--c-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
-  }
-
-  .form-field.derived {
-    background: var(--c-accent-tint, rgba(255, 165, 0, 0.06));
-    border-radius: 4px;
-    padding: 0.2rem 0.3rem;
-    margin: -0.2rem -0.3rem;
   }
 
   .input-row {
@@ -340,8 +353,14 @@
   .derived-prefix {
     font-size: 0.85rem;
     font-weight: 600;
+    color: transparent; /* always reserves space */
+    width: 0.7em;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .derived-prefix.visible {
     color: var(--c-accent);
-    margin-right: -0.1rem;
   }
 
   .unit { font-size: 0.7rem; color: var(--c-text-muted); }
