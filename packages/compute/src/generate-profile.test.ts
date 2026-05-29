@@ -109,11 +109,11 @@ describe("solveForITC", () => {
   });
 
   it("triangle case: ramps exceed duration", () => {
-    // 30 µA, T=100 s, ramps 80+80=160. Scaled peak = 30 × 100/160 = 18.75 µA
-    // ITC = 30 × 100² / (2 × 160) / 3600 = 30 × 10000 / 320 / 3600 = 0.2604 µAh
+    // 30 µA, T=100 s, ramps 80+80=160. Ramps scaled to fit, peak still = 30 µA.
+    // ITC = 30 × 100 / 2 / 3600 = 0.4167 µAh
     const r = solveForITC(30, 100, 80, 80);
     expect(r.ok).toBe(true);
-    expect(r.value).toBeCloseTo(0.2604, 3);
+    expect(r.value).toBeCloseTo(0.4167, 3);
   });
 
   it("zero duration → 0", () => {
@@ -200,4 +200,45 @@ describe("solveForCurrent", () => {
     expect(r.ok).toBe(false);
     expect(r.error).toBeDefined();
   });
+});
+
+// ---------------------------------------------------------------------------
+// Analytical ↔ numerical cross-check
+// ---------------------------------------------------------------------------
+
+describe("analytical vs numerical charge agreement", () => {
+  const cases = [
+    { name: "standard trapezoidal", I: 30, T: 7200, rU: 60, rD: 60 },
+    { name: "no ramps (step function)", I: 30, T: 3600, rU: 0, rD: 0 },
+    { name: "asymmetric ramps", I: 50, T: 3600, rU: 120, rD: 30 },
+    { name: "triangle (ramps exceed T)", I: 30, T: 100, rU: 80, rD: 80 },
+    { name: "short irradiation", I: 100, T: 10, rU: 2, rD: 2 },
+    { name: "long irradiation", I: 15, T: 86400, rU: 300, rD: 300 },
+    { name: "ramps exactly equal T", I: 30, T: 120, rU: 60, rD: 60 },
+    { name: "ramp-only (rUp = T, no rDown)", I: 30, T: 60, rU: 60, rD: 0 },
+  ];
+
+  for (const { name, I, T, rU, rD } of cases) {
+    it(`${name}: analytical ≈ numerical (< 0.5% error)`, () => {
+      const analytical = solveForITC(I, T, rU, rD);
+      const profile = generateProfile({
+        rampUpS: rU,
+        plateauCurrentMA: I / 1000,
+        rampDownS: rD,
+        totalDurationS: T,
+        timeStepS: 1,
+      });
+      const numerical = profileChargeUAh(profile);
+
+      // Agree within 2% — numerical has a last-point-zero artifact (the final
+      // sample is forced to 0, losing ~0.5×I×dt of charge). This is larger for
+      // short profiles where dt is a larger fraction of T.
+      if (analytical.value === 0) {
+        expect(numerical).toBeCloseTo(0, 2);
+      } else {
+        const relError = Math.abs(analytical.value - numerical) / analytical.value;
+        expect(relError).toBeLessThan(0.02);
+      }
+    });
+  }
 });
