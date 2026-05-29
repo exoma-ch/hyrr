@@ -34,13 +34,15 @@ describe("formatDecayMode", () => {
     expect(formatDecayMode("EC")).toBe("EC");
   });
 
-  it("collapses K/L/M-shell EC variants to plain EC", () => {
+  it("collapses K/L/M/N-shell EC variants to plain EC", () => {
     expect(formatDecayMode("KshellEC")).toBe("EC");
     expect(formatDecayMode("LshellEC")).toBe("EC");
     expect(formatDecayMode("MshellEC")).toBe("EC");
+    expect(formatDecayMode("NshellEC")).toBe("EC");
     expect(formatDecayMode("K_shell_EC")).toBe("EC");
     expect(formatDecayMode("L_shell_EC")).toBe("EC");
     expect(formatDecayMode("M_shell_EC")).toBe("EC");
+    expect(formatDecayMode("N_shell_EC")).toBe("EC");
   });
 
   it("passes unknown / empty modes through", () => {
@@ -97,10 +99,11 @@ describe("formatReaction", () => {
     expect(formatReaction("²⁷Al(p,αn)²²Na")).toBe("²⁷Al(p,αn)²²Na");
   });
 
-  it("collapses K/L/M-shell EC notations to (EC)", () => {
+  it("collapses K/L/M/N-shell EC notations to (EC)", () => {
     expect(formatReaction("⁵¹Mn(KshellEC)")).toBe("⁵¹Mn(EC)");
     expect(formatReaction("⁵¹Mn(LshellEC)")).toBe("⁵¹Mn(EC)");
     expect(formatReaction("⁵¹Mn(MshellEC)")).toBe("⁵¹Mn(EC)");
+    expect(formatReaction("⁵⁶Fe(NshellEC)")).toBe("⁵⁶Fe(EC)");
   });
 
   it("maps decay-arrow notation", () => {
@@ -142,12 +145,14 @@ describe("reactionFilterMatches (round-trip aliases)", () => {
 });
 
 describe("isShellEC", () => {
-  it("matches Kshell/Lshell/Mshell EC in any case", () => {
+  it("matches K/L/M/N-shell EC in any case", () => {
     expect(isShellEC("KshellEC")).toBe(true);
     expect(isShellEC("LshellEC")).toBe(true);
     expect(isShellEC("MshellEC")).toBe(true);
+    expect(isShellEC("NshellEC")).toBe(true);
     expect(isShellEC("kshellec")).toBe(true);
     expect(isShellEC("L_shell_EC")).toBe(true);
+    expect(isShellEC("N_shell_EC")).toBe(true);
   });
 
   it("does not match plain EC, beta+, or other modes", () => {

@@ -27,9 +27,15 @@ const DECAY_MODE_MAP: Record<string, string> = {
   "kshellec": "EC",
   "lshellec": "EC",
   "mshellec": "EC",
+  "nshellec": "EC",
+  "oshellec": "EC",
+  "pshellec": "EC",
   "k_shell_ec": "EC",
   "l_shell_ec": "EC",
   "m_shell_ec": "EC",
+  "n_shell_ec": "EC",
+  "o_shell_ec": "EC",
+  "p_shell_ec": "EC",
 };
 
 const PROJECTILE_MAP: Record<string, string> = {
@@ -61,7 +67,7 @@ export function formatDecayMode(mode: string): string {
 export function isShellEC(mode: string): boolean {
   if (!mode) return false;
   const key = mode.trim().toLowerCase().replace(/_/g, "");
-  return /^[klm]shellec$/.test(key);
+  return /^[klmnop]shellec$/.test(key);
 }
 
 export interface DecayChainEntry {
