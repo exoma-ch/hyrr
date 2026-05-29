@@ -26,6 +26,7 @@
   let rampUpFeedback = $state("");
   let rampDownFeedback = $state("");
   let durationFeedback = $state("");
+  let currentText = $state("30");
   let itcText = $state("");
 
   function formatSeconds(s: number): string {
@@ -77,8 +78,14 @@
 
   // --- Field handlers (only active when field is NOT derived) ---
   function onCurrentInput(e: Event) {
-    const v = parseFloat((e.target as HTMLInputElement).value);
-    if (!isNaN(v) && v >= 0) plateauUA = v;
+    currentText = (e.target as HTMLInputElement).value;
+  }
+  function commitCurrent() {
+    const v = parseFloat(currentText);
+    if (!isNaN(v) && v >= 0) {
+      plateauUA = v;
+      currentText = String(v);
+    }
   }
 
   function onDurationInput(e: Event) {
@@ -90,8 +97,14 @@
   }
 
   function onItcInput(e: Event) {
-    const v = parseFloat((e.target as HTMLInputElement).value);
-    if (!isNaN(v) && v >= 0) itcUAh = v;
+    itcText = (e.target as HTMLInputElement).value;
+  }
+  function commitItc() {
+    const v = parseFloat(itcText);
+    if (!isNaN(v) && v >= 0) {
+      itcUAh = v;
+      itcText = v.toFixed(2);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -152,8 +165,10 @@
     plateauUA = effCurrentUA;
     totalDurationS = effDurationS;
     itcUAh = effItcUAh;
+    currentText = String(effCurrentUA);
     durationText = formatSeconds(effDurationS);
     durationFeedback = "";
+    itcText = effItcUAh.toFixed(2);
     derivedField = newField;
   }
 
@@ -205,7 +220,7 @@
           {#if derivedField === "current"}
             <input type="text" value={effCurrentUA.toFixed(1)} disabled tabindex={-1} />
           {:else}
-            <input type="text" inputmode="decimal" value={plateauUA} oninput={onCurrentInput} onclick={(e) => e.stopPropagation()} />
+            <input type="text" inputmode="decimal" value={currentText} oninput={onCurrentInput} onblur={commitCurrent} onkeydown={(e) => { if (e.key === 'Enter') { commitCurrent(); (e.target as HTMLInputElement).blur(); }}} onclick={(e) => e.stopPropagation()} />
           {/if}
           <span class="unit">µA</span>
         </div>
@@ -239,7 +254,7 @@
           {#if derivedField === "itc"}
             <input type="text" inputmode="decimal" value={effItcUAh.toFixed(2)} disabled tabindex={-1} />
           {:else}
-            <input type="text" inputmode="decimal" value={itcUAh.toFixed(2)} oninput={onItcInput} onclick={(e) => e.stopPropagation()} />
+            <input type="text" inputmode="decimal" value={itcText} oninput={onItcInput} onblur={commitItc} onkeydown={(e) => { if (e.key === 'Enter') { commitItc(); (e.target as HTMLInputElement).blur(); }}} onclick={(e) => e.stopPropagation()} />
           {/if}
           <span class="unit">µAh</span>
         </div>
