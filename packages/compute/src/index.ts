@@ -114,8 +114,8 @@ export { parseCurrentProfileCSV } from "./current-profile-csv";
 export type { ParseResult, ParseError } from "./current-profile-csv";
 
 // --- Current profile generator ---
-export { generateProfile, profileChargeMS, profileChargeUAh, profileStats } from "./generate-profile";
-export type { GenerateProfileParams } from "./generate-profile";
+export { generateProfile, profileChargeMS, profileChargeUAh, profileStats, solveForITC, solveForDuration, solveForCurrent } from "./generate-profile";
+export type { GenerateProfileParams, SolveResult } from "./generate-profile";
 
 // --- Interpolation utility (for XS plotting) ---
 export { interp } from "./_interp";

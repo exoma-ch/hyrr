@@ -64,6 +64,102 @@ export function generateProfile(params: GenerateProfileParams): CurrentProfile {
   return { timesS: times, currentsMA: currents };
 }
 
+// ---------------------------------------------------------------------------
+// Analytical trapezoid constraint solver
+//
+// For a trapezoidal profile (ramp up → plateau → ramp down), the total charge
+// (ITC) is a closed-form function of plateau current, total duration, and ramp
+// times. This avoids generating and numerically integrating a full profile.
+//
+// Two regimes:
+//   Trapezoidal (T >= r_u + r_d): ITC = I × (T - (r_u + r_d) / 2)
+//   Triangle    (T <  r_u + r_d): ITC = I × T² / (2 × (r_u + r_d))
+//     (ramps scaled proportionally, peak = I × T / (r_u + r_d))
+// ---------------------------------------------------------------------------
+
+export interface SolveResult {
+  /** The computed value. */
+  value: number;
+  /** True if the result is physically valid. */
+  ok: boolean;
+  /** Human-readable error when !ok. */
+  error?: string;
+}
+
+/**
+ * Analytical ITC (µAh) from plateau current (µA), total duration (s),
+ * and ramp times (s).
+ */
+export function solveForITC(
+  plateauUA: number, totalDurationS: number, rampUpS: number, rampDownS: number,
+): SolveResult {
+  if (totalDurationS <= 0) return { value: 0, ok: true };
+  if (plateauUA <= 0) return { value: 0, ok: true };
+
+  const rSum = rampUpS + rampDownS;
+  let chargeUAs: number; // µA·s
+  if (totalDurationS >= rSum) {
+    // Trapezoidal: full ramps fit
+    chargeUAs = plateauUA * (totalDurationS - rSum / 2);
+  } else {
+    // Triangle: ramps scaled, peak = plateauUA × T / rSum
+    chargeUAs = plateauUA * totalDurationS * totalDurationS / (2 * rSum);
+  }
+  return { value: chargeUAs / 3600, ok: true };
+}
+
+/**
+ * Solve for total duration (s) given target ITC (µAh), plateau current (µA),
+ * and ramp times (s).
+ */
+export function solveForDuration(
+  itcUAh: number, plateauUA: number, rampUpS: number, rampDownS: number,
+): SolveResult {
+  if (itcUAh <= 0) return { value: 0, ok: true };
+  if (plateauUA <= 0) return { value: 0, ok: false, error: "Current must be > 0" };
+
+  const rSum = rampUpS + rampDownS;
+  const chargeUAs = itcUAh * 3600;
+
+  // Try trapezoidal first: T = chargeUAs / I + rSum / 2
+  const tTrap = chargeUAs / plateauUA + rSum / 2;
+  if (tTrap >= rSum) {
+    return { value: tTrap, ok: true };
+  }
+
+  // Triangle regime: chargeUAs = I × T² / (2 × rSum) → T = sqrt(2 × rSum × chargeUAs / I)
+  const tTri = rSum > 0 ? Math.sqrt(2 * rSum * chargeUAs / plateauUA) : 0;
+  if (tTri <= 0) return { value: 0, ok: false, error: "ITC too small for these ramps" };
+  return { value: tTri, ok: true };
+}
+
+/**
+ * Solve for plateau current (µA) given target ITC (µAh), total duration (s),
+ * and ramp times (s).
+ */
+export function solveForCurrent(
+  itcUAh: number, totalDurationS: number, rampUpS: number, rampDownS: number,
+): SolveResult {
+  if (itcUAh <= 0) return { value: 0, ok: true };
+  if (totalDurationS <= 0) return { value: 0, ok: false, error: "Duration must be > 0" };
+
+  const rSum = rampUpS + rampDownS;
+  const chargeUAs = itcUAh * 3600;
+
+  if (totalDurationS >= rSum) {
+    // Trapezoidal: I = chargeUAs / (T - rSum / 2)
+    const effectiveT = totalDurationS - rSum / 2;
+    if (effectiveT <= 0) {
+      return { value: 0, ok: false, error: "Duration too short for these ramps" };
+    }
+    return { value: chargeUAs / effectiveT, ok: true };
+  }
+
+  // Triangle: I = chargeUAs × 2 × rSum / T²
+  const current = chargeUAs * 2 * rSum / (totalDurationS * totalDurationS);
+  return { value: current, ok: true };
+}
+
 /** Compute total charge in mA·s via trapezoidal integration. */
 export function profileChargeMS(p: CurrentProfile): number {
   let charge = 0;

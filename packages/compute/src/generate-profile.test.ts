@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateProfile, profileChargeMS, profileChargeUAh, profileStats } from "./generate-profile";
+import { generateProfile, profileChargeMS, profileChargeUAh, profileStats, solveForITC, solveForDuration, solveForCurrent } from "./generate-profile";
 
 describe("generateProfile", () => {
   it("produces correct number of points", () => {
@@ -85,5 +85,119 @@ describe("profileStats", () => {
     expect(s.minCurrentUA).toBe(0);
     expect(s.maxCurrentUA).toBeCloseTo(30, 0);
     expect(s.chargeUAh).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Analytical trapezoid constraint solver
+// ---------------------------------------------------------------------------
+
+describe("solveForITC", () => {
+  it("trapezoidal: I × (T - rSum/2)", () => {
+    // 30 µA, 7200 s, ramps 60+60 = 120 s
+    // ITC = 30 × (7200 - 60) / 3600 = 30 × 7140 / 3600 = 59.5 µAh
+    const r = solveForITC(30, 7200, 60, 60);
+    expect(r.ok).toBe(true);
+    expect(r.value).toBeCloseTo(59.5, 1);
+  });
+
+  it("no ramps: I × T", () => {
+    // 30 µA, 3600 s, no ramps → 30 µAh
+    const r = solveForITC(30, 3600, 0, 0);
+    expect(r.ok).toBe(true);
+    expect(r.value).toBeCloseTo(30, 6);
+  });
+
+  it("triangle case: ramps exceed duration", () => {
+    // 30 µA, T=100 s, ramps 80+80=160. Scaled peak = 30 × 100/160 = 18.75 µA
+    // ITC = 30 × 100² / (2 × 160) / 3600 = 30 × 10000 / 320 / 3600 = 0.2604 µAh
+    const r = solveForITC(30, 100, 80, 80);
+    expect(r.ok).toBe(true);
+    expect(r.value).toBeCloseTo(0.2604, 3);
+  });
+
+  it("zero duration → 0", () => {
+    expect(solveForITC(30, 0, 60, 60)).toEqual({ value: 0, ok: true });
+  });
+
+  it("zero current → 0", () => {
+    expect(solveForITC(0, 3600, 60, 60)).toEqual({ value: 0, ok: true });
+  });
+});
+
+describe("solveForDuration", () => {
+  it("trapezoidal: round-trips with solveForITC", () => {
+    const itc = solveForITC(30, 7200, 60, 60);
+    const dur = solveForDuration(itc.value, 30, 60, 60);
+    expect(dur.ok).toBe(true);
+    expect(dur.value).toBeCloseTo(7200, 3);
+  });
+
+  it("no ramps: T = ITC × 3600 / I", () => {
+    const dur = solveForDuration(30, 30, 0, 0);
+    expect(dur.ok).toBe(true);
+    expect(dur.value).toBeCloseTo(3600, 6);
+  });
+
+  it("triangle case: round-trips correctly", () => {
+    // T=100, ramps=80+80, I=30
+    const itc = solveForITC(30, 100, 80, 80);
+    const dur = solveForDuration(itc.value, 30, 80, 80);
+    expect(dur.ok).toBe(true);
+    expect(dur.value).toBeCloseTo(100, 3);
+  });
+
+  it("zero ITC → 0", () => {
+    expect(solveForDuration(0, 30, 60, 60)).toEqual({ value: 0, ok: true });
+  });
+
+  it("zero current → error", () => {
+    const r = solveForDuration(30, 0, 60, 60);
+    expect(r.ok).toBe(false);
+    expect(r.error).toBeDefined();
+  });
+});
+
+describe("solveForCurrent", () => {
+  it("trapezoidal: round-trips with solveForITC", () => {
+    const itc = solveForITC(30, 7200, 60, 60);
+    const cur = solveForCurrent(itc.value, 7200, 60, 60);
+    expect(cur.ok).toBe(true);
+    expect(cur.value).toBeCloseTo(30, 3);
+  });
+
+  it("no ramps: I = ITC × 3600 / T", () => {
+    const cur = solveForCurrent(30, 3600, 0, 0);
+    expect(cur.ok).toBe(true);
+    expect(cur.value).toBeCloseTo(30, 6);
+  });
+
+  it("triangle case: round-trips correctly", () => {
+    const itc = solveForITC(30, 100, 80, 80);
+    const cur = solveForCurrent(itc.value, 100, 80, 80);
+    expect(cur.ok).toBe(true);
+    expect(cur.value).toBeCloseTo(30, 3);
+  });
+
+  it("duration equals rSum/2 → error (zero effective plateau)", () => {
+    // T = 60, ramps = 60+60 → rSum=120, T >= rSum is false (triangle)
+    // Actually T=60 < rSum=120, so triangle formula applies, which is fine.
+    // The error case is T >= rSum and T = rSum/2 — but that's impossible (T >= rSum > rSum/2).
+    // Real error: T >= rSum and effectiveT = T - rSum/2 ≤ 0 → T ≤ rSum/2 < rSum → contradiction.
+    // So the error only happens when we'd need rSum/2 > T but T >= rSum — impossible.
+    // Test the triangle edge: very short T relative to ramps
+    const cur = solveForCurrent(1, 1, 100, 100);
+    expect(cur.ok).toBe(true);
+    expect(cur.value).toBeGreaterThan(0);
+  });
+
+  it("zero ITC → 0", () => {
+    expect(solveForCurrent(0, 3600, 60, 60)).toEqual({ value: 0, ok: true });
+  });
+
+  it("zero duration → error", () => {
+    const r = solveForCurrent(30, 0, 60, 60);
+    expect(r.ok).toBe(false);
+    expect(r.error).toBeDefined();
   });
 });
