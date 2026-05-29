@@ -109,6 +109,8 @@
     const parsed = parseTime(irradText);
     if (parsed) {
       setIrradiation(parsed.seconds);
+      irradText = formatSeconds(parsed.seconds);
+      irradFeedback = "";
     }
   }
 
@@ -127,6 +129,8 @@
     const parsed = parseTime(coolText);
     if (parsed) {
       setCooling(parsed.seconds);
+      coolText = formatSeconds(parsed.seconds);
+      coolFeedback = "";
     }
   }
 

@@ -43,14 +43,28 @@
     return text ? "?" : "";
   }
 
-  // --- Ramp handlers (don't change derivedField) ---
+  /** On commit: resolve value, replace input text with canonical form, clear feedback. */
+  function commitTimeField(
+    text: string,
+    setSec: (s: number) => void,
+    setText: (t: string) => void,
+    setFeedback: (f: string) => void,
+  ) {
+    const parsed = parseTime(text);
+    if (parsed) {
+      setSec(parsed.seconds);
+      setText(formatSeconds(parsed.seconds));
+      setFeedback("");
+    }
+  }
+
+  // --- Ramp handlers ---
   function onRampUpInput(e: Event) {
     rampUpText = (e.target as HTMLInputElement).value;
     rampUpFeedback = handleTimeInput(rampUpText, (s) => { rampUpS = s; });
   }
   function commitRampUp() {
-    const parsed = parseTime(rampUpText);
-    if (parsed) rampUpS = parsed.seconds;
+    commitTimeField(rampUpText, (s) => { rampUpS = s; }, (t) => { rampUpText = t; }, (f) => { rampUpFeedback = f; });
   }
 
   function onRampDownInput(e: Event) {
@@ -58,8 +72,7 @@
     rampDownFeedback = handleTimeInput(rampDownText, (s) => { rampDownS = s; });
   }
   function commitRampDown() {
-    const parsed = parseTime(rampDownText);
-    if (parsed) rampDownS = parsed.seconds;
+    commitTimeField(rampDownText, (s) => { rampDownS = s; }, (t) => { rampDownText = t; }, (f) => { rampDownFeedback = f; });
   }
 
   // --- Field handlers (only active when field is NOT derived) ---
@@ -73,8 +86,7 @@
     durationFeedback = handleTimeInput(durationText, (s) => { totalDurationS = s; });
   }
   function commitDuration() {
-    const parsed = parseTime(durationText);
-    if (parsed) totalDurationS = parsed.seconds;
+    commitTimeField(durationText, (s) => { totalDurationS = s; }, (t) => { durationText = t; }, (f) => { durationFeedback = f; });
   }
 
   function onItcInput(e: Event) {
