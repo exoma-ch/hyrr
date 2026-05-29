@@ -80,11 +80,15 @@ repos:
         files: (pyproject\.toml|uv\.lock|wasm/Cargo\.(toml|lock))$
         pass_filenames: false
 
-  # Typo Linting
-  - repo: https://github.com/crate-ci/typos
-    rev: v1.39.0
+  # Typo Linting — flake's typos (downloaded binary doesn't run on NixOS)
+  - repo: local
     hooks:
       - id: typos
+        name: typos
+        entry: typos --force-exclude
+        language: system
+        pass_filenames: true
+        require_serial: true
 
   # Typstyle Linting
   - repo: local
