@@ -6,7 +6,7 @@
 #   2. wasm/Cargo.lock matches wasm/Cargo.toml (cargo check --locked)
 #
 # Exits non-zero on the first mismatch with a clear fix suggestion.
-# Used by pre-commit (local hook) and CI.
+# Used by prek (local git hook) and CI.
 
 set -euo pipefail
 

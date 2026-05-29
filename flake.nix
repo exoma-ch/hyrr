@@ -88,6 +88,14 @@
               clang
               just
 
+              # ── Git hooks (prek = fast Rust pre-commit reimpl) ────
+              # prek + the binary hook tools it drives, all from nixpkgs so
+              # they run on NixOS (pre-commit/prek's downloaded generic-linux
+              # binaries hit the stub-ld wall otherwise).
+              prek
+              typos
+              typstyle
+
               # ── Utilities ─────────────────────────────────────────
               git
               git-lfs
@@ -120,6 +128,11 @@
                 if [ ! -f "nucl-parquet/data/catalog.json" ]; then
                   echo "[hyrr] initializing nucl-parquet submodule..."
                   git submodule update --init nucl-parquet 2>/dev/null || true
+                fi
+
+                # ── Git hooks via prek (reads .pre-commit-config.yaml) ──
+                if [ -d .git ] && [ ! -f .git/hooks/pre-commit ]; then
+                  prek install 2>/dev/null || true
                 fi
 
                 echo "hyrr devshell — python $(python3 --version 2>&1 | cut -d' ' -f2), rustc $(rustc --version | cut -d' ' -f2), node $(node --version)"

@@ -31,13 +31,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Lint/type/hook tooling (ruff, pyright, prek) is provided by the flake
+# (flake.nix) — see [dependency-groups].dev note — not pip, so it isn't
+# duplicated here.
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.0",
     "nbmake>=1.5",
-    "ruff>=0.3",
-    "pyright>=1.1",
-    "pre-commit>=3.6",
     "ipykernel>=6.0",
     "jupyter>=1.0",
 ]
@@ -82,10 +82,10 @@ packages = ["src/hyrr"]
 # sdist, which breaks `uv sync --dev` on Python 3.13 and on NixOS. The geometry
 # math tests (tests/test_geometry.py) use only numpy; STEP/mesh support is
 # lazy-imported and opt-in via `uv sync --extra geometry`.
-# ruff + pyright are NOT here — the flake (flake.nix) is the single source
-# for lint/type tooling, used by both `nix develop` locally and CI's lint job.
-# This keeps one pinned ruff/pyright version (via flake.lock) instead of three
-# (pre-commit, uv, CI) drifting apart.
+# ruff + pyright + prek are NOT here — the flake (flake.nix) is the single
+# source for lint/type/hook tooling, used by both `nix develop` locally and
+# CI's lint job. This keeps one pinned version (via flake.lock) instead of
+# several (prek hooks, uv, CI) drifting apart.
 dev = [
     "hatchling>=1.25",
     "ipykernel>=6.31.0",
