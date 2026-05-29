@@ -79,6 +79,9 @@
       delete updated.energy_out_MeV;
       updated.thickness_cm = parsed.cm;
       onchange(updated);
+      // Auto-fill: replace input with canonical form, clear feedback
+      thicknessText = formatCm(parsed.cm);
+      thicknessFeedback = "";
     }
   }
 
