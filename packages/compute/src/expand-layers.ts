@@ -22,13 +22,13 @@ export function expandLayers(
 ): LayerConfig[] {
   const result: LayerConfig[] = [];
   let energy = config.beam.energy_MeV;
-  
+
   for (const item of config.layers) {
     if (isGroup(item)) {
       // Expand group with current energy state
       const groupLayers = expandGroup(item, config.beam.projectile, db, energy);
       result.push(...groupLayers);
-      
+
       // Update energy after group (if db available for tracking)
       if (db) {
         if (item.mode === "energy") {
@@ -48,7 +48,7 @@ export function expandLayers(
       }
     }
   }
-  
+
   return result;
 }
 
@@ -62,7 +62,7 @@ function expandGroup(
   energyIn: number,
 ): LayerConfig[] {
   const { layers, mode } = group;
-  
+
   if (mode === "count") {
     const count = group.count ?? 1;
     const repeated: LayerConfig[] = [];
@@ -71,17 +71,17 @@ function expandGroup(
     }
     return repeated;
   }
-  
+
   // Energy mode — incrementally append group copies until beam energy drops below threshold
   if (!db) return [...layers]; // can't compute without db, return single copy
-  
+
   const threshold = group.energyThreshold ?? 0;
   const MAX_ITERATIONS = 500;
-  
+
   const repeated: LayerConfig[] = [];
   let energy = energyIn;
   let iterations = 0;
-  
+
   while (energy > threshold && iterations < MAX_ITERATIONS) {
     for (const layer of layers) {
       const eOut = computeLayerEnergyOut(db, projectile, layer, energy);
@@ -98,7 +98,7 @@ function expandGroup(
     }
     iterations++;
   }
-  
+
   return repeated;
 }
 

@@ -267,17 +267,19 @@ def insert_cross_sections(
             # Skip NaN/inf values from malformed data files
             if not (math.isfinite(energy) and math.isfinite(xs)):
                 continue
-            batch.append((
-                entry.projectile,
-                entry.target_Z,
-                entry.target_A,
-                entry.residual_Z,
-                entry.residual_A,
-                entry.state,
-                energy,
-                xs,
-                entry.source,
-            ))
+            batch.append(
+                (
+                    entry.projectile,
+                    entry.target_Z,
+                    entry.target_A,
+                    entry.residual_Z,
+                    entry.residual_A,
+                    entry.state,
+                    energy,
+                    xs,
+                    entry.source,
+                )
+            )
 
             if len(batch) >= batch_size:
                 conn.executemany(sql, batch)

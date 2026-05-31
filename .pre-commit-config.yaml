@@ -1,5 +1,21 @@
 ---
-# .pre-commit-config.yaml
+# .pre-commit-config.yaml — run by `prek` (not pre-commit). See flake.nix.
+
+# Skip generated / vendored / upstream-data / scratch files for ALL hooks.
+# These are not hand-maintained source: physics data tables (must not be
+# reformatted), generated Tauri schemas, logo SVG assets, jupytext notebook
+# pairs, the release-please CHANGELOG, and working/scratch docs.
+exclude: |
+  (?x)^(
+    data/stopping/.*
+    | .*\.dat
+    | desktop/src-tauri/gen/.*
+    | notebooks/.*
+    | .*\.svg
+    | CHANGELOG\.md
+    | development-plan\.md
+    | HANDOFF\.md
+  )$
 
 repos:
   # General Pre-commit Hooks (Fixes formatting issues)
@@ -16,6 +32,9 @@ repos:
       - id: debug-statements
       - id: destroyed-symlinks
       - id: detect-private-key
+        # worker/src/index.ts strips PEM armor markers from a key blob; the
+        # BEGIN/END marker literals there are pattern strings, not a real key.
+        exclude: ^worker/src/index\.ts$
       - id: end-of-file-fixer
       - id: mixed-line-ending
       - id: trailing-whitespace
@@ -37,6 +56,16 @@ repos:
         language: system
         types_or: [python, pyi]
         require_serial: true
+      # Pyright — flake's pinned pyright, same invocation as CI's lint job.
+      # pass_filenames:false so it type-checks the whole package (src/hyrr/),
+      # not just the changed files; only triggers when some Python file is staged.
+      - id: pyright
+        name: pyright (type check)
+        entry: pyright src/hyrr/
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
 
   # YAML Linting
   - repo: https://github.com/adrienverge/yamllint
@@ -45,20 +74,26 @@ repos:
       - id: yamllint
         args: ["--format", "parsable", "--strict"]
 
-  # Shellcheck
+  # Shellcheck (.envrc is a direnv file, not a shell script — skip SC2148)
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.10.0.1
     hooks:
       - id: shellcheck
         name: shellcheck
+        exclude: ^\.envrc$
 
-  # Markdown Linting
+  # Markdown Linting — keep structural rules, drop purely-stylistic ones the
+  # repo doesn't follow (line-length, list-marker style, duplicate headings,
+  # consecutive blanks, mandatory top-level H1, ordered-list numbering).
   - repo: https://github.com/jackdewinter/pymarkdown
     rev: v0.9.23
     hooks:
       - id: pymarkdown
         name: pymarkdown
-        args: ["scan"]
+        args:
+          - "-d"
+          - "MD013,MD024,MD004,MD012,MD041,MD029"
+          - "scan"
 
   # Justfile formatting
   - repo: local

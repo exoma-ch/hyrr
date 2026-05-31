@@ -1,0 +1,31 @@
+# typos config — allow-list of false positives in this scientific codebase.
+# Element symbols, nuclear-reaction notation, numpy APIs, and code identifiers
+# that typos misreads as misspellings. Mapping a word to itself accepts it.
+[default.extend-words]
+ba = "ba"             # Barium (element symbol)
+nd = "nd"             # Neodymium (element symbol)
+ned = "ned"           # ENDF / identifier fragment
+ein = "ein"           # E_in / Ein (beam energy-in)
+ser = "ser"           # ...Ser (Serializable, code identifier)
+pn = "pn"             # (p,pn) nuclear-reaction channel
+arange = "arange"     # numpy.arange
+pont = "pont"         # DuPont (Kapton manufacturer)
+tabl = "tabl"         # TABL (constant/identifier fragment)
+daa = "daa"           # identifier/hex fragment
+mis = "mis"           # "mis-target" (comment)
+browseable = "browseable"   # accepted variant of browsable
+unparseable = "unparseable" # accepted variant of unparsable
+
+# Skip generated / vendored / data paths (prek's global exclude covers most,
+# but typos is also run directly via `just`/CI sometimes).
+[files]
+extend-exclude = [
+  "CHANGELOG.md",
+  "notebooks/",
+  "data/stopping/",
+  "*.dat",
+  "desktop/src-tauri/gen/",
+  "*.ipynb",
+  "uv.lock",
+  "*.lock",
+]

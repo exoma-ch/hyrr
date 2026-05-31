@@ -56,7 +56,7 @@ cd frontend && npm run check
 
 ## Commit format
 
-```
+```text
 type(scope): description
 ```
 

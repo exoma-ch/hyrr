@@ -55,6 +55,6 @@ fi
 
 # 5. Dev server
 echo "==> Starting vite dev server..."
-PORT_ARG=""
-[ -n "$PORT" ] && PORT_ARG="--port $PORT"
-cd frontend && exec npx vite --host 0.0.0.0 $PORT_ARG
+PORT_ARG=()
+[ -n "$PORT" ] && PORT_ARG=(--port "$PORT")
+cd frontend && exec npx vite --host 0.0.0.0 "${PORT_ARG[@]}"

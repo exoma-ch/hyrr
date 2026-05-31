@@ -104,8 +104,15 @@ def export_meta(conn: sqlite3.Connection, output_dir: Path) -> None:
         "daughter_Z, daughter_A, daughter_state, branching FROM decay_data"
     ).fetchall()
     cols = [
-        "Z", "A", "state", "half_life_s", "decay_mode",
-        "daughter_Z", "daughter_A", "daughter_state", "branching",
+        "Z",
+        "A",
+        "state",
+        "half_life_s",
+        "decay_mode",
+        "daughter_Z",
+        "daughter_A",
+        "daughter_state",
+        "branching",
     ]
     parts.append(f"-- decay_data: {len(rows)} rows")
     parts.append(_rows_to_inserts("decay_data", rows, cols))
@@ -145,7 +152,9 @@ def export_stopping(conn: sqlite3.Connection, output_dir: Path) -> None:
     content += _rows_to_inserts("stopping_power", rows, cols)
 
     size = _write_gzipped(output_dir / "stopping.sql.gz", content)
-    logger.info("Wrote stopping.sql.gz (%d bytes uncompressed, %d rows)", size, len(rows))
+    logger.info(
+        "Wrote stopping.sql.gz (%d bytes uncompressed, %d rows)", size, len(rows)
+    )
 
 
 def export_cross_sections(conn: sqlite3.Connection, output_dir: Path) -> None:
@@ -160,8 +169,15 @@ def export_cross_sections(conn: sqlite3.Connection, output_dir: Path) -> None:
     ).fetchall()
 
     cols = [
-        "projectile", "target_Z", "target_A", "residual_Z", "residual_A",
-        "state", "energy_MeV", "xs_mb", "source",
+        "projectile",
+        "target_Z",
+        "target_A",
+        "residual_Z",
+        "residual_A",
+        "state",
+        "energy_MeV",
+        "xs_mb",
+        "source",
     ]
 
     total_files = 0

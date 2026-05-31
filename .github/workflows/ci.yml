@@ -20,21 +20,20 @@ jobs:
       - name: Check lockfiles in sync
         run: bash scripts/check-lockfiles.sh
 
-  # lint + test run inside the flake's lean `ci` devShell so ruff, pyright,
-  # uv, and Python 3.12 are the exact versions used by local dev
-  # (`nix develop`) — one pinned toolchain via flake.lock, no drift.
+  # lint + test run inside the flake's lean `ci` devShell so the toolchain
+  # (ruff, pyright, typos, typstyle, just, prek, uv, Python 3.12) is the exact
+  # versions used by local dev (`nix develop`) — one pinned toolchain via
+  # flake.lock, no drift.
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/nix-installer-action@v16
-      - name: Lint (ruff + pyright via flake)
-        run: |
-          nix develop .#ci --command bash -c '
-            ruff check src/ tests/ data/
-            ruff format --check src/ tests/
-            pyright src/hyrr/
-          '
+      # Run the SAME gate local dev runs (.pre-commit-config.yaml via prek):
+      # ruff, ruff-format, pyright, yamllint, shellcheck, pymarkdown, typos,
+      # the pre-commit-hooks file checks, etc. One SSoT for "is this clean?".
+      - name: Lint (prek run --all-files via flake)
+        run: nix develop .#ci --command prek run --all-files --show-diff-on-failure
 
   test:
     runs-on: ubuntu-latest

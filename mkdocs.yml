@@ -66,24 +66,24 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting Started:
-    - Installation: getting-started/installation.md
-    - Quick Start: getting-started/quickstart.md
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
   - Frontend:
-    - Web App: frontend/webapp.md
-    - Architecture: frontend/architecture.md
+      - Web App: frontend/webapp.md
+      - Architecture: frontend/architecture.md
   - User Guide:
-    - Use Cases: guide/use-cases.md
-    - CLI Reference: guide/cli.md
+      - Use Cases: guide/use-cases.md
+      - CLI Reference: guide/cli.md
   - API Reference:
-    - Models: api/models.md
-    - Database: api/db.md
-    - Native Bridge: api/native-bridge.md
-    - Materials: api/materials.md
-    - Plotting: api/plotting.md
-    - Output: api/output.md
+      - Models: api/models.md
+      - Database: api/db.md
+      - Native Bridge: api/native-bridge.md
+      - Materials: api/materials.md
+      - Plotting: api/plotting.md
+      - Output: api/output.md
   - Development:
-    - Contributing: development/contributing.md
-    - Architecture: development/architecture.md
+      - Contributing: development/contributing.md
+      - Architecture: development/architecture.md
 
 extra:
   social:

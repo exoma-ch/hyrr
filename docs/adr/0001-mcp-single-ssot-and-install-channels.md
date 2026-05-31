@@ -161,11 +161,11 @@ without trusting an invisible default.
 
 ## References
 
-- #67 — MCP consolidation parent issue
-- #36 — Rust physics core SSoT
-- #35 — `--mcp` flag on Tauri binary (predecessor)
+- Issue #67 — MCP consolidation parent issue
+- Issue #36 — Rust physics core SSoT
+- Issue #35 — `--mcp` flag on Tauri binary (predecessor)
 - PR #70 — Rust-side consolidation
 - PR #73 — PyO3/maturin wrapper
-- #71 — PyPI publish + cibuildwheel + remaining follow-ups
+- Issue #71 — PyPI publish + cibuildwheel + remaining follow-ups
 - `core/src/mcp/` — tool definitions and dispatch
 - `scripts/mcp_parity_test.sh` — drift guard
