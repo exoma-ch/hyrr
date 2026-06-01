@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0](https://github.com/exoma-ch/hyrr/compare/v0.13.0...v0.14.0) (2026-06-01)
+
+
+### Features
+
+* 3-way current profile constraint system + NshellEC fix ([#406](https://github.com/exoma-ch/hyrr/issues/406)) ([c290c21](https://github.com/exoma-ch/hyrr/commit/c290c21fa88a760412ddf62aa80221025876fd49))
+* **compute:** add analytical trapezoid charge solver with triangle-case branching ([0b59699](https://github.com/exoma-ch/hyrr/commit/0b59699441766c45cf6bfa38d98c5074a6efa470)), closes [#404](https://github.com/exoma-ch/hyrr/issues/404)
+* CurrentProfilePopup — upload + generate profiles ([#403](https://github.com/exoma-ch/hyrr/issues/403)) ([5e0683a](https://github.com/exoma-ch/hyrr/commit/5e0683a5ed82e506fd4a3e3f18a543235dd4c6fb)), closes [#395](https://github.com/exoma-ch/hyrr/issues/395)
+* profile trim handles + editable point table — closes [#328](https://github.com/exoma-ch/hyrr/issues/328) ([#408](https://github.com/exoma-ch/hyrr/issues/408)) ([d72cd17](https://github.com/exoma-ch/hyrr/commit/d72cd171afea7ee10dfc508b2acc059c77ca6c78))
+
+
+### Bug Fixes
+
+* **ci:** ruff import order + remove duplicate workflow_dispatch ([5ddf137](https://github.com/exoma-ch/hyrr/commit/5ddf137542727609ee749f4ea95f6b49ba545b28))
+* **frontend:** 3-way constraint solver + auto-fill time inputs in Generate tab ([#407](https://github.com/exoma-ch/hyrr/issues/407)) ([b51ba8d](https://github.com/exoma-ch/hyrr/commit/b51ba8d62f4ded6ce87277ea9385727ee9ae89cf))
+* **frontend:** all Generate tab inputs commit on blur/Enter only ([36a21f6](https://github.com/exoma-ch/hyrr/commit/36a21f647e2f61ff952302e05bba39370280dd80))
+* **frontend:** beam bar layout — toggle spans current+irradiation, smart time inputs ([4087613](https://github.com/exoma-ch/hyrr/commit/4087613c349118ba0b3811b51c76205d802b102e))
+* **frontend:** Generate tab — clickable rows replace radio dots, no spinners ([d50e340](https://github.com/exoma-ch/hyrr/commit/d50e3406236391b2a18b3b2e0a7947cc978ae3ca))
+* **frontend:** Generate tab layout — ramps left, values+derive right, no jitter ([61e3afe](https://github.com/exoma-ch/hyrr/commit/61e3afe88610394ed9d1ef06d6d6d38fa77d2af0))
+* **frontend:** layer table shows user-defined material name, not parsed formula ([6a99548](https://github.com/exoma-ch/hyrr/commit/6a995486a5ca6f1cd96477d196ca956f56710e50)), closes [#376](https://github.com/exoma-ch/hyrr/issues/376)
+* **frontend:** merge constant/profile current into single toggle field ([#399](https://github.com/exoma-ch/hyrr/issues/399)) ([7097df2](https://github.com/exoma-ch/hyrr/commit/7097df2473923bc160ddb2e6f214344c0362c173))
+* **frontend:** smart time inputs auto-fill canonical form on Enter/blur ([7be1e01](https://github.com/exoma-ch/hyrr/commit/7be1e01e7690e7c487c7f307bafb298df649d3be))
+* **frontend:** switching derived field captures current values first ([a7647ec](https://github.com/exoma-ch/hyrr/commit/a7647ec019225d736f9085a10c32ea5168968d4d))
+* **frontend:** thickness input auto-fills canonical form on Enter/blur ([e25d6ae](https://github.com/exoma-ch/hyrr/commit/e25d6aed53fab605b83b5fa5af5ad933b8e63f12))
+* **frontend:** vertical derive radio strip + label alignment in Generate tab ([5fd2d02](https://github.com/exoma-ch/hyrr/commit/5fd2d02daa3032817d3d415acb4a27243181ff3a))
+
+
+### Tests
+
+* **e2e:** fix stale "Define & save" material selector ([#429](https://github.com/exoma-ch/hyrr/issues/429)) ([aad0073](https://github.com/exoma-ch/hyrr/commit/aad0073e7daeb32d76749c235d6de07008bfcd9b)), closes [#426](https://github.com/exoma-ch/hyrr/issues/426)
+
+
+### Miscellaneous
+
+* add scripts/dev.sh + just recipes for local development ([#400](https://github.com/exoma-ch/hyrr/issues/400)) ([e90586a](https://github.com/exoma-ch/hyrr/commit/e90586a3f187f941ceef9efb797c35819a143e5f))
+* **deps:** bump nucl-parquet submodule -&gt; data-2026.6.0 (EAF-2010 removed) ([#430](https://github.com/exoma-ch/hyrr/issues/430)) ([c2bddac](https://github.com/exoma-ch/hyrr/commit/c2bddac5b136a8d51245898515d20bc32e9197c2))
+* dev env doesn't pull vtk (local Python on 3.13/NixOS) ([#409](https://github.com/exoma-ch/hyrr/issues/409)) ([41ae12b](https://github.com/exoma-ch/hyrr/commit/41ae12b75c40f289700eee9606e7ab28184853e2))
+* ship sample current profile CSV for manual testing ([#397](https://github.com/exoma-ch/hyrr/issues/397)) ([f916938](https://github.com/exoma-ch/hyrr/commit/f9169385c97bb7b84568d7cbcce0a78b1bc0a9dc))
+* stop committing WASM binary to git ([#402](https://github.com/exoma-ch/hyrr/issues/402)) ([68c4b31](https://github.com/exoma-ch/hyrr/commit/68c4b31f8aced34f2f4e1ec9476f4958f6f0efdd))
+* switch pre-commit → prek; untrack e2e .last-run.json ([#411](https://github.com/exoma-ch/hyrr/issues/411)) ([2142919](https://github.com/exoma-ch/hyrr/commit/2142919f265238e981ede19477f2edfe1f8a8e86))
+
+
+### Documentation
+
+* **legal:** reconcile license to MIT + add disclaimer, privacy, terms, citation, compliance ([#432](https://github.com/exoma-ch/hyrr/issues/432)) ([645c661](https://github.com/exoma-ch/hyrr/commit/645c661919946b5752eb4ed540acc971dd937e42))
+
+
+### CI
+
+* unify lint gate on `prek run --all-files` (one SSoT) ([#413](https://github.com/exoma-ch/hyrr/issues/413)) ([4e0be82](https://github.com/exoma-ch/hyrr/commit/4e0be82e6a05713c42fae8eacfe8564cf37f690a))
+
 ## [0.13.0](https://github.com/exoma-ch/hyrr/compare/v0.12.1...v0.13.0) (2026-05-28)
 
 
