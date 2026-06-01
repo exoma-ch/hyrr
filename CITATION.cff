@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use HYRR, please cite it as below, and cite the nuclear data libraries you use (see nucl-parquet/ATTRIBUTION.md)."
+title: "HYRR: accelerator-driven radionuclide-production calculations"
+abstract: >-
+  HYRR computes accelerator-driven radionuclide production — cross sections,
+  stopping power, production yields, and decay chains — from evaluated nuclear
+  data, with a browser app, Python package, desktop app, and MCP server.
+type: software
+authors:
+  - name: "eXoma (Exotic Matter Applications), ETH Zürich"
+    # TODO: add individual authors (name + ORCID) before minting the DOI.
+repository-code: "https://github.com/exoma-ch/hyrr"
+license: MIT
+keywords:
+  - radionuclide production
+  - nuclear data
+  - cross sections
+  - cyclotron targetry
+# TODO: add `doi:` once a Zenodo release DOI is minted (issue #420).

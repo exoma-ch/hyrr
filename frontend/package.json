@@ -2,6 +2,7 @@
   "name": "hyrr-frontend",
   "private": true,
   "version": "0.13.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
