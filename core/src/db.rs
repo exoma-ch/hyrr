@@ -70,6 +70,17 @@ pub trait DatabaseProtocol: Send + Sync {
     /// Get gamma dose rate constant k (µSv·m²/MBq·h).
     fn get_dose_constant(&self, z: u32, a: u32, state: &str) -> Option<(f64, String)>;
 
+    /// Per-decay emission lines for the *parent* nuclide `(z, a, state)` (#427).
+    ///
+    /// Returns every γ / X-ray / Auger / conversion-electron / β± /
+    /// annihilation line emitted per decay of the parent, with absolute
+    /// `intensity_per_decay`. Default implementation returns an empty vec for
+    /// stores without emission data (in-memory / WASM); the parquet-backed
+    /// store overrides it.
+    fn get_emissions(&self, _z: u32, _a: u32, _state: &str) -> Vec<crate::types::EmissionLine> {
+        Vec::new()
+    }
+
     fn get_element_symbol(&self, z: u32) -> String;
     fn get_element_z(&self, symbol: &str) -> u32;
 
@@ -220,8 +231,8 @@ mod np_store {
 use super::*;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use nucl_parquet::{AbundancesDb, CrossSectionDb, DecayDb, DoseDb, StoppingDb};
-use crate::types::{CrossSectionData, DecayMode};
+use nucl_parquet::{AbundancesDb, CrossSectionDb, DecayDb, DoseDb, ParquetStore, StoppingDb};
+use crate::types::{CrossSectionData, DecayMode, EmissionLine};
 
 /// Nuclear data store backed by the `nucl-parquet` Rust client crate.
 ///
@@ -238,6 +249,10 @@ pub struct NpDataStore {
     elements: HashMap<u32, String>,
     symbol_to_z: HashMap<String, u32>,
     xs_cache: Mutex<HashMap<String, Vec<CrossSectionData>>>,
+    /// Generic reader for the parent-keyed `meta/ensdf/emissions/` dataset
+    /// (#427). nucl-parquet's typed DBs don't cover it, so we go through the
+    /// crate's generic `ParquetStore` (which caches loaded files internally).
+    emissions: ParquetStore,
 }
 
 impl NpDataStore {
@@ -255,6 +270,9 @@ impl NpDataStore {
         let decay = DecayDb::open(root.join("meta"))?;
         let dose = DoseDb::open(root.join("meta"))?;
         let stopping = StoppingDb::open(root.join("stopping"))?;
+        // Rooted at data_root so rel paths read as `meta/ensdf/...`. No I/O
+        // until the first emission query.
+        let emissions = ParquetStore::new(&root);
 
         // Build Z ↔ symbol maps from abundances
         let mut elements = HashMap::new();
@@ -277,6 +295,7 @@ impl NpDataStore {
             elements,
             symbol_to_z,
             xs_cache: Mutex::new(HashMap::new()),
+            emissions,
         })
     }
 
@@ -409,6 +428,57 @@ impl DatabaseProtocol for NpDataStore {
         self.dose
             .dose_constant(z, a, lookup_state)
             .map(|dc| (dc.k, dc.source.clone()))
+    }
+
+    fn get_emissions(&self, z: u32, a: u32, state: &str) -> Vec<EmissionLine> {
+        // Emission rows live in the parent's element file, keyed by parent.
+        let symbol = self.get_element_symbol(z);
+        let rel = format!("meta/ensdf/emissions/{symbol}.parquet");
+        let lookup_state = normalize_decay_state(state);
+
+        // No emission file for this element → no lines (not an error).
+        let Ok(rows) = self.emissions.load(&rel) else {
+            return Vec::new();
+        };
+
+        // Filter in Rust (not ParquetStore::Filter) to control cross-int-type
+        // number matching and ground-state ("" vs "g") normalization.
+        rows.iter()
+            .filter(|row| {
+                row.get("parent_Z").and_then(|v| v.as_u64()) == Some(z as u64)
+                    && row.get("parent_A").and_then(|v| v.as_u64()) == Some(a as u64)
+                    && row
+                        .get("parent_state")
+                        .and_then(|v| v.as_str())
+                        .map(normalize_decay_state)
+                        .unwrap_or("")
+                        == lookup_state
+            })
+            .filter_map(|row| {
+                Some(EmissionLine {
+                    rad_type: row.get("rad_type")?.as_str()?.to_string(),
+                    energy_kev: row.get("energy_keV")?.as_f64()?,
+                    intensity_per_decay: row.get("intensity_pct")?.as_f64()? / 100.0,
+                    decay_mode: row
+                        .get("decay_mode")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    daughter_z: row
+                        .get("daughter_Z")
+                        .and_then(|v| v.as_u64())
+                        .map(|n| n as u32),
+                    daughter_a: row
+                        .get("daughter_A")
+                        .and_then(|v| v.as_u64())
+                        .map(|n| n as u32),
+                    icc_total: row.get("icc_total").and_then(|v| v.as_f64()),
+                    rad_subtype: row
+                        .get("rad_subtype")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                })
+            })
+            .collect()
     }
 
     fn get_element_symbol(&self, z: u32) -> String {

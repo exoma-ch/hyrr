@@ -119,7 +119,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-      - name: MCP tool unit tests (pure layer-selection helpers)
+      - name: MCP tool unit tests (layer selection, result cache, dataset round-trip)
         working-directory: core
         run: "cargo test --features mcp --lib mcp::"
       - name: MCP layer-selection integration test (real tendl-2023-iso data)
@@ -127,6 +127,11 @@ jobs:
         env:
           HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
         run: cargo test --features mcp --test mcp_layer_selection
+      - name: MCP structured-export integration test (inventory / dataset / emission curve)
+        working-directory: core
+        env:
+          HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
+        run: cargo test --features mcp --test mcp_structured_export
 
   hyrr-py-check:
     # Catches PyO3 binding type drift against hyrr-core (Refs: #181).

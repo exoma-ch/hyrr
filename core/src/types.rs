@@ -335,6 +335,31 @@ pub struct StackResult {
     pub cooling_time_s: f64,
 }
 
+/// A single radiation emission line for a decaying nuclide (#427).
+///
+/// Sourced from the parent-keyed `meta/ensdf/emissions/{Symbol}.parquet`
+/// dataset: each row is one γ / X-ray / Auger / conversion-electron / β± /
+/// annihilation line emitted *per decay of the parent* `(z, a, state)`.
+/// `intensity_per_decay` is absolute (the raw `intensity_pct / 100`), so a
+/// 511 keV annihilation pair reads `2.0` and Co-60's 1173 keV γ reads `0.9986`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmissionLine {
+    /// `gamma` | `xray` | `auger` | `ce` | `beta-` | `beta+` | `annihilation`.
+    pub rad_type: String,
+    pub energy_kev: f64,
+    /// Photons/particles emitted per parent decay (absolute, not %).
+    pub intensity_per_decay: f64,
+    /// Feeding decay channel: `EC` | `beta-` | `beta+` | `IT` |
+    /// `KshellEC` / `LshellEC` / `MshellEC`. `None` when unfiled.
+    pub decay_mode: Option<String>,
+    pub daughter_z: Option<u32>,
+    pub daughter_a: Option<u32>,
+    /// Total internal-conversion coefficient (γ lines only).
+    pub icc_total: Option<f64>,
+    /// Line subtype, e.g. `Kα1` (X-ray) or `KLL` (Auger). `None` for γ.
+    pub rad_subtype: Option<String>,
+}
+
 /// Chain isotope used in the coupled ODE solver.
 #[derive(Debug, Clone)]
 pub struct ChainIsotope {

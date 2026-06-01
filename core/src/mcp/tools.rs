@@ -8,6 +8,109 @@ use crate::materials::{
 use crate::types::*;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use super::cache;
+use super::dataset::{self, Table};
+
+/// An embedded binary resource attached to a tool result. `blob_base64` holds
+/// standard-base64-encoded bytes (#427 uses this for Parquet tables).
+#[derive(Debug)]
+pub struct ToolResource {
+    pub uri: String,
+    pub mime_type: String,
+    pub blob_base64: String,
+}
+
+/// A tool's output: LLM-readable text plus any embedded resources. Most tools
+/// return text only (via `From<String>`); the dataset tools also attach
+/// Parquet resources alongside the inline JSON.
+#[derive(Debug)]
+pub struct ToolResponse {
+    pub text: String,
+    pub resources: Vec<ToolResource>,
+}
+
+impl From<String> for ToolResponse {
+    fn from(text: String) -> Self {
+        Self { text, resources: Vec::new() }
+    }
+}
+
+/// Base64-encode bytes for an embedded MCP resource blob.
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// Attach a table as a Parquet resource under a stable `hyrr://` URI.
+fn parquet_resource(sim_id: &str, table: &Table) -> Result<ToolResource, String> {
+    Ok(ToolResource {
+        uri: format!("hyrr://sim/{sim_id}/{}.parquet", table.name),
+        mime_type: "application/vnd.apache.parquet".to_string(),
+        blob_base64: b64(&table.to_parquet_bytes()?),
+    })
+}
+
+/// Fingerprint of session-defined materials so the result cache can't return a
+/// stale simulation after an alloy is (re)defined. Empty when no session
+/// materials exist (the common case → no effect on the cache key).
+fn registry_fingerprint(reg: &MaterialRegistry) -> String {
+    if reg.is_empty() {
+        return String::new();
+    }
+    let mut names: Vec<&String> = reg.keys().collect();
+    names.sort();
+    let mut s = String::new();
+    for name in names {
+        let m = &reg[name];
+        s.push_str(name);
+        s.push_str(&format!(":{:?}:", m.density_g_cm3));
+        let mut fr: Vec<(&String, &f64)> = m.mass_fractions.iter().collect();
+        fr.sort_by(|a, b| a.0.cmp(b.0));
+        for (e, f) in fr {
+            s.push_str(&format!("{e}={f:?},"));
+        }
+        s.push(';');
+    }
+    s
+}
+
+/// Run a simulation through the process-scoped result cache (#427). Repeat
+/// queries on the same config are lazy views over the cached `StackResult`.
+fn cached_sim(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<Arc<StackResult>, String> {
+    let fp = registry_fingerprint(registry);
+    cache::cached_stack(args, db.library(), &fp, || {
+        build_and_run_sim(db, registry, args).map(|(_stack, result, ..)| result)
+    })
+}
+
+/// Beam params for display headers, read directly from args (the cache returns
+/// only a `StackResult`, so metadata comes from the request).
+fn beam_args(args: &Value) -> (String, f64, f64) {
+    (
+        args.get("projectile").and_then(|v| v.as_str()).unwrap_or("?").to_string(),
+        args.get("energy_mev").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("current_ma").and_then(|v| v.as_f64()).unwrap_or(0.0),
+    )
+}
+
+/// Layer material names in beam order, as written in the request (the
+/// `StackResult` doesn't carry them).
+fn layer_materials(args: &Value) -> Vec<String> {
+    args.get("layers")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|l| l.get("material").and_then(|v| v.as_str()).unwrap_or("").to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// JSON Schema for a single target layer. Shared by every tool that takes
 /// `layers`. `require_thickness` toggles whether `thickness_cm` is required —
@@ -290,6 +393,62 @@ pub fn list_tools() -> Vec<Value> {
                 "required": ["z", "a"]
             }
         }),
+        serde_json::json!({
+            "name": "get_simulation_dataset",
+            "description": "Full structured export of a simulation as long-format tables — both inline JSON (for direct reasoning) and attached Parquet resources (for polars/pandas). Always returns the inventory table (one row per isotope × layer × source, with production rate, saturation yield, end-of-bombardment + end-of-cooling activity, half-life, and β+/EC/β−/IT branching). Set `cooling`, `depth`, and/or `emissions` to also include the cooling-tail (activity vs time), depth-profile (production rate vs depth), and per-decay emission-line tables. Cheap: backed by a config-hashed cache, so repeat queries on the same config don't recompute.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
+                    "energy_mev": { "type": "number" },
+                    "current_ma": { "type": "number" },
+                    "layers": { "type": "array", "items": layer_schema(false) },
+                    "irradiation_time_s": { "type": "number" },
+                    "cooling_time_s": { "type": "number" },
+                    "cooling": { "type": "boolean", "description": "Include the cooling-tail table (activity [Bq] vs time, t ≥ irradiation). Default false." },
+                    "depth": { "type": "boolean", "description": "Include the depth-profile table (production rate [atoms/s/cm] vs depth). Default false." },
+                    "emissions": { "type": "boolean", "description": "Include the emission table (per γ/x-ray/Auger/β±/annihilation line with intensity_per_decay). Default false." }
+                },
+                "required": ["projectile", "energy_mev", "current_ma", "layers"]
+            }
+        }),
+        serde_json::json!({
+            "name": "get_isotope_inventory",
+            "description": "Cheap 'what's in the can' query: just the inventory table (one row per isotope × layer × source — production rate, saturation yield, EOB + cooling activity, half-life, branching). No time series, no depth. Inline JSON plus a Parquet resource. Same stack arguments as `simulate`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
+                    "energy_mev": { "type": "number" },
+                    "current_ma": { "type": "number" },
+                    "layers": { "type": "array", "items": layer_schema(false) },
+                    "irradiation_time_s": { "type": "number" },
+                    "cooling_time_s": { "type": "number" }
+                },
+                "required": ["projectile", "energy_mev", "current_ma", "layers"]
+            }
+        }),
+        serde_json::json!({
+            "name": "get_emission_curve",
+            "description": "Per-isotope / per-line photon (or particle) emission-rate time series: rate_per_s(t) = total stack activity × intensity_per_decay, summed across layers. Long-format {t_s, isotope, energy_kev, emission_type, rate_per_s}, inline JSON + Parquet resource. The load-bearing surface for 511 keV purity windows, HPGe spectrum prediction, and dose-rate envelopes. Optional filters narrow the output: `isotope`, `emission_type` (gamma/xray/auger/ce/beta-/beta+/annihilation), `energy_kev` (± `energy_tolerance_kev`).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
+                    "energy_mev": { "type": "number" },
+                    "current_ma": { "type": "number" },
+                    "layers": { "type": "array", "items": layer_schema(false) },
+                    "irradiation_time_s": { "type": "number" },
+                    "cooling_time_s": { "type": "number" },
+                    "isotope": { "type": "string", "description": "Restrict to one isotope, e.g. 'F-18'. Optional — default sums every produced isotope." },
+                    "emission_type": { "type": "string", "description": "Restrict to one radiation type: gamma | xray | auger | ce | beta- | beta+ | annihilation." },
+                    "energy_kev": { "type": "number", "description": "Restrict to lines within ± energy_tolerance_kev of this energy (e.g. 511)." },
+                    "energy_tolerance_kev": { "type": "number", "description": "Tolerance for energy_kev matching [keV]. Default 1.0." },
+                    "vs": { "type": "string", "enum": ["time", "cooling"], "description": "'time' = full irradiation + cooling timeline; 'cooling' = cooling tail only. Default 'time'." }
+                },
+                "required": ["projectile", "energy_mev", "current_ma", "layers"]
+            }
+        }),
     ]
 }
 
@@ -303,21 +462,27 @@ pub fn call_tool(
     materials: &mut MaterialRegistry,
     name: &str,
     arguments: &Value,
-) -> Result<String, String> {
-    let body = match name {
-        "define_material" => tool_define_material(materials, arguments),
-        "simulate" => tool_simulate(db, &*materials, arguments),
-        "list_materials" => tool_list_materials(&*materials),
-        "list_reaction_channels" => tool_list_reaction_channels(db, arguments),
-        "get_decay_data" => tool_get_decay_data(db, arguments),
-        "compare_simulations" => tool_compare_simulations(db, &*materials, arguments),
-        "get_stack_energy_budget" => tool_get_stack_energy_budget(db, &*materials, arguments),
-        "get_stopping_power" => tool_get_stopping_power(db, &*materials, arguments),
-        "get_isotope_production_curve" => tool_get_isotope_production_curve(db, &*materials, arguments),
-        "list_producing_layers" => tool_list_producing_layers(db, &*materials, arguments),
+) -> Result<ToolResponse, String> {
+    // Text-only tools return a String (→ ToolResponse via From); the dataset
+    // tools return a ToolResponse directly (text + Parquet resources).
+    let mut response: ToolResponse = match name {
+        "define_material" => tool_define_material(materials, arguments)?.into(),
+        "simulate" => tool_simulate(db, &*materials, arguments)?.into(),
+        "list_materials" => tool_list_materials(&*materials)?.into(),
+        "list_reaction_channels" => tool_list_reaction_channels(db, arguments)?.into(),
+        "get_decay_data" => tool_get_decay_data(db, arguments)?.into(),
+        "compare_simulations" => tool_compare_simulations(db, &*materials, arguments)?.into(),
+        "get_stack_energy_budget" => tool_get_stack_energy_budget(db, &*materials, arguments)?.into(),
+        "get_stopping_power" => tool_get_stopping_power(db, &*materials, arguments)?.into(),
+        "get_isotope_production_curve" => tool_get_isotope_production_curve(db, &*materials, arguments)?.into(),
+        "list_producing_layers" => tool_list_producing_layers(db, &*materials, arguments)?.into(),
+        "get_simulation_dataset" => tool_get_simulation_dataset(db, &*materials, arguments)?,
+        "get_isotope_inventory" => tool_get_isotope_inventory(db, &*materials, arguments)?,
+        "get_emission_curve" => tool_get_emission_curve(db, &*materials, arguments)?,
         _ => return Err(format!("Unknown tool: {}", name)),
-    }?;
-    Ok(format!("{body}\n\n---\n*Library: {}*\n", db.library()))
+    };
+    response.text = format!("{}\n\n---\n*Library: {}*\n", response.text, db.library());
+    Ok(response)
 }
 
 /// Parse the flat enrichment array `[{element, A, fraction}]` into the
@@ -628,9 +793,12 @@ fn tool_define_material(
 }
 
 fn tool_simulate(db: &dyn DatabaseProtocol, registry: &MaterialRegistry, args: &Value) -> Result<String, String> {
-    let (stack, result, projectile_str, energy_mev, current_ma) = build_and_run_sim(db, registry, args)?;
-    let irr_time = stack.irradiation_time_s;
-    let cool_time = stack.cooling_time_s;
+    // Populate the result cache so follow-up dataset / inventory / emission
+    // queries on the same config are lazy views instead of re-runs (#427).
+    let result = cached_sim(db, registry, args)?;
+    let (projectile_str, energy_mev, current_ma) = beam_args(args);
+    let irr_time = result.irradiation_time_s;
+    let cool_time = result.cooling_time_s;
 
     let mut output = String::new();
     output.push_str(&format!(
@@ -1157,7 +1325,7 @@ fn tool_get_isotope_production_curve(
         _ => None,
     };
 
-    let (_stack, result, _, _, _) = build_and_run_sim(db, registry, args)?;
+    let result = cached_sim(db, registry, args)?;
 
     let sel = select_producing_layer(&result, &isotope, layer_index)?;
     let layer_idx = sel.layer_idx;
@@ -1272,7 +1440,7 @@ fn tool_list_producing_layers(
         .ok_or("Missing 'isotope'")?
         .to_string();
 
-    let (_stack, result, _, _, _) = build_and_run_sim(db, registry, args)?;
+    let result = cached_sim(db, registry, args)?;
 
     let producers = producing_layers(&result, &isotope);
     if producers.is_empty() {
@@ -1324,6 +1492,171 @@ fn tool_list_producing_layers(
     }
 
     Ok(output)
+}
+
+/// Max table rows inlined as JSON in a tool response. The full table always
+/// ships in the Parquet resource; inlining is capped so a large cooling/depth
+/// series can't blow up the LLM context (truncation is stated, not silent).
+const INLINE_ROW_CAP: usize = 200;
+
+/// Render a table as a `## name` section: a JSON code block (row-capped) noting
+/// any truncation. Shared by the dataset and inventory tools.
+fn render_table_section(table: &Table) -> Result<String, String> {
+    let rows = table.to_json_rows();
+    let shown = rows.len().min(INLINE_ROW_CAP);
+    let json = serde_json::to_string(&rows[..shown]).map_err(|e| e.to_string())?;
+    let note = if rows.len() > shown {
+        format!(
+            " — showing {shown} of {} rows (full table in the Parquet resource)",
+            rows.len()
+        )
+    } else {
+        String::new()
+    };
+    Ok(format!("## {}{}\n\n```json\n{}\n```\n", table.name, note, json))
+}
+
+fn tool_get_simulation_dataset(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<ToolResponse, String> {
+    let want_cooling = args.get("cooling").and_then(|v| v.as_bool()).unwrap_or(false);
+    let want_depth = args.get("depth").and_then(|v| v.as_bool()).unwrap_or(false);
+    let want_emissions = args.get("emissions").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    let result = cached_sim(db, registry, args)?;
+    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+    let mats = layer_materials(args);
+    let (proj, energy, current) = beam_args(args);
+
+    let mut tables: Vec<Table> = vec![dataset::build_inventory(db, &result, &mats, &sim_id)];
+    if want_cooling {
+        tables.push(dataset::build_cooling(&result, &sim_id));
+    }
+    if want_depth {
+        tables.push(dataset::build_depth(&result, &sim_id));
+    }
+    if want_emissions {
+        tables.push(dataset::build_emissions(db, &result, &sim_id));
+    }
+
+    let mut text = format!("# Simulation dataset `{sim_id}`\n\n");
+    text.push_str(&format!(
+        "**Beam:** {proj} at {energy:.1} MeV, {current:.3} mA | **Irradiation:** {:.0}s | **Cooling:** {:.0}s\n\n",
+        result.irradiation_time_s, result.cooling_time_s
+    ));
+    text.push_str(
+        "Each table is inlined as JSON below and attached as a Parquet resource \
+         (`hyrr://sim/<id>/<table>.parquet`). Long-format, one row per record.\n\n",
+    );
+    text.push_str("**Tables:** ");
+    text.push_str(
+        &tables
+            .iter()
+            .map(|t| format!("`{}` ({} rows)", t.name, t.nrows()))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+    text.push('\n');
+
+    let mut resources = Vec::new();
+    for table in &tables {
+        if table.is_empty() {
+            text.push_str(&format!("\n## {} — (no rows)\n", table.name));
+            continue;
+        }
+        text.push('\n');
+        text.push_str(&render_table_section(table)?);
+        resources.push(parquet_resource(&sim_id, table)?);
+    }
+
+    Ok(ToolResponse { text, resources })
+}
+
+fn tool_get_isotope_inventory(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<ToolResponse, String> {
+    let result = cached_sim(db, registry, args)?;
+    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+    let mats = layer_materials(args);
+    let table = dataset::build_inventory(db, &result, &mats, &sim_id);
+
+    let mut text = format!(
+        "# Isotope inventory `{sim_id}` ({} rows)\n\n\
+         One row per isotope × layer × source. Full table also attached as a Parquet resource.\n\n",
+        table.nrows()
+    );
+    let resources = if table.is_empty() {
+        text.push_str("No isotopes produced.\n");
+        Vec::new()
+    } else {
+        text.push_str(&render_table_section(&table)?);
+        vec![parquet_resource(&sim_id, &table)?]
+    };
+    Ok(ToolResponse { text, resources })
+}
+
+fn tool_get_emission_curve(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<ToolResponse, String> {
+    let vs = args.get("vs").and_then(|v| v.as_str()).unwrap_or("time");
+    if !["time", "cooling"].contains(&vs) {
+        return Err(format!("'vs' must be 'time' or 'cooling' (got '{vs}')"));
+    }
+    let iso_filter = args.get("isotope").and_then(|v| v.as_str());
+    let type_filter = args.get("emission_type").and_then(|v| v.as_str());
+    let energy_filter = args.get("energy_kev").and_then(|v| v.as_f64());
+    let energy_tol = args
+        .get("energy_tolerance_kev")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0);
+
+    let result = cached_sim(db, registry, args)?;
+    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+
+    let table = dataset::build_emission_curve(
+        db,
+        &result,
+        &sim_id,
+        vs == "cooling",
+        iso_filter,
+        type_filter,
+        energy_filter,
+        energy_tol,
+    );
+
+    let mut text = format!(
+        "# Emission-rate curve `{sim_id}` ({}) — {} rows\n\n\
+         `rate_per_s` = total stack activity × intensity_per_decay, summed over layers, \
+         per (isotope × line × time). Full table attached as a Parquet resource.\n\n",
+        vs,
+        table.nrows()
+    );
+    if let Some(f) = iso_filter {
+        text.push_str(&format!("Filter: isotope = {f}. "));
+    }
+    if let Some(f) = type_filter {
+        text.push_str(&format!("Filter: emission_type = {f}. "));
+    }
+    if let Some(f) = energy_filter {
+        text.push_str(&format!("Filter: energy = {f} ± {energy_tol} keV. "));
+    }
+    text.push('\n');
+
+    let resources = if table.is_empty() {
+        text.push_str("\nNo emission lines match (no produced isotope emits a matching line).\n");
+        Vec::new()
+    } else {
+        text.push('\n');
+        text.push_str(&render_table_section(&table)?);
+        vec![parquet_resource(&sim_id, &table)?]
+    };
+    Ok(ToolResponse { text, resources })
 }
 
 fn format_halflife(seconds: f64) -> String {
