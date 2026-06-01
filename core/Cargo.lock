@@ -641,10 +641,13 @@ name = "hyrr-core"
 version = "0.13.0"
 dependencies = [
  "approx",
+ "arrow",
+ "base64",
  "flate2",
  "fs2",
  "home",
  "nucl-parquet",
+ "parquet",
  "regex",
  "reqwest",
  "serde",

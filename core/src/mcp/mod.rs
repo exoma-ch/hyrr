@@ -4,5 +4,7 @@
 //! instead of the GUI. This enables AI assistants to invoke
 //! nuclear physics calculations directly.
 
+pub mod cache;
+pub mod dataset;
 pub mod tools;
 pub mod transport;
