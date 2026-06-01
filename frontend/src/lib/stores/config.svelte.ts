@@ -1,6 +1,6 @@
 /**
  * Centralized simulation config state using Svelte 5 runes.
- * 
+ *
  * Groups are purely a UI convenience - getLayers() always returns expanded flat layers.
  */
 
@@ -526,7 +526,7 @@ export function isConfigValid(): boolean {
   if (beam.energy_MeV <= 0 || beam.current_mA <= 0) return false;
   if (state.items.length === 0) return false;
   if (irradiation_s <= 0) return false;
-  
+
   for (const item of state.items) {
     if (isInternalGroup(item)) {
       // Validate group
@@ -534,7 +534,7 @@ export function isConfigValid(): boolean {
       if (!item.mode) return false;
       if (item.mode === "count" && (!item.count || item.count < 1)) return false;
       if (item.mode === "energy" && (!item.energyThreshold || item.energyThreshold < 0)) return false;
-      
+
       for (const layer of item.layers) {
         if (!layer.material) return false;
         // Groups cannot have E_out mode

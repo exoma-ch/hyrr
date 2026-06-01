@@ -47,6 +47,15 @@
         # `nix develop .#ci` so CI tooling versions match local exactly.
         pythonTooling = with pkgs; [ uv ruff pyright python ];
 
+        # Tools the prek hooks invoke directly (the `language: system` hooks in
+        # .pre-commit-config.yaml: typos, typstyle, just-fmt, check-lockfiles)
+        # plus prek itself and git. ruff + pyright come from pythonTooling. All
+        # from nixpkgs so they run on NixOS (prek's downloaded generic-linux
+        # hook binaries hit the stub-ld wall otherwise). Shared by the `ci` and
+        # `default` shells so `prek run --all-files` behaves identically in CI
+        # and locally — one lint gate, one set of pinned versions.
+        hookTooling = with pkgs; [ prek typos typstyle just git ];
+
         # uv env: use the pinned nix interpreter, never a downloaded one.
         uvEnv = {
           UV_PYTHON = "${python}/bin/python3.12";
@@ -59,16 +68,21 @@
       {
         devShells = {
           # ── Lean CI/Python shell ─────────────────────────────────────
-          # Just the Python toolchain — fast to realize (no WebKitGTK), used
-          # by CI lint + test jobs and for local Python-only work.
+          # Python toolchain + the prek hook tools — fast to realize (no
+          # WebKitGTK / Rust / Node), used by CI lint + test jobs and for local
+          # Python-only work. Carries hookTooling so CI's lint job can run the
+          # full `prek run --all-files` gate (the same one local dev runs).
           ci = pkgs.mkShell ({
-            packages = pythonTooling;
+            packages = pythonTooling ++ hookTooling;
             LD_LIBRARY_PATH = mkLibPath pyRuntimeLibs;
           } // uvEnv);
 
           # ── Full dev shell ───────────────────────────────────────────
           default = pkgs.mkShell ({
-            packages = with pkgs; pythonTooling ++ [
+            # pythonTooling + hookTooling (prek, typos, typstyle, just, git) are
+            # shared with the `ci` shell so the prek gate is identical in CI and
+            # locally; the extras below are the full desktop/WASM/frontend stack.
+            packages = with pkgs; pythonTooling ++ hookTooling ++ [
               # ── Rust ──────────────────────────────────────────────
               rustc
               cargo
@@ -86,18 +100,8 @@
               # ── Build tools ───────────────────────────────────────
               pkg-config
               clang
-              just
-
-              # ── Git hooks (prek = fast Rust pre-commit reimpl) ────
-              # prek + the binary hook tools it drives, all from nixpkgs so
-              # they run on NixOS (pre-commit/prek's downloaded generic-linux
-              # binaries hit the stub-ld wall otherwise).
-              prek
-              typos
-              typstyle
 
               # ── Utilities ─────────────────────────────────────────
-              git
               git-lfs
             ]
             ++ pkgs.lib.optionals isLinux tauriLibs

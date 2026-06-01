@@ -110,7 +110,9 @@ def insert_abundances(
     batch: list[tuple[int, int, str, float, float]] = []
 
     for entry in entries:
-        batch.append((entry.Z, entry.A, entry.symbol, entry.abundance, entry.atomic_mass))
+        batch.append(
+            (entry.Z, entry.A, entry.symbol, entry.abundance, entry.atomic_mass)
+        )
         if len(batch) >= batch_size:
             conn.executemany(sql, batch)
             conn.commit()

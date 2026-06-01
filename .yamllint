@@ -2,19 +2,36 @@
 extends: default
 
 rules:
-  # 80 chars should be enough, but don't fail if a line is longer
+  # Long expressions in workflows/mkdocs — don't fail on length.
   line-length: disable
 
-  # Accept both .yml and .yaml extensions
+  # Accept both .yml and .yaml extensions.
   document-start: disable
 
-  # Allow trailing spaces in some contexts
   trailing-spaces: enable
 
-  # Allow comments
-  comments-indentation: enable
+  # GitHub Actions `on:` is parsed by yamllint as the boolean `true`; it's the
+  # canonical workflow trigger key, not a typo. Allow on/off and don't check keys.
+  truthy:
+    allowed-values: ["true", "false", "on", "off"]
+    check-keys: false
 
-  # Allow empty lines
+  # Inline comments + alignment comments are fine.
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+
+  # GitHub Actions `${{ matrix.x }}` expressions and aligned matrix rows use
+  # intentional inner/after spacing — cosmetic, not errors.
+  braces:
+    max-spaces-inside: 1
+  commas: disable
+
+  # mkdocs.yml / workflows mix indent widths; require consistency, not a value.
+  indentation:
+    spaces: consistent
+    indent-sequences: consistent
+
   empty-lines:
     max: 1
     max-end: 0

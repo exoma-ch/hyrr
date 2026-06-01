@@ -7,7 +7,7 @@ HYRR has two independent compute implementations that share the same physics and
 
 ## Python module graph
 
-```
+```text
 models.py <- (all modules depend on models)
     |
     +-- db.py (DatabaseProtocol + DataStore, Parquet/Polars backend)
@@ -27,7 +27,7 @@ models.py <- (all modules depend on models)
 
 ## Frontend architecture
 
-```
+```text
 frontend/src/lib/
     |
     +-- compute/          Pure TypeScript physics engine

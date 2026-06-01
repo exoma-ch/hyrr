@@ -216,7 +216,7 @@ Read these in order if you're writing your first render test:
 
 Use the repo-wide format:
 
-```
+```text
 type(scope): short imperative description
 
 Optional longer body explaining why.

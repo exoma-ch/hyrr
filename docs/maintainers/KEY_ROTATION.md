@@ -41,7 +41,7 @@ signed release:
 
 1. **GitHub Actions secret** `TAURI_SIGNING_PRIVATE_KEY` — paste the
    *contents* of `~/.tauri-hyrr.key` (the whole base64 blob, including
-   `untrusted comment:` header).  
+   `untrusted comment:` header).
    Plus secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` with the passphrase.
 2. **Offline backup**, encrypted at rest. Recommended:
    - 1Password / Bitwarden vault entry, or
@@ -82,7 +82,7 @@ is the open feature request). Until that lands, rotation is a
 **two-version dance**:
 
 1. Generate a new keypair (`~/.tauri-hyrr-v2.key`) via the same flow.
-2. Bump the GH secret values to the new keypair.  
+2. Bump the GH secret values to the new keypair.
    *Do not delete the old key from the offline backup yet.*
 3. Cut a release with the old pubkey still in `tauri.conf.json` but
    signed with the new private key — **this will fail verification on

@@ -53,17 +53,19 @@ def parse_talys_residual(
         if not energies:
             continue
 
-        entries.append(CrossSectionEntry(
-            projectile=projectile,
-            target_Z=target_Z,
-            target_A=target_A,
-            residual_Z=residual_Z,
-            residual_A=residual_A,
-            state=state,
-            energies_MeV=energies,
-            xs_mb=xs_values,
-            source="talys",
-        ))
+        entries.append(
+            CrossSectionEntry(
+                projectile=projectile,
+                target_Z=target_Z,
+                target_A=target_A,
+                residual_Z=residual_Z,
+                residual_A=residual_A,
+                state=state,
+                energies_MeV=energies,
+                xs_mb=xs_values,
+                source="talys",
+            )
+        )
 
     return entries
 
@@ -110,24 +112,28 @@ def write_xs_parquet(
     rows: list[dict] = []
     for entry in entries:
         for energy, xs in zip(entry.energies_MeV, entry.xs_mb, strict=False):
-            rows.append({
-                "target_A": entry.target_A,
-                "residual_Z": entry.residual_Z,
-                "residual_A": entry.residual_A,
-                "state": entry.state,
-                "energy_MeV": energy,
-                "xs_mb": xs,
-            })
+            rows.append(
+                {
+                    "target_A": entry.target_A,
+                    "residual_Z": entry.residual_Z,
+                    "residual_A": entry.residual_A,
+                    "state": entry.state,
+                    "energy_MeV": energy,
+                    "xs_mb": xs,
+                }
+            )
 
     if not rows:
         logger.warning("No cross-section data to write")
         return
 
-    df = pl.DataFrame(rows).cast({
-        "target_A": pl.Int32,
-        "residual_Z": pl.Int32,
-        "residual_A": pl.Int32,
-    })
+    df = pl.DataFrame(rows).cast(
+        {
+            "target_A": pl.Int32,
+            "residual_Z": pl.Int32,
+            "residual_A": pl.Int32,
+        }
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(output_path)
@@ -189,6 +195,7 @@ def generate_talys_input(
 def get_element_symbol_for_z(Z: int) -> str:
     """Get element symbol from Z, using the db module's table."""
     from hyrr.db import ELEMENT_SYMBOLS
+
     sym = ELEMENT_SYMBOLS.get(Z)
     if sym is None:
         msg = f"Unknown element Z={Z}"

@@ -375,20 +375,24 @@ def insert_decay_data(
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     total = 0
-    batch: list[tuple[int, int, str, float | None, str, int | None, int | None, str, float]] = []
+    batch: list[
+        tuple[int, int, str, float | None, str, int | None, int | None, str, float]
+    ] = []
 
     for entry in entries:
-        batch.append((
-            entry.Z,
-            entry.A,
-            entry.state,
-            entry.half_life_s,
-            entry.decay_mode,
-            entry.daughter_Z,
-            entry.daughter_A,
-            entry.daughter_state,
-            entry.branching,
-        ))
+        batch.append(
+            (
+                entry.Z,
+                entry.A,
+                entry.state,
+                entry.half_life_s,
+                entry.decay_mode,
+                entry.daughter_Z,
+                entry.daughter_A,
+                entry.daughter_state,
+                entry.branching,
+            )
+        )
         if len(batch) >= batch_size:
             conn.executemany(sql, batch)
             conn.commit()

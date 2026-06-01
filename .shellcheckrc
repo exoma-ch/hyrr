@@ -1,0 +1,4 @@
+# shellcheck config.
+# SC2012 (use find not ls) and SC2002 (useless cat) are info/style nits where
+# the simpler form is intentional and correct for our controlled inputs.
+disable=SC2012,SC2002

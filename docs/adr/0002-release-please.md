@@ -28,7 +28,7 @@ truth in `.release-please-manifest.json`.
 
 ### How it works
 
-```
+```text
 feat: add α emission tab  →  release-please scans commits
 fix: β spectrum dips       →  creates/updates "Release v0.9.0" PR
                            →  PR has CHANGELOG + version bumps in 6 files

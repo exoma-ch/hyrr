@@ -16,7 +16,7 @@ The frontend is a **Svelte 5 + TypeScript** single-page app built with Vite. It 
 
 ## Compute engine
 
-```
+```text
 frontend/src/lib/compute/
     production.ts    — ∫σ/dEdx numerical integration
     chains.ts        — Bateman decay chain solver (matrix exponential)
@@ -35,7 +35,7 @@ The TypeScript engine produces results identical to the Python library. A single
 
 ## Reactive architecture
 
-```
+```text
 User input → config store ($state)
                 ↓
          scheduler (debounced)
