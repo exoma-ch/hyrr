@@ -30,7 +30,7 @@ test.describe("Soda-lime mass mixture walkthrough (#97)", () => {
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
 
     // Open the define-form section.
-    await page.getByRole("button", { name: /Define.*save material/ }).click();
+    await page.getByRole("button", { name: /Define & save/ }).click();
 
     // Paste the glass mixture (low-confidence: chip should go amber + nudge).
     const paste = page.getByPlaceholder(/Al2O3/);

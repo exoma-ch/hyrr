@@ -21,7 +21,7 @@ test.describe("DefineForm — rows-based UI (Phase 3 of #64)", () => {
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
 
     // Open the define-form section.
-    await page.getByRole("button", { name: /Define.*save material/ }).click();
+    await page.getByRole("button", { name: /Define & save/ }).click();
 
     // First "+ element" → PT modal.
     await page.getByRole("button", { name: "+ element" }).click();
@@ -64,7 +64,7 @@ test.describe("DefineForm — rows-based UI (Phase 3 of #64)", () => {
   test("paste-formula input commits on blur and populates rows", async ({ page }) => {
     await page.locator(".material-name").first().click();
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
-    await page.getByRole("button", { name: /Define.*save material/ }).click();
+    await page.getByRole("button", { name: /Define & save/ }).click();
 
     const paste = page.getByPlaceholder(/Al2O3/);
     await paste.fill("Al 80%, Cu 5%, Zn %");
