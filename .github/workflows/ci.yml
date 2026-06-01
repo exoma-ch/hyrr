@@ -101,6 +101,33 @@ jobs:
         working-directory: core
         run: cargo test --features embed-data --test embedded_data_store
 
+  mcp-tools:
+    # #427/#428 — exercise the MCP tool surface (layer selection, structured
+    # export, emission curves). The `mcp` feature isn't in the default set, so
+    # without this job the mcp:: tests are never compiled in CI.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set clients/rs/nucl-parquet data/meta data/stopping data/tendl-2023-iso/xs
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: MCP tool unit tests (pure layer-selection helpers)
+        working-directory: core
+        run: "cargo test --features mcp --lib mcp::"
+      - name: MCP layer-selection integration test (real tendl-2023-iso data)
+        working-directory: core
+        env:
+          HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
+        run: cargo test --features mcp --test mcp_layer_selection
+
   hyrr-py-check:
     # Catches PyO3 binding type drift against hyrr-core (Refs: #181).
     # The py/ crate is excluded from the default workspace because the
