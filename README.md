@@ -150,6 +150,13 @@ cd desktop && npx tauri dev
 
 **eXoma** — *Exotic Matter Applications* — is a research group at ETH Zürich focused on novel radioisotope production methods and targetry.
 
-## License
+## License & legal
 
-MIT
+- **Code:** [MIT](LICENSE).
+- **Bundled nuclear data** (via the `nucl-parquet` submodule): third-party — each
+  library keeps its own terms and required citation. See
+  [nucl-parquet/ATTRIBUTION.md](nucl-parquet/ATTRIBUTION.md); HYRR does not
+  relicense the data.
+- **Disclaimer:** results carry evaluated-data uncertainties and are **not
+  validated** for clinical, safety, or regulatory use — see [DISCLAIMER](DISCLAIMER.md).
+- [Privacy](PRIVACY.md) · [Terms](TERMS.md) · [How to cite](CITATION.cff) · [Compliance](COMPLIANCE.md) · [Contributing](CONTRIBUTING.md)
