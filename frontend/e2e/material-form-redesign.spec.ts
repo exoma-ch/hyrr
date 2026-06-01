@@ -18,7 +18,7 @@ test.describe("Material-form redesign (#92)", () => {
   test("paste 'SiO2 80%, H2O 20%' → mode flips to wt %, rows materialize", async ({ page }) => {
     await page.locator(".material-name").first().click();
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
-    await page.getByRole("button", { name: /Define.*save material/ }).click();
+    await page.getByRole("button", { name: /Define & save/ }).click();
 
     // In Single mode, bottom paste-formula field is visible. Type a mass mixture.
     const paste = page.getByPlaceholder(/Al2O3/);
@@ -38,7 +38,7 @@ test.describe("Material-form redesign (#92)", () => {
   test("clearing the paste field on blur is a no-op on rows (#87)", async ({ page }) => {
     await page.locator(".material-name").first().click();
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
-    await page.getByRole("button", { name: /Define.*save material/ }).click();
+    await page.getByRole("button", { name: /Define & save/ }).click();
 
     const paste = page.getByPlaceholder(/Al2O3/);
     await paste.fill("Al 80%, Cu 20%");
@@ -67,7 +67,7 @@ test.describe("Material-form redesign (#92)", () => {
   test("glassy mass mixture renders amber low-confidence chip with mol% nudge", async ({ page }) => {
     await page.locator(".material-name").first().click();
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
-    await page.getByRole("button", { name: /Define.*save material/ }).click();
+    await page.getByRole("button", { name: /Define & save/ }).click();
 
     const paste = page.getByPlaceholder(/Al2O3/);
     await paste.fill("SiO2 75%, Na2O 14%, CaO 11%");
@@ -83,7 +83,7 @@ test.describe("Material-form redesign (#92)", () => {
   test("per-row 'E' enrichment button appears for single-element rows in mixture mode (#93)", async ({ page }) => {
     await page.locator(".material-name").first().click();
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
-    await page.getByRole("button", { name: /Define.*save material/ }).click();
+    await page.getByRole("button", { name: /Define & save/ }).click();
 
     await page.getByPlaceholder(/Al2O3/).fill("Cu 80%, H2O 20%");
     await page.getByPlaceholder(/Al2O3/).blur();
@@ -100,7 +100,7 @@ test.describe("Material-form redesign (#92)", () => {
   test("density renders as suggestion only — Save disabled until accepted", async ({ page }) => {
     await page.locator(".material-name").first().click();
     await page.waitForSelector(".material-popup", { timeout: 5_000 });
-    await page.getByRole("button", { name: /Define.*save material/ }).click();
+    await page.getByRole("button", { name: /Define & save/ }).click();
 
     await page.getByPlaceholder(/Al2O3/).fill("Al 80%, Cu 20%");
     await page.getByPlaceholder(/Al2O3/).blur();
