@@ -210,12 +210,23 @@ fn handle_request(
 
             match tools::call_tool(db, materials, name, &arguments) {
                 Ok(result) => {
-                    let response = serde_json::json!({
-                        "content": [{
-                            "type": "text",
-                            "text": result
-                        }]
-                    });
+                    // Text block first, then one embedded `resource` block per
+                    // attached Parquet table (#427).
+                    let mut content = vec![serde_json::json!({
+                        "type": "text",
+                        "text": result.text
+                    })];
+                    for res in &result.resources {
+                        content.push(serde_json::json!({
+                            "type": "resource",
+                            "resource": {
+                                "uri": res.uri,
+                                "mimeType": res.mime_type,
+                                "blob": res.blob_base64
+                            }
+                        }));
+                    }
+                    let response = serde_json::json!({ "content": content });
                     JsonRpcResponse::success(id, response)
                 }
                 Err(e) => {
