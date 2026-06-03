@@ -209,7 +209,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_isotope_production_curve",
-            "description": "Activity or depth profile for one named isotope from a simulation. `vs=time` returns buildup+cooling activity [Bq] vs time grid. `vs=cooling` returns the cooling tail only. `vs=depth` returns depth [cm] + local production rate [atoms/s/cm]. If multiple layers produce the same isotope, the curve is from the first such layer in beam order.",
+            "description": "Activity or depth profile for one named isotope from a simulation. `vs=time` returns buildup+cooling activity [Bq] vs time grid. `vs=cooling` returns the cooling tail only. `vs=depth` returns depth [cm] + local production rate [atoms/s/cm]. When several layers produce the isotope, pass `layer_index` (1-based, matching `simulate` output) to choose which one; if omitted, the first producing layer in beam order is used and a warning naming the other producing layers is prepended. Use `list_producing_layers` to discover every layer that makes the isotope.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -223,9 +223,30 @@ pub fn list_tools() -> Vec<Value> {
                     "irradiation_time_s": { "type": "number" },
                     "cooling_time_s": { "type": "number" },
                     "isotope": { "type": "string", "description": "Isotope name, e.g. 'Cu-64' or 'Mo-99'" },
+                    "layer_index": { "type": "integer", "description": "1-based layer to read the curve from (matches `simulate` layer numbering). Optional — when omitted, defaults to the first layer in beam order that produces the isotope, with a warning if more than one layer does. Errors if the named isotope is not produced in the requested layer." },
                     "vs": { "type": "string", "enum": ["time", "cooling", "depth"] }
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers", "isotope", "vs"]
+            }
+        }),
+        serde_json::json!({
+            "name": "list_producing_layers",
+            "description": "List every layer in a stack that produces a named isotope, with each layer's energy window and end-of-bombardment activity [Bq]. Cheap discovery tool — lets you find which layer to pass as `layer_index` to `get_isotope_production_curve` without parsing a full `simulate` output. Takes the same stack arguments as `simulate`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
+                    "energy_mev": { "type": "number" },
+                    "current_ma": { "type": "number" },
+                    "layers": {
+                        "type": "array",
+                        "items": layer_schema(false)
+                    },
+                    "irradiation_time_s": { "type": "number" },
+                    "cooling_time_s": { "type": "number" },
+                    "isotope": { "type": "string", "description": "Isotope name, e.g. 'Sc-44' or 'Cu-64'" }
+                },
+                "required": ["projectile", "energy_mev", "current_ma", "layers", "isotope"]
             }
         }),
         serde_json::json!({
@@ -293,6 +314,7 @@ pub fn call_tool(
         "get_stack_energy_budget" => tool_get_stack_energy_budget(db, &*materials, arguments),
         "get_stopping_power" => tool_get_stopping_power(db, &*materials, arguments),
         "get_isotope_production_curve" => tool_get_isotope_production_curve(db, &*materials, arguments),
+        "list_producing_layers" => tool_list_producing_layers(db, &*materials, arguments),
         _ => return Err(format!("Unknown tool: {}", name)),
     }?;
     Ok(format!("{body}\n\n---\n*Library: {}*\n", db.library()))
@@ -1019,6 +1041,94 @@ fn tool_get_stopping_power(db: &dyn DatabaseProtocol, registry: &MaterialRegistr
     Ok(output)
 }
 
+/// A resolved layer choice for an isotope curve. Borrows into the
+/// [`StackResult`](crate::types::StackResult) it was selected from.
+#[derive(Debug)]
+struct LayerSelection<'a> {
+    /// 0-based index into `layer_results`.
+    layer_idx: usize,
+    lr: &'a crate::types::LayerResult,
+    iso: &'a crate::types::IsotopeResult,
+    /// Every layer (0-based) in beam order that produces the isotope.
+    producing: Vec<usize>,
+    /// True when no `layer_index` was given AND more than one layer produces
+    /// the isotope — the caller should surface a disambiguation warning (#428).
+    defaulted: bool,
+}
+
+/// Every layer (0-based, beam order) that produces `isotope`, paired with its
+/// [`IsotopeResult`]. Single source of truth for layer discovery — shared by
+/// the production-curve selector and `list_producing_layers` (#428).
+fn producing_layers<'a>(
+    result: &'a crate::types::StackResult,
+    isotope: &str,
+) -> Vec<(usize, &'a crate::types::IsotopeResult)> {
+    result
+        .layer_results
+        .iter()
+        .enumerate()
+        .filter_map(|(i, lr)| lr.isotope_results.get(isotope).map(|iso| (i, iso)))
+        .collect()
+}
+
+/// Resolve which layer's curve to return for `isotope`.
+///
+/// `layer_index` is 1-based (matching `simulate` output). When `None`, the
+/// first producing layer in beam order is chosen; if more than one layer
+/// produces the isotope the selection is flagged `defaulted` so the caller can
+/// warn. When `Some`, the layer must exist and must actually produce the
+/// isotope, else a clear error naming the producing layers is returned (#428).
+fn select_producing_layer<'a>(
+    result: &'a crate::types::StackResult,
+    isotope: &str,
+    layer_index: Option<usize>,
+) -> Result<LayerSelection<'a>, String> {
+    let producers = producing_layers(result, isotope);
+    if producers.is_empty() {
+        return Err(format!("Isotope '{}' not produced in any layer", isotope));
+    }
+    let producing: Vec<usize> = producers.iter().map(|(i, _)| *i).collect();
+
+    let layer_idx = match layer_index {
+        Some(one_based) => {
+            let n_layers = result.layer_results.len();
+            if one_based == 0 || one_based > n_layers {
+                return Err(format!(
+                    "layer_index {} out of range — stack has {} layer(s), numbered 1..={}",
+                    one_based, n_layers, n_layers
+                ));
+            }
+            let zero = one_based - 1;
+            if !producing.contains(&zero) {
+                let where_ = producing
+                    .iter()
+                    .map(|i| (i + 1).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "Isotope '{}' is not produced in layer {} — produced in layer(s): {}",
+                    isotope, one_based, where_
+                ));
+            }
+            zero
+        }
+        None => producing[0],
+    };
+
+    let lr = &result.layer_results[layer_idx];
+    let iso = lr
+        .isotope_results
+        .get(isotope)
+        .expect("layer_idx came from producing_layers, so the isotope is present");
+    Ok(LayerSelection {
+        layer_idx,
+        lr,
+        iso,
+        defaulted: layer_index.is_none() && producing.len() > 1,
+        producing,
+    })
+}
+
 fn tool_get_isotope_production_curve(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
@@ -1033,16 +1143,26 @@ fn tool_get_isotope_production_curve(
     if !["time", "cooling", "depth"].contains(&vs) {
         return Err(format!("'vs' must be one of: time, cooling, depth (got '{}')", vs));
     }
+    // layer_index is 1-based in the API; reject non-positive values early.
+    let layer_index = match args.get("layer_index") {
+        Some(v) if !v.is_null() => {
+            let n = v
+                .as_i64()
+                .ok_or("'layer_index' must be an integer (1-based)")?;
+            if n < 1 {
+                return Err("'layer_index' must be a positive 1-based layer number".to_string());
+            }
+            Some(n as usize)
+        }
+        _ => None,
+    };
 
     let (_stack, result, _, _, _) = build_and_run_sim(db, registry, args)?;
 
-    // Find the first layer containing the named isotope.
-    let (layer_idx, lr, iso) = result
-        .layer_results
-        .iter()
-        .enumerate()
-        .find_map(|(i, lr)| lr.isotope_results.get(&isotope).map(|iso| (i, lr, iso)))
-        .ok_or_else(|| format!("Isotope '{}' not produced in any layer", isotope))?;
+    let sel = select_producing_layer(&result, &isotope, layer_index)?;
+    let layer_idx = sel.layer_idx;
+    let lr = sel.lr;
+    let iso = sel.iso;
 
     let mut output = String::new();
     output.push_str(&format!(
@@ -1051,6 +1171,25 @@ fn tool_get_isotope_production_curve(
         vs,
         layer_idx + 1,
     ));
+    if sel.defaulted {
+        // #428: the silent "first layer in beam order" footgun. Name the other
+        // producing layers and point at the explicit selector.
+        let others = sel
+            .producing
+            .iter()
+            .map(|i| (i + 1).to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        output.push_str(&format!(
+            "> ⚠️ Showing layer {} of {} layers that produce {} (producing layers: {}). \
+             Pass `layer_index` (1-based) to choose another, or call `list_producing_layers` \
+             for each layer's activity.\n\n",
+            layer_idx + 1,
+            sel.producing.len(),
+            isotope,
+            others,
+        ));
+    }
 
     match vs {
         "time" => {
@@ -1122,6 +1261,71 @@ fn tool_get_isotope_production_curve(
     Ok(output)
 }
 
+fn tool_list_producing_layers(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<String, String> {
+    let isotope = args
+        .get("isotope")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'isotope'")?
+        .to_string();
+
+    let (_stack, result, _, _, _) = build_and_run_sim(db, registry, args)?;
+
+    let producers = producing_layers(&result, &isotope);
+    if producers.is_empty() {
+        return Ok(format!(
+            "# Producing layers for {}\n\nNo layer in this stack produces {}.\n",
+            isotope, isotope
+        ));
+    }
+
+    // Beam order is already the iteration order; flag the peak-activity layer
+    // so the consumer knows where production actually concentrates.
+    let peak_idx = producers
+        .iter()
+        .max_by(|(_, a), (_, b)| {
+            a.activity_bq
+                .partial_cmp(&b.activity_bq)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| *i);
+
+    let mut output = String::new();
+    output.push_str(&format!(
+        "# Producing layers for {}\n\n{} of {} layer(s) produce {}. \
+         Pass a `layer_index` below to `get_isotope_production_curve`.\n\n",
+        isotope,
+        producers.len(),
+        result.layer_results.len(),
+        isotope,
+    ));
+    output.push_str("| Layer | E_in → E_out [MeV] | Half-life | EOB activity [Bq] | Source | |\n");
+    output.push_str("|-------|--------------------|-----------|--------------------|--------|--|\n");
+    for (i, iso) in &producers {
+        let lr = &result.layer_results[*i];
+        let hl = match iso.half_life_s {
+            Some(t) if t > 0.0 => format_halflife(t),
+            _ => "stable".to_string(),
+        };
+        let peak_marker = if Some(*i) == peak_idx { "← peak" } else { "" };
+        output.push_str(&format!(
+            "| {} | {:.2} → {:.2} | {} | {:.3e} | {} | {} |\n",
+            i + 1,
+            lr.energy_in,
+            lr.energy_out,
+            hl,
+            iso.activity_bq,
+            iso.source,
+            peak_marker,
+        ));
+    }
+
+    Ok(output)
+}
+
 fn format_halflife(seconds: f64) -> String {
     if seconds < 60.0 {
         format!("{:.2} s", seconds)
@@ -1133,5 +1337,132 @@ fn format_halflife(seconds: f64) -> String {
         format!("{:.2} d", seconds / 86400.0)
     } else {
         format!("{:.2} y", seconds / (365.25 * 86400.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{IsotopeResult, LayerResult, StackResult};
+    use std::collections::HashMap;
+
+    /// Minimal IsotopeResult carrying just the fields the selector reads.
+    fn iso(name: &str, activity_bq: f64) -> IsotopeResult {
+        IsotopeResult {
+            name: name.to_string(),
+            z: 21,
+            a: 44,
+            state: String::new(),
+            half_life_s: Some(14256.0),
+            production_rate: 1.0,
+            saturation_yield_bq_ua: 1.0,
+            activity_bq,
+            time_grid_s: vec![0.0, 1.0],
+            activity_vs_time_bq: vec![0.0, activity_bq],
+            source: "direct".to_string(),
+            activity_direct_bq: activity_bq,
+            activity_ingrowth_bq: 0.0,
+            activity_direct_vs_time_bq: vec![0.0, activity_bq],
+            activity_ingrowth_vs_time_bq: vec![0.0, 0.0],
+            reactions: vec![],
+            decay_notations: vec![],
+        }
+    }
+
+    /// A layer producing the given (isotope, activity) pairs.
+    fn layer(isos: &[(&str, f64)]) -> LayerResult {
+        let mut isotope_results = HashMap::new();
+        for (name, act) in isos {
+            isotope_results.insert(name.to_string(), iso(name, *act));
+        }
+        LayerResult {
+            energy_in: 18.0,
+            energy_out: 12.0,
+            delta_e_mev: 6.0,
+            heat_kw: 0.0,
+            depth_profile: vec![],
+            isotope_results,
+            stopping_power_sources: HashMap::new(),
+            depth_production_rates: HashMap::new(),
+        }
+    }
+
+    fn stack(layers: Vec<LayerResult>) -> StackResult {
+        StackResult {
+            layer_results: layers,
+            irradiation_time_s: 3600.0,
+            cooling_time_s: 0.0,
+        }
+    }
+
+    #[test]
+    fn producing_layers_reports_every_producer_in_beam_order() {
+        // Sc-44 in layers 0 and 2; Cu-64 only in layer 1.
+        let s = stack(vec![
+            layer(&[("Sc-44", 10.0)]),
+            layer(&[("Cu-64", 5.0)]),
+            layer(&[("Sc-44", 99.0)]),
+        ]);
+        let idxs: Vec<usize> = producing_layers(&s, "Sc-44").iter().map(|(i, _)| *i).collect();
+        assert_eq!(idxs, vec![0, 2]);
+        let idxs: Vec<usize> = producing_layers(&s, "Cu-64").iter().map(|(i, _)| *i).collect();
+        assert_eq!(idxs, vec![1]);
+        assert!(producing_layers(&s, "F-18").is_empty());
+    }
+
+    #[test]
+    fn default_selection_warns_when_multiple_layers_produce() {
+        let s = stack(vec![layer(&[("Sc-44", 10.0)]), layer(&[("Sc-44", 99.0)])]);
+        let sel = select_producing_layer(&s, "Sc-44", None).unwrap();
+        assert_eq!(sel.layer_idx, 0, "default picks first producer in beam order");
+        assert!(sel.defaulted, "must flag ambiguity so caller warns");
+        assert_eq!(sel.producing, vec![0, 1]);
+    }
+
+    #[test]
+    fn default_selection_does_not_warn_for_single_producer() {
+        let s = stack(vec![layer(&[("Sc-44", 10.0)]), layer(&[("Cu-64", 5.0)])]);
+        let sel = select_producing_layer(&s, "Sc-44", None).unwrap();
+        assert_eq!(sel.layer_idx, 0);
+        assert!(!sel.defaulted, "single producer is unambiguous — no warning");
+    }
+
+    #[test]
+    fn explicit_layer_index_selects_that_layer() {
+        let s = stack(vec![layer(&[("Sc-44", 10.0)]), layer(&[("Sc-44", 99.0)])]);
+        let sel = select_producing_layer(&s, "Sc-44", Some(2)).unwrap();
+        assert_eq!(sel.layer_idx, 1, "1-based index 2 → 0-based 1");
+        assert!(!sel.defaulted, "explicit selection never warns");
+        assert_eq!(sel.iso.activity_bq, 99.0);
+    }
+
+    #[test]
+    fn explicit_layer_index_on_non_producing_layer_errors_with_producers() {
+        // Sc-44 produced only in layers 1 and 3 (1-based); ask for layer 2.
+        let s = stack(vec![
+            layer(&[("Sc-44", 10.0)]),
+            layer(&[("Cu-64", 5.0)]),
+            layer(&[("Sc-44", 99.0)]),
+        ]);
+        let err = select_producing_layer(&s, "Sc-44", Some(2)).unwrap_err();
+        assert!(err.contains("not produced in layer 2"), "got: {err}");
+        assert!(err.contains("1, 3"), "error should name producing layers (1-based): {err}");
+    }
+
+    #[test]
+    fn layer_index_out_of_range_errors() {
+        let s = stack(vec![layer(&[("Sc-44", 10.0)])]);
+        let err = select_producing_layer(&s, "Sc-44", Some(5)).unwrap_err();
+        assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn isotope_absent_everywhere_errors() {
+        let s = stack(vec![layer(&[("Cu-64", 5.0)])]);
+        let err = select_producing_layer(&s, "Sc-44", None).unwrap_err();
+        assert!(err.contains("not produced in any layer"), "got: {err}");
+        // Same message regardless of whether a layer_index was supplied.
+        let err = select_producing_layer(&s, "Sc-44", Some(1)).unwrap_err();
+        assert!(err.contains("not produced in any layer"), "got: {err}");
     }
 }
