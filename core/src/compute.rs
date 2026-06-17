@@ -18,7 +18,7 @@ use crate::stopping::{
 use crate::types::*;
 
 /// Convert layer's (Element, atom_fraction) to (Z, mass_fraction).
-fn layer_composition(layer: &Layer) -> Vec<(u32, f64)> {
+fn layer_composition(layer: &Layer) -> Result<Vec<(u32, f64)>, StoppingError> {
     let mut raw: Vec<(u32, f64)> = Vec::new();
     for (elem, atom_frac) in &layer.elements {
         let mut avg_mass = 0.0;
@@ -30,9 +30,18 @@ fn layer_composition(layer: &Layer) -> Vec<(u32, f64)> {
 
     let total: f64 = raw.iter().map(|(_, w)| w).sum();
     if total <= 0.0 {
-        panic!("Layer composition has zero total mass");
+        // Reachable from user config (zero atom fractions, or empty /
+        // zero-abundance isotopes). Return a structured error instead of
+        // panicking so the IPC boundary surfaces it cleanly (#355).
+        let elements = layer
+            .elements
+            .iter()
+            .map(|(e, _)| e.symbol.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(StoppingError::ZeroMassLayer { elements });
     }
-    raw.iter().map(|&(z, w)| (z, w / total)).collect()
+    Ok(raw.iter().map(|&(z, w)| (z, w / total)).collect())
 }
 
 /// Run the full HYRR simulation pipeline for a target stack.
@@ -123,7 +132,7 @@ fn compute_layer(
         });
     }
 
-    let composition = layer_composition(layer);
+    let composition = layer_composition(layer)?;
     let density = layer.density_g_cm3;
     let nist = layer.nist_compound.as_deref();
 
@@ -656,7 +665,7 @@ fn compute_layer_stopping_only(
         });
     }
 
-    let composition = layer_composition(layer);
+    let composition = layer_composition(layer)?;
     let density = layer.density_g_cm3;
     let nist = layer.nist_compound.as_deref();
 
@@ -1263,5 +1272,39 @@ mod tests {
                 rel
             );
         }
+    }
+
+    /// #355: a zero-mass layer (element with no isotopic abundance) must return
+    /// a structured error, not panic.
+    #[test]
+    fn layer_composition_zero_mass_returns_error() {
+        use crate::types::{Element, Layer};
+
+        let layer = Layer {
+            density_g_cm3: 10.0,
+            // Element with empty isotopes → average mass 0 → zero total mass.
+            elements: vec![(
+                Element {
+                    symbol: "Mo".to_string(),
+                    z: 42,
+                    isotopes: HashMap::new(),
+                },
+                1.0,
+            )],
+            thickness_cm: Some(0.1),
+            areal_density_g_cm2: None,
+            energy_out_mev: None,
+            is_monitor: false,
+            nist_compound: None,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        };
+
+        let err = layer_composition(&layer).expect_err("zero-mass layer must error");
+        assert!(
+            matches!(err, StoppingError::ZeroMassLayer { .. }),
+            "expected ZeroMassLayer, got {err:?}"
+        );
     }
 }

@@ -1423,7 +1423,14 @@ fn tool_get_isotope_production_curve(
                 ));
             }
         }
-        _ => unreachable!(),
+        // Guarded upstream (vs is validated to time/cooling/depth above), but
+        // return an error rather than panicking so no `unreachable!` is
+        // reachable on any MCP input path (#355).
+        other => {
+            return Err(format!(
+                "'vs' must be one of: time, cooling, depth (got '{other}')"
+            ))
+        }
     }
 
     Ok(output)
