@@ -75,8 +75,10 @@ def _find_data_dir() -> Path | None:
     repo_root = Path(__file__).parent.parent.parent
     candidates.extend(
         [
-            repo_root / "nucl-parquet",
-            repo_root / ".." / "nucl-parquet",
+            repo_root / "nucl-parquet" / "data",  # git submodule (v0.6.0+)
+            repo_root / "nucl-parquet",  # git submodule (legacy layout)
+            repo_root / ".." / "nucl-parquet" / "data",  # sibling repo (v0.6.0+)
+            repo_root / ".." / "nucl-parquet",  # sibling repo (legacy)
             Path.home() / ".hyrr" / "nucl-parquet",
         ]
     )
