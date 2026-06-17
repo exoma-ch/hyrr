@@ -56,11 +56,11 @@ fn list_producing_layers_reports_both_ti_layers() {
         .expect("list_producing_layers should succeed");
     // Both Ti layers produce V-48.
     assert!(
-        out.contains("2 of 2 layer(s) produce V-48"),
-        "expected both layers to produce V-48; got:\n{out}"
+        out.text.contains("2 of 2 layer(s) produce V-48"),
+        "expected both layers to produce V-48; got:\n{}", out.text
     );
     // The peak-activity layer is flagged.
-    assert!(out.contains("← peak"), "should flag the peak-activity layer:\n{out}");
+    assert!(out.text.contains("← peak"), "should flag the peak-activity layer:\n{}", out.text);
 }
 
 #[test]
@@ -74,11 +74,11 @@ fn production_curve_warns_when_defaulting_to_first_layer() {
         &ti_stack_args(json!({ "isotope": ISO, "vs": "time" })),
     )
     .expect("curve should succeed");
-    assert!(out.contains("— layer 1"), "default picks first producing layer:\n{out}");
-    assert!(out.contains("⚠️"), "must warn about ambiguity when defaulting:\n{out}");
+    assert!(out.text.contains("— layer 1"), "default picks first producing layer:\n{}", out.text);
+    assert!(out.text.contains("⚠️"), "must warn about ambiguity when defaulting:\n{}", out.text);
     assert!(
-        out.contains("layer_index"),
-        "warning should point at the layer_index selector:\n{out}"
+        out.text.contains("layer_index"),
+        "warning should point at the layer_index selector:\n{}", out.text
     );
 }
 
@@ -93,8 +93,8 @@ fn production_curve_honors_explicit_layer_index() {
         &ti_stack_args(json!({ "isotope": ISO, "vs": "time", "layer_index": 2 })),
     )
     .expect("curve for layer 2 should succeed");
-    assert!(out.contains("— layer 2"), "explicit layer_index=2 should select layer 2:\n{out}");
-    assert!(!out.contains("⚠️"), "explicit selection must not warn:\n{out}");
+    assert!(out.text.contains("— layer 2"), "explicit layer_index=2 should select layer 2:\n{}", out.text);
+    assert!(!out.text.contains("⚠️"), "explicit selection must not warn:\n{}", out.text);
 }
 
 #[test]

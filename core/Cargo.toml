@@ -11,7 +11,9 @@ exclude = [".cargo/**"]
 [features]
 default = ["parquet-store"]
 parquet-store = ["dep:nucl-parquet"]
-mcp = ["parquet-store"]
+# Structured export (#427) needs arrow/parquet for the parquet resource and
+# base64 to embed it in MCP content blocks — pulled in only with `mcp`.
+mcp = ["parquet-store", "dep:arrow", "dep:parquet", "dep:base64"]
 embed-data = ["parquet-store", "dep:tempfile"]
 
 [dependencies]
@@ -21,6 +23,13 @@ thiserror = "2"
 nucl-parquet = { path = "../nucl-parquet/clients/rs/nucl-parquet", optional = true, default-features = false }
 regex = "1"
 flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
+# Parquet/Arrow writer + base64 for the #427 dataset tools. Versions match
+# nucl-parquet's (already in the tree). `default-features = false` keeps this to
+# the array/schema/record-batch core nucl-parquet already pulls — no csv/ipc/json
+# umbrella. mcp-only.
+arrow = { version = "54", optional = true, default-features = false }
+parquet = { version = "54", optional = true, default-features = false, features = ["arrow"] }
+base64 = { version = "0.22", optional = true }
 
 # Native-only deps for the lazy data-fetch path (#52). Gated so wasm32
 # consumers don't pull reqwest/tar/zstd into their dependency graph.
