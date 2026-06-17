@@ -8,7 +8,11 @@
  */
 
 import { deflateSync, inflateSync } from "fflate";
-import { setCustomDensityLookup, setCustomCompositionLookup } from "@hyrr/compute";
+import {
+  setCustomDensityLookup,
+  setCustomCompositionLookup,
+  formulaToMassFractions,
+} from "@hyrr/compute";
 import { lookupByIdentifier } from "./compute/custom-material-registry";
 import type { SimulationConfig, LayerConfig, BeamConfig } from "./types";
 import type { SerializableConfig } from "./stores/config.svelte";
@@ -16,22 +20,49 @@ import type { SerializableConfig } from "./stores/config.svelte";
 const V2_PREFIX = "1:";
 const MAX_URL_ITEMS = 30;
 
-/** Inline-composition data carried by a layer when its material is a
- *  user-saved custom (or hydrated catalog fork). On decode, the receiver
- *  registers it as a session-only lookup so resolveMaterial finds density
- *  and per-element fractions without the user redefining the material. */
+/** Inline custom-material definition carried by a layer whose material is a
+ *  user-saved custom (or hydrated catalog fork). On decode the receiver
+ *  (a) registers it as a session-only lookup so resolveMaterial finds density
+ *  and per-element fractions without the user redefining the material, and
+ *  (b) records the full definition so the recipient can save it into their own
+ *  library by clicking the material (#96; overlaps #344/#356). */
 interface InlineComposition {
   /** density g/cm³ */
   d: number;
-  /** per-element mass fractions, summing to ~1 */
-  e: Record<string, number>;
+  /** per-element mass fractions, summing to ~1. Optional — recomputed from the
+   *  formula on decode when absent (e.g. a formula-only custom that was saved
+   *  without precomputed fractions). */
+  e?: Record<string, number>;
+  /** chemical formula / original input — lets a formula-only custom travel and
+   *  be saved verbatim on the recipient. */
+  f?: string;
+  /** isotopic enrichment overrides per element symbol. */
+  n?: Record<string, Record<number, number>>;
 }
 
-const __sessionCompositions = new Map<string, InlineComposition>();
-function registerSessionComposition(name: string, x: InlineComposition): void {
-  __sessionCompositions.set(name, x);
+/** Full custom-material definition recovered from a decoded share link, keyed
+ *  by material name. The UI offers these for "save to my library". */
+export interface SharedCustomMaterial {
+  name: string;
+  formula: string;
+  density: number;
+  massFractions?: Record<string, number>;
+  enrichment?: Record<string, Record<number, number>>;
+}
+
+const __sessionCompositions = new Map<string, { d: number; e: Record<string, number> }>();
+const __sharedCustomMaterials = new Map<string, SharedCustomMaterial>();
+
+function registerSessionComposition(name: string, comp: { d: number; e: Record<string, number> }): void {
+  __sessionCompositions.set(name, comp);
   setCustomDensityLookup((id) => __sessionCompositions.get(id)?.d ?? null);
   setCustomCompositionLookup((id) => __sessionCompositions.get(id)?.e ?? null);
+}
+
+/** Custom-material definition recovered from a shared link, for the recipient's
+ *  "save this material" flow. Null for names that didn't arrive via a link. */
+export function getSharedCustomMaterial(name: string): SharedCustomMaterial | null {
+  return __sharedCustomMaterials.get(name) ?? null;
 }
 
 /** Compact a single layer. */
@@ -43,13 +74,18 @@ function compactLayer(l: LayerConfig): any {
   if (l.enrichment) cl.n = l.enrichment;
   if (l.is_monitor) cl.f = true;
   if (l.density_g_cm3 !== undefined) cl.d = l.density_g_cm3;
-  // #96 v3 invariant: embed inline composition when the material is a
-  // user-saved custom. Receiver registers via setCustomDensityLookup +
-  // setCustomCompositionLookup so resolveMaterial finds it without the
-  // user having to redefine the material first.
+  // #96 v3 invariant: embed the full custom-material definition when the
+  // material is a user-saved custom, so the whole layer stack travels in the
+  // link. The receiver registers a session lookup (resolveMaterial finds it
+  // without redefining) AND can save it to their own library. Embed the
+  // formula too — a formula-only custom (no precomputed massFractions, the
+  // #344 case) otherwise sent only its bare name and wouldn't resolve.
   const cm = lookupByIdentifier(l.material);
-  if (cm?.massFractions) {
-    cl.x = { d: cm.density, e: cm.massFractions };
+  if (cm) {
+    const x: InlineComposition = { d: cm.density, f: cm.formula };
+    if (cm.massFractions) x.e = cm.massFractions;
+    if (cm.enrichment) x.n = cm.enrichment;
+    cl.x = x;
   }
   return cl;
 }
@@ -104,14 +140,35 @@ function expandLayer(cl: any): LayerConfig {
   if (cl.n) layer.enrichment = cl.n;
   if (cl.f) layer.is_monitor = true;
   if (cl.d !== undefined) layer.density_g_cm3 = cl.d;
-  // #96 v3: layer carries inline composition for ad-hoc / custom materials.
-  // Register session-only so resolveMaterial finds it. Validate shape so a
-  // malformed share URL doesn't poison the session.
-  if (cl.x && typeof cl.x === "object" && typeof cl.x.d === "number" && cl.x.e && typeof cl.x.e === "object") {
-    registerSessionComposition(layer.material, { d: cl.x.d, e: cl.x.e });
-    // Also set density_g_cm3 on the layer so the Rust backend (which
-    // doesn't see the TS session composition) gets the custom density.
+  // #96 v3: layer carries the inline custom-material definition. Validate shape
+  // so a malformed share URL can't poison the session.
+  if (cl.x && typeof cl.x === "object" && typeof cl.x.d === "number") {
+    const formula = typeof cl.x.f === "string" ? cl.x.f : undefined;
+    // Mass fractions: prefer the embedded set; otherwise recompute from the
+    // formula so a formula-only custom still resolves on the recipient.
+    let massFractions: Record<string, number> | undefined =
+      cl.x.e && typeof cl.x.e === "object" ? cl.x.e : undefined;
+    if (!massFractions && formula) {
+      const computed = formulaToMassFractions(formula);
+      if (Object.keys(computed).length > 0) massFractions = computed;
+    }
+    if (massFractions) {
+      // Register session-only so resolveMaterial finds it.
+      registerSessionComposition(layer.material, { d: cl.x.d, e: massFractions });
+    }
+    // Set density_g_cm3 so the Rust backend (which doesn't see the TS session
+    // composition) gets the custom density.
     layer.density_g_cm3 = cl.x.d;
+    // Record the full definition so the recipient can save it to their library
+    // by clicking the material (see getSharedCustomMaterial).
+    __sharedCustomMaterials.set(layer.material, {
+      name: layer.material,
+      formula: formula ?? layer.material,
+      density: cl.x.d,
+      massFractions,
+      enrichment:
+        cl.x.n && typeof cl.x.n === "object" ? cl.x.n : undefined,
+    });
   }
   return layer;
 }
