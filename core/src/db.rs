@@ -231,7 +231,9 @@ mod np_store {
 use super::*;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use nucl_parquet::{AbundancesDb, CrossSectionDb, DecayDb, DoseDb, ParquetStore, StoppingDb};
+use nucl_parquet::{
+    z_to_symbol, AbundancesDb, CrossSectionDb, DecayDb, DoseDb, ParquetStore, StoppingDb,
+};
 use crate::types::{CrossSectionData, DecayMode, EmissionLine};
 
 /// Nuclear data store backed by the `nucl-parquet` Rust client crate.
@@ -274,14 +276,17 @@ impl NpDataStore {
         // until the first emission query.
         let emissions = ParquetStore::new(&root);
 
-        // Build Z ↔ symbol maps from abundances
+        // Build Z ↔ symbol maps from the canonical IUPAC table (Z=1..=118), not
+        // from abundances: elements with no natural isotopes (Tc Z=43, Pm Z=61,
+        // and the transuranics) are absent from the abundance data, which left
+        // get_element_symbol falling back to "Z43" and mislabelling residuals
+        // like Tc-99m as "Z43-99m" in production results.
         let mut elements = HashMap::new();
         let mut symbol_to_z = HashMap::new();
         for z in 1..=118u32 {
-            let isotopes = abundances.isotopes(z);
-            if let Some(first) = isotopes.first() {
-                elements.insert(z, first.symbol.clone());
-                symbol_to_z.insert(first.symbol.clone(), z);
+            if let Some(sym) = z_to_symbol(z) {
+                elements.insert(z, sym.to_string());
+                symbol_to_z.insert(sym.to_string(), z);
             }
         }
 
@@ -604,7 +609,7 @@ mod embedded_store {
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use nucl_parquet::{AbundancesDb, CrossSectionDb, DecayDb, DoseDb, StoppingDb};
+use nucl_parquet::{z_to_symbol, AbundancesDb, CrossSectionDb, DecayDb, DoseDb, StoppingDb};
 use crate::types::{CrossSectionData, DecayMode};
 
 /// Static embedded tar containing all nuclear data files.
@@ -681,14 +686,15 @@ impl EmbeddedDataStore {
         }
         let stopping = StoppingDb::open(stopping_dir.path().join("stopping"))?;
 
-        // Build Z ↔ symbol maps
+        // Build Z ↔ symbol maps from the canonical IUPAC table (Z=1..=118), not
+        // from abundances — see ParquetDataStore::new: abundance-derived maps drop
+        // elements with no natural isotopes (Tc, Pm, transuranics).
         let mut elements = HashMap::new();
         let mut symbol_to_z = HashMap::new();
         for z in 1..=118u32 {
-            let isotopes = abundances.isotopes(z);
-            if let Some(first) = isotopes.first() {
-                elements.insert(z, first.symbol.clone());
-                symbol_to_z.insert(first.symbol.clone(), z);
+            if let Some(sym) = z_to_symbol(z) {
+                elements.insert(z, sym.to_string());
+                symbol_to_z.insert(sym.to_string(), z);
             }
         }
 
