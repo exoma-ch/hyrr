@@ -38,6 +38,17 @@ dev-fast *args:
 wasm:
     wasm-pack build wasm/ --target web --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
 
+# Build the hyrr._native PyO3 extension into src/hyrr (needed for tests/integration)
+[group('dev')]
+build-native *args:
+    scripts/build-native.sh {{args}}
+
+# Run the integration suite (builds _native first; resolves data from the submodule)
+[group('test')]
+test-integration *args:
+    scripts/build-native.sh
+    HYRR_DATA="${HYRR_DATA:-$PWD/nucl-parquet/data}" uv run pytest tests/integration {{args}}
+
 # Copy nuclear data to frontend
 [group('dev')]
 data:
