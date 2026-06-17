@@ -10,6 +10,18 @@ name: Release Please
 # publish workflows (release.yml, tauri-build.yml) or re-push the tag
 # from a local clone. See ADR 0002 for details. A PAT-based approach
 # would eliminate this step but adds secret management overhead.
+#
+# The sync-release-lockfiles job (below) keeps uv.lock + wasm/Cargo.lock in
+# sync with the versions release-please bumps in pyproject.toml/wasm/Cargo.toml
+# — release-please bumps manifests but not lockfiles, which otherwise fails the
+# required `lint` (lockfile-sync) gate on the release PR (Refs: #445).
+#
+# CAVEAT: that job pushes with GITHUB_TOKEN, so it does NOT trigger CI on the
+# release PR. Because release-please also opens the PR with GITHUB_TOKEN, the
+# required status checks never run automatically. After the release PR is up
+# (and its lockfiles synced), a maintainer must close→reopen it once to fire
+# CI. A GitHub App token on the release-please step would remove this manual
+# step, at the cost of app/secret setup.
 
 on:
   push:
@@ -26,6 +38,7 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
+      pr: ${{ steps.release.outputs.pr }}
     steps:
       - uses: googleapis/release-please-action@v5
         id: release
@@ -48,3 +61,53 @@ jobs:
         run: |
           git tag "hyrr-mcp-${TAG}"
           git push origin "hyrr-mcp-${TAG}"
+
+  # When release-please opens/updates a release PR, it bumps the version in
+  # pyproject.toml + wasm/Cargo.toml but leaves uv.lock and wasm/Cargo.lock
+  # stale — which fails the required `lint` (lockfile-sync) gate. Regenerate
+  # them on the release branch so the PR is mergeable once CI runs. Runs only
+  # when a release PR exists (the `pr` output is empty on release-created /
+  # no-op runs). See the CAVEAT in the header about triggering CI. (Refs: #445)
+  sync-release-lockfiles:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.pr != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+          submodules: false
+      # cargo needs the nucl-parquet Rust client on disk to resolve the
+      # wasm -> core -> nucl-parquet path-dep chain (sparse: client only).
+      - name: Init nucl-parquet submodule (sparse — Rust client only)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set clients/rs/nucl-parquet
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Regenerate lockfiles to match bumped versions
+        run: |
+          # Minimal regen: uv lock only repins what changed; `cargo update -p`
+          # touches the bumped local crate (and its path dependents) without
+          # churning registry deps.
+          uv lock
+          cargo update --manifest-path wasm/Cargo.toml -p hyrr-core -p hyrr-wasm
+      - name: Verify the gate now passes
+        run: bash scripts/check-lockfiles.sh
+      - name: Commit & push if changed
+        run: |
+          if git diff --quiet -- uv.lock wasm/Cargo.lock; then
+            echo "Lockfiles already in sync — nothing to push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock wasm/Cargo.lock
+          git commit -m "chore(release): sync uv.lock + wasm/Cargo.lock to bumped version"
+          git push
