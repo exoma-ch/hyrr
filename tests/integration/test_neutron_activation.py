@@ -11,9 +11,27 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests.integration.conftest import requires_db
+from tests.integration.conftest import _find_data_dir, requires_db
 
-pytestmark = [pytest.mark.integration, requires_db]
+
+def _has_neutron_data() -> bool:
+    """tendl-2023-iso ships charged-particle cross-sections only (p/d/t/h/a) —
+    there is no neutron sublibrary — so (n,x) activation can't be exercised
+    against it. Detect the absence and skip rather than assert against data
+    that isn't shipped."""
+    data_dir = _find_data_dir()
+    if data_dir is None:
+        return False
+    xs = data_dir / "tendl-2023-iso" / "xs"
+    return xs.is_dir() and any(xs.glob("n_*.parquet"))
+
+
+requires_neutron_data = pytest.mark.skipif(
+    not _has_neutron_data(),
+    reason="library has no neutron (n,x) cross-sections (tendl-2023-iso is charged-particle only)",
+)
+
+pytestmark = [pytest.mark.integration, requires_db, requires_neutron_data]
 
 
 # ---------------------------------------------------------------------------

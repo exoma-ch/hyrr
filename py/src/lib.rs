@@ -83,7 +83,13 @@ impl PyDataStore {
             current_profile,
         };
 
-        let result = compute_stack(&*db, &mut stack, true);
+        // Unwrap the Result here so callers receive a bare SimulationResult JSON
+        // (as the docstring promises) rather than a serde-tagged {"Ok": ...} /
+        // {"Err": ...} envelope. Surfacing the error as a PyRuntimeError also
+        // prevents the failure mode where a compute error serialized to
+        // {"Err": ...} was silently read as "no layers" by the Python side.
+        let result = compute_stack(&*db, &mut stack, true)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("compute_stack failed: {e}")))?;
         let json = serde_json::to_string(&result)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
         Ok(json)
