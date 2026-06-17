@@ -38,7 +38,7 @@ mod tests {
         let mut o_override = HashMap::new();
         o_override.insert(18, 0.97);
         enrichment.insert("O".to_string(), o_override);
-        let h2o = resolve_material(&db, "H2O-18", Some(&enrichment), None).unwrap();
+        let h2o = resolve_material(&db, "H2O-18", Some(&enrichment), None, None).unwrap();
 
         eprintln!("H2O-18 resolution: density={}, elements:", h2o.density);
         for (elem, frac) in &h2o.elements {
