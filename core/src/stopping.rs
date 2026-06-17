@@ -31,6 +31,8 @@ const BUNDLED_CATIMA_PROJECTILES: &[&str] =
 #[derive(Debug, Clone, thiserror::Error, serde::Serialize)]
 #[serde(tag = "variant")]
 pub enum StoppingError {
+    #[error("Layer has zero total mass — every element has zero atom fraction or zero isotopic abundance (elements: {elements})")]
+    ZeroMassLayer { elements: String },
     #[error("No {source_name} stopping table — projectile {projectile} not in bundled set. Available: {available_pretty}")]
     NoSourceTable {
         #[serde(rename = "source")]
@@ -96,6 +98,8 @@ impl StoppingError {
                 *li = Some(layer_index);
                 *lm = Some(mat);
             }
+            // ZeroMassLayer already names its elements; no per-layer slots.
+            StoppingError::ZeroMassLayer { .. } => {}
         }
         self
     }
