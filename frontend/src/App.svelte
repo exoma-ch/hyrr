@@ -3,6 +3,8 @@
   import "./lib/stores/theme.svelte"; // initialise theme (applies data-theme attribute)
   import { registerServiceWorker } from "./lib/sw-register";
   import { decodeSerializableConfigFromHash, setConfigInHash } from "./lib/config-url";
+  import { getSharedCustomMaterial } from "./lib/config-url-v2";
+  import type { EditableMaterial } from "./lib/components/material/DefineForm.svelte";
   import {
     getConfig,
     setConfig,
@@ -88,6 +90,9 @@
   let materialPopupLayerIndex = $state(0);
   let materialPopupEditId = $state<string | null>(null);
   let materialPopupQuery = $state("");
+  /** DefineForm prefill for a shared-link custom the recipient hasn't saved
+   *  yet — lets them save it by clicking the material (#96). */
+  let materialPopupPrefill = $state<EditableMaterial | null>(null);
   let elementPopupOpen = $state(false);
   let elementPopupSymbol = $state("");
   let elementPopupEnrichment = $state<Record<number, number> | undefined>(undefined);
@@ -248,7 +253,19 @@
     }
     const cm = mat ? getCustomMaterials().find((m) => m.name === mat || m.formula === mat) : null;
     materialPopupEditId = cm?.id ?? null;
-    materialPopupQuery = cm ? "" : (mat ?? "");
+    // If the material isn't in the library but arrived via a share link,
+    // prefill the DefineForm from the shared definition so the recipient can
+    // save it (Save forks a new custom — editingCustomId = ""). (#96)
+    const shared = !cm && mat ? getSharedCustomMaterial(mat) : null;
+    materialPopupPrefill = shared
+      ? {
+          formula: shared.formula,
+          name: shared.name,
+          density: shared.density,
+          editingCustomId: "",
+        }
+      : null;
+    materialPopupQuery = cm || shared ? "" : (mat ?? "");
     materialPopupOpen = true;
   }
 
@@ -447,6 +464,7 @@
         : (() => { const item = getInternalItems()[materialPopupLayerIndex]; return item && !('mode' in item) ? item.enrichment : undefined; })()}
       materials={[]}
       editMaterialId={materialPopupEditId}
+      prefillDefine={materialPopupPrefill}
       initialQuery={materialPopupQuery}
       {projectile}
     />

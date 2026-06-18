@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { encodeConfigV2, decodeConfigV2, decodeConfigV2Ser } from "./config-url-v2";
+import {
+  encodeConfigV2,
+  decodeConfigV2,
+  decodeConfigV2Ser,
+  getSharedCustomMaterial,
+} from "./config-url-v2";
 import { initCustomMaterialRegistry } from "./compute/custom-material-registry";
 import type { CustomMaterial } from "./stores/custom-materials.svelte";
 import type { SerializableConfig } from "./stores/config.svelte";
@@ -212,6 +217,66 @@ describe("v3 inline composition (#96)", () => {
     };
     const r = compute.resolveMaterial(mockDb, "soda-lime-glass");
     expect(r.density).toBeCloseTo(2.5);
+  });
+
+  it("transports a formula-only custom (no massFractions) and resolves it", async () => {
+    // The #344 case: a custom saved with only formula + density. Previously
+    // only the bare name travelled and wouldn't resolve on another machine.
+    setTestMaterials([{
+      id: "t2", name: "my-brass", formula: "CuZn", density: 8.5, timestamp: 0,
+    }]);
+    const cfg: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 16, current_mA: 0.15 },
+      items: [{ material: "my-brass", thickness_cm: 0.02 }],
+      irradiation_s: 3600,
+      cooling_s: 600,
+    };
+    const hash = encodeConfigV2(cfg);
+    // Recipient has no such material saved.
+    setTestMaterials([]);
+    const payload = hash.replace("#config=1:", "");
+    const decoded = decodeConfigV2Ser(payload);
+    expect(decoded).not.toBeNull();
+    const layer = decoded!.items[0] as { density_g_cm3?: number };
+    expect(layer.density_g_cm3).toBeCloseTo(8.5);
+
+    const compute = await import("@hyrr/compute");
+    const mockDb = {
+      getCrossSections: () => [],
+      hasCrossSections: () => false,
+      getStoppingPower: () => ({ energiesMeV: new Float64Array(0), dedx: new Float64Array(0) }),
+      getNaturalAbundances: () => new Map(),
+      getDecayData: () => null,
+      getDoseConstant: () => null,
+      getElementSymbol: () => "?",
+      getElementZ: () => 0,
+    };
+    // Composition was recomputed from the formula → resolveMaterial works.
+    const r = compute.resolveMaterial(mockDb, "my-brass");
+    expect(r.density).toBeCloseTo(8.5);
+  });
+
+  it("records the full shared definition so the recipient can save it", () => {
+    setTestMaterials([{
+      id: "t3", name: "my-brass", formula: "CuZn", density: 8.5, timestamp: 0,
+      enrichment: { Cu: { 63: 1.0 } },
+    }]);
+    const cfg: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 16, current_mA: 0.15 },
+      items: [{ material: "my-brass", thickness_cm: 0.02 }],
+      irradiation_s: 3600,
+      cooling_s: 600,
+    };
+    const hash = encodeConfigV2(cfg);
+    setTestMaterials([]);
+    decodeConfigV2Ser(hash.replace("#config=1:", ""));
+
+    const shared = getSharedCustomMaterial("my-brass");
+    expect(shared).not.toBeNull();
+    expect(shared!.formula).toBe("CuZn");
+    expect(shared!.density).toBeCloseTo(8.5);
+    expect(shared!.enrichment).toEqual({ Cu: { 63: 1.0 } });
+    expect(getSharedCustomMaterial("not-shared")).toBeNull();
   });
 });
 

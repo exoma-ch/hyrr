@@ -24,6 +24,11 @@
     materials: MaterialInfo[];
     /** If set, auto-open editor for this custom material ID when popup opens */
     editMaterialId?: string | null;
+    /** Open the DefineForm prefilled with this material when the popup opens —
+     *  used for a custom material that arrived via a share link but isn't yet
+     *  in the recipient's library, so they can save it (#96). Save forks a new
+     *  custom (editingCustomId = ""). */
+    prefillDefine?: EditableMaterial | null;
     /** Active beam projectile ("p", "d", "a", …). Used to compute the
      *  PeriodicTable's TENDL-coverage disabled set in a later commit. */
     projectile?: string;
@@ -39,6 +44,7 @@
     currentEnrichment,
     materials,
     editMaterialId = null,
+    prefillDefine = null,
     projectile,
     initialQuery = "",
   }: Props = $props();
@@ -103,7 +109,9 @@
   $effect(() => {
     if (open) {
       query = initialQuery || "";
-      editInitial = null;
+      // Prefill the DefineForm for a shared-link material the recipient hasn't
+      // saved yet (#96). editMaterialId (an existing custom) takes precedence.
+      editInitial = !editMaterialId ? prefillDefine : null;
       view = "search";
       // Force a clean state so a stale disabledSet from a previous
       // popup-open with a different projectile doesn't flash through.
