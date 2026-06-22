@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0](https://github.com/exoma-ch/hyrr/compare/v0.14.0...v0.15.0) (2026-06-22)
+
+
+### Features
+
+* **mcp:** structured data export — dataset/inventory/emission-curve tools + result cache ([#433](https://github.com/exoma-ch/hyrr/issues/433)) ([f3e749f](https://github.com/exoma-ch/hyrr/commit/f3e749fd10a28675de38fae99516cf50a392a528)), closes [#427](https://github.com/exoma-ch/hyrr/issues/427)
+* **share:** transport full custom-material definitions in links + recipient can save ([#96](https://github.com/exoma-ch/hyrr/issues/96)) ([#452](https://github.com/exoma-ch/hyrr/issues/452)) ([0deb391](https://github.com/exoma-ch/hyrr/commit/0deb391de063df4982fbc923df4447560e371e50))
+* **tracing:** structured trace spine + opt-in bug-report attach ([#159](https://github.com/exoma-ch/hyrr/issues/159)) ([#456](https://github.com/exoma-ch/hyrr/issues/456)) ([1331a5b](https://github.com/exoma-ch/hyrr/commit/1331a5bed4ebf5b326f4f47484e55799b343a467))
+
+
+### Bug Fixes
+
+* batch of simulation + UX bug fixes ([#344](https://github.com/exoma-ch/hyrr/issues/344) [#436](https://github.com/exoma-ch/hyrr/issues/436) [#438](https://github.com/exoma-ch/hyrr/issues/438) [#437](https://github.com/exoma-ch/hyrr/issues/437) [#435](https://github.com/exoma-ch/hyrr/issues/435) [#331](https://github.com/exoma-ch/hyrr/issues/331)) ([#454](https://github.com/exoma-ch/hyrr/issues/454)) ([6c56cd5](https://github.com/exoma-ch/hyrr/commit/6c56cd5d4da603cba138a4aa0b0336d341114ec6))
+* **core:** build Z↔symbol map from IUPAC table, not abundances ([#450](https://github.com/exoma-ch/hyrr/issues/450)) ([9a38540](https://github.com/exoma-ch/hyrr/commit/9a385400ec33cd29a84da45b436baea919ee52fe)), closes [#444](https://github.com/exoma-ch/hyrr/issues/444)
+* **core:** replace user-reachable panics with structured errors ([#355](https://github.com/exoma-ch/hyrr/issues/355)) ([#451](https://github.com/exoma-ch/hyrr/issues/451)) ([35fc4fc](https://github.com/exoma-ch/hyrr/commit/35fc4fc2500bf5e3a016182368f40212e7587ecd))
+* **native:** unwrap compute_stack Result so the Python API gets layers ([#448](https://github.com/exoma-ch/hyrr/issues/448)) ([4443a74](https://github.com/exoma-ch/hyrr/commit/4443a7436d864600a4f14bd76fddc90c8e013489)), closes [#444](https://github.com/exoma-ch/hyrr/issues/444)
+
+
+### Miscellaneous
+
+* **dev:** reproducible hyrr._native build + runnable integration suite ([#443](https://github.com/exoma-ch/hyrr/issues/443)) ([ea04df8](https://github.com/exoma-ch/hyrr/commit/ea04df80fb6404ed11f43d9eb791cd92617c536d))
+* sync root package-lock to frontend 0.13.0 / MIT / hyparquet-writer 0.15.1 ([#442](https://github.com/exoma-ch/hyrr/issues/442)) ([4d5fc63](https://github.com/exoma-ch/hyrr/commit/4d5fc636837c2aea1930b7a605a92bd552e98761))
+
+
+### Documentation
+
+* **claude:** correct stale 'pure Python' architecture → Rust core + bindings ([#449](https://github.com/exoma-ch/hyrr/issues/449)) ([6e1cd38](https://github.com/exoma-ch/hyrr/commit/6e1cd3890c4f8c8579e4d7ca4b155cd3449c8e0a))
+
+
+### CI
+
+* **release-please:** auto-sync uv.lock + wasm/Cargo.lock on release PRs ([#447](https://github.com/exoma-ch/hyrr/issues/447)) ([094cfd1](https://github.com/exoma-ch/hyrr/commit/094cfd1f6263a1e83fd5061d76dcecb213ab5686))
+
 ## [0.14.0](https://github.com/exoma-ch/hyrr/compare/v0.13.0...v0.14.0) (2026-06-17)
 
 
