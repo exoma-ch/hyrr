@@ -4,10 +4,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    # Shared code-quality / observability gates (#159). Pinned to the branch that
-    # adds `no-raw-trace-fields`; flip to the default branch once gerchowl/guardrails#24
-    # merges. `follows` keeps one nixpkgs eval (shared store/cache).
-    guardrails.url = "github:gerchowl/guardrails/no-raw-trace-fields";
+    # Shared code-quality / observability gates (#159). `follows` keeps one
+    # nixpkgs eval (shared store/cache).
+    guardrails.url = "github:gerchowl/guardrails";
     guardrails.inputs.nixpkgs.follows = "nixpkgs";
   };
 
