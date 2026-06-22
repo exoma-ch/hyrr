@@ -12,6 +12,7 @@
   import { buildSessionFile, downloadSessionFile, pickSessionFile } from "../session-io";
   import { getDisplayThresholds, setDisplayThresholds } from "../stores/display-thresholds.svelte";
   import { openExternalUrl } from "../utils/open-url";
+  import { copyText } from "../utils/copy-text";
   import { Bug, Check, CircleHelp, Clipboard, History, Link, Monitor, Moon, Save, Sun } from "lucide-svelte";
   import logoUrl from "/logo.svg?url";
 
@@ -44,19 +45,11 @@
   let shareUrl = $derived(`${SHARE_BASE}${currentHash}`);
 
   async function copyToClipboard(text: string, which: "hash" | "share") {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      // Fallback for non-secure contexts (e.g. Tauri webview)
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-    }
+    // Only show the "Copied!" badge if the write actually succeeded. The macOS
+    // desktop (WKWebView) path goes through tauri-plugin-clipboard-manager,
+    // because navigator.clipboard.writeText silently no-ops there (#331).
+    const ok = await copyText(text);
+    if (!ok) return;
     copied = which;
     setTimeout(() => { if (copied === which) copied = null; }, 1500);
   }
