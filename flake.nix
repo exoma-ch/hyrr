@@ -16,11 +16,16 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # guardrails gate binaries (`guardrails-<name>` on PATH), invoked by the
-        # repo's .pre-commit-config.yaml local hooks. Shared by both shells so the
-        # gates run identically in CI (`prek run --all-files` from `.#ci`) and
-        # locally (#159).
-        gates = guardrails.lib.${system}.gates;
+        # guardrails: the gate binaries (`guardrails-<name>`) + the devShell
+        # wrapper. `mkDevShell`'s shellHook auto-installs the prek hooks the
+        # worktree-safe way — via `git rev-parse --git-path hooks`, NOT the
+        # `[ -d .git ]` check that silently fails in linked worktrees (where
+        # `.git` is a file) — and self-bootstraps the shell, so commits from any
+        # worktree / subagent / plain shell run the gates instead of erroring on
+        # missing `guardrails-*` binaries. The `ci` shell stays a bare mkShell
+        # (it runs `prek run --all-files` explicitly, so it needs the gate
+        # binaries but not the auto-install, and stays lean for fast CI). (#159)
+        inherit (guardrails.lib.${system}) gates mkDevShell;
         isDarwin = pkgs.stdenv.isDarwin;
         isLinux = pkgs.stdenv.isLinux;
 
@@ -60,12 +65,14 @@
 
         # Tools the prek hooks invoke directly (the `language: system` hooks in
         # .pre-commit-config.yaml: typos, typstyle, just-fmt, check-lockfiles)
-        # plus prek itself and git. ruff + pyright come from pythonTooling. All
-        # from nixpkgs so they run on NixOS (prek's downloaded generic-linux
-        # hook binaries hit the stub-ld wall otherwise). Shared by the `ci` and
-        # `default` shells so `prek run --all-files` behaves identically in CI
-        # and locally — one lint gate, one set of pinned versions.
-        hookTooling = with pkgs; [ prek typos typstyle just git ];
+        # plus git. ruff + pyright come from pythonTooling. All from nixpkgs so
+        # they run on NixOS (prek's downloaded generic-linux hook binaries hit
+        # the stub-ld wall otherwise). `prek` is split out because the `default`
+        # shell gets it (and the gates) from mkDevShell's toolbelt — adding it
+        # again would double-source it on PATH.
+        hookExtras = with pkgs; [ typos typstyle just git ];
+        # `ci` is a bare mkShell, so it lists prek + the gate binaries explicitly.
+        hookTooling = with pkgs; [ prek ] ++ hookExtras;
 
         # uv env: use the pinned nix interpreter, never a downloaded one.
         uvEnv = {
@@ -79,24 +86,27 @@
       {
         devShells = {
           # ── Lean CI/Python shell ─────────────────────────────────────
-          # Python toolchain + the prek hook tools — fast to realize (no
-          # WebKitGTK / Rust / Node), used by CI lint + test jobs and for local
-          # Python-only work. Carries hookTooling so CI's lint job can run the
-          # full `prek run --all-files` gate (the same one local dev runs).
+          # Python toolchain + prek + the gate binaries — fast to realize (no
+          # WebKitGTK / Rust / Node / cargo-* toolbelt), used by CI lint + test
+          # jobs. CI invokes `prek run --all-files` explicitly, so it needs the
+          # gate binaries but NOT mkDevShell's auto-install/self-bootstrap — which
+          # is why this stays a bare mkShell rather than mkDevShell.
           ci = pkgs.mkShell ({
             packages = pythonTooling ++ hookTooling ++ [ gates ];
             LD_LIBRARY_PATH = mkLibPath pyRuntimeLibs;
           } // uvEnv);
 
-          # ── Full dev shell ───────────────────────────────────────────
-          default = pkgs.mkShell ({
-            # pythonTooling + hookTooling (prek, typos, typstyle, just, git) are
-            # shared with the `ci` shell so the prek gate is identical in CI and
-            # locally; the extras below are the full desktop/WASM/frontend stack.
-            packages = with pkgs; pythonTooling ++ hookTooling ++ [
-              # ── Gates (guardrails) ────────────────────────────────
-              gates
-
+          # ── Full dev shell (guardrails mkDevShell) ───────────────────
+          # This is the shell direnv / `nix develop` / subagents enter. Going
+          # through mkDevShell means its shellHook auto-wires the prek hooks
+          # worktree-safely and self-bootstraps the env, so a commit/push from
+          # any worktree or subagent runs the gates without a manual `nix
+          # develop` (#159). prek + the gates come from the toolbelt — don't list
+          # them in `extra`.
+          default = mkDevShell {
+            inherit pkgs;
+            name = "hyrr-dev";
+            extra = with pkgs; pythonTooling ++ hookExtras ++ [
               # ── Rust ──────────────────────────────────────────────
               rustc
               cargo
@@ -125,13 +135,16 @@
               darwin.apple_sdk.frameworks.AppKit
             ]);
 
-            # Native libs for both Rust (webkit/gtk) and Python wheels.
-            LD_LIBRARY_PATH = mkLibPath (pyRuntimeLibs
-              ++ pkgs.lib.optionals isLinux tauriLibs);
+            # uv env + native libs for both Rust (webkit/gtk) and Python wheels.
+            env = uvEnv // {
+              LD_LIBRARY_PATH = mkLibPath (pyRuntimeLibs
+                ++ pkgs.lib.optionals isLinux tauriLibs);
+            };
 
-            shellHook = ''
-              # Skip auto-bootstrap in CI / non-interactive use — `nix develop`
-              # there just provides tools; jobs run their own steps explicitly.
+            # Appended after the guardrails banner + hook-install. The prek-install
+            # block is gone — mkDevShell does it (worktree-safe). Project bootstrap
+            # (venv/npm/submodule) stays, skipped in CI.
+            hook = ''
               if [ -z "''${CI:-}" ]; then
                 # ── Python venv via uv ──────────────────────────────
                 if [ ! -d ".venv" ]; then uv venv; fi
@@ -148,11 +161,6 @@
                   git submodule update --init nucl-parquet 2>/dev/null || true
                 fi
 
-                # ── Git hooks via prek (reads .pre-commit-config.yaml) ──
-                if [ -d .git ] && [ ! -f .git/hooks/pre-commit ]; then
-                  prek install 2>/dev/null || true
-                fi
-
                 echo "hyrr devshell — python $(python3 --version 2>&1 | cut -d' ' -f2), rustc $(rustc --version | cut -d' ' -f2), node $(node --version)"
               fi
 
@@ -160,7 +168,7 @@
               export CC="${pkgs.clang}/bin/clang"
               export CXX="${pkgs.clang}/bin/clang++"
             '';
-          } // uvEnv);
+          };
         };
       });
 }
