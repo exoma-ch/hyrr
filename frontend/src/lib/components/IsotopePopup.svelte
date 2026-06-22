@@ -22,6 +22,7 @@
   } from "@hyrr/compute";
   import type { DecayMode, CrossSectionData, ProjectileType } from "@hyrr/compute";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
+  import { canonicalState } from "../plotting/aggregate-isotopes";
   import type { CsvTrace } from "../plotting/csv-export";
   import {
     aggregateDecayModes,
@@ -252,7 +253,13 @@
           for (const [targetA, isoAbundance] of el.isotopes) {
             const xsList = db.getCrossSections(proj, el.Z, targetA);
             for (const xs of xsList) {
-              const isoKey = `${xs.residualZ}-${xs.residualA}-${xs.state || ""}`;
+              // Canonicalize ground state ("g" → "") so these keys match the
+              // states the activity table emits (which are already canonical).
+              // Without this, ground-state residuals that carry a "g"/"m" split
+              // in the data (e.g. Sc-44) key as "21-44-g" here but are looked up
+              // as "21-44-" → no match → empty cross-section section (#436).
+              const rState = canonicalState(xs.state || "");
+              const isoKey = `${xs.residualZ}-${xs.residualA}-${rState}`;
               // Peak XS for this channel
               let peakXs = 0;
               for (let i = 0; i < xs.xsMb.length; i++) {
@@ -282,8 +289,8 @@
                 seenIso.add(isoKey);
                 const sym = Z_TO_SYMBOL[xs.residualZ] ?? `Z${xs.residualZ}`;
                 produced.push({
-                  name: `${sym}-${xs.residualA}${xs.state === "g" ? "" : xs.state}`,
-                  Z: xs.residualZ, A: xs.residualA, state: xs.state || "",
+                  name: `${sym}-${xs.residualA}${rState}`,
+                  Z: xs.residualZ, A: xs.residualA, state: rState,
                 });
               }
             }
