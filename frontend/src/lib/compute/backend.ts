@@ -23,6 +23,12 @@ export type BackendKind = "tauri" | "wasm";
 let activeBackend: BackendKind | null = null;
 let wasmStore: any = null; // WasmDataStore instance (lazy-loaded)
 let wasmTsDataStore: any = null; // TS DataStore used for WASM XS loading
+let wasmModule: any = null; // the imported hyrr-wasm module (for rebuilds)
+let wasmLibrary: string = DEFAULT_LIBRARY; // library id the store was built with
+// `${projectile}_${symbol}` keys already loaded into the current wasmStore.
+// Makes cross-section loading idempotent and is cleared whenever the store is
+// rebuilt (so a fresh store re-loads what it needs).
+const loadedXsKeys = new Set<string>();
 
 /** Return the TS DataStore created during WASM init (already fully init'd).
  *  Null when using Tauri backend or if WASM init hasn't run yet. */
@@ -71,7 +77,10 @@ export async function initBackend(
     if (typeof wasm.default === "function") {
       await wasm.default();
     }
-    wasmStore = new wasm.WasmDataStore(library ?? DEFAULT_LIBRARY);
+    wasmModule = wasm;
+    wasmLibrary = library ?? DEFAULT_LIBRARY;
+    wasmStore = new wasm.WasmDataStore(wasmLibrary);
+    loadedXsKeys.clear();
 
     // Feed data from existing TS DataStore (hyparquet)
     onProgress?.("Loading nuclear data for WASM...", 0.3);
@@ -164,6 +173,51 @@ function prepareConfigJson(config: SimulationConfig): string {
   );
 }
 
+/**
+ * Rebuild the WASM data store from the retained TS DataStore.
+ *
+ * On wasm32 a Rust panic *aborts* without unwinding, so the borrow guard of a
+ * `&self`/`&mut self` method never runs its destructor — the WasmRefCell is
+ * left permanently borrowed and every subsequent call fails with "recursive
+ * use of an object detected which would lead to unsafe aliasing in rust"
+ * (#344). The only way to clear that state is to drop the poisoned instance and
+ * build a fresh one. Cross-sections are reloaded lazily on the next compute
+ * (loadedXsKeys is cleared); the SSoT closures read the module-level wasmStore
+ * by reference, so they pick up the new instance automatically.
+ */
+async function rebuildWasmStore(): Promise<void> {
+  if (!wasmModule || !wasmTsDataStore) {
+    throw new Error("Cannot rebuild WASM store: backend not initialized");
+  }
+  wasmStore = new wasmModule.WasmDataStore(wasmLibrary);
+  loadedXsKeys.clear();
+  await transferDataToWasm(wasmTsDataStore, wasmStore);
+}
+
+/**
+ * Run a WASM store operation, recovering from a poisoned store. If the call
+ * throws (a prior panic poisoned the store, or this call itself panics), the
+ * store is rebuilt and the operation retried once. If the retry also fails the
+ * store is rebuilt again — so one bad config never bricks the session for the
+ * next, different config — and the error is surfaced.
+ */
+async function runWasmWithRecovery<T>(op: () => Promise<T> | T): Promise<T> {
+  if (!wasmStore) throw new Error("WASM store not initialized");
+  try {
+    return await op();
+  } catch (e) {
+    console.error("[wasm] call failed, rebuilding store and retrying once:", e);
+    await rebuildWasmStore();
+    try {
+      return await op();
+    } catch (e2) {
+      // Genuine failure for this input — leave a clean store for the next call.
+      await rebuildWasmStore();
+      throw e2;
+    }
+  }
+}
+
 export async function computeStackBackend(
   config: SimulationConfig,
 ): Promise<SimulationResult> {
@@ -179,21 +233,14 @@ export async function computeStackBackend(
     }
 
     case "wasm": {
-      if (!wasmStore) throw new Error("WASM store not initialized");
-      // Ensure cross-sections are loaded for required elements
-      console.log("[wasm] Loading cross-sections...");
-      await ensureWasmCrossSections(config);
-      console.log("[wasm] Running computeStack...");
-      try {
+      return runWasmWithRecovery(async () => {
+        // Ensure cross-sections are loaded for required elements
+        await ensureWasmCrossSections(config);
         const resultJson = wasmStore.computeStack(configJson);
-        console.log("[wasm] computeStack done, parsing result...");
         const result = JSON.parse(resultJson);
         result.timestamp = Date.now();
         return result;
-      } catch (e: any) {
-        console.error("[wasm] computeStack failed:", e);
-        throw e;
-      }
+      });
     }
 
     default:
@@ -223,9 +270,10 @@ export async function computeDepthPreviewBackend(
     }
 
     case "wasm": {
-      if (!wasmStore) throw new Error("WASM store not initialized");
-      const resultJson = wasmStore.computeDepthPreview(configJson);
-      return JSON.parse(resultJson);
+      return runWasmWithRecovery(() => {
+        const resultJson = wasmStore.computeDepthPreview(configJson);
+        return JSON.parse(resultJson);
+      });
     }
 
     default:
@@ -343,6 +391,9 @@ async function ensureWasmCrossSections(
 
   for (const sym of elements) {
     const cacheKey = `${projectile}_${sym}`;
+    // Idempotent: skip elements already transferred into the current store.
+    // Cleared on rebuild so a fresh store reloads them (#344).
+    if (loadedXsKeys.has(cacheKey)) continue;
     if (ds.xsCache?.has(cacheKey)) {
       const rawRows = ds.xsCache.get(cacheKey);
       if (!rawRows || rawRows.length === 0) continue;
@@ -358,6 +409,7 @@ async function ensureWasmCrossSections(
         xs_mb: Number(r.xs_mb),
       }));
       wasmStore.loadCrossSections(projectile, sym, JSON.stringify(rows));
+      loadedXsKeys.add(cacheKey);
     }
   }
 }

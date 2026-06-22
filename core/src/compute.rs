@@ -753,11 +753,29 @@ fn integrate_heat(profile: &[DepthPoint], area_cm2: f64) -> f64 {
 ///
 /// In the small-λt_irr limit `(1 - exp(-λt_irr)) → λt_irr`, so for stable or
 /// very long-lived isotopes this preserves the prior behaviour.
+///
+/// IMPORTANT: the bound `R * (1 - exp(-λ t_irr))` only accounts for *direct*
+/// production at rate `R`. It is **not** an upper bound for isotopes that are
+/// also fed by decay of a parent (ingrowth): their true activity is
+/// `direct + ingrowth`, which legitimately exceeds the direct-only saturation.
+/// Clamping those to the direct ceiling pins the curve to a constant and
+/// produces a non-physical plateau that fails to decay after end-of-beam
+/// (issue #437 — W-179 fed by W-179m's IT branch). We therefore restrict the
+/// clamp to purely-direct isotopes (`source == "direct"`); chain-fed isotopes
+/// (`"daughter"`/`"both"`) are left untouched and decay correctly post-EOB. The
+/// chain solver is trusted to f64 precision for those (the matrix-exponential
+/// transients #55 guarded against were eliminated once nuclear-prompt isotopes
+/// were collapsed to instantaneous feed-through, #58).
 fn clamp_activities_to_saturation(
     isotope_results: &mut HashMap<String, IsotopeResult>,
     irr_time: f64,
 ) {
     for iso in isotope_results.values_mut() {
+        // Only purely-direct isotopes have `R * (1 - exp(-λ t_irr))` as a valid
+        // ceiling. Skip ingrowth-fed isotopes (see doc comment, issue #437).
+        if iso.source != "direct" {
+            continue;
+        }
         let Some(hl) = iso.half_life_s else { continue };
         if hl <= 0.0 {
             continue;
@@ -932,6 +950,55 @@ mod tests {
         assert!(iso.activity_bq <= saturation * (1.0 + 1e-12));
         assert!(iso.activity_direct_bq <= saturation * (1.0 + 1e-12));
         assert!(iso.activity_ingrowth_bq <= saturation * (1.0 + 1e-12));
+    }
+
+    /// Regression test for issue #437.
+    ///
+    /// A chain-fed isotope (`source == "both"`) — e.g. W-179g, directly produced
+    /// *and* fed by the IT decay of W-179m — has a true activity that exceeds the
+    /// direct-only saturation ceiling `R * (1 - exp(-λ t_irr))`. The clamp must
+    /// NOT touch it, otherwise the curve is pinned to the constant ceiling and
+    /// stays flat across end-of-beam instead of decaying.
+    #[test]
+    fn clamp_skips_chain_fed_isotopes() {
+        let half_life_s: f64 = 2223.0; // W-179g, ~37 min
+        let irr_time: f64 = 3600.0; // 1 h
+        let r: f64 = 3.0e9; // direct production rate
+        let lambda = LN2 / half_life_s;
+        let direct_saturation = r * (1.0 - (-lambda * irr_time).exp());
+
+        // Total = direct + ingrowth, exceeding the direct ceiling near EOB, then
+        // a clean monotonic decay after beam-off. If the clamp wrongly fires it
+        // pins everything above `direct_saturation` to a flat plateau.
+        let activity = vec![
+            0.5 * direct_saturation,        // build-up
+            1.4 * direct_saturation,        // exceeds direct ceiling (ingrowth bump)
+            1.5 * direct_saturation,        // EOB peak
+            1.5 * direct_saturation * 0.85, // decay after EOB
+            1.5 * direct_saturation * 0.60,
+        ];
+        let mut iso = iso_with("W-179", half_life_s, r, activity.clone());
+        iso.source = "both".to_string();
+        iso.activity_ingrowth_vs_time_bq =
+            activity.iter().map(|&a| 0.4 * a).collect();
+        iso.activity_ingrowth_bq = 0.4 * *activity.last().unwrap();
+
+        let mut results = HashMap::new();
+        results.insert("W-179".to_string(), iso);
+
+        clamp_activities_to_saturation(&mut results, irr_time);
+
+        let clamped = &results["W-179"].activity_vs_time_bq;
+        // Untouched: values above the direct ceiling must survive.
+        assert_eq!(
+            clamped, &activity,
+            "chain-fed isotope must not be clamped to the direct-only saturation"
+        );
+        // And the post-EOB tail must still be strictly decreasing (no plateau).
+        assert!(
+            clamped[2] > clamped[3] && clamped[3] > clamped[4],
+            "post-EOB activity must decay, not plateau: {clamped:?}"
+        );
     }
 
     #[test]

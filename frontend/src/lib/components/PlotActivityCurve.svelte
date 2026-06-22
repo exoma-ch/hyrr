@@ -281,21 +281,43 @@
     const { label: timeLabel, divisor: timeDiv } = bestTimeUnit(totalTime);
 
     const traces: any[] = [];
+    // Export traces carry the full, unfiltered samples regardless of plot mode.
+    const exportTraces: { name: string; x: number[]; y: number[] }[] = [];
     let colorIdx = 0;
+    // On a log axis the t=0 sample has activity ≈ 0 (→ log(0) = -∞) and tiny
+    // sub-threshold stragglers drag the auto-range down to numerically
+    // meaningless values, squashing the real curves. Drop those points (in Bq,
+    // before unit conversion) so autorange reflects the actual curve range
+    // (#438; supersedes the manual y-range clamp from #130).
+    const actThreshold = getThresholds().activity;
 
     for (const s of series) {
-      const times = s.time_grid_s.map((t) => (t - timeOffset) / timeDiv);
-      const activities = s.activity_vs_time_Bq.map((a) => a / actDiv);
+      const fullX = s.time_grid_s.map((t) => (t - timeOffset) / timeDiv);
+      const fullY = s.activity_vs_time_Bq.map((a) => a / actDiv);
+
+      let plotX = fullX;
+      let plotY = fullY;
+      if (logY) {
+        plotX = [];
+        plotY = [];
+        for (let i = 0; i < s.activity_vs_time_Bq.length; i++) {
+          if (s.activity_vs_time_Bq[i] >= actThreshold) {
+            plotX.push((s.time_grid_s[i] - timeOffset) / timeDiv);
+            plotY.push(s.activity_vs_time_Bq[i] / actDiv);
+          }
+        }
+      }
 
       traces.push({
-        x: times,
-        y: activities,
+        x: plotX,
+        y: plotY,
         name: s.label,
         type: "scatter",
         mode: "lines",
         line: { color: TRACE_COLORS[colorIdx % TRACE_COLORS.length], width: 1.5 },
         visible: legendVisibility.get(s.label) ?? true,
       });
+      exportTraces.push({ name: s.label, x: fullX, y: fullY });
       colorIdx++;
     }
 
@@ -327,17 +349,8 @@
         title: { text: `Activity (${actLabel})` },
         gridcolor: tc.border,
         type: logY ? "log" : "linear",
-        // On log scale, clamp the lower bound to the activity threshold
-        // (in plot units) so a single 1e-15 Bq straggler doesn't dominate
-        // the y-range. See #130 P1. Display-only; trace data is unmodified.
-        ...(logY
-          ? {
-              range: [
-                Math.log10(Math.max(getThresholds().activity / actDiv, 1e-30)),
-                Math.log10(Math.max(globalMax / actDiv, getThresholds().activity / actDiv * 10)),
-              ],
-            }
-          : {}),
+        // Sub-threshold points are filtered out of the log-scale traces above,
+        // so Plotly's auto-range now reflects the real curve range (#438).
       },
       shapes,
       annotations,
@@ -347,7 +360,7 @@
     lastExport = {
       xLabel: `Time ${useEOBTime ? "from EOB" : ""} (${timeLabel})`,
       yLabel: `Activity (${actLabel})`,
-      traces: traces.map((t: any) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
+      traces: exportTraces.map((t) => ({ name: t.name, x: [...t.x], y: [...t.y] })),
     };
     Plotly.react(plotDiv, traces, layout, PLOTLY_CONFIG);
     attachLegendListeners();
