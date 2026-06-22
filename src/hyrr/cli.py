@@ -177,7 +177,25 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true", help="Overwrite existing parquet files"
     )
 
+    # trace — inspect the structured trace log (#159). `hyrr trace dump` prints the
+    # last N JSONL events for headless / CI debugging.
+    trace_parser = subparsers.add_parser("trace", help="Structured trace tools (#159)")
+    trace_sub = trace_parser.add_subparsers(dest="trace_command")
+    trace_dump = trace_sub.add_parser("dump", help="Print the trace JSONL log")
+    trace_dump.add_argument(
+        "--file",
+        type=Path,
+        default=None,
+        help="Trace JSONL path (default: ~/.hyrr/logs/hyrr-cli.jsonl)",
+    )
+    trace_dump.add_argument(
+        "--lines", type=int, default=50, help="Print only the last N events (0 = all)"
+    )
+
     args = parser.parse_args(argv)
+
+    # Initialize tracing for the run (stderr always; JSONL when HYRR_TRACE is set).
+    _init_tracing()
 
     if args.command is None:
         parser.print_help()
@@ -195,7 +213,55 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_download_data(args)
     elif args.command == "generate-xs":
         return _cmd_generate_xs(args)
+    elif args.command == "trace":
+        return _cmd_trace_dump(args)
 
+    return 0
+
+
+def _default_trace_log() -> Path:
+    """SSoT path for the CLI trace JSONL (shared by init + dump)."""
+    return Path.home() / ".hyrr" / "logs" / "hyrr-cli.jsonl"
+
+
+def _init_tracing() -> None:
+    """Wire the native tracing subscriber once at startup. Stderr always; JSONL to
+    the default log file only when HYRR_TRACE is set (off by default — zero noise)."""
+    import os
+
+    try:
+        from hyrr import _native
+    except Exception:
+        return  # pure-Python install — no native tracing, fine.
+    if os.environ.get("HYRR_TRACE"):
+        log = _default_trace_log()
+        log.parent.mkdir(parents=True, exist_ok=True)
+        _native.py_trace_init(str(log))
+    else:
+        _native.py_trace_init(None)
+
+
+def _cmd_trace_dump(args: argparse.Namespace) -> int:
+    """Print the trace JSONL log (last N events) for headless / CI debugging."""
+    import json
+
+    if getattr(args, "trace_command", None) != "dump":
+        print("usage: hyrr trace dump [--file PATH] [--lines N]", file=sys.stderr)
+        return 2
+    path = Path(args.file) if args.file else _default_trace_log()
+    if not path.exists():
+        print(
+            f"No trace log at {path}.\nRun with HYRR_TRACE=1 to record one.",
+            file=sys.stderr,
+        )
+        return 1
+    lines = path.read_text().splitlines()
+    tail = lines[-args.lines :] if args.lines and args.lines > 0 else lines
+    for line in tail:
+        try:
+            print(json.dumps(json.loads(line)))
+        except (ValueError, TypeError):
+            print(line)
     return 0
 
 

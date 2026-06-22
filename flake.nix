@@ -4,12 +4,23 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    # Shared code-quality / observability gates (#159). Pinned to the branch that
+    # adds `no-raw-trace-fields`; flip to the default branch once gerchowl/guardrails#24
+    # merges. `follows` keeps one nixpkgs eval (shared store/cache).
+    guardrails.url = "github:gerchowl/guardrails/no-raw-trace-fields";
+    guardrails.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { nixpkgs, flake-utils, ... }:
+  outputs = { nixpkgs, flake-utils, guardrails, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+
+        # guardrails gate binaries (`guardrails-<name>` on PATH), invoked by the
+        # repo's .pre-commit-config.yaml local hooks. Shared by both shells so the
+        # gates run identically in CI (`prek run --all-files` from `.#ci`) and
+        # locally (#159).
+        gates = guardrails.lib.${system}.gates;
         isDarwin = pkgs.stdenv.isDarwin;
         isLinux = pkgs.stdenv.isLinux;
 
@@ -73,7 +84,7 @@
           # Python-only work. Carries hookTooling so CI's lint job can run the
           # full `prek run --all-files` gate (the same one local dev runs).
           ci = pkgs.mkShell ({
-            packages = pythonTooling ++ hookTooling;
+            packages = pythonTooling ++ hookTooling ++ [ gates ];
             LD_LIBRARY_PATH = mkLibPath pyRuntimeLibs;
           } // uvEnv);
 
@@ -83,6 +94,9 @@
             # shared with the `ci` shell so the prek gate is identical in CI and
             # locally; the extras below are the full desktop/WASM/frontend stack.
             packages = with pkgs; pythonTooling ++ hookTooling ++ [
+              # ── Gates (guardrails) ────────────────────────────────
+              gates
+
               # ── Rust ──────────────────────────────────────────────
               rustc
               cargo

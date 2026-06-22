@@ -26,6 +26,9 @@ export interface BugReportBodyInput {
   userAgent: string;
   /** Defaults to `new Date()` for testability. */
   now?: Date;
+  /** Opt-in diagnostic trace (#159) — the literal merged JSON the user previewed.
+   *  Omitted when the attach checkbox is off. */
+  trace?: string;
 }
 
 /**
@@ -93,6 +96,12 @@ export function buildBugReportBody(input: BugReportBodyInput): string {
   sections.push(`**Version:** ${input.appVersion}`);
   sections.push(`**Browser:** ${input.userAgent}`);
   sections.push(`**Timestamp:** ${(input.now ?? new Date()).toISOString()}`);
+
+  // Diagnostic trace last, fenced as ```json so GitHub renders it literally and
+  // the human-readable context stays on top (#159). Only present when attached.
+  if (input.trace && input.trace.trim()) {
+    sections.push(`## Diagnostic trace\n\n\`\`\`json\n${input.trace}\n\`\`\``);
+  }
 
   return sections.join("\n\n");
 }

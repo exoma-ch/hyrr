@@ -18,6 +18,7 @@ import {
   restoreSerializableConfig,
   type SerializableConfig,
 } from "./config.svelte";
+import { trace } from "../trace/trace";
 
 export interface SessionTab {
   id: string;
@@ -123,7 +124,7 @@ export async function restoreSessions(): Promise<void> {
       restoreSerializableConfig(activeTab.config);
     }
   } catch (err) {
-    console.warn("Failed to restore sessions from IndexedDB:", err);
+    trace.event("_session", "session.restore_failed", { error: String(err) });
   }
   initialized = true;
 }
@@ -150,7 +151,7 @@ export async function addSessionTab(): Promise<string | null> {
     await saveSession(toRecord(tab, true));
     return tab.id;
   } catch (err) {
-    console.warn("Failed to add session tab:", err);
+    trace.event("_session", "session.add_failed", { error: String(err) });
     return null;
   }
 }

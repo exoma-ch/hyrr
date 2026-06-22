@@ -56,6 +56,18 @@ describe("buildBugReportBody (#143)", () => {
     expect(body).toContain("**Compute error:** Error: StoppingError: O-16 unsupported");
   });
 
+  it("appends the diagnostic trace as a fenced json block when present (#159)", () => {
+    const trace = '{\n  "traceId": "abc",\n  "events": []\n}';
+    const body = buildBugReportBody(baseInput({ trace }));
+    expect(body).toContain("## Diagnostic trace");
+    expect(body).toContain("```json\n" + trace + "\n```");
+  });
+
+  it("omits the diagnostic trace section when absent/empty (#159)", () => {
+    expect(buildBugReportBody(baseInput())).not.toContain("## Diagnostic trace");
+    expect(buildBugReportBody(baseInput({ trace: "" }))).not.toContain("## Diagnostic trace");
+  });
+
   it("includes BOTH the stale-result line and the error when both happen to be set", () => {
     // This combo is unusual after #143's fix (setResultErrored clears result),
     // but the body builder must still honour what it's given.

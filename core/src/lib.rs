@@ -22,4 +22,5 @@ pub mod matrix_exp;
 pub mod production;
 pub mod projectile;
 pub mod stopping;
+pub mod trace_schema;
 pub mod types;

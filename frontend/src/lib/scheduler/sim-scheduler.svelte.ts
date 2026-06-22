@@ -16,9 +16,11 @@ import {
   setComputeError,
   clearResult,
   setResultErrored,
+  setActiveTraceId,
   type SimStatus,
 } from "../stores/results.svelte";
 import { parseComputeError } from "../compute/parse-error";
+import { trace, newTraceId } from "../trace/trace";
 import { configHash } from "./config-hash";
 import { DataStore } from "@hyrr/compute";
 import type { SimulationConfig, SimulationResult } from "@hyrr/compute";
@@ -134,10 +136,22 @@ async function runSimulation(hash: string): Promise<void> {
   const config = getConfig();
   cancelled = false;
 
+  // Mint the run's trace id synchronously (before any await) so a bug-report
+  // modal opened mid-run sees the correct id, and correlate it with whatever
+  // terminal state lands (#159).
+  const traceId = newTraceId();
+  setActiveTraceId(traceId);
+  trace.event(traceId, "run.start", {
+    projectile: config.beam.projectile,
+    energy_MeV: config.beam.energy_MeV,
+    nLayers: config.layers.length,
+  });
+
   try {
     if (!backendReady) {
       state = "loading_data";
       setLoading("Initializing compute backend...");
+      trace.event(traceId, "backend.init", {});
       await initDataStore("./data/parquet");
     }
 
@@ -146,8 +160,9 @@ async function runSimulation(hash: string): Promise<void> {
     // Rust backend (Tauri or WASM) — single call handles data + compute
     state = "running";
     setRunning("Running simulation (Rust)...");
+    trace.event(traceId, "compute.call", { backend });
 
-    const simResult = await computeStackBackend(config);
+    const simResult = await computeStackBackend(config, traceId);
 
     if (cancelled) return;
 
@@ -167,11 +182,16 @@ async function runSimulation(hash: string): Promise<void> {
 
     lastHash = hash;
     state = "ready";
+    trace.event(traceId, "run.success", { nLayers: simResult.layers.length });
     setResult(simResult);
   } catch (e: unknown) {
     if (cancelled) return;
     state = "error";
     const parsed = parseComputeError(e);
+    // Emit the terminal trace event BEFORE the store transition, so the
+    // recovery card / bug report reads a buffer that already records the
+    // failure (#159).
+    trace.event(traceId, "run.error", { message: parsed.message, kind: parsed.kind });
     // #143 clears the stale result + captures the raw error for the
     // bug-report fallback; #142 layers the typed error for the recovery
     // card on top. Both fields are read by different consumers, so set

@@ -15,9 +15,22 @@ let computeError = $state<ComputeError | null>(null);
 // that didn't go through the typed path (#143).
 let resultError = $state<unknown | null>(null);
 let progress = $state<string>("");
+// Active trace id for the current/last run (#159). Minted by the scheduler at run
+// start so whichever terminal state lands, the id is already correlated with it;
+// read reactively by the bug-report modal + recovery cards.
+let activeTraceId = $state<string | null>(null);
 
 export function getResult(): SimulationResult | null {
   return result;
+}
+
+/** The trace id of the current/last run (#159), or null if none. */
+export function getActiveTraceId(): string | null {
+  return activeTraceId;
+}
+
+export function setActiveTraceId(id: string | null): void {
+  activeTraceId = id;
 }
 
 export function getStatus(): SimStatus {

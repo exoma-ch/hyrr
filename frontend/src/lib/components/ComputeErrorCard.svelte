@@ -1,5 +1,8 @@
 <script lang="ts">
   import type { ComputeError } from "../types";
+  import { getActiveTraceId } from "../stores/results.svelte";
+  import { buildMergedTracePayload } from "../trace/merge-trace";
+  import TracePreview from "./TracePreview.svelte";
 
   type Props = {
     error: ComputeError;
@@ -75,6 +78,13 @@
       .filter((s) => s.length > 0);
     return projForms[0] ?? null;
   }
+
+  // "View diagnostics" surfaces the SAME trace the bug-report modal would attach
+  // (#118/#159) — read-only here, the modal owns the attach checkbox.
+  let showDiagnostics = $state(false);
+  const tracePayload = $derived(
+    showDiagnostics ? buildMergedTracePayload(getActiveTraceId()) : "",
+  );
 </script>
 
 <div class="error-card" role="alert" aria-live="assertive">
@@ -143,7 +153,20 @@
     {#if onReportGap}
       <button type="button" onclick={onReportGap}>Report this gap</button>
     {/if}
+    <button type="button" onclick={() => (showDiagnostics = !showDiagnostics)}>
+      {showDiagnostics ? "Hide diagnostics" : "View diagnostics"}
+    </button>
   </footer>
+
+  {#if showDiagnostics}
+    <section class="diagnostics">
+      {#if tracePayload}
+        <TracePreview payload={tracePayload} showAttach={false} />
+      {:else}
+        <p class="no-trace">No trace recorded for this run.</p>
+      {/if}
+    </section>
+  {/if}
 </div>
 
 <style>

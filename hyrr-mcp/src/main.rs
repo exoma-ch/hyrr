@@ -21,6 +21,11 @@ fn main() {
         return;
     }
 
+    // Structured tracing (#159): stderr is the MCP log channel (stdout is the
+    // JSON-RPC protocol stream), so the human layer never corrupts the protocol;
+    // set HYRR_TRACE_FILE to also append structured JSONL. Held for the process.
+    let _trace_guard = hyrr_core::trace_schema::init_native();
+
     let library = resolve_library(&args);
     let data_dir = resolve_data_dir(&args, &library);
 
