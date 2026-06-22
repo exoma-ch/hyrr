@@ -22,12 +22,22 @@
     getReleaseUrl,
     getCacheRootPattern,
   } from "../compute/data-fetch-meta";
+  import { buildMergedTracePayload } from "../trace/merge-trace";
+  import TracePreview from "./TracePreview.svelte";
 
   type Props = {
     error: ParsedFetchError;
     onretry: () => void;
   };
   let { error, onretry }: Props = $props();
+
+  // The data-load hang (#118) has no compute traceId; its signal lives in the
+  // "_init" bucket (backend init failures). Surface the same trace a bug report
+  // would carry (#159).
+  let showDiagnostics = $state(false);
+  const tracePayload = $derived(
+    showDiagnostics ? buildMergedTracePayload("_init") : "",
+  );
 
   // SSoT-resolved values (Tauri only). Browser mode falls through to
   // the URL/cache_dir already in the error payload (if any) — both are
@@ -95,7 +105,16 @@
         Open URL in browser
       </button>
     {/if}
+    <button type="button" onclick={() => (showDiagnostics = !showDiagnostics)}>
+      {showDiagnostics ? "Hide diagnostics" : "View diagnostics"}
+    </button>
   </footer>
+
+  {#if showDiagnostics && tracePayload}
+    <section class="diagnostics">
+      <TracePreview payload={tracePayload} showAttach={false} />
+    </section>
+  {/if}
 
   <p class="cli-hint">
     Or from a terminal: <code>hyrr fetch-data</code>

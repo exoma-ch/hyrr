@@ -1,7 +1,9 @@
 <script lang="ts">
   import { getConfig, getSerializableConfig } from "../stores/config.svelte";
-  import { getResult, getResultError } from "../stores/results.svelte";
+  import { getResult, getResultError, getActiveTraceId } from "../stores/results.svelte";
   import { buildBugReportBody } from "./bug-report-body";
+  import { buildMergedTracePayload } from "../trace/merge-trace";
+  import TracePreview from "./TracePreview.svelte";
   import { getShareableUrl } from "../config-url";
   import { getBugReportOpen, closeBugReport } from "../stores/bugreport.svelte";
   import { isTauri } from "../utils/platform";
@@ -17,6 +19,10 @@
   let screenshot = $state<Blob | null>(null);
   let screenshotPreview = $state<string | null>(null);
   let reportType = $state<"bug" | "feature">("bug");
+  // Diagnostic trace (#159): default OFF. The preview renders the SAME string we
+  // embed when attached, so what the user sees is exactly what gets submitted.
+  let attachTrace = $state(false);
+  let mergedTrace = $derived(buildMergedTracePayload(getActiveTraceId()));
   let submitting = $state(false);
   let capturing = $state(false);
   let resultMsg = $state<{ ok: boolean; text: string } | null>(null);
@@ -229,6 +235,7 @@
       computeError: getResultError(),
       appVersion: __APP_VERSION__,
       userAgent: navigator.userAgent,
+      trace: attachTrace ? mergedTrace : undefined,
     });
   }
 
@@ -439,6 +446,17 @@
           </div>
         {/if}
       </div>
+
+      {#if mergedTrace}
+        <div class="field">
+          <span class="field-label">Diagnostic trace <span class="optional">(optional)</span></span>
+          <TracePreview
+            payload={mergedTrace}
+            attach={attachTrace}
+            onAttachChange={(v) => (attachTrace = v)}
+          />
+        </div>
+      {/if}
 
       {#if !desktop}
         <!-- Invisible Turnstile widget container -->

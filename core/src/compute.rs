@@ -62,6 +62,14 @@ pub fn compute_stack(
     let mut energy_in = beam.energy_mev;
     let mut layer_results = Vec::new();
 
+    // Stage-boundary trace (#159). Once per run — never inside the loop below.
+    crate::trace_schema::compute_stack_start(
+        db.library(),
+        projectile.symbol(),
+        stack.layers.len(),
+        beam.energy_mev,
+    );
+
     for (idx, layer) in stack.layers.iter_mut().enumerate() {
         // Capture material name BEFORE compute_layer mutates the layer.
         // Layer doesn't carry a name; surface the first element's symbol
@@ -87,9 +95,19 @@ pub fn compute_stack(
             stack.current_profile.as_ref(),
         )
         .map_err(|e| e.with_layer_context(idx, material_hint))?;
+        // Per-layer boundary (debug — scales with layer count, not iterations).
+        crate::trace_schema::compute_layer(
+            idx,
+            energy_in,
+            lr.energy_out,
+            lr.isotope_results.len(),
+        );
         energy_in = lr.energy_out;
         layer_results.push(lr);
     }
+
+    let n_isotopes: usize = layer_results.iter().map(|lr| lr.isotope_results.len()).sum();
+    crate::trace_schema::compute_stack_done(layer_results.len(), n_isotopes);
 
     Ok(StackResult {
         layer_results,

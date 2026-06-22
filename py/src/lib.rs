@@ -464,6 +464,29 @@ fn config_to_layers(db: &ParquetDataStore, config: &SimConfig) -> Result<Vec<Lay
 // Python module
 // ---------------------------------------------------------------------------
 
+/// Initialize native tracing for the Python CLI (#159). Human logs to stderr
+/// (RUST_LOG, default info); when `jsonl_path` is given, structured JSONL is also
+/// appended there. The `WorkerGuard` is parked in a process-global so it lives
+/// until interpreter teardown (flush is best-effort). Idempotent.
+#[pyfunction]
+#[pyo3(signature = (jsonl_path=None))]
+fn py_trace_init(jsonl_path: Option<String>) -> PyResult<()> {
+    use std::sync::OnceLock;
+    static TRACE_GUARD: OnceLock<Mutex<Option<Box<dyn std::any::Any + Send>>>> = OnceLock::new();
+    if let Some(p) = jsonl_path.as_deref() {
+        if !p.is_empty() {
+            // SAFETY: called once at CLI startup, before threads spawn.
+            unsafe { std::env::set_var("HYRR_TRACE_FILE", p) };
+        }
+    }
+    let guard = hyrr_core::trace_schema::init_native();
+    let slot = TRACE_GUARD.get_or_init(|| Mutex::new(None));
+    if let Ok(mut g) = slot.lock() {
+        *g = guard;
+    }
+    Ok(())
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDataStore>()?;
@@ -480,5 +503,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_cache_is_complete, m)?)?;
     m.add_function(wrap_pyfunction!(py_data_version, m)?)?;
     m.add_function(wrap_pyfunction!(py_prune_old_versions, m)?)?;
+    m.add_function(wrap_pyfunction!(py_trace_init, m)?)?;
     Ok(())
 }

@@ -6,11 +6,15 @@ mod commands;
 
 use std::sync::Mutex;
 
+use tauri::Manager;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.iter().any(|a| a == "--mcp") {
-        // MCP mode: stdio JSON-RPC server, no GUI
+        // MCP mode: stdio JSON-RPC server, no GUI. Tracing to stderr (the MCP log
+        // channel) + JSONL when HYRR_TRACE_FILE is set (#159). Guard held to exit.
+        let _trace_guard = hyrr_core::trace_schema::init_native();
         let data_dir = hyrr_core::data_dir::resolve();
         let library = resolve_mcp_library(&args);
         hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library);
@@ -30,6 +34,21 @@ fn main() {
     }
 
     builder
+        .setup(|app| {
+            // Tee structured tracing JSONL into the platform log dir (#159) so a
+            // desktop user has a durable, discoverable trail (macOS ~/Library/Logs,
+            // Linux ~/.local/share/<id>/logs, Windows %LOCALAPPDATA%). Leak the
+            // guard: the GUI runs until process exit, where the flush is moot.
+            if let Ok(dir) = app.path().app_log_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                // SAFETY: setup runs on the main thread before IPC/webview threads.
+                unsafe { std::env::set_var("HYRR_TRACE_FILE", dir.join("hyrr.jsonl")) };
+                if let Some(guard) = hyrr_core::trace_schema::init_native() {
+                    Box::leak(Box::new(guard));
+                }
+            }
+            Ok(())
+        })
         .manage(commands::DataStoreState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             commands::init_data_store,
