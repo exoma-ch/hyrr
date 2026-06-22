@@ -54,7 +54,12 @@ impl PyDataStore {
         // Load cross-sections
         let projectile_str = &config.beam.projectile;
         for lc in &config.layers {
-            let resolution = resolve_material(&*db, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3).expect("resolve_material");
+            // Propagate material-resolution failures (e.g. an unknown compound
+            // with no density) as a Python exception. `.expect()` here aborted
+            // the interpreter; the WASM path already returns this as an error
+            // via `?` (see #344).
+            let resolution = resolve_material(&*db, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
             for (elem, _) in &resolution.elements {
                 db.load_xs(projectile_str, elem.z)
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;

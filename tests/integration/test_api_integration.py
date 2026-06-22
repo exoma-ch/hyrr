@@ -98,3 +98,40 @@ class TestRunSimulation:
         assert len(result["layers"]) == 1
         serialized = json.dumps(result)
         assert "NaN" not in serialized
+
+    def test_unknown_compound_without_density_raises(self, data_path):
+        """Regression for #344: a compound with no known density must surface a
+        catchable exception, not abort the interpreter via a Rust panic
+        (`.expect()`). On WASM the equivalent panic poisoned the data store and
+        produced the "unsafe aliasing" error on every subsequent call."""
+        config = {
+            "beam": {"projectile": "p", "energy_MeV": 18, "current_mA": 0.01},
+            "layers": [
+                {"material": "MgNa2O15CaSi6", "thickness_cm": 0.1},
+                {"material": "Fe", "thickness_cm": 0.1},
+            ],
+            "irradiation_s": 3600,
+            "cooling_s": 3600,
+        }
+        with pytest.raises(ValueError, match="No density known"):
+            run_simulation_from_json(json.dumps(config), str(data_path))
+
+    def test_two_layer_stack_with_density(self, data_path):
+        """Regression for #344: the same 2-layer stack computes cleanly once the
+        custom compound carries a density (as it does when shared via URL)."""
+        config = {
+            "beam": {"projectile": "p", "energy_MeV": 18, "current_mA": 0.01},
+            "layers": [
+                {
+                    "material": "MgNa2O15CaSi6",
+                    "thickness_cm": 0.1,
+                    "density_g_cm3": 2.5,
+                },
+                {"material": "Fe", "thickness_cm": 0.1},
+            ],
+            "irradiation_s": 3600,
+            "cooling_s": 3600,
+        }
+        result = run_simulation_from_json(json.dumps(config), str(data_path))
+        assert len(result["layers"]) == 2
+        assert "NaN" not in json.dumps(result)
