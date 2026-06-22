@@ -6,6 +6,7 @@
   import { nucLabel } from "@hyrr/compute";
   import { getSelectedIsotopes } from "../stores/selection.svelte";
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
+  import { getDepthPreview } from "../stores/depth-preview.svelte";
   import type { CsvTrace } from "../plotting/csv-export";
   import SaveMenu from "./SaveMenu.svelte";
   import SectionHeader from "./SectionHeader.svelte";
@@ -275,10 +276,20 @@
       xanchor: "left" as const,
     }));
 
+    // Match the depth-profile plot's x-axis exactly: span the full stack
+    // thickness (Σ layer thickness_mm) from the same shared depth-preview store
+    // (PlotDepthProfileLive uses range [0, Σ thickness_mm]). Without this the
+    // production plot auto-ranges only to where production is non-zero, so the
+    // two depth axes don't line up (#435). Fall back to the locally-accumulated
+    // production extent if the preview store isn't populated yet.
+    const stackThicknessMm = getDepthPreview().reduce((sum, l) => sum + l.thickness_mm, 0);
+    const xMax = stackThicknessMm > 0 ? stackThicknessMm : cumulativeDepth;
+
     const layout = darkLayout({
       xaxis: {
         title: { text: "Depth (mm)" },
         gridcolor: tc.border,
+        ...(xMax > 0 ? { range: [0, xMax] } : {}),
       },
       yaxis: {
         title: { text: "Production rate (atoms/s/cm)" },
