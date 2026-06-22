@@ -15,11 +15,19 @@ parquet-store = ["dep:nucl-parquet"]
 # base64 to embed it in MCP content blocks — pulled in only with `mcp`.
 mcp = ["parquet-store", "dep:arrow", "dep:parquet", "dep:base64"]
 embed-data = ["parquet-store", "dep:tempfile"]
+# Structured tracing → local JSONL via guardrails-trace (#159). Native-only —
+# the dep is fs/stderr based; the `tracing` facade itself is wasm-safe and
+# always present, so WASM emits the same events into its own ring subscriber.
+trace-jsonl = ["dep:guardrails-trace"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+# Tracing facade (#159). Wasm-safe — emitting an event is a no-op without an
+# installed subscriber, so this is always present; the JSONL subscriber (native)
+# and the ring subscriber (wasm) are wired by the respective entrypoints.
+tracing = { version = "0.1", features = ["attributes"] }
 nucl-parquet = { path = "../nucl-parquet/clients/rs/nucl-parquet", optional = true, default-features = false }
 regex = "1"
 flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
@@ -42,6 +50,12 @@ fs2 = "0.4"
 # at the Tauri/IPC boundary (#173). Pure-Rust, tiny, no transitive
 # baggage. Native-only because wasm32 has no filesystem.
 home = "0.5"
+# guardrails-trace (#159): one-call observability spine — EnvFilter + structured
+# JSONL — for native binaries (CLI/MCP/Tauri). Pulled only with `trace-jsonl`
+# (it's tracing-appender/fmt based → native-only). Pinned by rev for a
+# reproducible Cargo.lock across hyrr-mcp/desktop; flip to a tag once the
+# upstream PR (gerchowl/guardrails#24) merges.
+guardrails-trace = { git = "https://github.com/gerchowl/guardrails", package = "guardrails-trace", rev = "218b996612839e277a4515f8183bf9102189b362", optional = true }
 
 # tempfile is used at runtime for embed-data (stopping dir extraction)
 # and at test time for isolated $HOME tests.

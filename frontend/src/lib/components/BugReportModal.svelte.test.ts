@@ -71,6 +71,9 @@ const resultErrorMock = vi.fn(() => null as unknown);
 vi.mock("../stores/results.svelte", () => ({
   getResult: vi.fn(() => null),
   getResultError: () => resultErrorMock(),
+  // #159: the modal reads the active trace id to build the (default-off) trace
+  // preview. No active run in these tests → null → no preview rendered.
+  getActiveTraceId: vi.fn(() => null),
 }));
 
 // Shareable-URL builder — return a stable fake. The body builder embeds this

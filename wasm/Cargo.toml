@@ -6,7 +6,9 @@ description = "WASM bindings for hyrr-core — browser compute backend"
 license = "MIT"
 
 [lib]
-crate-type = ["cdylib"]
+# rlib alongside cdylib so the pure ring-buffer logic is unit-testable on the host
+# (`cargo test`); wasm-pack consumes the cdylib.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 hyrr-core = { path = "../core", default-features = false }
@@ -15,6 +17,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1"
+# Tracing ring buffer (#159). `release_max_level_debug` statically strips `trace!`
+# call sites from the wasm blob (keeps debug for the bug-report ring).
+tracing = { version = "0.1", features = ["release_max_level_debug"] }
+js-sys = "0.3"
 
 [profile.release]
 opt-level = "s"

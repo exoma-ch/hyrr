@@ -6,7 +6,8 @@
 
 use std::collections::HashMap;
 
-use console_error_panic_hook::set_once as set_panic_hook;
+mod trace;
+
 use hyrr_core::compute::compute_stack;
 use hyrr_core::db::{DatabaseProtocol, InMemoryDataStore};
 use hyrr_core::formula::parse_formula;
@@ -32,7 +33,10 @@ pub struct WasmDataStore {
 impl WasmDataStore {
     #[wasm_bindgen(constructor)]
     pub fn new(library: &str) -> Self {
-        set_panic_hook();
+        // Install the ring subscriber + composed panic hook (records panics into
+        // the ring before the wasm abort) and identify the engine build (#159).
+        trace::install();
+        hyrr_core::trace_schema::library_selected(library);
         Self {
             inner: InMemoryDataStore::new(library),
         }

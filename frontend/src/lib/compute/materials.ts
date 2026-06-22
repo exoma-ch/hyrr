@@ -13,6 +13,7 @@ import {
 } from "../utils/formula";
 import type { DatabaseProtocol, Element } from "@hyrr/compute";
 import { lookupByIdentifier } from "./custom-material-registry";
+import { trace } from "../trace/trace";
 
 export { parseFormula, formulaToMassFractions, SYMBOL_TO_Z, STANDARD_ATOMIC_WEIGHT };
 
@@ -475,7 +476,7 @@ export function resolveMaterial(
       } else {
         // Fallback: rough estimate from mass fractions
         density = 5.0;
-        console.warn(`[materials] No density for "${identifier}", using default ${density} g/cm³`);
+        trace.event("_materials", "materials.default_density", { identifier, density });
       }
     }
   }

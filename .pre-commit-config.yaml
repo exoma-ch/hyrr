@@ -135,3 +135,37 @@ repos:
         files: ^.*\.typ$
         pass_filenames: true
         args: [--inplace]
+
+  # ── guardrails deterministic gates (#159) ───────────────────────────────────
+  # Binaries on PATH via the flake's `gates` package (both `.#ci` and default
+  # shells). CI runs the same set through `nix develop .#ci -c prek run --all-files`.
+  - repo: local
+    hooks:
+      - id: no-fake-impl
+        name: guardrails — no fake/placeholder implementations
+        entry: guardrails-no-fake-impl
+        language: system
+        pass_filenames: true
+      - id: no-conflict-markers
+        name: guardrails — no committed merge-conflict markers
+        entry: guardrails-no-conflict-markers
+        language: system
+        pass_filenames: true
+      # no-commented-code is intentionally NOT enabled: on this repo it is
+      # 13-false-positive / 0-true-positive (it mis-fires on prose comments
+      # ending in ';' and ones describing data shapes like `{ Z, A, ... }`).
+      # Per guardrails' own philosophy a gate must have a low enough FP rate that
+      # nobody reflexively bypasses it; revisit if the heuristic tightens
+      # upstream (gerchowl/guardrails).
+      - id: no-debug-leftovers
+        name: guardrails — no debug-print leftovers (use the tracing facade)
+        # CLI/server output surfaces + the SW-register lifecycle log are legit.
+        entry: env GUARDRAILS_OUTPUT_GLOBS=src/hyrr/cli.py:*/mcp/transport.rs:py-mcp/src/lib.rs:py-mcp/python/hyrr_mcp/*:frontend/src/lib/sw-register.ts:frontend/scripts/*:frontend/e2e/* guardrails-no-debug-leftovers
+        language: system
+        pass_filenames: true
+      - id: no-raw-trace-fields
+        name: guardrails — no raw ?/% field formatters in tracing macros (privacy)
+        # core/src/trace_schema.rs is the single audit surface where shaped fields live.
+        entry: env GUARDRAILS_TRACE_ALLOW_GLOBS=core/src/trace_schema.rs guardrails-no-raw-trace-fields
+        language: system
+        pass_filenames: true

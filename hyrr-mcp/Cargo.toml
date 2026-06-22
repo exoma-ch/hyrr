@@ -10,7 +10,7 @@ name = "hyrr-mcp"
 path = "src/main.rs"
 
 [dependencies]
-hyrr-core = { path = "../core", features = ["mcp"] }
+hyrr-core = { path = "../core", features = ["mcp", "trace-jsonl"] }
 nucl-parquet = { path = "../nucl-parquet/clients/rs/nucl-parquet", features = ["fetch"] }
 
 [profile.release]

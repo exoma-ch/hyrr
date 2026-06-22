@@ -11,6 +11,8 @@
 import { isTauri } from "../utils/platform";
 import { DEFAULT_LIBRARY } from "./data-fetch-meta";
 import { lookupByName } from "./custom-material-registry";
+import { trace, type TraceDump } from "../trace/trace";
+import { registerWasmTraceDumper } from "../trace/wasm-bridge";
 import type { SimulationConfig, SimulationResult } from "@hyrr/compute";
 import type { DepthPreviewLayer } from "../stores/depth-preview.svelte";
 
@@ -65,7 +67,9 @@ export async function initBackend(
       activeBackend = "tauri";
       return "tauri";
     } catch (e) {
-      console.warn("[backend] Tauri init failed, falling through:", e);
+      // Init-time: no compute run yet, so use the reserved "_init" bucket — the
+      // splash/recovery card surfaces this if startup hangs (#118/#159).
+      trace.event("_init", "backend.tauri.init_failed", { error: String(e) });
     }
   }
 
@@ -128,10 +132,13 @@ export async function initBackend(
       },
     });
 
+    // Expose the WASM ring buffer to the trace layer without a static import
+    // back into this module (#159).
+    registerWasmTraceDumper(dumpWasmTrace);
     activeBackend = "wasm";
     return "wasm";
   } catch (e) {
-    console.warn("[backend] WASM init failed, falling back to TS:", e);
+    trace.event("_init", "backend.wasm.init_failed", { error: String(e) });
   }
 
   // No TS fallback — Rust (Tauri or WASM) is required
@@ -201,12 +208,17 @@ async function rebuildWasmStore(): Promise<void> {
  * store is rebuilt again — so one bad config never bricks the session for the
  * next, different config — and the error is surfaced.
  */
-async function runWasmWithRecovery<T>(op: () => Promise<T> | T): Promise<T> {
+async function runWasmWithRecovery<T>(
+  op: () => Promise<T> | T,
+  traceId = "_wasm",
+): Promise<T> {
   if (!wasmStore) throw new Error("WASM store not initialized");
   try {
     return await op();
   } catch (e) {
-    console.error("[wasm] call failed, rebuilding store and retrying once:", e);
+    // The store was likely poisoned by a prior panic-abort (#344); record the
+    // rebuild on the trace so a bug report shows the recovery (#159).
+    trace.event(traceId, "wasm.rebuild", { reason: String(e) });
     await rebuildWasmStore();
     try {
       return await op();
@@ -220,6 +232,7 @@ async function runWasmWithRecovery<T>(op: () => Promise<T> | T): Promise<T> {
 
 export async function computeStackBackend(
   config: SimulationConfig,
+  traceId = "_wasm",
 ): Promise<SimulationResult> {
   const configJson = prepareConfigJson(config);
 
@@ -240,11 +253,27 @@ export async function computeStackBackend(
         const result = JSON.parse(resultJson);
         result.timestamp = Date.now();
         return result;
-      });
+      }, traceId);
     }
 
     default:
       throw new Error(`No compute backend active. Call initBackend() first.`);
+  }
+}
+
+/**
+ * The WASM ring buffer's events (#159), or `null` when the dump export is
+ * unavailable. Registered with the trace bridge after WASM init so the UI reads
+ * it without importing this module (which would drag in the `hyrr-wasm` dynamic
+ * import). The dump's own `traceId` is ignored — the merge re-wraps it.
+ */
+function dumpWasmTrace(): TraceDump | null {
+  if (activeBackend !== "wasm" || !wasmModule?.__hyrr_dump_trace) return null;
+  try {
+    const json: string = wasmModule.__hyrr_dump_trace(undefined);
+    return JSON.parse(json) as TraceDump;
+  } catch {
+    return null;
   }
 }
 

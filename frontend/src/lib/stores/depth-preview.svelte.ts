@@ -8,6 +8,7 @@ import {
   getActiveBackend,
   computeDepthPreviewBackend,
 } from "../compute/backend";
+import { trace } from "../trace/trace";
 
 export interface DepthPreviewLayer {
   material: string;
@@ -47,7 +48,9 @@ async function computePreviewAsync(): Promise<void> {
       cooling_s: config.cooling_s ?? 86400,
     });
   } catch (e) {
-    console.warn("[depth-preview] Backend error, clearing preview:", e);
+    // Depth-preview is high-frequency; keep it in its own bucket, separate from
+    // the full-compute trace the bug report cares about (#159).
+    trace.event("_depth", "depth.error", { error: String(e) });
     preview = [];
   }
 }
