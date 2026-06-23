@@ -196,7 +196,10 @@
     }
     window.addEventListener("keydown", onKeyDown);
 
-    await registerServiceWorker();
+    // Skip the SW in dev: a caching service worker serves stale bundles over
+    // Vite's fresh modules, so edits silently don't take effect (and HMR fights
+    // the cache). Only register on real deploys (staging/prod).
+    if (import.meta.env.PROD) await registerServiceWorker();
 
     const ok = await runInitialDataLoad();
     if (!ok) return;

@@ -8,6 +8,7 @@
   import { getIsotopeFilter } from "../stores/isotope-filter.svelte";
   import { getDepthPreview } from "../stores/depth-preview.svelte";
   import type { CsvTrace } from "../plotting/csv-export";
+  import { selectPerLayerTopN } from "../plotting/production-trace-select";
   import SaveMenu from "./SaveMenu.svelte";
   import SectionHeader from "./SectionHeader.svelte";
 
@@ -99,6 +100,27 @@
     const boundaries: { depth: number; label: string }[] = [];
     let cumulativeDepth = 0;
 
+    // ── Per-layer top-N selection ─────────────────────────────────────────
+    // A stack-global top-N lets the highest-yield layer monopolize the plot,
+    // burying a thin/downstream layer's signature radionuclide (e.g. ⁴⁴Sc under
+    // a Nb foil's bulk). Instead, rank radionuclides WITHIN each layer by that
+    // layer's integrated production (∫rate·dx) and keep the top N per layer, so
+    // every layer's headline products are represented. Stable isotopes are
+    // excluded — the target matrix isn't a "produced radionuclide" (consistent
+    // with the activity plot, which skips half_life_s === null).
+    const TOP_N_PER_LAYER = 8;
+    const GLOBAL_TRACE_CAP = 40; // backstop so a very deep stack can't explode
+
+    // name → Z/A/reactions/half_life lookup. Reused by the stable-isotope check
+    // (production selection + ranking) and the Z/A/reaction filters below.
+    const nameToIso = new Map<string, (typeof result.layers)[number]["isotopes"][number]>();
+    for (const layer of result.layers) {
+      for (const iso of layer.isotopes) {
+        if (!nameToIso.has(iso.name)) nameToIso.set(iso.name, iso);
+      }
+    }
+    const isStable = (name: string) => nameToIso.get(name)?.half_life_s === null;
+
     for (const layer of result.layers) {
       const dp = layer.depth_profile;
       const dpr = layer.depth_production_rates;
@@ -155,14 +177,10 @@
       cumulativeDepth = layerEnd;
     }
 
-    // Lookup: isotope name → any IsotopeResultData that carries its Z/A/reactions.
-    // Filters below (Z, A, reactions) reference those fields.
-    const nameToIso = new Map<string, (typeof result.layers)[number]["isotopes"][number]>();
-    for (const layer of result.layers) {
-      for (const iso of layer.isotopes) {
-        if (!nameToIso.has(iso.name)) nameToIso.set(iso.name, iso);
-      }
-    }
+    // Per-layer top-N union: each layer's headline radionuclides (ranked by that
+    // layer's integrated production), so a thin/downstream layer's signature
+    // isotope isn't buried by a high-yield layer in a stack-global ranking.
+    const perLayerSelected = selectPerLayerTopN(result.layers, isStable, TOP_N_PER_LAYER);
 
     const zMin = sharedFilter.zMin ? parseInt(sharedFilter.zMin, 10) : NaN;
     const zMax = sharedFilter.zMax ? parseInt(sharedFilter.zMax, 10) : NaN;
@@ -196,6 +214,7 @@
     // depth sampling differs.
     const ranked = [...isoData.entries()]
       .filter(([name]) => passesFilter(name))
+      .filter(([name]) => !isStable(name))
       .map(([name, data]) => {
         let total = 0;
         for (let i = 1; i < data.depths.length; i++) {
@@ -206,12 +225,14 @@
       .filter((r) => r.total > 0)
       .sort((a, b) => b.total - a.total);
 
-    // Filter by selection or top 15
+    // Explicit selection wins; otherwise show the per-layer top-N union, ordered
+    // by stack-wide total for a stable legend, with a deep-stack backstop cap.
     let toPlot = ranked;
     if (selected.size > 0) {
       toPlot = ranked.filter((r) => selected.has(r.name));
     } else {
-      toPlot = ranked.slice(0, 15);
+      toPlot = ranked.filter((r) => perLayerSelected.has(r.name));
+      if (toPlot.length > GLOBAL_TRACE_CAP) toPlot = toPlot.slice(0, GLOBAL_TRACE_CAP);
     }
 
     if (toPlot.length === 0) {
