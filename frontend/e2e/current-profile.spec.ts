@@ -194,16 +194,22 @@ test.describe("current profile — Sc-44 preset", () => {
     // Profile mode replaces the irradiation input (duration comes from profile)
     await expect(page.locator("#bcb-irrad")).toHaveCount(0);
 
-    // Wait for compute
-    await page.waitForSelector(".status-dot.busy", { timeout: 5_000 }).catch(() => {});
-    await page.waitForSelector(".status-dot.ready", { timeout: 60_000 }).catch(() => {});
-    await page.waitForTimeout(1_000);
-
-    const cellText = await page.locator(".activity-table-enhanced td").allTextContents();
-    const hasCaProducts = cellText.some(
-      (t) => t.includes("Sc") || t.includes("44K") || t.includes("Ti") || t.includes("Z21"),
-    );
-    expect(hasCaProducts, `No Ca-44 products found`).toBe(true);
+    // Poll the table for products rather than reading once after a fixed delay.
+    // The Ca-44 profile compute is correct (locally it yields ⁴⁴Sc/⁴⁴ᵐSc/⁴³Sc in
+    // ~1 s) but on cold CI runners it can lag, and the busy→ready transition can
+    // be missed entirely — a single post-`waitForTimeout` read then races the
+    // result and intermittently sees an empty table. Polling fixes that flake.
+    await expect
+      .poll(
+        async () => {
+          const cells = await page.locator(".activity-table-enhanced td").allTextContents();
+          return cells.some(
+            (t) => t.includes("Sc") || t.includes("44K") || t.includes("Ti") || t.includes("Z21"),
+          );
+        },
+        { message: "No Ca-44 products (⁴⁴Sc/Ti/…) appeared in the activity table", timeout: 90_000 },
+      )
+      .toBe(true);
 
     const fatal = errors.filter(
       (e) => e.includes("panic") || e.includes("unreachable") || e.includes("computeStack failed"),
