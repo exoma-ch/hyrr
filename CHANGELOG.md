@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2](https://github.com/exoma-ch/hyrr/compare/v0.16.1...v0.16.2) (2026-06-23)
+
+
+### Bug Fixes
+
+* **ci:** pin wasm-pack version for tauri build (macOS) ([#457](https://github.com/exoma-ch/hyrr/issues/457)) ([#475](https://github.com/exoma-ch/hyrr/issues/475)) ([2433f5e](https://github.com/exoma-ch/hyrr/commit/2433f5e18fa184b331bc5a1b550cbc2a8cfe351c))
+
 ## [0.16.1](https://github.com/exoma-ch/hyrr/compare/v0.16.0...v0.16.1) (2026-06-23)
 
 
