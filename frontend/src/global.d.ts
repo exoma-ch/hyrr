@@ -7,6 +7,11 @@ declare module "*.svg?url" {
 
 interface ImportMetaEnv {
   readonly BASE_URL: string;
+  // Vite built-ins (this project hand-rolls ImportMetaEnv instead of pulling in
+  // vite/client, so the standard PROD/DEV/MODE flags must be declared here).
+  readonly PROD: boolean;
+  readonly DEV: boolean;
+  readonly MODE: string;
   readonly VITE_ISSUE_WORKER_URL?: string;
   readonly VITE_TURNSTILE_SITE_KEY?: string;
 }
