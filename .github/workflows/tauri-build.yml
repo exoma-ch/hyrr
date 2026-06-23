@@ -93,6 +93,22 @@ jobs:
             npm install @rollup/rollup-win32-x64-msvc --no-save 2>/dev/null || true
           fi
 
+      # The desktop build runs the frontend build via tauri-action's
+      # beforeBuildCommand, which imports `hyrr-wasm`. Without the WASM package
+      # on disk, rolldown can't resolve that import and the whole build fails
+      # (#457 — the gap that broke desktop installers since v0.12.1). Build it
+      # first, mirroring e2e.yml. The matrix rust-target is the desktop triple,
+      # so add the wasm32 target explicitly.
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+
+      - name: Build WASM compute engine
+        shell: bash
+        run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+
       - name: Build and release desktop app
         id: tauri_build
         uses: tauri-apps/tauri-action@v0
