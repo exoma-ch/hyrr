@@ -302,7 +302,9 @@
           type: "bar",
           name: nucLabel(agg.name),
           marker: { color, opacity: 0.85 },
-          hovertemplate: `%{x:.1f} keV<br>${nucLabel(agg.name)}: %{y:.2e} /s<extra></extra>`,
+          // x-unified already shows the energy once as the header — don't repeat
+          // "<E> keV" on every row (halves the hover height, #462).
+          hovertemplate: `${nucLabel(agg.name)}: %{y:.2e} /s<extra></extra>`,
         });
         colorIdx++;
       }
@@ -356,6 +358,16 @@
         const maxB = Math.max(...(b.y as number[]));
         return maxB - maxA;
       });
+      // Cap the unified hover to the strongest N isotopes so it can't overflow
+      // the viewport (which was clipping the Σ total + rows at e.g. 511 keV).
+      // Weaker emitters stay visible as bars and still count toward the Σ —
+      // they're just not listed per-row (#462).
+      const HOVER_TOP_N = 12;
+      traces
+        .filter((t: any) => t.type === "bar")
+        .forEach((t: any, i: number) => {
+          if (i >= HOVER_TOP_N) t.hoverinfo = "skip";
+        });
     }
 
     // Stacked total per energy, shown ONCE as a single "Σ total" footer row in
@@ -385,7 +397,7 @@
         marker: { color: "rgba(0,0,0,0)", size: 0.1 },
         name: "Σ total",
         showlegend: false,
-        hovertemplate: "Σ %{y:.2e} /s<extra></extra>",
+        hovertemplate: "Σ total: %{y:.2e} /s<extra></extra>",
       });
     }
 
