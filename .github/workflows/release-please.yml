@@ -5,23 +5,20 @@ name: Release Please
 # CHANGELOG + version bumps) or — if that PR was just merged — creates the
 # tag + GitHub Release.
 #
-# IMPORTANT: Tags created by GITHUB_TOKEN don't trigger other workflows.
-# After release-please creates a tag, manually dispatch the downstream
-# publish workflows (release.yml, tauri-build.yml) or re-push the tag
-# from a local clone. See ADR 0002 for details. A PAT-based approach
-# would eliminate this step but adds secret management overhead.
+# Auth: a dedicated GitHub App (hyrr-release-bot) token, NOT GITHUB_TOKEN.
+# GitHub deliberately suppresses workflow triggers for events made with the
+# default GITHUB_TOKEN (anti-recursion). That used to mean (a) the release PR
+# got no CI — a maintainer had to close→reopen it — and (b) the v* / hyrr-mcp-v*
+# tags didn't fire the publish workflows, needing a manual dispatch. The App
+# token is a non-default credential, so its commits and tags DO trigger
+# workflows: the release PR gets CI automatically and the tags auto-publish.
+# Secrets: RELEASE_PLEASE_APP_ID / RELEASE_PLEASE_APP_PRIVATE_KEY.
 #
-# The sync-release-lockfiles job (below) keeps uv.lock + wasm/Cargo.lock in
-# sync with the versions release-please bumps in pyproject.toml/wasm/Cargo.toml
-# — release-please bumps manifests but not lockfiles, which otherwise fails the
-# required `lint` (lockfile-sync) gate on the release PR (Refs: #445).
-#
-# CAVEAT: that job pushes with GITHUB_TOKEN, so it does NOT trigger CI on the
-# release PR. Because release-please also opens the PR with GITHUB_TOKEN, the
-# required status checks never run automatically. After the release PR is up
-# (and its lockfiles synced), a maintainer must close→reopen it once to fire
-# CI. A GitHub App token on the release-please step would remove this manual
-# step, at the cost of app/secret setup.
+# The sync-release-lockfiles job (below) keeps uv.lock + wasm/Cargo.lock in sync
+# with the versions release-please bumps (manifests bumped, lockfiles not —
+# otherwise the required `lint` lockfile-sync gate fails). It checks out and
+# pushes with the same App token so its lockfile commit also triggers the PR's
+# CI (Refs: #445).
 
 on:
   push:
@@ -40,9 +37,16 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       pr: ${{ steps.release.outputs.pr }}
     steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
       - uses: googleapis/release-please-action@v5
         id: release
         with:
+          token: ${{ steps.app-token.outputs.token }}
           manifest-file: .release-please-manifest.json
           config-file: release-please-config.json
 
@@ -53,6 +57,8 @@ jobs:
         if: ${{ steps.release.outputs.release_created == 'true' }}
         with:
           fetch-depth: 0
+          # App token so the hyrr-mcp-v* tag push triggers release-hyrr-mcp.yml.
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Tag hyrr-mcp release
         if: ${{ steps.release.outputs.release_created == 'true' }}
@@ -75,10 +81,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v6
         with:
           ref: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
           submodules: false
+          # App token so the lockfile-sync commit triggers the release PR's CI.
+          token: ${{ steps.app-token.outputs.token }}
       # cargo needs the nucl-parquet Rust client on disk to resolve the
       # wasm -> core -> nucl-parquet path-dep chain (sparse: client only).
       - name: Init nucl-parquet submodule (sparse — Rust client only)
