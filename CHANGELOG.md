@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1](https://github.com/exoma-ch/hyrr/compare/v0.15.0...v0.15.1) (2026-06-23)
+
+
+### Bug Fixes
+
+* **frontend:** make EOB≠EOC legible — F-18 cooling, cooling=0 cue, e2e guard ([#464](https://github.com/exoma-ch/hyrr/issues/464)) ([3f65bb6](https://github.com/exoma-ch/hyrr/commit/3f65bb6574ce9a41d40810372980076f36492171)), closes [#462](https://github.com/exoma-ch/hyrr/issues/462)
+
+
+### Miscellaneous
+
+* **deps:** bump nucl-parquet to v0.14.0 (catima isotope fix [#247](https://github.com/exoma-ch/hyrr/issues/247)) ([#465](https://github.com/exoma-ch/hyrr/issues/465)) ([2539158](https://github.com/exoma-ch/hyrr/commit/2539158b073583085d6112bbb32c1bfec10a5ca8))
+
 ## [0.15.0](https://github.com/exoma-ch/hyrr/compare/v0.14.0...v0.15.0) (2026-06-22)
 
 
