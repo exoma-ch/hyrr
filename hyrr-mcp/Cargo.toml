@@ -1,6 +1,6 @@
 [package]
 name = "hyrr-mcp"
-version = "0.16.0"
+version = "0.16.1"
 edition = "2021"
 description = "HYRR MCP server — stdio JSON-RPC for radio-isotope production queries"
 license = "MIT"

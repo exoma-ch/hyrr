@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "hyrr-mcp"
-version = "0.16.0"
+version = "0.16.1"
 description = "HYRR MCP server — stdio JSON-RPC for radio-isotope production queries"
 readme = "README.md"
 license = { text = "MIT" }
