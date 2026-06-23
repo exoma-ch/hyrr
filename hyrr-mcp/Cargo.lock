@@ -519,7 +519,7 @@ dependencies = [
 [[package]]
 name = "guardrails-trace"
 version = "0.1.0"
-source = "git+https://github.com/gerchowl/guardrails?rev=218b996612839e277a4515f8183bf9102189b362#218b996612839e277a4515f8183bf9102189b362"
+source = "git+https://github.com/gerchowl/guardrails?rev=bdec0d0b0cc2ca1d534fce46018b304aa0b504f9#bdec0d0b0cc2ca1d534fce46018b304aa0b504f9"
 dependencies = [
  "tracing",
  "tracing-appender",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "hyrr-core"
-version = "0.15.1"
+version = "0.16.2"
 dependencies = [
  "arrow",
  "base64",
@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "hyrr-mcp"
-version = "0.15.1"
+version = "0.16.2"
 dependencies = [
  "hyrr-core",
  "nucl-parquet",
@@ -994,7 +994,7 @@ dependencies = [
 
 [[package]]
 name = "nucl-parquet"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "arrow",
  "bytes",
