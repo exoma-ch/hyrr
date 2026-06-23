@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "hyrr-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "flate2",
  "fs2",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "nucl-parquet"
-version = "0.13.6"
+version = "0.14.0"
 dependencies = [
  "arrow",
  "bytes",
