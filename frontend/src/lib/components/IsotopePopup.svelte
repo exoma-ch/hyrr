@@ -278,7 +278,11 @@
                   targetSymbol: tSym,
                   targetA,
                   abundance: atomFrac * isoAbundance,
-                  label: `<sup>${targetA}</sup>${tSym}${rxn}<sup>${xs.residualA}</sup>${rSym}`,
+                  // Include the residual metastable marker (rState: "m"/"m1"/…,
+                  // "" for ground) in the mass-number superscript so an isomer
+                  // reads ⁴⁴ᵐSc, not ⁴⁴Sc — otherwise the ground and metastable
+                  // channels are indistinguishable in the cross-section legend.
+                  label: `<sup>${targetA}</sup>${tSym}${rxn}<sup>${xs.residualA}${rState}</sup>${rSym}`,
                   reaction: rxn,
                 };
                 if (!allChanMap.has(isoKey)) allChanMap.set(isoKey, []);
