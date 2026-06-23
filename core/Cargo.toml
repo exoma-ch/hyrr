@@ -55,7 +55,7 @@ home = "0.5"
 # (it's tracing-appender/fmt based → native-only). Pinned by rev for a
 # reproducible Cargo.lock across hyrr-mcp/desktop; flip to a tag once the
 # upstream PR (gerchowl/guardrails#24) merges.
-guardrails-trace = { git = "https://github.com/gerchowl/guardrails", package = "guardrails-trace", rev = "218b996612839e277a4515f8183bf9102189b362", optional = true }
+guardrails-trace = { git = "https://github.com/gerchowl/guardrails", package = "guardrails-trace", rev = "bdec0d0b0cc2ca1d534fce46018b304aa0b504f9", optional = true }
 
 # tempfile is used at runtime for embed-data (stopping dir extraction)
 # and at test time for isolated $HOME tests.
