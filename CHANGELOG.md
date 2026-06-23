@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0](https://github.com/exoma-ch/hyrr/compare/v0.15.1...v0.16.0) (2026-06-23)
+
+
+### Features
+
+* **frontend:** sticky Filters bar between Depth Profile and Production vs Depth ([#469](https://github.com/exoma-ch/hyrr/issues/469)) ([5362ba9](https://github.com/exoma-ch/hyrr/commit/5362ba98457ee8ec0246d88ce8780ccd5d6e78cc))
+
+
+### Bug Fixes
+
+* **frontend:** production-vs-depth shows per-layer radionuclides (not stable matrix) ([#467](https://github.com/exoma-ch/hyrr/issues/467)) ([0a96496](https://github.com/exoma-ch/hyrr/commit/0a96496b608c03ea8334f91f6d24be62b25e925c))
+* **frontend:** show the metastable 'm' in cross-section channel labels ([#468](https://github.com/exoma-ch/hyrr/issues/468)) ([2865edc](https://github.com/exoma-ch/hyrr/commit/2865edc1076681899c8f09842c91ed92d4d16611)), closes [#436](https://github.com/exoma-ch/hyrr/issues/436)
+
+
+### Miscellaneous
+
+* **deps:** bump nucl-parquet — federated catima shards (our [#252](https://github.com/exoma-ch/hyrr/issues/252) implemented) ([#470](https://github.com/exoma-ch/hyrr/issues/470)) ([a02a03e](https://github.com/exoma-ch/hyrr/commit/a02a03e6bfab73ee8c746bcf44c96d4b51b2eb01))
+
 ## [0.15.1](https://github.com/exoma-ch/hyrr/compare/v0.15.0...v0.15.1) (2026-06-23)
 
 
