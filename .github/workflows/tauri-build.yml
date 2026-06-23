@@ -104,6 +104,11 @@ jobs:
 
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          # Pin the version: macOS runners ship a pre-installed wasm-pack too old
+          # for `--no-opt`, which jetli won't override without an explicit version
+          # (Linux/Windows got 0.13.1 and built fine; macOS got the stale one).
+          version: "v0.13.1"
 
       - name: Build WASM compute engine
         shell: bash
