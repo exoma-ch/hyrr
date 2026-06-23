@@ -449,6 +449,13 @@
     {/snippet}
   </SectionHeader>
 
+  {#if (result?.config?.cooling_s ?? 0) === 0}
+    <p class="cooling-note" data-testid="cooling-zero-note">
+      Cooling = 0 s — <strong>EOC = EOB</strong> (no decay phase). Set a cooling
+      time to see post-irradiation decay.
+    </p>
+  {/if}
+
   <div class="table-wrapper">
     <table>
       <thead>
@@ -640,6 +647,17 @@
 
 
   /* Table */
+  .cooling-note {
+    margin: 0.25rem 0 0.5rem;
+    font-size: 0.72rem;
+    color: var(--c-text-muted);
+    font-style: italic;
+  }
+  .cooling-note strong {
+    font-style: normal;
+    color: var(--c-text);
+  }
+
   .table-wrapper {
     overflow-x: auto;
   }

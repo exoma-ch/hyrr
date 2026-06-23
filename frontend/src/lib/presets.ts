@@ -93,7 +93,9 @@ export const PRESETS: Preset[] = [
         { material: "H2O-18", enrichment: { O: { 18: 0.97 } }, thickness_cm: 0.3, density_g_cm3: 1.11 },
       ],
       irradiation_s: 7200,
-      cooling_s: 0,
+      // 1 h cooling — realistic F-18 handling, and (unlike 0 s) it makes the
+      // EOB vs EOC columns differ so the example doesn't read like a bug (#462).
+      cooling_s: 3600,
     },
   },
   {
