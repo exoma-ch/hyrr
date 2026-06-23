@@ -103,6 +103,19 @@
    *  Dismissed permanently in localStorage on close. */
   let showSchemaBreakBanner = $state(false);
 
+  // The sticky Filters bar pins directly below the sticky top bar. Track the top
+  // bar's live height (it reflows responsively / when layers change) and publish
+  // it as --top-bar-h so the filter's sticky `top` offset stays correct.
+  let topBarEl = $state<HTMLElement | undefined>();
+  $effect(() => {
+    if (!topBarEl) return;
+    const ro = new ResizeObserver(() => {
+      document.documentElement.style.setProperty("--top-bar-h", `${topBarEl!.offsetHeight}px`);
+    });
+    ro.observe(topBarEl);
+    return () => ro.disconnect();
+  });
+
   // Must call initScheduler synchronously in component context for $effect
   initScheduler();
   initDepthPreview();
@@ -354,7 +367,7 @@
     </div>
   {/if}
 
-  <div class="top-bar">
+  <div class="top-bar" bind:this={topBarEl}>
     <HeaderBar />
     {#if ready}
       <div class="config-row">
@@ -406,6 +419,12 @@
         <PlotDepthProfileLive />
 
         {#if result}
+          <!-- Filters sit between Depth Profile and Production vs Depth, ahead of
+               every layer/isotope-dependent view (production, activity, emission,
+               table). Sticky so they stay reachable while scrolling those. -->
+          <div class="filter-sticky">
+            <IsotopeFilterBar {result} />
+          </div>
           <PlotProductionDepth {result} />
         {/if}
 
@@ -417,7 +436,6 @@
         {/if}
 
         {#if result}
-          <IsotopeFilterBar {result} />
           <div id="sec-activity"></div>
           <PlotActivityCurve {result} />
           <div id="sec-emission"></div>
@@ -672,6 +690,20 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+  }
+
+  /* Filters bar pinned just below the sticky top bar (--top-bar-h is published
+     by a ResizeObserver on .top-bar). z-index below the top bar so it tucks
+     under it; the background + gap-bleed keep content from peeking through when
+     pinned. */
+  .filter-sticky {
+    position: sticky;
+    top: var(--top-bar-h, 2.5rem);
+    z-index: 15;
+    background: var(--c-bg-subtle, var(--c-bg, #1a1a2e));
+    padding-block: 0.4rem;
+    margin-block: -0.4rem;
+    border-bottom: 1px solid var(--c-border);
   }
 
   .top-bar {
