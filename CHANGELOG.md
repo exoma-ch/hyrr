@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1](https://github.com/exoma-ch/hyrr/compare/v0.16.0...v0.16.1) (2026-06-23)
+
+
+### Bug Fixes
+
+* **ci:** build WASM before the tauri desktop build ([#457](https://github.com/exoma-ch/hyrr/issues/457)) ([#474](https://github.com/exoma-ch/hyrr/issues/474)) ([7169a20](https://github.com/exoma-ch/hyrr/commit/7169a202666be8573e14feb727239cceea87788d))
+* **e2e:** repair the 3 long-red tests dragging the whole matrix to failure ([#472](https://github.com/exoma-ch/hyrr/issues/472)) ([46f917c](https://github.com/exoma-ch/hyrr/commit/46f917cc868fcbc054b6abe6362975ca69ac5221))
+
 ## [0.16.0](https://github.com/exoma-ch/hyrr/compare/v0.15.1...v0.16.0) (2026-06-23)
 
 
