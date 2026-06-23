@@ -114,13 +114,16 @@ fn unsupported_heavy_ion_returns_typed_error_not_panic() {
         return;
     };
 
-    // Cl-35 is NOT in the bundled catima set (C-12, O-16, Ne-20, Si-28, Ar-40, Fe-56).
-    // It must surface as a typed Err, not a panic.
-    let Some(proj) = ProjectileType::from_str("Cl-35") else {
-        eprintln!("skipping: Cl-35 not parseable in this build");
+    // Cl-38 (T½ 37 min) sits below the federated catima set's inclusion
+    // threshold — stable + primordial + ground-state T½ > 1 yr (nucl-parquet
+    // #254) — so no catima_Cl38 shard exists. (Cl-35/36/37 now do, after #254
+    // federated catima from 6 bundled shards to ~399.) It must surface as a
+    // typed Err, not a panic.
+    let Some(proj) = ProjectileType::from_str("Cl-38") else {
+        eprintln!("skipping: Cl-38 not parseable in this build");
         return;
     };
-    let _ = db.load_xs("Cl-35", 29);
+    let _ = db.load_xs("Cl-38", 29);
     let energy = 10.0 * proj.a() as f64;
     let stack = trivial_cu_stack(&db, proj, energy);
 
@@ -136,7 +139,7 @@ fn unsupported_heavy_ion_returns_typed_error_not_panic() {
                 source_name.contains("Cl"),
                 "expected source_name to mention Cl, got {source_name}"
             );
-            assert_eq!(projectile, "Cl-35");
+            assert_eq!(projectile, "Cl-38");
         }
         Err(other) => panic!("expected NoSourceTable, got {other:?}"),
         Ok(_) => panic!("expected error for unsupported Cl-35, got Ok"),
