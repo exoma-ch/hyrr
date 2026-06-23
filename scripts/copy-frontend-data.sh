@@ -36,7 +36,21 @@ fi
 
 # ── Stopping ──────────────────────────────────────────────────────
 mkdir -p "$DEST/stopping/compounds"
-cp "$NP/stopping/"*.parquet "$DEST/stopping/" 2>/dev/null || true
+# NIST elemental sources (PSTAR/ASTAR/dSTAR/tSTAR …) — every non-catima shard.
+for f in "$NP/stopping/"*.parquet; do
+  [ -e "$f" ] || continue
+  case "$(basename "$f")" in
+    catima_*) : ;;  # catima handled selectively below
+    *) cp "$f" "$DEST/stopping/" ;;
+  esac
+done
+# CatIMA heavy-ion stopping is federated upstream into ~399 per-beam-isotope
+# shards (nucl-parquet #252/#254). The frontend only needs the heavy-ion beams
+# HYRR offers, so copy just those rather than shipping ~58 MB of unused shards.
+# Keep in sync with core/src/stopping.rs BUNDLED_CATIMA_PROJECTILES.
+for iso in C12 O16 Ne20 Si28 Ar40 Fe56; do
+  [ -f "$NP/stopping/catima_${iso}.parquet" ] && cp "$NP/stopping/catima_${iso}.parquet" "$DEST/stopping/"
+done
 # NIST compound stopping (PSTAR/ASTAR compounds)
 cp "$NP/stopping/compounds/"*.parquet "$DEST/stopping/compounds/" 2>/dev/null || true
 
