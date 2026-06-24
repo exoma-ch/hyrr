@@ -59,8 +59,8 @@ fn main() {
     let energies = vec![18.0_f64, 15.0, 10.0, 5.0, 2.0, 1.0];
     println!("dE/dx [MeV/cm] for p+ at various E (density applied):");
     for &e in &energies {
-        let al_v = dedx_mev_per_cm(&db, &proj, &al_comp, al.density, &[e]).unwrap()[0];
-        let ti_v = dedx_mev_per_cm(&db, &proj, &ti_comp, ti.density, &[e]).unwrap()[0];
+        let al_v = dedx_mev_per_cm(&db, &proj, &al_comp, al.density, &[e], None).unwrap()[0];
+        let ti_v = dedx_mev_per_cm(&db, &proj, &ti_comp, ti.density, &[e], None).unwrap()[0];
         // NIST PSTAR reference (no density factor):
         // Al @ 18 MeV: 24.5 MeV cm²/g × 2.70 g/cm³ = 66 MeV/cm expected
         println!("  E={:>5.2} MeV   Al={:>8.3}   Ti={:>8.3}", e, al_v, ti_v);
@@ -76,7 +76,7 @@ fn main() {
         ("Al (1 mm)", 0.1, al.density, &al_comp),
     ];
     for (label, thick_cm, dens, comp) in steps {
-        let e_out = compute_energy_out(&db, &proj, comp, dens, e, thick_cm, 1000).unwrap();
+        let e_out = compute_energy_out(&db, &proj, comp, dens, e, thick_cm, 1000, None).unwrap();
         let dedx_avg = (e - e_out) / thick_cm;
         println!(
             "  {:>24}   E {:>6.2} → {:>6.2} MeV   ⟨dE/dx⟩={:.2} MeV/cm",

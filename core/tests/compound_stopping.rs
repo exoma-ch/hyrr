@@ -81,7 +81,7 @@ fn water_simulation_produces_f18_with_nist_stopping() {
     let mut o_override = std::collections::HashMap::new();
     o_override.insert(18, 0.97);
     enrichment.insert("O".to_string(), o_override);
-    let h2o = resolve_material(&db, "H2O-18", Some(&enrichment), None).unwrap();
+    let h2o = resolve_material(&db, "H2O-18", Some(&enrichment), None, None).unwrap();
     assert_eq!(h2o.nist_compound.as_deref(), Some("WATER_LIQUID"));
 
     let layer2 = Layer {
