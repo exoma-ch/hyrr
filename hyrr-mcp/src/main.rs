@@ -61,11 +61,12 @@ fn resolve_data_dir(args: &[String], library: &str) -> String {
                 "stopping/ASTAR.parquet",
                 "stopping/dSTAR.parquet",
                 "stopping/tSTAR.parquet",
-                // CatIMA heavy-ion stopping was federated upstream from one
-                // monolith into per-beam-isotope shards (nucl-parquet #254);
-                // pre-fetch the heavy-ion beams HYRR bundles (matches
-                // core/src/stopping.rs BUNDLED_CATIMA_PROJECTILES and the
-                // frontend copy in scripts/copy-frontend-data.sh).
+                // CatIMA stopping was federated upstream from one monolith into
+                // per-beam-isotope shards (nucl-parquet #254); pre-fetch the
+                // beams HYRR bundles (matches core/src/stopping.rs
+                // BUNDLED_CATIMA_PROJECTILES and scripts/copy-frontend-data.sh).
+                // He3 is the ³He ("h") beam, now per-isotope CatIMA not ASTAR×4/3 (#194).
+                "stopping/catima_He3.parquet",
                 "stopping/catima_C12.parquet",
                 "stopping/catima_O16.parquet",
                 "stopping/catima_Ne20.parquet",

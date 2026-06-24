@@ -44,11 +44,14 @@ for f in "$NP/stopping/"*.parquet; do
     *) cp "$f" "$DEST/stopping/" ;;
   esac
 done
-# CatIMA heavy-ion stopping is federated upstream into ~399 per-beam-isotope
-# shards (nucl-parquet #252/#254). The frontend only needs the heavy-ion beams
-# HYRR offers, so copy just those rather than shipping ~58 MB of unused shards.
+# CatIMA stopping is federated upstream into ~399 per-beam-isotope shards
+# (nucl-parquet #252/#254). The frontend only needs the beams HYRR offers, so
+# copy just those rather than shipping ~58 MB of unused shards.
+#   - He3: the active ³He ("h") light-ion beam now uses per-isotope CatIMA
+#     instead of ASTAR×4/3 velocity-scaling (#194).
+#   - C12…Fe56: the heavy-ion beams (currently UI-gated on #266, native-only).
 # Keep in sync with core/src/stopping.rs BUNDLED_CATIMA_PROJECTILES.
-for iso in C12 O16 Ne20 Si28 Ar40 Fe56; do
+for iso in He3 C12 O16 Ne20 Si28 Ar40 Fe56; do
   [ -f "$NP/stopping/catima_${iso}.parquet" ] && cp "$NP/stopping/catima_${iso}.parquet" "$DEST/stopping/"
 done
 # NIST compound stopping (PSTAR/ASTAR compounds)
