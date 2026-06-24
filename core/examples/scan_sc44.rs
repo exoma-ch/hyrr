@@ -45,6 +45,7 @@ fn main() {
         areal_density_g_cm2: None,
         energy_out_mev: None,
         is_monitor: false,
+        nist_compound: None,
         computed_energy_in: 0.0,
         computed_energy_out: 0.0,
         computed_thickness: 0.0,

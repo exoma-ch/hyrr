@@ -478,6 +478,7 @@ pub fn resolve_formula(
 }
 
 /// Material resolution result.
+#[derive(Debug)]
 pub struct MaterialResolution {
     pub elements: Vec<(Element, f64)>,
     pub density: f64,
