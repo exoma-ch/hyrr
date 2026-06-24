@@ -27,22 +27,30 @@ const PRESETS = [
     heavy: false,
   },
   {
+    // p @ 21 MeV → Ga: ⁶⁹Ga(p,2n)⁶⁸Ge (peak ~490 mb). Verified against the
+    // core to produce Ge-68. (Regenerated 2026-06-24 — the prior URL was a
+    // corrupt deflate stream that decoded to an empty default config, #484.)
     name: "Ge-68",
-    url: "./#config=1:LY0xDgAgCEPvwmwk4insAXQOuBgH4-K9zfpS2nyvrYcDJ2PDIibAmEGxQurWYlXTGFPzXiYOF6hBb0IZR64P",
+    url: "./#config=1:q1ZKUrKqVipQsgJiHaVUJSsjQx2lZCUrAz3DWh2lHCWr6GqlXKCseyJQugQiHqujlKlkZWxmYABWCqRrAQ",
     expectIsotope: /68Ge|Ge-68|32-68/,
     expectLayer: "L1",
     heavy: true,
   },
   {
+    // α @ 29 MeV → Bi: ²⁰⁹Bi(α,2n)²¹¹At. Verified to produce At-211.
     name: "At-211",
-    url: "./#config=1:LYwxDoAgEET_ss1aQOJPbNRGWxeNFfH3Lksxmcx_exkfD8rcOY0FGDNIb0hhglqEiA6KZ53rYuFygR70a6hh5H_3FQ",
+    url: "./#config=1:q1ZKUrKqVipQslJKVNJRSlWyMrLUUUpWsjLQM6zVUcpRsoquVsoFyjplAqVLQOIGRrWxOkqZSlbGZgYGYLVAuhYA",
     expectIsotope: /211At|At-211|85-211/,
     expectLayer: "L1",
     heavy: true,
   },
   {
+    // p @ 100 MeV → Th: high-energy spallation of ²³²Th → ²²⁵Ac (127-isotope
+    // spectrum — the heaviest compute, by design). The clean ²²⁶Ra(p,2n)²²⁵Ac
+    // route is blocked by a core gap (Ra's xs file is `p_Z88`, looked up by
+    // symbol `p_Ra`) — tracked separately. Verified to produce Ac-225.
     name: "Ac-225",
-    url: "./#config=1:q1ZKUrKqVipQsgJiHaVUJSsjEx2lZCUrAz0Dw1odpRwlq-hqpVygdFCirpGRGVBNCVQyVkcpU8nKwszEwMAArMXE2AjIrAUA",
+    url: "./#config=1:q1ZKUrKqVipQsgJiHaVUJStDAwMdpWQlKwM9w1odpRwlq-hqpVygdEgGUL4EJG5gWhuro5SpZGVsBlULpGsB",
     expectIsotope: /225Ac|Ac-225|89-225/,
     expectLayer: "L1",
     heavy: true,
