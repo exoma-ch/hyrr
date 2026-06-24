@@ -302,7 +302,9 @@
           type: "bar",
           name: nucLabel(agg.name),
           marker: { color, opacity: 0.85 },
-          hovertemplate: `%{x:.1f} keV<br>${nucLabel(agg.name)}: %{y:.2e} /s<extra></extra>`,
+          // x-unified already shows the energy once as the header — don't repeat
+          // "<E> keV" on every row (halves the hover height, #462).
+          hovertemplate: `${nucLabel(agg.name)}: %{y:.2e} /s<extra></extra>`,
         });
         colorIdx++;
       }
@@ -356,9 +358,25 @@
         const maxB = Math.max(...(b.y as number[]));
         return maxB - maxA;
       });
+      // Cap the unified hover to the strongest N isotopes so it can't overflow
+      // the viewport (which was clipping the Σ total + rows at e.g. 511 keV).
+      // Weaker emitters stay visible as bars and still count toward the Σ —
+      // they're just not listed per-row (#462).
+      const HOVER_TOP_N = 12;
+      traces
+        .filter((t: any) => t.type === "bar")
+        .forEach((t: any, i: number) => {
+          if (i >= HOVER_TOP_N) t.hoverinfo = "skip";
+        });
     }
 
-    // Compute per-energy sums for the hover tooltip (stacked total)
+    // Stacked total per energy, shown ONCE as a single "Σ total" footer row in
+    // the unified hover — NOT injected under every isotope (#462). At 511 keV
+    // (annihilation, emitted by ~everything) the per-row repeat read as a
+    // per-isotope total but is the cross-isotope sum. barmode is "stack", so the
+    // stack already reaches this height; a transparent scatter at y=total adds
+    // the single total row without changing the axis or drawing a marker. Each
+    // isotope row keeps only its own line rate.
     const barTraces = traces.filter((t: any) => t.type === "bar");
     if (barTraces.length > 0) {
       const sumByE = new Map<number, number>();
@@ -370,16 +388,17 @@
           sumByE.set(key, (sumByE.get(key) ?? 0) + ys[i]);
         }
       }
-      // Inject sum into each trace's customdata + update hovertemplate
-      for (const t of barTraces) {
-        const xs = (t as any).x as number[];
-        const sums = xs.map((x) => sumByE.get(Math.round(x * 100) / 100) ?? 0);
-        (t as any).customdata = sums;
-        (t as any).hovertemplate = (t as any).hovertemplate.replace(
-          "<extra></extra>",
-          "<br>Σ %{customdata:.2e} /s<extra></extra>",
-        );
-      }
+      const totalX = [...sumByE.keys()].sort((a, b) => a - b);
+      traces.push({
+        x: totalX,
+        y: totalX.map((x) => sumByE.get(x) ?? 0),
+        type: "scatter",
+        mode: "markers",
+        marker: { color: "rgba(0,0,0,0)", size: 0.1 },
+        name: "Σ total",
+        showlegend: false,
+        hovertemplate: "Σ total: %{y:.2e} /s<extra></extra>",
+      });
     }
 
     // Adaptive bar width: ~0.3% of the energy range so sticks are

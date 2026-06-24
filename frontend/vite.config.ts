@@ -65,6 +65,7 @@ export default defineConfig({
       : { "hyrr-wasm": "/src/lib/compute/hyrr-wasm-pkg/hyrr_wasm.js" },
   },
   server: {
+    allowedHosts: true,
     fs: {
       allow: [".", "../../nucl-parquet"],
     },
