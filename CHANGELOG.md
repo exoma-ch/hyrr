@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0](https://github.com/exoma-ch/hyrr/compare/v0.16.3...v0.17.0) (2026-06-24)
+
+
+### Features
+
+* **stopping:** ³He uses per-isotope catima_He3, not ASTAR×4/3 ([#194](https://github.com/exoma-ch/hyrr/issues/194)) ([#482](https://github.com/exoma-ch/hyrr/issues/482)) ([74b2618](https://github.com/exoma-ch/hyrr/commit/74b2618c6e071bc66c3da5754cb5d1da11b8fb4c))
+
+
+### Bug Fixes
+
+* **ci:** build WASM before the e2e-tauri frontend build (actually fixes [#457](https://github.com/exoma-ch/hyrr/issues/457)) ([#480](https://github.com/exoma-ch/hyrr/issues/480)) ([3e149d8](https://github.com/exoma-ch/hyrr/commit/3e149d8cf6d79e5c9c7ef9ca985fd22c27dc72df))
+* **frontend:** show emission Σ total once in unified hover, not under each isotope ([#462](https://github.com/exoma-ch/hyrr/issues/462)) ([#463](https://github.com/exoma-ch/hyrr/issues/463)) ([90962b6](https://github.com/exoma-ch/hyrr/commit/90962b6c758dabf66ffa2fac75d8710a44da55f0))
+
 ## [0.16.3](https://github.com/exoma-ch/hyrr/compare/v0.16.2...v0.16.3) (2026-06-23)
 
 
