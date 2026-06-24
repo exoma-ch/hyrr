@@ -89,7 +89,13 @@ function elementalDedxScalar(
   if (projZ === 1) {
     source = SOURCE_PSTAR;
     lookupEnergy = energyMeV / projA;
+  } else if (projZ === 2 && projA === 3) {
+    // ³He: per-isotope catima_He3 table at the actual total energy — no
+    // velocity scaling (#194). Mirrors core/src/stopping.rs::source_for().
+    source = SOURCE_CATIMA_PREFIX + "He3";
+    lookupEnergy = energyMeV;
   } else if (projZ === 2) {
+    // α (He-4): ASTAR is the NIST reference; E × 4/4 = E (unscaled).
     source = SOURCE_ASTAR;
     lookupEnergy = energyMeV * (4 / projA);
   } else if (isHeavyIon(projectile)) {

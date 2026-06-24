@@ -17,12 +17,18 @@ const NIST_CANDIDATE_ZS: &[u32] = &[
 ];
 
 /// Catima projectiles bundled in nucl-parquet (kept in sync with
-/// `data/build_parquet.py`'s catima ingestion list). Used as the
+/// `data/build_parquet.py`'s catima ingestion list and the frontend's
+/// `scripts/copy-frontend-data.sh` shard whitelist). Used as the
 /// fallback `available_pretty` set when the database can't enumerate
 /// available sources directly — there is no `list_sources` API on
 /// `DatabaseProtocol`.
+///
+/// He-3 is included because the `proj.z == 2` projectile ³He now resolves
+/// to its own per-isotope `catima_He3` shard (issue #194) rather than the
+/// ASTAR velocity-scaling approximation. α (He-4) stays on ASTAR — ASTAR is
+/// the NIST α reference — so it is *not* listed here.
 const BUNDLED_CATIMA_PROJECTILES: &[&str] =
-    &["C-12", "O-16", "Ne-20", "Si-28", "Ar-40", "Fe-56"];
+    &["He-3", "C-12", "O-16", "Ne-20", "Si-28", "Ar-40", "Fe-56"];
 
 /// Typed errors from the stopping-power lookup path.
 ///
@@ -224,10 +230,13 @@ fn get_available_zs(db: &dyn DatabaseProtocol, source: &str) -> Vec<u32> {
 }
 
 fn available_sources_for(projectile: &ProjectileType) -> Vec<String> {
-    let z = projectile.z();
-    if z == 1 {
+    let proj = projectile.projectile();
+    if proj.z == 1 {
         vec![SOURCE_PSTAR.to_string()]
-    } else if z == 2 {
+    } else if proj.z == 2 && proj.a == 3 {
+        // ³He resolves to the per-isotope CatIMA shard (#194).
+        vec![format!("{SOURCE_CATIMA_PREFIX}He3")]
+    } else if proj.z == 2 {
         vec![SOURCE_ASTAR.to_string()]
     } else {
         // Match the on-disk catima parquet naming (no dash in symbol-A);
@@ -240,11 +249,13 @@ fn available_sources_for(projectile: &ProjectileType) -> Vec<String> {
 }
 
 fn available_pretty_for(projectile: &ProjectileType) -> String {
-    let z = projectile.z();
-    if z == 1 {
+    let proj = projectile.projectile();
+    if proj.z == 1 {
         "p, d, t (PSTAR with velocity-scaling)".to_string()
-    } else if z == 2 {
-        "h, a (ASTAR with velocity-scaling)".to_string()
+    } else if proj.z == 2 && proj.a == 3 {
+        "h / ³He (catima_He3, per-isotope CatIMA)".to_string()
+    } else if proj.z == 2 {
+        "a / α (ASTAR, NIST reference)".to_string()
     } else {
         BUNDLED_CATIMA_PROJECTILES.join(", ")
     }
@@ -256,10 +267,14 @@ fn available_pretty_for(projectile: &ProjectileType) -> String {
 /// `catima_O16.parquet` (no dash). Strip the dash so the source key matches
 /// the on-disk filename. See #141 (#137 root cause).
 fn source_for(projectile: &ProjectileType) -> String {
-    let z = projectile.z();
-    if z == 1 {
+    let proj = projectile.projectile();
+    if proj.z == 1 {
         SOURCE_PSTAR.to_string()
-    } else if z == 2 {
+    } else if proj.z == 2 && proj.a == 3 {
+        // ³He → dedicated per-isotope CatIMA shard `catima_He3` (#194).
+        format!("{SOURCE_CATIMA_PREFIX}He3")
+    } else if proj.z == 2 {
+        // α (He-4) stays on ASTAR — the NIST α reference.
         SOURCE_ASTAR.to_string()
     } else {
         format!(
@@ -272,12 +287,14 @@ fn source_for(projectile: &ProjectileType) -> String {
 
 /// Mass stopping power for a projectile in a pure element [MeV·cm²/g].
 ///
-/// Velocity scaling:
+/// Stopping-power source / energy axis per projectile:
 /// - p: PSTAR at E
 /// - d: PSTAR at E/2
 /// - t: PSTAR at E/3
-/// - h (³He): ASTAR at E × 4/3
-/// - a (α): ASTAR at E
+/// - h (³He): `catima_He3` at the actual total energy E — per-isotope CatIMA
+///   data (#194). Supersedes the historical `ASTAR at E × 4/3` velocity-scaling
+///   approximation used while no ³He table existed.
+/// - a (α): ASTAR at E — ASTAR is the NIST α reference; left unscaled.
 pub fn elemental_dedx(
     db: &dyn DatabaseProtocol,
     projectile: &ProjectileType,
@@ -290,7 +307,16 @@ pub fn elemental_dedx(
         let lookup: Vec<f64> = energies_mev.iter().map(|&e| e / proj.a as f64).collect();
         let (result, _) = get_interpolated_dedx(db, SOURCE_PSTAR, target_z, &lookup, projectile)?;
         Ok(result)
+    } else if proj.z == 2 && proj.a == 3 {
+        // ³He: look up the dedicated per-isotope CatIMA shard at the actual
+        // total energy. The federation stores `energy_MeV` as *total* MeV
+        // (nucl-parquet #252), and `nist_table("catima_He3", …)` consumes that
+        // total-MeV axis — so NO velocity scaling here (#194).
+        let source = source_for(projectile);
+        let (result, _) = get_interpolated_dedx(db, &source, target_z, energies_mev, projectile)?;
+        Ok(result)
     } else if proj.z == 2 {
+        // α (He-4): ASTAR is the NIST reference. E × 4/4 = E, i.e. unscaled.
         let lookup: Vec<f64> = energies_mev.iter().map(|&e| e * (4.0 / proj.a as f64)).collect();
         let (result, _) = get_interpolated_dedx(db, SOURCE_ASTAR, target_z, &lookup, projectile)?;
         Ok(result)
@@ -386,11 +412,17 @@ pub fn compound_dedx_with_nist(
 }
 
 /// NIST compound stopping source name for a projectile type.
+///
+/// ³He returns `""`: the `ASTAR_compound` tables are α (He-4) data, and unlike
+/// the elemental path there is no per-isotope CatIMA *compound* table for ³He,
+/// so a direct lookup would silently feed α stopping. Returning `""` skips the
+/// direct table and falls through to Bragg additivity, which composes the
+/// correct per-element `catima_He3` stopping (#194).
 fn compound_stopping_source(projectile: &ProjectileType) -> &'static str {
-    let z = projectile.z();
-    if z == 1 { "PSTAR_compound" }
-    else if z == 2 { "ASTAR_compound" }
-    else { "" } // No NIST compound tables for heavy ions
+    let proj = projectile.projectile();
+    if proj.z == 1 { "PSTAR_compound" }
+    else if proj.z == 2 && proj.a == 4 { "ASTAR_compound" }
+    else { "" } // ³He and heavy ions: no NIST compound table → Bragg additivity.
 }
 
 /// Linear stopping power [MeV/cm].
@@ -592,6 +624,99 @@ mod tests {
         let result = elemental_dedx(&db, &projectile, 13, &[10.0]).unwrap();
         assert_eq!(result.len(), 1);
         assert!(result[0] > 0.0);
+    }
+
+    /// Build a DB with an ASTAR table and a *distinct* `catima_He3` table for
+    /// Cu (Z=29), so the ³He resolution path is unambiguous. The two tables use
+    /// deliberately different magnitudes (ASTAR: 400/√E, He3: 700/√E) so a value
+    /// landing on one vs the other is decisive proof of which source was used.
+    fn he3_db() -> InMemoryDataStore {
+        let mut db = InMemoryDataStore::new("test");
+        db.add_element(29, "Cu");
+        let energies: Vec<f64> = (0..60)
+            .map(|i| 0.001_f64 * 10f64.powf(i as f64 / 10.0))
+            .collect();
+        let astar: Vec<f64> = energies.iter().map(|&e| 400.0 / e.sqrt()).collect();
+        let he3: Vec<f64> = energies.iter().map(|&e| 700.0 / e.sqrt()).collect();
+        db.add_stopping_data(SOURCE_ASTAR, 29, energies.clone(), astar);
+        db.add_stopping_data("catima_He3", 29, energies, he3);
+        db
+    }
+
+    /// #194: ³He must resolve to `catima_He3` at the *actual* total energy,
+    /// NOT to the old `ASTAR at E × 4/3` velocity-scaling approximation.
+    #[test]
+    fn he3_resolves_to_catima_not_astar_scaled() {
+        let db = he3_db();
+        let he3 = ProjectileType::Helion;
+        let e = 10.0;
+
+        // source label is catima_He3, not ASTAR.
+        let label = get_stopping_source(&db, &he3, 29).unwrap();
+        assert_eq!(label, "catima_He3", "³He must resolve to catima_He3");
+
+        // Value equals catima_He3 at the actual energy E (= 700/√E here)…
+        let got = elemental_dedx(&db, &he3, 29, &[e]).unwrap()[0];
+        let expect_catima = 700.0 / e.sqrt();
+        assert!(
+            (got - expect_catima).abs() / expect_catima < 1e-9,
+            "³He dE/dx {got} should equal catima_He3 at E={e} ({expect_catima})"
+        );
+
+        // …and is provably NOT the old ASTAR-at-E×4/3 value (= 400/√(E·4/3)).
+        let old_astar_scaled = 400.0 / (e * 4.0 / 3.0).sqrt();
+        assert!(
+            (got - old_astar_scaled).abs() / old_astar_scaled > 0.1,
+            "³He must differ from old ASTAR×4/3 ({old_astar_scaled}), got {got} — migration did not take effect"
+        );
+    }
+
+    /// α (He-4) must remain on ASTAR — ASTAR is the NIST α reference. This
+    /// guards against the #194 split accidentally diverting α to catima.
+    #[test]
+    fn alpha_stays_on_astar() {
+        let db = he3_db();
+        let alpha = ProjectileType::Alpha;
+        let label = get_stopping_source(&db, &alpha, 29).unwrap();
+        assert_eq!(label, SOURCE_ASTAR, "α must stay on ASTAR");
+
+        // α at E maps to ASTAR at E×4/4 = E (unscaled): 400/√E.
+        let e = 10.0;
+        let got = elemental_dedx(&db, &alpha, 29, &[e]).unwrap()[0];
+        let expect = 400.0 / e.sqrt();
+        assert!(
+            (got - expect).abs() / expect < 1e-9,
+            "α dE/dx {got} should equal ASTAR at E ({expect})"
+        );
+    }
+
+    /// ³He sanity: physically reasonable across a realistic energy range —
+    /// positive, finite, and monotonically decreasing with energy (above the
+    /// Bragg peak), and the same order of magnitude as α.
+    #[test]
+    fn he3_dedx_physically_reasonable() {
+        let db = he3_db();
+        let he3 = ProjectileType::Helion;
+        let alpha = ProjectileType::Alpha;
+        let energies: Vec<f64> = vec![1.0, 2.0, 5.0, 10.0, 20.0, 30.0];
+
+        let dedx = elemental_dedx(&db, &he3, 29, &energies).unwrap();
+        for (i, &v) in dedx.iter().enumerate() {
+            assert!(v.is_finite() && v > 0.0, "³He dE/dx at {} MeV: {v}", energies[i]);
+        }
+        for w in dedx.windows(2) {
+            assert!(w[1] < w[0], "³He dE/dx should decrease with energy: {:?}", dedx);
+        }
+        // Same order of magnitude as α at each energy (within 10×).
+        let a = elemental_dedx(&db, &alpha, 29, &energies).unwrap();
+        for i in 0..energies.len() {
+            let ratio = dedx[i] / a[i];
+            assert!(
+                (0.1..=10.0).contains(&ratio),
+                "³He/α dE/dx ratio {ratio} at {} MeV outside [0.1, 10]",
+                energies[i]
+            );
+        }
     }
 
     #[test]

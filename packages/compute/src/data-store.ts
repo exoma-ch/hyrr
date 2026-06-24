@@ -184,13 +184,15 @@ export class DataStore implements DatabaseProtocol {
     // files have the same (source, target_Z, energy_MeV, dedx) schema
     // as the light-ion files — added in nucl-parquet data-2026.5.1.
     //
-    // He3STAR removed in data-2026.5.0: ³He routes through ASTAR with
-    // velocity-scaling (E × 4/3). See _energy-loss.ts.
+    // ³He uses its own per-isotope catima_He3 table at the actual total
+    // energy (no velocity scaling) — replaces the old ASTAR×4/3 approximation
+    // (#194). α (He-4) still uses ASTAR. See _energy-loss.ts.
     const stoppingSources = [
       // Light ions
       "PSTAR", "ASTAR", "dSTAR", "tSTAR",
-      // Heavy ions — pre-split catima tables (synced with
-      // BUNDLED_CATIMA_PROJECTILES in core/src/stopping.rs)
+      // catima per-isotope tables (synced with BUNDLED_CATIMA_PROJECTILES in
+      // core/src/stopping.rs): He3 = ³He beam; C12…Fe56 = heavy-ion beams.
+      "catima_He3",
       "catima_C12", "catima_O16", "catima_Ne20",
       "catima_Si28", "catima_Ar40", "catima_Fe56",
     ];
