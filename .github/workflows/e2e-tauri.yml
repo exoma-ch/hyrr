@@ -114,6 +114,20 @@ jobs:
             npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
           fi
 
+      # Build the WASM package the frontend imports (`hyrr-wasm`) before the
+      # frontend build, or rolldown can't resolve the import and the build dies
+      # (#457). Mirrors tauri-build.yml; pin wasm-pack so every runner matches.
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: "v0.13.1"
+
+      - name: Build WASM compute engine
+        run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+
       - name: Build frontend (Tauri mode)
         working-directory: frontend
         env:
