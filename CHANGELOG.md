@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3](https://github.com/exoma-ch/hyrr/compare/v0.16.2...v0.16.3) (2026-06-23)
+
+
+### Bug Fixes
+
+* **mcp:** tracing logs to stderr, not stdout — unblocks hyrr-mcp publish ([#478](https://github.com/exoma-ch/hyrr/issues/478)) ([173e986](https://github.com/exoma-ch/hyrr/commit/173e986d428862392f994d3c7cafbd17ce054191))
+
+
+### CI
+
+* **release:** use hyrr-release-bot App token, not GITHUB_TOKEN ([#477](https://github.com/exoma-ch/hyrr/issues/477)) ([69cbdbb](https://github.com/exoma-ch/hyrr/commit/69cbdbbe2846e244386674e229747af4f8ee727e))
+
 ## [0.16.2](https://github.com/exoma-ch/hyrr/compare/v0.16.1...v0.16.2) (2026-06-23)
 
 
