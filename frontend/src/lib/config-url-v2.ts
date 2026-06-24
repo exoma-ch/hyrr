@@ -59,6 +59,17 @@ function registerSessionComposition(name: string, comp: { d: number; e: Record<s
   setCustomCompositionLookup((id) => __sessionCompositions.get(id)?.e ?? null);
 }
 
+/** Density + mass-fractions of a custom material that arrived via a share link
+ *  (registered at decode time). The unified registry chains to this so a shared
+ *  custom resolves for compute even after `initCustomMaterialRegistry` re-wires
+ *  the package lookups to the saved-materials set (#96 — otherwise the session
+ *  lookup is clobbered and the layer resolves to zero mass). */
+export function getSessionComposition(
+  id: string,
+): { d: number; e: Record<string, number> } | null {
+  return __sessionCompositions.get(id) ?? null;
+}
+
 /** Custom-material definition recovered from a shared link, for the recipient's
  *  "save this material" flow. Null for names that didn't arrive via a link. */
 export function getSharedCustomMaterial(name: string): SharedCustomMaterial | null {

@@ -11,6 +11,7 @@
 import { isTauri } from "../utils/platform";
 import { DEFAULT_LIBRARY } from "./data-fetch-meta";
 import { lookupByName } from "./custom-material-registry";
+import { getSharedCustomMaterial } from "../config-url-v2";
 import { trace, type TraceDump } from "../trace/trace";
 import { registerWasmTraceDumper } from "../trace/wasm-bridge";
 import type { SimulationConfig, SimulationResult } from "@hyrr/compute";
@@ -156,10 +157,13 @@ export async function initBackend(
  * Routes to the active backend automatically.
  */
 /** Expand custom material names to their formulas + densities before
- *  sending to the Rust backend. Uses the unified custom material registry. */
+ *  sending to the Rust backend. Checks the unified registry (saved customs)
+ *  first, then falls back to a custom that arrived via a share link (#96) —
+ *  otherwise the Rust backend receives the bare custom name (which it can't
+ *  resolve) and the layer computes as zero mass. */
 function expandCustomMaterials(config: SimulationConfig): SimulationConfig {
   const layers = config.layers.map((layer) => {
-    const cm = lookupByName(layer.material);
+    const cm = lookupByName(layer.material) ?? getSharedCustomMaterial(layer.material);
     if (!cm) return layer;
     return {
       ...layer,
