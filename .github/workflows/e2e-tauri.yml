@@ -20,23 +20,41 @@ on:
       - "frontend/src/lib/compute/backend.ts"
       - "frontend/src/lib/utils/platform.ts"
       - ".github/workflows/e2e-tauri.yml"
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
 
 jobs:
+  # Cost-rescope (#484 Part B). PR → Linux only (the cheap, fast runner); the
+  # Windows WebView2 smoke runs at tag (v*) / manual dispatch. (tauri-driver
+  # has no macOS support, so there's no macOS row to gate.)
+  config:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.set.outputs.include }}
+    steps:
+      - id: set
+        run: |
+          LINUX='{"os":"ubuntu-22.04","binary":"desktop/src-tauri/target/debug/hyrr-desktop"}'
+          WIN='{"os":"windows-latest","binary":"desktop/src-tauri/target/debug/hyrr-desktop.exe"}'
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "include=[$LINUX]" >> "$GITHUB_OUTPUT"
+          else
+            echo "include=[$LINUX,$WIN]" >> "$GITHUB_OUTPUT"
+          fi
+
   e2e-tauri:
     name: e2e-tauri (${{ matrix.os }})
+    needs: config
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-22.04
-            binary: desktop/src-tauri/target/debug/hyrr-desktop
-          - os: windows-latest
-            binary: desktop/src-tauri/target/debug/hyrr-desktop.exe
+        include: ${{ fromJSON(needs.config.outputs.include) }}
 
     defaults:
       run:
