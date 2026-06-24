@@ -14,7 +14,7 @@ use hyrr_core::formula::parse_formula;
 use hyrr_core::materials::resolve_material;
 use hyrr_core::production::generate_depth_profile;
 use hyrr_core::stopping::{
-    compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm, StoppingError,
+    StoppingError, compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm,
 };
 use hyrr_core::types::*;
 use serde::{Deserialize, Serialize};
@@ -59,7 +59,8 @@ impl WasmDataStore {
         let entries: Vec<AbundanceEntry> =
             serde_json::from_str(json).map_err(|e| JsValue::from_str(&e.to_string()))?;
         for e in entries {
-            self.inner.add_abundance(e.z, e.a, e.abundance, e.atomic_mass);
+            self.inner
+                .add_abundance(e.z, e.a, e.abundance, e.atomic_mass);
         }
         Ok(())
     }
@@ -126,7 +127,8 @@ impl WasmDataStore {
                 let target_z: u32 = z_str.parse().unwrap_or(0);
                 let energies: Vec<f64> = pairs.iter().map(|p| p.0).collect();
                 let dedx: Vec<f64> = pairs.iter().map(|p| p.1).collect();
-                self.inner.add_stopping_data(source, target_z, energies, dedx);
+                self.inner
+                    .add_stopping_data(source, target_z, energies, dedx);
             }
         }
         Ok(())
@@ -150,7 +152,8 @@ impl WasmDataStore {
             if let Some((source, compound)) = key.split_once('\0') {
                 let energies: Vec<f64> = pairs.iter().map(|p| p.0).collect();
                 let dedx: Vec<f64> = pairs.iter().map(|p| p.1).collect();
-                self.inner.add_compound_stopping_data(source, compound, energies, dedx);
+                self.inner
+                    .add_compound_stopping_data(source, compound, energies, dedx);
             }
         }
         Ok(())
@@ -171,10 +174,19 @@ impl WasmDataStore {
         // Group by (target_A, residual_Z, residual_A, state)
         let mut grouped: HashMap<String, (u32, u32, u32, String, Vec<(f64, f64)>)> = HashMap::new();
         for e in entries {
-            let key = format!("{}_{}_{}_{}", e.target_a, e.residual_z, e.residual_a, e.state);
-            let entry = grouped
-                .entry(key)
-                .or_insert_with(|| (e.target_a, e.residual_z, e.residual_a, e.state.clone(), Vec::new()));
+            let key = format!(
+                "{}_{}_{}_{}",
+                e.target_a, e.residual_z, e.residual_a, e.state
+            );
+            let entry = grouped.entry(key).or_insert_with(|| {
+                (
+                    e.target_a,
+                    e.residual_z,
+                    e.residual_a,
+                    e.state.clone(),
+                    Vec::new(),
+                )
+            });
             entry.4.push((e.energy_mev, e.xs_mb));
         }
 
@@ -192,7 +204,8 @@ impl WasmDataStore {
             });
         }
 
-        self.inner.add_cross_sections(projectile, element_symbol, xs_list);
+        self.inner
+            .add_cross_sections(projectile, element_symbol, xs_list);
         Ok(())
     }
 
@@ -202,11 +215,11 @@ impl WasmDataStore {
         let config: SimulationConfig =
             serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        let projectile = ProjectileType::from_str(&config.beam.projectile)
-            .ok_or_else(|| JsValue::from_str(&format!("Invalid projectile: {}", config.beam.projectile)))?;
+        let projectile = ProjectileType::from_str(&config.beam.projectile).ok_or_else(|| {
+            JsValue::from_str(&format!("Invalid projectile: {}", config.beam.projectile))
+        })?;
 
-        let layers = config_to_layers(&self.inner, &config)
-            .map_err(|e| JsValue::from_str(&e))?;
+        let layers = config_to_layers(&self.inner, &config).map_err(|e| JsValue::from_str(&e))?;
 
         let current_profile = config
             .current_profile
@@ -223,8 +236,8 @@ impl WasmDataStore {
             current_profile,
         };
 
-        let result = compute_stack(&self.inner, &mut stack, true)
-            .map_err(stopping_error_to_jsvalue)?;
+        let result =
+            compute_stack(&self.inner, &mut stack, true).map_err(stopping_error_to_jsvalue)?;
         let sim_result = convert_stack_result(config_json, &result);
         serde_json::to_string(&sim_result).map_err(|e| JsValue::from_str(&e.to_string()))
     }
@@ -235,8 +248,9 @@ impl WasmDataStore {
         let config: SimulationConfig =
             serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        let projectile = ProjectileType::from_str(&config.beam.projectile)
-            .ok_or_else(|| JsValue::from_str(&format!("Invalid projectile: {}", config.beam.projectile)))?;
+        let projectile = ProjectileType::from_str(&config.beam.projectile).ok_or_else(|| {
+            JsValue::from_str(&format!("Invalid projectile: {}", config.beam.projectile))
+        })?;
         let proj_z = projectile.z();
         let beam_current = config.beam.current_ma;
         let beam_area = 1.0_f64;
@@ -268,8 +282,14 @@ impl WasmDataStore {
                 continue;
             }
 
-            let resolution = resolve_material(&self.inner, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)
-                .map_err(|e| JsValue::from_str(&e))?;
+            let resolution = resolve_material(
+                &self.inner,
+                &lc.material,
+                lc.enrichment.as_ref(),
+                None,
+                lc.density_g_cm3,
+            )
+            .map_err(|e| JsValue::from_str(&e))?;
             let composition = compute_composition(&resolution.elements);
             let density = resolution.density;
 
@@ -279,12 +299,27 @@ impl WasmDataStore {
                 (ad / density, "areal_density", None)
             } else if let Some(e_out) = lc.energy_out_mev {
                 if energy_in <= 0.0 {
-                    (0.0, "energy_out", Some("Beam stopped before this layer".to_string()))
+                    (
+                        0.0,
+                        "energy_out",
+                        Some("Beam stopped before this layer".to_string()),
+                    )
                 } else if e_out > energy_in {
-                    (0.0, "energy_out", Some(format!("Eout ({e_out} MeV) > Ein ({energy_in:.1} MeV)")))
+                    (
+                        0.0,
+                        "energy_out",
+                        Some(format!("Eout ({e_out} MeV) > Ein ({energy_in:.1} MeV)")),
+                    )
                 } else {
                     match compute_thickness_from_energy(
-                        &self.inner, &projectile, &composition, density, energy_in, e_out.max(0.0), 1000, None,
+                        &self.inner,
+                        &projectile,
+                        &composition,
+                        density,
+                        energy_in,
+                        e_out.max(0.0),
+                        1000,
+                        None,
                     ) {
                         Ok(t) => (t, "energy_out", None),
                         Err(e) => (0.0, "energy_out", Some(e.to_string())),
@@ -301,8 +336,17 @@ impl WasmDataStore {
                 let e_out_res: Result<f64, StoppingError> = if user_specified == "energy_out" {
                     Ok(lc.energy_out_mev.unwrap_or(0.0).min(energy_in).max(0.0))
                 } else {
-                    compute_energy_out(&self.inner, &projectile, &composition, density, energy_in, thickness_cm, 1000, None)
-                        .map(|v| v.max(0.0))
+                    compute_energy_out(
+                        &self.inner,
+                        &projectile,
+                        &composition,
+                        density,
+                        energy_in,
+                        thickness_cm,
+                        1000,
+                        None,
+                    )
+                    .map(|v| v.max(0.0))
                 };
                 let e_out = match e_out_res {
                     Ok(v) => v,
@@ -332,7 +376,14 @@ impl WasmDataStore {
                 let energies: Vec<f64> = (0..n_pts)
                     .map(|i| e_min + (energy_in - e_min) * (i as f64) / ((n_pts - 1) as f64))
                     .collect();
-                let dedx_vals = match dedx_mev_per_cm(&self.inner, &projectile, &composition, density, &energies, None) {
+                let dedx_vals = match dedx_mev_per_cm(
+                    &self.inner,
+                    &projectile,
+                    &composition,
+                    density,
+                    &energies,
+                    None,
+                ) {
                     Ok(v) => v,
                     Err(err) => {
                         preview_layers.push(DepthPreviewLayer {
@@ -350,7 +401,8 @@ impl WasmDataStore {
                         continue;
                     }
                 };
-                let dp = generate_depth_profile(&energies, &dedx_vals, beam_current, beam_area, proj_z);
+                let dp =
+                    generate_depth_profile(&energies, &dedx_vals, beam_current, beam_area, proj_z);
 
                 let mut points: Vec<DepthPreviewPoint> = Vec::new();
                 for i in 0..dp.depths.len() {
@@ -378,8 +430,16 @@ impl WasmDataStore {
 
                 let last_mm = points.last().map(|p| p.depth_mm).unwrap_or(0.0);
                 if last_mm < thickness_mm - 0.001 {
-                    points.push(DepthPreviewPoint { depth_mm: last_mm + 0.001, energy_mev: 0.0, heat_w_cm3: 0.0 });
-                    points.push(DepthPreviewPoint { depth_mm: thickness_mm, energy_mev: 0.0, heat_w_cm3: 0.0 });
+                    points.push(DepthPreviewPoint {
+                        depth_mm: last_mm + 0.001,
+                        energy_mev: 0.0,
+                        heat_w_cm3: 0.0,
+                    });
+                    points.push(DepthPreviewPoint {
+                        depth_mm: thickness_mm,
+                        energy_mev: 0.0,
+                        heat_w_cm3: 0.0,
+                    });
                 }
 
                 (e_out, points, heat_w / 1000.0)
@@ -387,8 +447,16 @@ impl WasmDataStore {
                 (
                     0.0,
                     vec![
-                        DepthPreviewPoint { depth_mm: 0.0, energy_mev: 0.0, heat_w_cm3: 0.0 },
-                        DepthPreviewPoint { depth_mm: thickness_mm, energy_mev: 0.0, heat_w_cm3: 0.0 },
+                        DepthPreviewPoint {
+                            depth_mm: 0.0,
+                            energy_mev: 0.0,
+                            heat_w_cm3: 0.0,
+                        },
+                        DepthPreviewPoint {
+                            depth_mm: thickness_mm,
+                            energy_mev: 0.0,
+                            heat_w_cm3: 0.0,
+                        },
                     ],
                     0.0,
                 )
@@ -432,9 +500,18 @@ impl WasmDataStore {
             .ok_or_else(|| JsValue::from_str(&format!("Invalid projectile: {projectile}")))?;
         let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        compute_energy_out(&self.inner, &proj, &composition, density_g_cm3, energy_in_mev, thickness_cm, 1000, None)
-            .map(|v| v.max(0.0))
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+        compute_energy_out(
+            &self.inner,
+            &proj,
+            &composition,
+            density_g_cm3,
+            energy_in_mev,
+            thickness_cm,
+            1000,
+            None,
+        )
+        .map(|v| v.max(0.0))
+        .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Parse a chemical formula. Returns JSON `{"H": 2, "O": 1}`.
@@ -697,7 +774,10 @@ fn stopping_error_to_jsvalue(err: StoppingError) -> JsValue {
     use serde::Serialize;
     let mut value = err.as_json();
     if let Some(obj) = value.as_object_mut() {
-        obj.insert("message".to_string(), serde_json::Value::String(err.to_string()));
+        obj.insert(
+            "message".to_string(),
+            serde_json::Value::String(err.to_string()),
+        );
     }
     // `serde_wasm_bindgen::to_value` defaults to converting JSON objects into
     // JS `Map`s, which the frontend's `parseComputeError` can't introspect via
@@ -710,12 +790,21 @@ fn stopping_error_to_jsvalue(err: StoppingError) -> JsValue {
     }
 }
 
-fn config_to_layers(db: &dyn DatabaseProtocol, config: &SimulationConfig) -> Result<Vec<Layer>, String> {
+fn config_to_layers(
+    db: &dyn DatabaseProtocol,
+    config: &SimulationConfig,
+) -> Result<Vec<Layer>, String> {
     config
         .layers
         .iter()
         .map(|lc| {
-            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)?;
+            let resolution = resolve_material(
+                db,
+                &lc.material,
+                lc.enrichment.as_ref(),
+                None,
+                lc.density_g_cm3,
+            )?;
             Ok(Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,

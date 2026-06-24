@@ -96,17 +96,15 @@ pub fn compute_stack(
         )
         .map_err(|e| e.with_layer_context(idx, material_hint))?;
         // Per-layer boundary (debug — scales with layer count, not iterations).
-        crate::trace_schema::compute_layer(
-            idx,
-            energy_in,
-            lr.energy_out,
-            lr.isotope_results.len(),
-        );
+        crate::trace_schema::compute_layer(idx, energy_in, lr.energy_out, lr.isotope_results.len());
         energy_in = lr.energy_out;
         layer_results.push(lr);
     }
 
-    let n_isotopes: usize = layer_results.iter().map(|lr| lr.isotope_results.len()).sum();
+    let n_isotopes: usize = layer_results
+        .iter()
+        .map(|lr| lr.isotope_results.len())
+        .sum();
     crate::trace_schema::compute_stack_done(layer_results.len(), n_isotopes);
 
     Ok(StackResult {
@@ -318,7 +316,11 @@ fn compute_layer(
                             name,
                             z: xs.residual_z,
                             a: xs.residual_a,
-                            state: if xs.state == "g" { String::new() } else { xs.state.clone() },
+                            state: if xs.state == "g" {
+                                String::new()
+                            } else {
+                                xs.state.clone()
+                            },
                             half_life_s: half_life,
                             production_rate: scaled_rate,
                             saturation_yield_bq_ua: sat_yield,
@@ -432,7 +434,12 @@ fn nuc_label(symbol: &str, a: u32, state: &str) -> String {
 /// Canonical short decay-notation string, e.g. "⁹⁹Mo(β⁻)". The `mode` is the
 /// raw string from the nuclear-data file; empty/unknown modes fall back to a
 /// generic "decay" label so the parent nuclide still surfaces in the table.
-fn format_decay_notation(parent_symbol: &str, parent_a: u32, parent_state: &str, mode: &str) -> String {
+fn format_decay_notation(
+    parent_symbol: &str,
+    parent_a: u32,
+    parent_state: &str,
+    mode: &str,
+) -> String {
     let label = nuc_label(parent_symbol, parent_a, parent_state);
     let mode_label = if mode.is_empty() { "decay" } else { mode };
     format!("{}({})", label, mode_label)
@@ -491,7 +498,11 @@ fn apply_chain_solver_by_component(
             // isotope as directly-produced and has no parent-graph context.
             for ciso in component {
                 let symbol = db.get_element_symbol(ciso.z);
-                let state_suffix = if ciso.state == "g" { "" } else { ciso.state.as_str() };
+                let state_suffix = if ciso.state == "g" {
+                    ""
+                } else {
+                    ciso.state.as_str()
+                };
                 let name = format!("{}-{}{}", symbol, ciso.a, state_suffix);
                 if let Some(existing) = isotope_results.get(&name) {
                     let mut iso = existing.clone();
@@ -518,7 +529,11 @@ fn apply_chain_solver_by_component(
 
         for (i, ciso) in solution.isotopes.iter().enumerate() {
             let symbol = db.get_element_symbol(ciso.z);
-            let state_suffix = if ciso.state == "g" { "" } else { ciso.state.as_str() };
+            let state_suffix = if ciso.state == "g" {
+                ""
+            } else {
+                ciso.state.as_str()
+            };
             let name = format!("{}-{}{}", symbol, ciso.a, state_suffix);
 
             let total_activity = &solution.activities[i];
@@ -561,14 +576,10 @@ fn apply_chain_solver_by_component(
                         // Look up the parent ChainIsotope to recover the
                         // symbol via the database — this keeps the formatting
                         // consistent with the isotope `name` field.
-                        let parent = solution
-                            .isotopes
-                            .iter()
-                            .find(|p| &p.key() == parent_key);
+                        let parent = solution.isotopes.iter().find(|p| &p.key() == parent_key);
                         let Some(parent) = parent else { continue };
                         let psym = db.get_element_symbol(parent.z);
-                        let notation =
-                            format_decay_notation(&psym, parent.a, &parent.state, mode);
+                        let notation = format_decay_notation(&psym, parent.a, &parent.state, mode);
                         if seen.insert(notation.clone()) {
                             decay_notations.push(notation);
                         }
@@ -582,7 +593,11 @@ fn apply_chain_solver_by_component(
                     name,
                     z: ciso.z,
                     a: ciso.a,
-                    state: if ciso.state == "g" { String::new() } else { ciso.state.clone() },
+                    state: if ciso.state == "g" {
+                        String::new()
+                    } else {
+                        ciso.state.clone()
+                    },
                     half_life_s: ciso.half_life_s,
                     production_rate: prod_rate,
                     saturation_yield_bq_ua: sat_yield,
@@ -689,18 +704,39 @@ fn compute_layer_stopping_only(
 
     let (thickness, energy_out) = if let Some(e_out) = layer.energy_out_mev {
         let thick = compute_thickness_from_energy(
-            db, projectile, &composition, density, energy_in, e_out, 1000, nist,
+            db,
+            projectile,
+            &composition,
+            density,
+            energy_in,
+            e_out,
+            1000,
+            nist,
         )?;
         (thick, e_out)
     } else if let Some(thick) = layer.thickness_cm {
         let e_out = compute_energy_out(
-            db, projectile, &composition, density, energy_in, thick, 1000, nist,
+            db,
+            projectile,
+            &composition,
+            density,
+            energy_in,
+            thick,
+            1000,
+            nist,
         )?;
         (thick, e_out)
     } else {
         let thick = layer.areal_density_g_cm2.unwrap() / density;
         let e_out = compute_energy_out(
-            db, projectile, &composition, density, energy_in, thick, 1000, nist,
+            db,
+            projectile,
+            &composition,
+            density,
+            energy_in,
+            thick,
+            1000,
+            nist,
         )?;
         (thick, e_out)
     };
@@ -997,8 +1033,7 @@ mod tests {
         ];
         let mut iso = iso_with("W-179", half_life_s, r, activity.clone());
         iso.source = "both".to_string();
-        iso.activity_ingrowth_vs_time_bq =
-            activity.iter().map(|&a| 0.4 * a).collect();
+        iso.activity_ingrowth_vs_time_bq = activity.iter().map(|&a| 0.4 * a).collect();
         iso.activity_ingrowth_bq = 0.4 * *activity.last().unwrap();
 
         let mut results = HashMap::new();
@@ -1120,9 +1155,7 @@ mod tests {
             },
         );
 
-        let results = apply_chain_solver_by_component(
-            &db, direct, 600.0, 0.0, 1.0e13, None, 1.0,
-        );
+        let results = apply_chain_solver_by_component(&db, direct, 600.0, 0.0, 1.0e13, None, 1.0);
 
         // B is a daughter-only isotope fed by A; its decay_notations must
         // mention A via the parent nuclide format.
@@ -1232,7 +1265,9 @@ mod tests {
         assert!(
             err < 0.05,
             "bateman build-up at t=t½: got {}, expected {} (err {:.2})",
-            a_at_hl, expected, err
+            a_at_hl,
+            expected,
+            err
         );
 
         // Last point — well into cooling after ~10 half-lives of decay.
@@ -1243,7 +1278,8 @@ mod tests {
         assert!(
             err_last < 0.05,
             "bateman decay at end of cooling: got {}, expected {}",
-            last, expected_last
+            last,
+            expected_last
         );
 
         // Ensure it's NOT the step-function shape (i.e. mid-cooling value is

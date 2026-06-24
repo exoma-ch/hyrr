@@ -79,7 +79,6 @@ fn main() {
 #[cfg(feature = "embed-data")]
 fn pack_data_tar(library: &str) {
     use std::fs;
-    use std::io::Write;
 
     let data_root = Path::new("../nucl-parquet/data");
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
@@ -95,8 +94,8 @@ fn pack_data_tar(library: &str) {
 
     // Helper: add a single file under a relative path in the tar.
     let add_file = |tar: &mut tar::Builder<fs::File>, disk_path: &Path, tar_path: &str| {
-        let data = fs::read(disk_path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", disk_path.display()));
+        let data =
+            fs::read(disk_path).unwrap_or_else(|e| panic!("read {}: {e}", disk_path.display()));
         let mut header = tar::Header::new_gnu();
         header.set_size(data.len() as u64);
         header.set_mode(0o644);
@@ -106,7 +105,11 @@ fn pack_data_tar(library: &str) {
     };
 
     // Meta: single-file Dbs
-    for name in &["abundances.parquet", "decay.parquet", "dose_constants.parquet"] {
+    for name in &[
+        "abundances.parquet",
+        "decay.parquet",
+        "dose_constants.parquet",
+    ] {
         let disk = data_root.join("meta").join(name);
         if disk.exists() {
             add_file(&mut tar, &disk, &format!("meta/{name}"));
@@ -145,7 +148,9 @@ fn pack_data_tar(library: &str) {
 fn add_dir_recursive(tar: &mut tar::Builder<std::fs::File>, dir: &Path, prefix: &str) {
     use std::fs;
 
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
         let name = entry.file_name();
@@ -157,8 +162,7 @@ fn add_dir_recursive(tar: &mut tar::Builder<std::fs::File>, dir: &Path, prefix: 
         } else if path.extension().and_then(|e| e.to_str()) == Some("parquet")
             || path.extension().and_then(|e| e.to_str()) == Some("json")
         {
-            let data = fs::read(&path)
-                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let data = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
             let mut header = tar::Header::new_gnu();
             header.set_size(data.len() as u64);
             header.set_mode(0o644);

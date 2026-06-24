@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 
-use crate::materials::MaterialRegistry;
 use super::tools;
+use crate::materials::MaterialRegistry;
 
 /// JSON-RPC 2.0 request.
 #[derive(Debug, Deserialize)]
@@ -123,7 +123,9 @@ pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
     let db = match crate::db::ParquetDataStore::new(data_dir, library) {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("hyrr-mcp: failed to load nuclear data from {data_dir} (library {library}): {e}");
+            eprintln!(
+                "hyrr-mcp: failed to load nuclear data from {data_dir} (library {library}): {e}"
+            );
             std::process::exit(1);
         }
     };

@@ -255,9 +255,9 @@ impl FetchProgressThrottle {
             || final_byte
             || match p.stage {
                 FetchStage::Downloading => interval_ok && bytes_step_ok,
-                FetchStage::Connecting
-                | FetchStage::Extracting
-                | FetchStage::Verifying => interval_ok,
+                FetchStage::Connecting | FetchStage::Extracting | FetchStage::Verifying => {
+                    interval_ok
+                }
             };
 
         if !should_emit {
@@ -368,18 +368,23 @@ impl FetchErrorPayload {
     /// frontend actually sees. Equivalent to manually emitting
     /// `{"kind": "FetchError", "variant": ..., ...}`.
     pub fn to_json_string(&self) -> String {
-        let inner = serde_json::to_value(self).unwrap_or_else(|_| {
-            serde_json::json!({"variant": "Io", "message": "serialise failed"})
-        });
+        let inner = serde_json::to_value(self).unwrap_or_else(
+            |_| serde_json::json!({"variant": "Io", "message": "serialise failed"}),
+        );
         let mut obj = serde_json::Map::new();
-        obj.insert("kind".to_string(), serde_json::Value::String("FetchError".to_string()));
+        obj.insert(
+            "kind".to_string(),
+            serde_json::Value::String("FetchError".to_string()),
+        );
         if let serde_json::Value::Object(m) = inner {
             for (k, v) in m {
                 obj.insert(k, v);
             }
         }
-        serde_json::to_string(&serde_json::Value::Object(obj))
-            .unwrap_or_else(|_| "{\"kind\":\"FetchError\",\"variant\":\"Io\",\"message\":\"serialise failed\"}".to_string())
+        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_else(|_| {
+            "{\"kind\":\"FetchError\",\"variant\":\"Io\",\"message\":\"serialise failed\"}"
+                .to_string()
+        })
     }
 }
 
@@ -545,9 +550,7 @@ fn acquire_lock() -> Result<CacheLock> {
     // rationale. Poisoning means a previous holder panicked mid-op;
     // we recover and proceed because the file lock + sentinel-based
     // recovery handle the on-disk consistency story.
-    let guard = process_lock()
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let guard = process_lock().lock().unwrap_or_else(|p| p.into_inner());
     let root = cache_root()?;
     fs::create_dir_all(&root)?;
     let file = fs::OpenOptions::new()
@@ -558,7 +561,10 @@ fn acquire_lock() -> Result<CacheLock> {
         .open(root.join(".lock"))?;
     file.lock_exclusive()
         .map_err(|e| FetchError::Io(io::Error::other(format!("lock: {e}"))))?;
-    Ok(CacheLock { _file: file, _guard: guard })
+    Ok(CacheLock {
+        _file: file,
+        _guard: guard,
+    })
 }
 
 /// Build a configured reqwest client for cache fetches.
@@ -610,7 +616,11 @@ impl Drop for TmpFileGuard {
 /// rate.
 pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>) -> Result<()> {
     let url = release_url();
-    progress(FetchProgress { stage: FetchStage::Connecting, bytes_done: 0, bytes_total: None });
+    progress(FetchProgress {
+        stage: FetchStage::Connecting,
+        bytes_done: 0,
+        bytes_total: None,
+    });
 
     let client = build_http_client().map_err(|e| FetchError::Network(e.to_string()))?;
     let resp = client
@@ -702,11 +712,7 @@ fn require_free_space(min_bytes: u64) -> Result<()> {
 /// not `data/tendl-2024/`. The trailing slash matters — without it,
 /// `"data/tendl-2"` would also match `data/tendl-2024/`. Callers should
 /// always include the slash for directory-scoped extracts.
-pub fn extract_tarball(
-    archive: &Path,
-    dest: &Path,
-    prefixes: &[&str],
-) -> Result<()> {
+pub fn extract_tarball(archive: &Path, dest: &Path, prefixes: &[&str]) -> Result<()> {
     let mut noop = no_op_progress();
     extract_tarball_with_progress(archive, dest, prefixes, &mut noop)
 }
@@ -724,8 +730,8 @@ pub fn extract_tarball_with_progress(
     progress: ProgressFn<'_>,
 ) -> Result<()> {
     let file = fs::File::open(archive)?;
-    let decoder = zstd::stream::Decoder::new(file)
-        .map_err(|e| FetchError::Decompress(e.to_string()))?;
+    let decoder =
+        zstd::stream::Decoder::new(file).map_err(|e| FetchError::Decompress(e.to_string()))?;
     let mut tar = tar::Archive::new(decoder);
 
     fs::create_dir_all(dest)?;
@@ -1158,8 +1164,8 @@ pub fn export_offline_bundle(out: &Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let file = fs::File::create(out)?;
-    let encoder = zstd::stream::Encoder::new(file, 3)
-        .map_err(|e| FetchError::Decompress(e.to_string()))?;
+    let encoder =
+        zstd::stream::Encoder::new(file, 3).map_err(|e| FetchError::Decompress(e.to_string()))?;
     let mut tar = tar::Builder::new(encoder.auto_finish());
     // Walk `cache/data/` and add each entry under the prefix `data/`.
     let data = cache.join("data");
@@ -1179,10 +1185,7 @@ pub fn install_from_tarball(archive: &Path) -> Result<()> {
 }
 
 /// Progress-aware variant of [`install_from_tarball`].
-pub fn install_from_tarball_with_progress(
-    archive: &Path,
-    progress: ProgressFn<'_>,
-) -> Result<()> {
+pub fn install_from_tarball_with_progress(archive: &Path, progress: ProgressFn<'_>) -> Result<()> {
     if !archive.exists() {
         return Err(FetchError::Io(io::Error::new(
             io::ErrorKind::NotFound,
@@ -1257,8 +1260,7 @@ pub fn prune_old_versions(keep: usize) -> Result<usize> {
     // `keep` controls how many historical siblings to preserve on top of
     // that. So `keep=2` with current=v0.10.0 and siblings v0.0.1..v0.0.5
     // preserves {v0.10.0, v0.0.5, v0.0.4} = 3 dirs.
-    let mut kept: std::collections::HashSet<(u64, u64, u64)> =
-        std::collections::HashSet::new();
+    let mut kept: std::collections::HashSet<(u64, u64, u64)> = std::collections::HashSet::new();
     if let Some(c) = current {
         kept.insert(c);
     }
@@ -1402,14 +1404,16 @@ mod tests {
         header.set_size(payload.len() as u64);
         header.set_mode(0o644);
         header.set_cksum();
-        tar.append_data(&mut header, "data/meta/marker", payload.as_slice()).unwrap();
+        tar.append_data(&mut header, "data/meta/marker", payload.as_slice())
+            .unwrap();
         // Also include a library subtree so ensure_library can find it.
         let mut h2 = tar::Header::new_gnu();
         let p2 = b"xs-marker";
         h2.set_size(p2.len() as u64);
         h2.set_mode(0o644);
         h2.set_cksum();
-        tar.append_data(&mut h2, "data/tendl-test/xs/p_Cu.parquet", p2.as_slice()).unwrap();
+        tar.append_data(&mut h2, "data/tendl-test/xs/p_Cu.parquet", p2.as_slice())
+            .unwrap();
         tar.finish().unwrap();
     }
 
@@ -1462,13 +1466,21 @@ mod tests {
 
     #[test]
     fn data_version_is_resolved_from_submodule() {
-        assert_ne!(DATA_VERSION, "0.0.0-unknown",
-            "build.rs fell back — submodule not checked out at build time");
+        assert_ne!(
+            DATA_VERSION, "0.0.0-unknown",
+            "build.rs fell back — submodule not checked out at build time"
+        );
         let parts: Vec<&str> = DATA_VERSION.split('.').collect();
-        assert_eq!(parts.len(), 3, "DATA_VERSION = {DATA_VERSION:?} is not N.N.N");
+        assert_eq!(
+            parts.len(),
+            3,
+            "DATA_VERSION = {DATA_VERSION:?} is not N.N.N"
+        );
         for p in &parts {
-            assert!(p.chars().all(|c| c.is_ascii_digit()),
-                "DATA_VERSION component {p:?} not numeric");
+            assert!(
+                p.chars().all(|c| c.is_ascii_digit()),
+                "DATA_VERSION component {p:?} not numeric"
+            );
         }
     }
 
@@ -1501,14 +1513,20 @@ mod tests {
         make_test_tarball(&archive);
 
         install_from_tarball(&archive).unwrap();
-        let mtime1 = fs::metadata(sentinel_path().unwrap()).unwrap().modified().unwrap();
+        let mtime1 = fs::metadata(sentinel_path().unwrap())
+            .unwrap()
+            .modified()
+            .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(50));
         // Second call short-circuits — we still call install_from_tarball
         // unconditionally to verify it's safe; the function is allowed to
         // re-extract under the lock, but must not corrupt state.
         install_from_tarball(&archive).unwrap();
         assert!(is_cache_complete());
-        let mtime2 = fs::metadata(sentinel_path().unwrap()).unwrap().modified().unwrap();
+        let mtime2 = fs::metadata(sentinel_path().unwrap())
+            .unwrap()
+            .modified()
+            .unwrap();
         // Either the second run no-op'd (mtime unchanged) or re-wrote
         // (mtime advanced); both are fine — what matters is the cache is
         // still usable.
@@ -1860,7 +1878,10 @@ mod tests {
         let (r1, r2) = std::thread::scope(|s| {
             let h1 = s.spawn(|| install_from_tarball(archive_ref));
             let h2 = s.spawn(|| install_from_tarball(archive_ref));
-            (h1.join().expect("t1 panicked"), h2.join().expect("t2 panicked"))
+            (
+                h1.join().expect("t1 panicked"),
+                h2.join().expect("t2 panicked"),
+            )
         });
 
         // Neither thread deadlocked (we got here) and at least one
@@ -1873,7 +1894,10 @@ mod tests {
 
         // Final state is consistent: sentinel + payload present, no
         // stray partial dirs.
-        assert!(is_cache_complete(), "sentinel missing after both threads finished");
+        assert!(
+            is_cache_complete(),
+            "sentinel missing after both threads finished"
+        );
         let marker = cache_dir().unwrap().join("data/meta/marker");
         assert!(marker.exists(), "payload missing after concurrent install");
         assert_eq!(fs::read(&marker).unwrap(), b"test-marker");
@@ -1903,7 +1927,10 @@ mod tests {
 
         // After the interrupted install: cache must be incomplete and
         // an orphan partial-{pid} should be visible to the sweep.
-        assert!(!is_cache_complete(), "sentinel written despite interruption");
+        assert!(
+            !is_cache_complete(),
+            "sentinel written despite interruption"
+        );
         assert!(
             count_partial_dirs() >= 1,
             "expected an orphan partial dir from the interrupted install"
@@ -1939,7 +1966,7 @@ mod tests {
         let results = std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(N);
             for _ in 0..N {
-                handles.push(s.spawn(|| ensure_meta_stopping()));
+                handles.push(s.spawn(ensure_meta_stopping));
             }
             handles
                 .into_iter()
@@ -1961,7 +1988,10 @@ mod tests {
         );
         assert!(is_cache_complete());
         let marker = cache_dir().unwrap().join("data/meta/marker");
-        assert!(marker.exists(), "meta/marker missing after ensure_meta_stopping race");
+        assert!(
+            marker.exists(),
+            "meta/marker missing after ensure_meta_stopping race"
+        );
         assert_eq!(count_partial_dirs(), 0);
 
         test_hooks::clear_fetch_source();
@@ -2010,10 +2040,7 @@ mod tests {
             .map(|e| e.bytes_done)
             .collect();
         for w in extracting.windows(2) {
-            assert!(
-                w[1] >= w[0],
-                "Extracting progress went backwards: {w:?}"
-            );
+            assert!(w[1] >= w[0], "Extracting progress went backwards: {w:?}");
         }
     }
 
@@ -2073,10 +2100,7 @@ mod tests {
             );
 
             // Variants that should expose the canonical URL.
-            let needs_url = matches!(
-                err,
-                FetchError::HttpStatus(_) | FetchError::Network(_)
-            );
+            let needs_url = matches!(err, FetchError::HttpStatus(_) | FetchError::Network(_));
             if needs_url {
                 let url = release_url();
                 assert!(
@@ -2309,11 +2333,19 @@ mod tests {
     // -----------------------------------------------------------------
 
     fn dl(bytes_done: u64, bytes_total: Option<u64>) -> FetchProgress {
-        FetchProgress { stage: FetchStage::Downloading, bytes_done, bytes_total }
+        FetchProgress {
+            stage: FetchStage::Downloading,
+            bytes_done,
+            bytes_total,
+        }
     }
 
     fn ev(stage: FetchStage, bytes_done: u64, bytes_total: Option<u64>) -> FetchProgress {
-        FetchProgress { stage, bytes_done, bytes_total }
+        FetchProgress {
+            stage,
+            bytes_done,
+            bytes_total,
+        }
     }
 
     /// First-ever event always emits (stage-changed bypass: last_stage
@@ -2459,7 +2491,9 @@ mod tests {
         seed_from_dir(&src).unwrap();
         assert!(is_cache_complete());
 
-        let cached_xs = cache_dir().unwrap().join("data/tendl-2023-iso/xs/p_Cu.parquet");
+        let cached_xs = cache_dir()
+            .unwrap()
+            .join("data/tendl-2023-iso/xs/p_Cu.parquet");
         assert!(cached_xs.exists(), "bundled XS library was not seeded");
         assert_eq!(fs::read(&cached_xs).unwrap(), b"xs-data");
     }

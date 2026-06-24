@@ -33,7 +33,10 @@ pub struct ToolResponse {
 
 impl From<String> for ToolResponse {
     fn from(text: String) -> Self {
-        Self { text, resources: Vec::new() }
+        Self {
+            text,
+            resources: Vec::new(),
+        }
     }
 }
 
@@ -93,9 +96,16 @@ fn cached_sim(
 /// only a `StackResult`, so metadata comes from the request).
 fn beam_args(args: &Value) -> (String, f64, f64) {
     (
-        args.get("projectile").and_then(|v| v.as_str()).unwrap_or("?").to_string(),
-        args.get("energy_mev").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        args.get("current_ma").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        args.get("projectile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string(),
+        args.get("energy_mev")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+        args.get("current_ma")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
     )
 }
 
@@ -106,7 +116,12 @@ fn layer_materials(args: &Value) -> Vec<String> {
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .map(|l| l.get("material").and_then(|v| v.as_str()).unwrap_or("").to_string())
+                .map(|l| {
+                    l.get("material")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -472,9 +487,13 @@ pub fn call_tool(
         "list_reaction_channels" => tool_list_reaction_channels(db, arguments)?.into(),
         "get_decay_data" => tool_get_decay_data(db, arguments)?.into(),
         "compare_simulations" => tool_compare_simulations(db, &*materials, arguments)?.into(),
-        "get_stack_energy_budget" => tool_get_stack_energy_budget(db, &*materials, arguments)?.into(),
+        "get_stack_energy_budget" => {
+            tool_get_stack_energy_budget(db, &*materials, arguments)?.into()
+        }
         "get_stopping_power" => tool_get_stopping_power(db, &*materials, arguments)?.into(),
-        "get_isotope_production_curve" => tool_get_isotope_production_curve(db, &*materials, arguments)?.into(),
+        "get_isotope_production_curve" => {
+            tool_get_isotope_production_curve(db, &*materials, arguments)?.into()
+        }
         "list_producing_layers" => tool_list_producing_layers(db, &*materials, arguments)?.into(),
         "get_simulation_dataset" => tool_get_simulation_dataset(db, &*materials, arguments)?,
         "get_isotope_inventory" => tool_get_isotope_inventory(db, &*materials, arguments)?,
@@ -490,7 +509,8 @@ pub fn call_tool(
 /// Returns None when the input is absent or null; errors on malformed entries.
 fn parse_enrichment(
     val: Option<&Value>,
-) -> Result<Option<std::collections::HashMap<String, std::collections::HashMap<u32, f64>>>, String> {
+) -> Result<Option<std::collections::HashMap<String, std::collections::HashMap<u32, f64>>>, String>
+{
     use std::collections::HashMap;
     let Some(v) = val else { return Ok(None) };
     if v.is_null() {
@@ -516,7 +536,10 @@ fn parse_enrichment(
             .get("fraction")
             .and_then(|v| v.as_f64())
             .ok_or("enrichment entry missing 'fraction'")?;
-        overrides.entry(elem.to_string()).or_default().insert(a, frac);
+        overrides
+            .entry(elem.to_string())
+            .or_default()
+            .insert(a, frac);
     }
     Ok(Some(overrides))
 }
@@ -629,9 +652,14 @@ fn build_and_run_sim(
         current_profile,
     };
 
-    let result = crate::compute::compute_stack(db, &mut stack, true)
-        .map_err(|e| e.to_string())?;
-    Ok((stack, result, projectile_str.to_string(), energy_mev, current_ma))
+    let result = crate::compute::compute_stack(db, &mut stack, true).map_err(|e| e.to_string())?;
+    Ok((
+        stack,
+        result,
+        projectile_str.to_string(),
+        energy_mev,
+        current_ma,
+    ))
 }
 
 /// Stopping-only variant of [`build_and_run_sim`] for tools that only need
@@ -710,15 +738,12 @@ fn build_and_run_stopping_only(
         current_profile: None,
     };
 
-    let result = crate::compute::compute_stack_stopping_only(db, &mut stack)
-        .map_err(|e| e.to_string())?;
+    let result =
+        crate::compute::compute_stack_stopping_only(db, &mut stack).map_err(|e| e.to_string())?;
     Ok((result, projectile_str.to_string(), energy_mev, current_ma))
 }
 
-fn tool_define_material(
-    materials: &mut MaterialRegistry,
-    args: &Value,
-) -> Result<String, String> {
+fn tool_define_material(materials: &mut MaterialRegistry, args: &Value) -> Result<String, String> {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -792,7 +817,11 @@ fn tool_define_material(
     ))
 }
 
-fn tool_simulate(db: &dyn DatabaseProtocol, registry: &MaterialRegistry, args: &Value) -> Result<String, String> {
+fn tool_simulate(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<String, String> {
     // Populate the result cache so follow-up dataset / inventory / emission
     // queries on the same config are lazy views instead of re-runs (#427).
     let result = cached_sim(db, registry, args)?;
@@ -1024,13 +1053,13 @@ fn tool_get_decay_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String
     }
 }
 
-fn tool_compare_simulations(db: &dyn DatabaseProtocol, registry: &MaterialRegistry, args: &Value) -> Result<String, String> {
-    let config_a = args
-        .get("config_a")
-        .ok_or("Missing 'config_a'")?;
-    let config_b = args
-        .get("config_b")
-        .ok_or("Missing 'config_b'")?;
+fn tool_compare_simulations(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<String, String> {
+    let config_a = args.get("config_a").ok_or("Missing 'config_a'")?;
+    let config_b = args.get("config_b").ok_or("Missing 'config_b'")?;
 
     let label_a = config_a
         .get("label")
@@ -1069,11 +1098,19 @@ fn tool_compare_simulations(db: &dyn DatabaseProtocol, registry: &MaterialRegist
     // dominates. `peak_lhs` / `peak_rhs` are the cross-config peaks for
     // the left and right entries being compared, NOT for configs A and B.
     all_names.sort_by(|lhs, rhs| {
-        let peak_lhs = iso_a.get(lhs).copied().unwrap_or(0.0)
+        let peak_lhs = iso_a
+            .get(lhs)
+            .copied()
+            .unwrap_or(0.0)
             .max(iso_b.get(lhs).copied().unwrap_or(0.0));
-        let peak_rhs = iso_a.get(rhs).copied().unwrap_or(0.0)
+        let peak_rhs = iso_a
+            .get(rhs)
+            .copied()
+            .unwrap_or(0.0)
             .max(iso_b.get(rhs).copied().unwrap_or(0.0));
-        peak_rhs.partial_cmp(&peak_lhs).unwrap_or(std::cmp::Ordering::Equal)
+        peak_rhs
+            .partial_cmp(&peak_lhs)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut output = String::new();
@@ -1092,13 +1129,20 @@ fn tool_compare_simulations(db: &dyn DatabaseProtocol, registry: &MaterialRegist
         } else {
             "—".to_string()
         };
-        output.push_str(&format!("| {} | {:.3e} | {:.3e} | {} |\n", name, a, b, ratio));
+        output.push_str(&format!(
+            "| {} | {:.3e} | {:.3e} | {} |\n",
+            name, a, b, ratio
+        ));
     }
 
     Ok(output)
 }
 
-fn tool_get_stack_energy_budget(db: &dyn DatabaseProtocol, registry: &MaterialRegistry, args: &Value) -> Result<String, String> {
+fn tool_get_stack_energy_budget(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<String, String> {
     // Stopping-only fast path — skips the activation pipeline that
     // build_and_run_sim would invoke. Identical energy/heat numbers, much
     // less work for stacks with many cross-section channels.
@@ -1142,7 +1186,11 @@ fn tool_get_stack_energy_budget(db: &dyn DatabaseProtocol, registry: &MaterialRe
     Ok(output)
 }
 
-fn tool_get_stopping_power(db: &dyn DatabaseProtocol, registry: &MaterialRegistry, args: &Value) -> Result<String, String> {
+fn tool_get_stopping_power(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<String, String> {
     let projectile_str = args
         .get("projectile")
         .and_then(|v| v.as_str())
@@ -1188,10 +1236,7 @@ fn tool_get_stopping_power(db: &dyn DatabaseProtocol, registry: &MaterialRegistr
 
     let mass_dedx = crate::stopping::compound_dedx(db, &projectile, &composition, &energies)
         .map_err(|e| e.to_string())?;
-    let lin_dedx: Vec<f64> = mass_dedx
-        .iter()
-        .map(|s| s * density)
-        .collect();
+    let lin_dedx: Vec<f64> = mass_dedx.iter().map(|s| s * density).collect();
 
     let mut output = String::new();
     output.push_str(&format!(
@@ -1307,9 +1352,15 @@ fn tool_get_isotope_production_curve(
         .and_then(|v| v.as_str())
         .ok_or("Missing 'isotope'")?
         .to_string();
-    let vs = args.get("vs").and_then(|v| v.as_str()).ok_or("Missing 'vs'")?;
+    let vs = args
+        .get("vs")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'vs'")?;
     if !["time", "cooling", "depth"].contains(&vs) {
-        return Err(format!("'vs' must be one of: time, cooling, depth (got '{}')", vs));
+        return Err(format!(
+            "'vs' must be one of: time, cooling, depth (got '{}')",
+            vs
+        ));
     }
     // layer_index is 1-based in the API; reject non-positive values early.
     let layer_index = match args.get("layer_index") {
@@ -1392,10 +1443,13 @@ fn tool_get_isotope_production_curve(
             }
         }
         "depth" => {
-            let rates = lr
-                .depth_production_rates
-                .get(&isotope)
-                .ok_or_else(|| format!("No depth production rates for '{}' in layer {}", isotope, layer_idx + 1))?;
+            let rates = lr.depth_production_rates.get(&isotope).ok_or_else(|| {
+                format!(
+                    "No depth production rates for '{}' in layer {}",
+                    isotope,
+                    layer_idx + 1
+                )
+            })?;
             if lr.depth_profile.is_empty() || rates.is_empty() {
                 return Err("Layer has no depth profile (thickness not resolved)".to_string());
             }
@@ -1478,7 +1532,8 @@ fn tool_list_producing_layers(
         isotope,
     ));
     output.push_str("| Layer | E_in → E_out [MeV] | Half-life | EOB activity [Bq] | Source | |\n");
-    output.push_str("|-------|--------------------|-----------|--------------------|--------|--|\n");
+    output
+        .push_str("|-------|--------------------|-----------|--------------------|--------|--|\n");
     for (i, iso) in &producers {
         let lr = &result.layer_results[*i];
         let hl = match iso.half_life_s {
@@ -1520,7 +1575,10 @@ fn render_table_section(table: &Table) -> Result<String, String> {
     } else {
         String::new()
     };
-    Ok(format!("## {}{}\n\n```json\n{}\n```\n", table.name, note, json))
+    Ok(format!(
+        "## {}{}\n\n```json\n{}\n```\n",
+        table.name, note, json
+    ))
 }
 
 fn tool_get_simulation_dataset(
@@ -1528,9 +1586,15 @@ fn tool_get_simulation_dataset(
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    let want_cooling = args.get("cooling").and_then(|v| v.as_bool()).unwrap_or(false);
+    let want_cooling = args
+        .get("cooling")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let want_depth = args.get("depth").and_then(|v| v.as_bool()).unwrap_or(false);
-    let want_emissions = args.get("emissions").and_then(|v| v.as_bool()).unwrap_or(false);
+    let want_emissions = args
+        .get("emissions")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let result = cached_sim(db, registry, args)?;
     let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
@@ -1743,9 +1807,15 @@ mod tests {
             layer(&[("Cu-64", 5.0)]),
             layer(&[("Sc-44", 99.0)]),
         ]);
-        let idxs: Vec<usize> = producing_layers(&s, "Sc-44").iter().map(|(i, _)| *i).collect();
+        let idxs: Vec<usize> = producing_layers(&s, "Sc-44")
+            .iter()
+            .map(|(i, _)| *i)
+            .collect();
         assert_eq!(idxs, vec![0, 2]);
-        let idxs: Vec<usize> = producing_layers(&s, "Cu-64").iter().map(|(i, _)| *i).collect();
+        let idxs: Vec<usize> = producing_layers(&s, "Cu-64")
+            .iter()
+            .map(|(i, _)| *i)
+            .collect();
         assert_eq!(idxs, vec![1]);
         assert!(producing_layers(&s, "F-18").is_empty());
     }
@@ -1754,7 +1824,10 @@ mod tests {
     fn default_selection_warns_when_multiple_layers_produce() {
         let s = stack(vec![layer(&[("Sc-44", 10.0)]), layer(&[("Sc-44", 99.0)])]);
         let sel = select_producing_layer(&s, "Sc-44", None).unwrap();
-        assert_eq!(sel.layer_idx, 0, "default picks first producer in beam order");
+        assert_eq!(
+            sel.layer_idx, 0,
+            "default picks first producer in beam order"
+        );
         assert!(sel.defaulted, "must flag ambiguity so caller warns");
         assert_eq!(sel.producing, vec![0, 1]);
     }
@@ -1764,7 +1837,10 @@ mod tests {
         let s = stack(vec![layer(&[("Sc-44", 10.0)]), layer(&[("Cu-64", 5.0)])]);
         let sel = select_producing_layer(&s, "Sc-44", None).unwrap();
         assert_eq!(sel.layer_idx, 0);
-        assert!(!sel.defaulted, "single producer is unambiguous — no warning");
+        assert!(
+            !sel.defaulted,
+            "single producer is unambiguous — no warning"
+        );
     }
 
     #[test]
@@ -1786,7 +1862,10 @@ mod tests {
         ]);
         let err = select_producing_layer(&s, "Sc-44", Some(2)).unwrap_err();
         assert!(err.contains("not produced in layer 2"), "got: {err}");
-        assert!(err.contains("1, 3"), "error should name producing layers (1-based): {err}");
+        assert!(
+            err.contains("1, 3"),
+            "error should name producing layers (1-based): {err}"
+        );
     }
 
     #[test]

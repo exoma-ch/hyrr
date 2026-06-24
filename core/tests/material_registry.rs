@@ -62,7 +62,11 @@ fn registry_overrides_static_catalog() {
         "session havar should override static catalog, got density={}",
         res.density
     );
-    assert_eq!(res.elements.len(), 2, "should have 2 elements from session definition");
+    assert_eq!(
+        res.elements.len(),
+        2,
+        "should have 2 elements from session definition"
+    );
 }
 
 #[test]

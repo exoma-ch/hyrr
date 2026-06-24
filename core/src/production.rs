@@ -133,7 +133,10 @@ pub fn generate_depth_profile(
     let total_depth = raw_depths[n - 1];
     if total_depth <= 0.0 || n < 2 {
         // Degenerate layer — pass the raw arrays through.
-        let heat_w_cm3: Vec<f64> = d_rev.iter().map(|&d| flux * d.abs() * MEV_TO_JOULE).collect();
+        let heat_w_cm3: Vec<f64> = d_rev
+            .iter()
+            .map(|&d| flux * d.abs() * MEV_TO_JOULE)
+            .collect();
         return DepthProfileResult {
             depths: raw_depths,
             energies_ordered: e_rev,
@@ -191,9 +194,8 @@ mod tests {
         let xs_mb: Vec<f64> = xs_energies_mev.iter().map(|_| 50.0).collect();
 
         // Roughly proton-on-Al stopping power, varying with E to avoid trivial cases.
-        let dedx_fn = |energies: &[f64]| -> Vec<f64> {
-            energies.iter().map(|&e| 40.0 / e.sqrt()).collect()
-        };
+        let dedx_fn =
+            |energies: &[f64]| -> Vec<f64> { energies.iter().map(|&e| 40.0 / e.sqrt()).collect() };
 
         let energy_in = 72.0;
         let energy_out = 8.0;
@@ -240,11 +242,11 @@ mod tests {
             weight,
         );
 
-        let integrated_from_depth =
-            crate::interpolation::trapezoid(&depth_rates, &depth.depths);
+        let integrated_from_depth = crate::interpolation::trapezoid(&depth_rates, &depth.depths);
 
-        let rel_err =
-            ((integrated_from_depth - integrated.production_rate) / integrated.production_rate).abs();
+        let rel_err = ((integrated_from_depth - integrated.production_rate)
+            / integrated.production_rate)
+            .abs();
         assert!(
             rel_err < 0.005,
             "drift: ∫(depth_rate) dx = {:.6e}, compute_production_rate = {:.6e}, rel_err = {:.4}",

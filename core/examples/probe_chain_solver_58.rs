@@ -94,11 +94,7 @@ fn print_aug_result(label: &str, lambda: f64, dt: f64) {
         e[0].abs()
     };
 
-    println!(
-        "{label}  λ·dt={:.4e}  ‖aug‖₁={:.3e}",
-        lambda * dt,
-        n1
-    );
+    println!("{label}  λ·dt={:.4e}  ‖aug‖₁={:.3e}", lambda * dt, n1);
     println!(
         "  e_aug = [[{:.6e}, {:.6e}], [{:.6e}, {:.6e}]]",
         e[0], e[1], e[2], e[3]
@@ -170,7 +166,7 @@ fn main() {
         let dt = t_cool[ti] - t_prev;
         let a_dt = vec![-lambda * dt];
         let ea = matrix_exp(&a_dt, 1);
-        n_state[0] = ea[0] * n_state[0];
+        n_state[0] *= ea[0];
         if n_state[0] < 0.0 {
             n_state[0] = 0.0;
         }
@@ -203,10 +199,7 @@ fn main() {
             max_rel_err = rel;
             max_rel_idx = i;
         }
-        if [0_usize, 1, 2, 5, 10, 50, 98, 99, 100, 101, 150, 199]
-            .iter()
-            .any(|&j| j == i)
-        {
+        if [0_usize, 1, 2, 5, 10, 50, 98, 99, 100, 101, 150, 199].contains(&i) {
             println!(
                 "  {:>3}  {:>9.2}  {:>12.4e}  {:>12.4e}  {:>10.2e}",
                 i, time_grid[i], a_chain, a_ref, rel

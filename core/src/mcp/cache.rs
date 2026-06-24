@@ -272,7 +272,11 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "second call must hit the cache");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "second call must hit the cache"
+        );
         // Both Arcs are the cached (first) result, so the second closure's
         // value (22.0) was never used.
         assert_eq!(a.irradiation_time_s, 11.0);
@@ -294,6 +298,9 @@ mod tests {
         }
         assert!(lru.map.len() <= CAPACITY);
         assert!(lru.get(0).is_none(), "oldest key should have been evicted");
-        assert!(lru.get(CAPACITY as u64 + 4).is_some(), "newest key retained");
+        assert!(
+            lru.get(CAPACITY as u64 + 4).is_some(),
+            "newest key retained"
+        );
     }
 }

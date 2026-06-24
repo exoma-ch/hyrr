@@ -56,7 +56,6 @@ fn main() {
     let cool_s = 0.0_f64;
 
     println!(
-        "{}",
         "E_MeV\tE_out_MeV\trate_Sc44g\trate_Sc44m\tA_Sc44g_Bq\tA_Sc44m_Bq\tratio_g_over_m\tGBq_per_uAh_total"
     );
 

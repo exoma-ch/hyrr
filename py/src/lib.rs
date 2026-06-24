@@ -58,8 +58,14 @@ impl PyDataStore {
             // with no density) as a Python exception. `.expect()` here aborted
             // the interpreter; the WASM path already returns this as an error
             // via `?` (see #344).
-            let resolution = resolve_material(&*db, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)
-                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            let resolution = resolve_material(
+                &*db,
+                &lc.material,
+                lc.enrichment.as_ref(),
+                None,
+                lc.density_g_cm3,
+            )
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
             for (elem, _) in &resolution.elements {
                 db.load_xs(projectile_str, elem.z)
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
@@ -77,7 +83,9 @@ impl PyDataStore {
             .current_profile
             .map(|cp| CurrentProfile::from_values(cp.times_s, cp.currents_ma))
             .transpose()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid current profile: {e}")))?;
+            .map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("Invalid current profile: {e}"))
+            })?;
 
         let mut stack = TargetStack {
             beam: Beam::new(projectile, config.beam.energy_mev, config.beam.current_ma),
@@ -93,8 +101,9 @@ impl PyDataStore {
         // {"Err": ...} envelope. Surfacing the error as a PyRuntimeError also
         // prevents the failure mode where a compute error serialized to
         // {"Err": ...} was silently read as "no layers" by the Python side.
-        let result = compute_stack(&*db, &mut stack, true)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("compute_stack failed: {e}")))?;
+        let result = compute_stack(&*db, &mut stack, true).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("compute_stack failed: {e}"))
+        })?;
         let json = serde_json::to_string(&result)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
         Ok(json)
@@ -125,7 +134,8 @@ fn py_parse_formula(formula: &str) -> PyResult<HashMap<String, u32>> {
 fn resolve_material_json(data_dir: &str, library: &str, identifier: &str) -> PyResult<String> {
     let db = ParquetDataStore::new(data_dir, library)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
-    let resolution = resolve_material(&db, identifier, None, None, None).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+    let resolution = resolve_material(&db, identifier, None, None, None)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
     let result = serde_json::json!({
         "density": resolution.density,
         "molecular_weight": resolution.molecular_weight,
@@ -189,8 +199,9 @@ fn py_dedx_mev_per_cm(
     let proj = ProjectileType::from_str(projectile).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!("Invalid projectile: {projectile}"))
     })?;
-    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
+    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}"))
+    })?;
     stopping::dedx_mev_per_cm(&db, &proj, &composition, density, &energies, None)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
@@ -213,10 +224,20 @@ fn py_compute_energy_out(
     let proj = ProjectileType::from_str(projectile).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!("Invalid projectile: {projectile}"))
     })?;
-    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    stopping::compute_energy_out(&db, &proj, &composition, density, e_in, thickness, n_points, None)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
+    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}"))
+    })?;
+    stopping::compute_energy_out(
+        &db,
+        &proj,
+        &composition,
+        density,
+        e_in,
+        thickness,
+        n_points,
+        None,
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
 /// Compute target thickness [cm] from energy loss.
@@ -237,10 +258,20 @@ fn py_compute_thickness(
     let proj = ProjectileType::from_str(projectile).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!("Invalid projectile: {projectile}"))
     })?;
-    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    stopping::compute_thickness_from_energy(&db, &proj, &composition, density, e_in, e_out, n_points, None)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
+    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}"))
+    })?;
+    stopping::compute_thickness_from_energy(
+        &db,
+        &proj,
+        &composition,
+        density,
+        e_in,
+        e_out,
+        n_points,
+        None,
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +474,13 @@ fn config_to_layers(db: &ParquetDataStore, config: &SimConfig) -> Result<Vec<Lay
         .layers
         .iter()
         .map(|lc| {
-            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)?;
+            let resolution = resolve_material(
+                db,
+                &lc.material,
+                lc.enrichment.as_ref(),
+                None,
+                lc.density_g_cm3,
+            )?;
             Ok(Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,

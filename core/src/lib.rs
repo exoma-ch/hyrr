@@ -4,9 +4,9 @@
 //! for stacked target assemblies under charged-particle bombardment.
 
 pub mod bateman;
-pub mod config_url;
 pub mod chains;
 pub mod compute;
+pub mod config_url;
 pub mod constants;
 pub mod data_dir;
 #[cfg(not(target_arch = "wasm32"))]
@@ -16,9 +16,9 @@ pub mod formula;
 pub mod interpolation;
 pub mod materials;
 pub mod math;
+pub mod matrix_exp;
 #[cfg(feature = "mcp")]
 pub mod mcp;
-pub mod matrix_exp;
 pub mod production;
 pub mod projectile;
 pub mod stopping;

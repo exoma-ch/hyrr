@@ -69,3 +69,35 @@ tar = "0.4"
 [dev-dependencies]
 approx = "0.5"
 tempfile = "3"
+
+# Clippy gate (#484). `cargo clippy` is now a required `nix flake check`, so we
+# deny all clippy warnings — then allow the handful that are intentional in a
+# numerical/physics codebase. `priority = -1` makes the deny-all the base level
+# so the specific `allow`s (default priority 0) win over it. The auto-fixable
+# real lints (needless_borrow, redundant_closure, …) were cleaned up when the
+# gate landed; these allows are the deliberate, reviewed exceptions:
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+# Physics entry points legitimately carry many parameters (energy grid, material
+# refs, projectile, options) — bundling into structs hurts call-site clarity.
+too_many_arguments = "allow"
+# ComputeError/StoppingError are rich enums returned widely; boxing every Result
+# to shrink the Err variant trades real ergonomics for a microscopic size win.
+result_large_err = "allow"
+# Interpolation/table accessors return genuinely nested tuple types; aliases
+# would scatter the shape away from where it's read.
+type_complexity = "allow"
+# `from_str` is the established constructor name across the type surface here;
+# renaming to satisfy the std-trait-confusion lint would be a breaking API churn.
+should_implement_trait = "allow"
+# Numerical guards like `!(max_activity > 0.0)` are deliberate NaN handling —
+# they intentionally differ from `<= 0.0` (which would treat NaN the other way).
+neg_cmp_op_on_partial_ord = "allow"
+# Numerical loops that index parallel arrays by position read more clearly as
+# indexed loops than as zipped iterators.
+needless_range_loop = "allow"
+# `is_some()`/`is_none()` guards immediately before an `unwrap()` are kept for
+# readability in the chain solver rather than restructured into `if let`.
+unnecessary_unwrap = "allow"
+# Descending sort via an explicit comparator is clearer than `Reverse(key)`.
+unnecessary_sort_by = "allow"
