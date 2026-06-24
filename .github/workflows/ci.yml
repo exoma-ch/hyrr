@@ -10,7 +10,7 @@ jobs:
   lockfile-sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -27,7 +27,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@v16
       # Run the SAME gate local dev runs (.pre-commit-config.yaml via prek):
       # ruff, ruff-format, pyright, yamllint, shellcheck, pymarkdown, typos,
@@ -38,7 +38,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: false
       - name: Init nucl-parquet submodule (sparse)
@@ -57,7 +57,7 @@ jobs:
   rust-projectile-matrix:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: false
       - name: Init nucl-parquet submodule (sparse)
@@ -80,7 +80,7 @@ jobs:
     # and a full simulation runs through the build-time tar.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: false
       - name: Init nucl-parquet submodule (sparse)
@@ -107,7 +107,7 @@ jobs:
     # without this job the mcp:: tests are never compiled in CI.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: false
       - name: Init nucl-parquet submodule (sparse)
@@ -142,7 +142,7 @@ jobs:
     # libpython, so it's safe to run here.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: false
       - name: Init nucl-parquet submodule (sparse — Rust client only)
@@ -165,7 +165,7 @@ jobs:
     # and cold-start error paths without network access.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: false
       - name: Init nucl-parquet submodule (sparse)
@@ -189,7 +189,7 @@ jobs:
   data-fetch-ssot:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Assert docs do not pin a concrete data tarball version
         run: |
           # SSoT: tarball filename pattern lives in core/src/data_fetch.rs.
@@ -221,7 +221,7 @@ jobs:
     # Catch release-workflow drift before it breaks a real release.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # tauri.conf.json beforeBuildCommand runs from desktop/src-tauri/
       # (Tauri v2 CWD semantics). All --prefix paths must use ../../ to
@@ -258,7 +258,7 @@ jobs:
   supplier-catalog-freshness:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
