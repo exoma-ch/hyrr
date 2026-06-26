@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: DeterminateSystems/nix-installer-action@v22
       # Run the SAME gate local dev runs (.pre-commit-config.yaml via prek):
       # ruff, ruff-format, pyright, yamllint, shellcheck, pymarkdown, typos,
       # the pre-commit-hooks file checks, etc. One SSoT for "is this clean?".
@@ -46,7 +46,7 @@ jobs:
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
           git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs
-      - uses: DeterminateSystems/nix-installer-action@v16
+      - uses: DeterminateSystems/nix-installer-action@v22
       - name: Test (uv + pytest via flake, Python 3.12)
         run: |
           nix develop .#ci --command bash -c '
