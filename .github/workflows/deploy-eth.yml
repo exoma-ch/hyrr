@@ -108,4 +108,8 @@ jobs:
           esac
           code=$(curl -4 -sS -m 20 -o /dev/null -w '%{http_code}' "$URL")
           echo "$URL → HTTP $code"
-          [ "$code" = "200" ] || { echo "smoke failed"; exit 1; }
+          # Gated instances 302 → wayf.switch.ch (AAI); both 200 and 302 are healthy.
+          case "$code" in
+            200 | 302) : ;;
+            *) echo "smoke failed"; exit 1 ;;
+          esac
