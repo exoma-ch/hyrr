@@ -99,9 +99,6 @@
   let elementPopupLayerIndex = $state(0);
   let isotopePopupOpen = $state(false);
   let isotopePopupData = $state({ name: "", Z: 0, A: 0, nuclearState: "" });
-  /** One-time banner shown after the 0.x material-schema break (#92).
-   *  Dismissed permanently in localStorage on close. */
-  let showSchemaBreakBanner = $state(false);
 
   // The sticky Filters bar pins directly below the sticky top bar. Track the top
   // bar's live height (it reflows responsively / when layers change) and publish
@@ -170,10 +167,6 @@
     if (urlConfig) restoreSerializableConfig(urlConfig);
 
     await loadCustomMaterials();
-    try {
-      const seen = localStorage.getItem("hyrr.notice.materialSchemaBreak");
-      if (!seen) showSchemaBreakBanner = true;
-    } catch { /* no-op */ }
 
     // Single registration point — replaces 6 separate closures (#388).
     // Lazy: getter is called on every lookup, so add/update/delete mutations are visible.
@@ -353,23 +346,6 @@
 </script>
 
 <main>
-  {#if showSchemaBreakBanner}
-    <div class="schema-break-banner" role="status">
-      <span>
-        hyrr 0.x — the material schema changed in this build. If saved custom materials don't open, redefine them via the "Define & save material" form. Share URLs from earlier versions may no longer load.
-      </span>
-      <button
-        type="button"
-        class="schema-break-close"
-        aria-label="Dismiss"
-        onclick={() => {
-          showSchemaBreakBanner = false;
-          try { localStorage.setItem("hyrr.notice.materialSchemaBreak", "1"); } catch { /* no-op */ }
-        }}
-      >×</button>
-    </div>
-  {/if}
-
   <div class="top-bar" bind:this={topBarEl}>
     <HeaderBar />
     {#if ready}
@@ -539,28 +515,6 @@
 <BugReportModal />
 
 <style>
-  .schema-break-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.6rem;
-    background: var(--c-yellow-tint, var(--c-bg-muted));
-    color: var(--c-text);
-    padding: 0.5rem 0.9rem;
-    font-size: 0.78rem;
-    border-bottom: 1px solid var(--c-border);
-  }
-  .schema-break-close {
-    background: none;
-    border: none;
-    color: var(--c-text-muted);
-    font-size: 1.1rem;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0.15rem 0.4rem;
-    border-radius: 3px;
-  }
-  .schema-break-close:hover { color: var(--c-text); background: var(--c-bg-default); }
   /* ─── Theme tokens ─── */
   :global(:root),
   :global([data-theme="dark"]) {
