@@ -41,6 +41,25 @@ The remote document root is read from each instance's own `~/conf/servers`
 (`DocumentRoot`) — authoritative, never hardcoded. Override with
 `HYRR_ETH_DOCROOT` if needed.
 
+### Access gating (nuclear-data licensing)
+
+The nuclear data HYRR serves is license-restricted, so the ETH instances are
+**gated behind SWITCH AAI (Shibboleth)** and limited to a whitelist. The gate is
+a `.htaccess` (`AuthType shibboleth` + `Require shib-attr principalName|mail …`)
+that the deploy **bakes into the bundle** — htdocs runs `AllowOverride
+AuthConfig`, so auth directives are allowed (only `AddType`/FileInfo isn't, hence
+no wasm MIME — wasm-bindgen falls back arrayBuffer). Baking it in means a
+redeploy can't silently un-gate the site.
+
+The whitelist lives in `infra/eth-webhosting/whitelist.txt` (**gitignored** — the
+repo is public; emails stay local). One identifier per line, matched against
+both `principalName` (eppn) and `mail`. Edit it and redeploy to change access.
+Unauthenticated requests 302 → `wayf.switch.ch` (institution picker). Certs use
+DNS-01, so gating doesn't disturb renewal.
+
+The public **GitHub Pages** site is a redirect to `hyrr.ethz.ch` (one site to
+maintain; no licensed data served publicly) — see `deploy-frontend.yml`.
+
 ### CI
 
 `.github/workflows/deploy-eth.yml` exists but is gated behind repo variable
