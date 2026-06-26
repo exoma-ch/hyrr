@@ -1,0 +1,111 @@
+name: Deploy to ETH webhosting
+
+# Promotion ladder for the ETH Zürich web instances:
+#   ent (hyrrent.ethz.ch) ─▶ tst (hyrrtst.ethz.ch) ─▶ prd (hyrr.ethz.ch)
+#
+# IMPORTANT — why every job is gated:
+# ETH webhosting SSH (:22) is reachable only from the ETH network / a jump
+# host. GitHub-hosted runners cannot connect (verified from outside: "No route
+# to host"). So this workflow is a no-op until a jump-capable SSH path exists
+# (a self-hosted runner on the ETH network, or a heimdall-style bastion). Flip
+# repo variable CI_DEPLOY_ENABLED=true once that path is in place. Until then,
+# deploy from a Mac on the ETH VPN:  just deploy-eth-ladder  /  just elevate
+#
+# This mirrors gerchowl/duplet-webserver's deploy.yml, which hit the same
+# constraint ("GitHub runners can't reach the instances … deploy locally").
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "wasm/**"
+      - "core/**"
+      - "Cargo.lock"
+      - "scripts/deploy-eth.sh"
+      - "scripts/copy-frontend-data.sh"
+      - ".github/workflows/deploy-eth.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target ETH instance"
+        required: true
+        type: choice
+        options:
+          - ent
+          - tst
+          - prd
+
+permissions:
+  contents: read
+
+# Serialize per-instance deploys so a push and a dispatch can't race the same
+# docroot.
+concurrency:
+  group: eth-deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'ent' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Gated until CI has a jump-capable SSH path to *.ethz.ch (see header).
+    if: vars.CI_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    # push → ent; dispatch → chosen env. The GitHub Environment carries the
+    # per-instance secrets/vars and (for prd) required-reviewer protection.
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'ent' }}
+    env:
+      TARGET_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'ent' }}
+      # Non-interactive prd confirmation — the Environment's required reviewers
+      # are the real gate in CI, not the script's terminal prompt.
+      HYRR_ASSUME_YES: "1"
+      # Per-environment docroot override (skips remote conf/servers detection
+      # when set). Leave the variable unset to auto-detect.
+      HYRR_ETH_DOCROOT: ${{ vars.ETH_DOCROOT }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs data/hi-xs-prod/xs data/endfb-8.1/xs
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: "v0.13.1"
+
+      - name: Load deploy SSH key
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "${{ secrets.ETH_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Pin host keys to avoid TOFU-on-first-deploy; populate this secret
+          # once with: ssh-keyscan hyrrent.ethz.ch hyrrtst.ethz.ch hyrrprd.ethz.ch
+          if [ -n "${{ secrets.ETH_SSH_KNOWN_HOSTS }}" ]; then
+            echo "${{ secrets.ETH_SSH_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/known_hosts
+          fi
+
+      - name: Deploy ${{ env.TARGET_ENV }}
+        run: scripts/deploy-eth.sh "$TARGET_ENV"
+
+      - name: Smoke check
+        run: |
+          case "$TARGET_ENV" in
+            prd) URL="https://hyrr.ethz.ch" ;;
+            *)   URL="https://hyrr${TARGET_ENV}.ethz.ch" ;;
+          esac
+          code=$(curl -4 -sS -m 20 -o /dev/null -w '%{http_code}' "$URL")
+          echo "$URL → HTTP $code"
+          [ "$code" = "200" ] || { echo "smoke failed"; exit 1; }

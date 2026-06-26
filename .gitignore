@@ -241,3 +241,8 @@ rnp-*.png
 
 # Claude Code runtime locks
 .claude/scheduled_tasks.lock
+
+# ETH webhosting provisioning docs / per-instance notes (local only).
+# Deploy *scripts* (scripts/deploy-eth.sh) and CI stay tracked; only these
+# provisioning mails + notes are kept out of git. SSH keys never live here.
+infra/eth-webhosting/
