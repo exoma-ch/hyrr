@@ -175,21 +175,27 @@ case "$CMD" in
     resolve_docroot "$ENV"
     ;;
   ladder)
+    # ent + tst are non-prod: mark noindex so only prod (hyrr.ethz.ch) is
+    # indexed. canonical still points at prod via the default VITE_SITE_URL.
+    export VITE_ROBOTS="noindex, nofollow"
     do_build
     do_deploy ent
     do_deploy tst
     echo
-    echo "=== ent + tst deployed from one build. PRD HELD. ==="
-    echo "=== After your OK, elevate the SAME artifact:  just elevate  ==="
+    echo "=== ent + tst deployed from one build (noindex). PRD HELD. ==="
+    echo "=== After your OK, lift to prod (rebuilt indexable):  just elevate  ==="
     ;;
   ent | tst)
     validate_env "$CMD"
+    export VITE_ROBOTS="noindex, nofollow"
     do_build
     do_deploy "$CMD"
     ;;
   prd)
+    # Prod is the canonical, indexable origin — no VITE_ROBOTS override. Always
+    # builds fresh so it can't inherit a non-prod build's noindex meta.
     confirm_prd
-    do_build
+    HYRR_SKIP_BUILD="" do_build
     do_deploy prd
     ;;
   *)

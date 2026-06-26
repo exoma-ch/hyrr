@@ -78,10 +78,11 @@ deploy-eth-probe env="ent":
 deploy-eth-ladder:
     scripts/deploy-eth.sh ladder
 
-# Elevate the SAME artifact verified on tst → PRODUCTION (https://hyrr.ethz.ch).
+# Lift to PRODUCTION (https://hyrr.ethz.ch) — rebuilds indexable (noindex only
+# applies to ent/tst), confirms, then deploys. Same source as the tst build.
 [group('deploy')]
 elevate:
-    HYRR_SKIP_BUILD=1 scripts/deploy-eth.sh prd
+    scripts/deploy-eth.sh prd
 
 # Run frontend unit tests
 [group('test')]
