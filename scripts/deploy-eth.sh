@@ -20,21 +20,39 @@
 # .github/workflows/deploy-eth.yml.
 #
 # Env knobs:
-#   HYRR_ETH_DOCROOT   override remote docroot (skip conf/servers detection)
-#   HYRR_SKIP_BUILD=1  deploy the existing frontend/dist as-is (promote the
-#                      exact artifact verified on the previous rung)
-#   HYRR_ASSUME_YES=1  skip the prd confirmation prompt (for non-interactive CI)
+#   HYRR_ETH_DOCROOT     override remote docroot (skip conf/servers detection)
+#   HYRR_SKIP_BUILD=1    deploy the existing frontend/dist as-is (promote the
+#                        exact artifact verified on the previous rung)
+#   HYRR_ASSUME_YES=1    skip the prd confirmation prompt (for non-interactive CI)
+#   HYRR_ETH_SSH_PREFIX  use ssh_config aliases "<prefix><env>" instead of
+#                        connecting directly. ETH SSH (:22) is reachable only
+#                        from the ETH network, so off-network hosts (vm-dev, CI)
+#                        set HYRR_ETH_SSH_PREFIX=ethz-hyrr to route through the
+#                        heimdall ProxyJump configured in ~/.ssh/config. A host
+#                        already on the ETH VPN can leave it unset (direct).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-SSH_OPTS=(-o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new)
+SSH_OPTS=(-o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new)
 
 # ── env → host / user / canonical URL ──────────────────────────────
 env_host() { echo "hyrr${1}.ethz.ch"; }
 env_user() { echo "w3_hyrr${1}"; }
 env_url()  { case "$1" in prd) echo "https://hyrr.ethz.ch" ;; *) echo "https://hyrr${1}.ethz.ch" ;; esac; }
+
+# SSH destination for an env. With HYRR_ETH_SSH_PREFIX set (e.g. "ethz-hyrr"),
+# use the matching ssh_config alias — it supplies user, hostname, key and any
+# ProxyJump (the ETH heimdall jump). Otherwise connect directly, which works
+# from a host already on the ETH network / VPN.
+ssh_target() { # ssh_target <env>
+  if [ -n "${HYRR_ETH_SSH_PREFIX:-}" ]; then
+    echo "${HYRR_ETH_SSH_PREFIX}${1}"
+  else
+    echo "$(env_user "$1")@$(env_host "$1")"
+  fi
+}
 
 validate_env() {
   case "$1" in
@@ -47,7 +65,7 @@ remote() { # remote <env> <cmd...>
   local env="$1"; shift
   # The command is intentionally sent verbatim for remote-side expansion.
   # shellcheck disable=SC2029
-  ssh "${SSH_OPTS[@]}" "$(env_user "$env")@$(env_host "$env")" "$@"
+  ssh "${SSH_OPTS[@]}" "$(ssh_target "$env")" "$@"
 }
 
 # Resolve the document root remotely — authoritative, never guessed locally.
@@ -112,8 +130,8 @@ do_build() {
 
 # ── deploy ─────────────────────────────────────────────────────────
 do_deploy() { # do_deploy <env>
-  local env="$1" user host url docroot
-  user="$(env_user "$env")"; host="$(env_host "$env")"; url="$(env_url "$env")"
+  local env="$1" host url docroot
+  host="$(env_host "$env")"; url="$(env_url "$env")"
 
   echo "=== Resolving docroot on ${host} ==="
   docroot="$(resolve_docroot "$env")"
@@ -124,12 +142,13 @@ do_deploy() { # do_deploy <env>
   fi
   echo "    docroot = ${docroot}"
 
-  echo "=== Rsync frontend/dist → ${user}@${host}:${docroot} ==="
+  local target; target="$(ssh_target "$env")"
+  echo "=== Rsync frontend/dist → ${target}:${docroot} ==="
   # --delete keeps the docroot a clean mirror of dist (like the gh-pages
   # clean:true). Preserve ACME challenges so cert renewal isn't disturbed.
-  rsync -azh --delete --delete-excluded --exclude '.well-known/' \
+  rsync -rlptzh --delete --delete-excluded --exclude '.well-known/' \
     -e "ssh ${SSH_OPTS[*]}" \
-    frontend/dist/ "${user}@${host}:${docroot}/"
+    frontend/dist/ "${target}:${docroot}/"
 
   echo "=== Deployed ${env} → ${url} ==="
 }
