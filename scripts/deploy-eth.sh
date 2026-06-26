@@ -134,6 +134,8 @@ do_build() {
   if [ "${HYRR_SKIP_BUILD:-}" = "1" ]; then
     [ -d frontend/dist ] || { echo "ERROR: HYRR_SKIP_BUILD=1 but frontend/dist is missing — build first" >&2; exit 4; }
     echo "=== Reusing existing frontend/dist (HYRR_SKIP_BUILD=1) ==="
+    # Still refresh the gate so a whitelist-only edit applies without a rebuild.
+    write_gate frontend/dist
     return
   fi
   echo "=== 1/4 Building WASM compute engine ==="
