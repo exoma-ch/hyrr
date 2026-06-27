@@ -25,6 +25,11 @@ jobs:
   redirect:
     runs-on: ubuntu-latest
     steps:
+      # Required: the Pages deploy action initializes git from the workspace.
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+
       - name: Build redirect site
         run: |
           mkdir -p site/tst
