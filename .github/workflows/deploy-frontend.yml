@@ -1,93 +1,69 @@
-name: Deploy frontend (staging slot)
+name: Deploy GitHub Pages redirect → hyrr.ethz.ch
 
-# Every push to main lands in /hyrr/tst/ — never directly to /hyrr/.
-# Promotion to prod is gated behind the staging smoke (deploy-staging-smoke.yml)
-# and explicit dispatch of promote-to-prod.yml. This means broken main pushes
-# can't land on the user-facing URL anymore — they fail the smoke and the
-# previous prod stays live.
+# HYRR's app + license-restricted nuclear data now live ONLY on the gated ETH
+# instances (https://hyrr.ethz.ch, SWITCH AAI). GitHub Pages no longer serves
+# the app — it publishes a tiny redirect so there is ONE site to maintain and
+# no licensed data is exposed publicly.
+#
+# The previous app-build pipeline is preserved in .github/workflows-archive/
+# (deploy-frontend.yml.orig, promote-to-prod.yml, deploy-staging-smoke.yml).
+#
+# Manual trigger only: run this AFTER prod is live (just elevate) so the
+# redirect doesn't point at the placeholder. First run purges the old public
+# app/data from gh-pages (clean: true).
 on:
-  push:
-    branches: [main]
-    # WASM is built from wasm/** linking core/**, then bundled into
-    # frontend/dist — so a core or wasm change is functionally a
-    # frontend change for the deployed /tst bundle. Without these
-    # paths a wasm-only PR (e.g. depth-grid bump) merges to main but
-    # never reaches staging. Cargo.lock is here because dependency
-    # bumps can affect WASM size/behavior even without source changes.
-    paths:
-      - "frontend/**"
-      - "wasm/**"
-      - "core/**"
-      - "Cargo.lock"
-      - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch:
 
 permissions:
-  contents: write # needed to push to gh-pages branch
-  pages: read
+  contents: write # push to gh-pages branch
 
-# Serialize against the prod promotion workflow — they both write the same branch.
 concurrency:
   group: gh-pages-branch
   cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
+  redirect:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: false
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-
-      - name: Init nucl-parquet submodule (sparse)
+      - name: Build redirect site
         run: |
-          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
-          cd nucl-parquet
-          git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs data/hi-xs-prod/xs data/endfb-8.1/xs
+          mkdir -p site/tst
+          cat > site/index.html <<'EOF'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>HYRR has moved to hyrr.ethz.ch</title>
+            <link rel="canonical" href="https://hyrr.ethz.ch/" />
+            <meta http-equiv="refresh" content="0; url=https://hyrr.ethz.ch/" />
+            <!-- Carry any #config=… share hash across to the new domain. -->
+            <script>location.replace("https://hyrr.ethz.ch/" + location.hash);</script>
+            <style>
+              body { font-family: system-ui, sans-serif; max-width: 34rem; margin: 14vh auto; padding: 0 1.2rem; line-height: 1.55; color: #0f1117; }
+              a { color: #2563eb; }
+            </style>
+          </head>
+          <body>
+            <h1>HYRR has moved</h1>
+            <p>HYRR now lives at <a href="https://hyrr.ethz.ch/">hyrr.ethz.ch</a>
+               (ETH&nbsp;/ SWITCH&nbsp;AAI login required). Redirecting…</p>
+          </body>
+          </html>
+          EOF
+          # Same redirect for deep links, old /tst/ staging links, and 404s.
+          cp site/index.html site/404.html
+          cp site/index.html site/tst/index.html
 
-      - name: Copy nuclear data for frontend
-        run: |
-          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: "v0.13.1"
-
-      - name: Build WASM compute engine
-        run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Fix rollup native bindings
-        working-directory: frontend
-        run: npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
-
-      - name: Build frontend (base=/hyrr/tst/)
-        working-directory: frontend
-        env:
-          VITE_BASE_PATH: /hyrr/tst/
-        run: npm run build
-
-      - name: Deploy to gh-pages /tst/
+      - name: Deploy redirect to gh-pages
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           branch: gh-pages
-          folder: frontend/dist
-          target-folder: tst
-          # `clean` removes files inside `tst/` that aren't in `frontend/dist`.
-          # It doesn't touch sibling folders like `/` (prod) or `/preview/*/`.
+          folder: site
+          target-folder: .
+          # Purge the previously-published app + nuclear data from the public
+          # site (license). Keep PR preview slots if any exist.
           clean: true
-          # Record the source SHA so promote-to-prod can reproduce this build.
-          commit-message: "deploy(staging): tst/ from ${{ github.sha }}"
+          clean-exclude: |
+            preview/**
+          commit-message: "deploy(gh-pages): redirect → hyrr.ethz.ch (single maintained site)"

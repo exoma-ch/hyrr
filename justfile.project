@@ -59,6 +59,31 @@ data:
 deploy-tst:
     scripts/deploy-staging-manual.sh
 
+# ── ETH webhosting (hyrr.ethz.ch) — promotion ladder: ent → tst → prd ──────────
+# These build + rsync the frontend over SSH and MUST run from a host with ETH
+# SSH reachability (your Mac on VPN/eduroam) — not vm-dev or GitHub runners.
+
+# Build + deploy to one ETH instance (ent | tst | prd). prd confirms first.
+[group('deploy')]
+deploy-eth env:
+    scripts/deploy-eth.sh {{env}}
+
+# Read-only: dump an instance's remote $HOME + conf/servers + resolved docroot.
+[group('deploy')]
+deploy-eth-probe env="ent":
+    scripts/deploy-eth.sh probe {{env}}
+
+# First-deploy ladder: build once → ent → tst (prd HELD for explicit OK).
+[group('deploy')]
+deploy-eth-ladder:
+    scripts/deploy-eth.sh ladder
+
+# Lift to PRODUCTION (https://hyrr.ethz.ch) — rebuilds indexable (noindex only
+# applies to ent/tst), confirms, then deploys. Same source as the tst build.
+[group('deploy')]
+elevate:
+    scripts/deploy-eth.sh prd
+
 # Run frontend unit tests
 [group('test')]
 test-frontend:

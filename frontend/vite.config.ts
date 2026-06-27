@@ -46,6 +46,23 @@ function manifestPlugin(): Plugin {
   };
 }
 
+// SEO meta substitution for index.html. The deployed app lives at several
+// origins (GitHub Pages /hyrr/, and the ETH instances hyrr.ethz.ch /
+// hyrrtst.ethz.ch / hyrrent.ethz.ch). To avoid duplicate-content competition,
+// canonical / og / twitter / JSON-LD all point at ONE home (VITE_SITE_URL,
+// default https://hyrr.ethz.ch), and non-prod deploys pass VITE_ROBOTS to
+// mark themselves noindex. Defaults keep prod + gh-pages indexable.
+function seoMetaPlugin(): Plugin {
+  const siteUrl = (process.env.VITE_SITE_URL ?? "https://hyrr.ethz.ch").replace(/\/$/, "");
+  const robots = process.env.VITE_ROBOTS ?? "index, follow";
+  return {
+    name: "hyrr-seo-meta",
+    transformIndexHtml(html) {
+      return html.replaceAll("%SITE_URL%", siteUrl).replaceAll("%ROBOTS%", robots);
+    },
+  };
+}
+
 export default defineConfig({
   // `svelteTesting()` is a no-op outside `VITEST` — it flips the
   // `resolve.conditions` order (browser ahead of node) so svelte's
@@ -53,7 +70,7 @@ export default defineConfig({
   // afterEach hook. Without it, `render()` blows up with
   // `mount(...) is not available on the server` because Vite would
   // serve svelte's SSR build to tests.
-  plugins: [svelte(), svelteTesting(), manifestPlugin()],
+  plugins: [svelte(), svelteTesting(), manifestPlugin(), seoMetaPlugin()],
   base: resolvedBase,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
