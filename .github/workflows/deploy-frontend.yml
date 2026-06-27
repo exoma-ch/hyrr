@@ -1,17 +1,22 @@
-name: Deploy GitHub Pages redirect → hyrr.ethz.ch
+name: Deploy GitHub Pages landing → hyrr
 
-# HYRR's app + license-restricted nuclear data now live ONLY on the gated ETH
-# instances (https://hyrr.ethz.ch, SWITCH AAI). GitHub Pages no longer serves
-# the app — it publishes a tiny redirect so there is ONE site to maintain and
-# no licensed data is exposed publicly.
+# HYRR's app + license-restricted nuclear data live ONLY on the gated ETH
+# instances (https://hyrrprd.ethz.ch, SWITCH AAI). GitHub Pages serves a
+# PUBLIC landing page (landing/) that describes HYRR and routes people to the
+# gated app or to a "request access" form — so there is one public face and no
+# licensed data is exposed publicly.
 #
 # The previous app-build pipeline is preserved in .github/workflows-archive/
 # (deploy-frontend.yml.orig, promote-to-prod.yml, deploy-staging-smoke.yml).
 #
-# Manual trigger only: run this AFTER prod is live (just elevate) so the
-# redirect doesn't point at the placeholder. First run purges the old public
-# app/data from gh-pages (clean: true).
+# Manual trigger. First run purges the old public app/data from gh-pages
+# (clean: true).
 on:
+  push:
+    branches: [main]
+    paths:
+      - "landing/**"
+      - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch:
 
 permissions:
@@ -22,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  redirect:
+  landing:
     runs-on: ubuntu-latest
     steps:
       # Required: the Pages deploy action initializes git from the workspace.
@@ -30,37 +35,17 @@ jobs:
         with:
           submodules: false
 
-      - name: Build redirect site
+      - name: Assemble landing site
         run: |
-          mkdir -p site/tst
-          cat > site/index.html <<'EOF'
-          <!doctype html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <title>HYRR has moved to hyrr.ethz.ch</title>
-            <link rel="canonical" href="https://hyrr.ethz.ch/" />
-            <meta http-equiv="refresh" content="0; url=https://hyrr.ethz.ch/" />
-            <!-- Carry any #config=… share hash across to the new domain. -->
-            <script>location.replace("https://hyrr.ethz.ch/" + location.hash);</script>
-            <style>
-              body { font-family: system-ui, sans-serif; max-width: 34rem; margin: 14vh auto; padding: 0 1.2rem; line-height: 1.55; color: #0f1117; }
-              a { color: #2563eb; }
-            </style>
-          </head>
-          <body>
-            <h1>HYRR has moved</h1>
-            <p>HYRR now lives at <a href="https://hyrr.ethz.ch/">hyrr.ethz.ch</a>
-               (ETH&nbsp;/ SWITCH&nbsp;AAI login required). Redirecting…</p>
-          </body>
-          </html>
-          EOF
-          # Same redirect for deep links, old /tst/ staging links, and 404s.
-          cp site/index.html site/404.html
-          cp site/index.html site/tst/index.html
+          mkdir -p site
+          cp landing/index.html site/index.html
+          # Unknown paths (incl. old deep links) land on the landing page.
+          cp landing/index.html site/404.html
+          # Favicon / wordmark icon (best-effort; landing degrades if absent).
+          cp frontend/public/hyrr-icon-192.png site/ 2>/dev/null || true
+          cp frontend/public/favicon.svg site/ 2>/dev/null || true
 
-      - name: Deploy redirect to gh-pages
+      - name: Deploy landing to gh-pages
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           branch: gh-pages
@@ -71,4 +56,4 @@ jobs:
           clean: true
           clean-exclude: |
             preview/**
-          commit-message: "deploy(gh-pages): redirect → hyrr.ethz.ch (single maintained site)"
+          commit-message: "deploy(gh-pages): public landing page for HYRR"
