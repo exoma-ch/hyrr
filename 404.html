@@ -78,6 +78,8 @@
       .msg { font-size: 0.9rem; padding: 0.6rem 0.8rem; border-radius: 7px; margin: 0; }
       .msg.ok { background: rgba(46,160,67,0.15); color: #56d364; }
       .msg.err { background: rgba(248,81,73,0.12); color: #ff7b72; }
+      .privacy { font-size: 0.78rem; color: var(--muted); margin: 0; line-height: 1.5; }
+      .privacy a { color: var(--muted); text-decoration: underline; }
       .submit { background: var(--green); color: #fff; border: 1px solid var(--green-em); justify-self: start; }
       .submit:hover:not(:disabled) { background: var(--green-em); }
       .submit:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -150,6 +152,14 @@
                 <textarea id="f-reason" name="reason" rows="3" required placeholder="Briefly — your use case / project"></textarea>
               </div>
               <div class="cf-turnstile" data-sitekey="0x4AAAAAACqNDO64trTYeLx7" data-theme="dark"></div>
+              <p class="privacy">
+                🔒 Your details are <strong>end-to-end encrypted in your browser</strong>
+                (using <a href="https://age-encryption.org/">age</a>) to the maintainer's
+                key before they are sent — GitHub, the host, and the network only ever see
+                ciphertext; only the HYRR maintainer can decrypt them. They are used solely
+                to review and grant access and are not shared. Contact via the
+                <a href="https://github.com/exoma-ch/hyrr">repository</a>.
+              </p>
               <p id="form-msg" class="msg" style="display:none"></p>
               <button id="submit-btn" class="btn submit" type="submit">Send request</button>
             </form>
@@ -169,6 +179,10 @@
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <script>
       const WORKER_URL = "https://hyrr-issue-worker.lars-gerchow.workers.dev";
+      // age recipient (PUBLIC, encrypt-only) — the maintainer holds the secret key
+      // and decrypts locally. This being public is by design.
+      const AGE_RECIPIENT = "age13lmcjnm6uy8v782y9wxr6llx2lpgq0qg7nhk9kmyr5528qfpwyuqnmrfff";
+      const AGE_MODULE = "https://esm.sh/age-encryption@0.2.4";
       const form = document.getElementById("access-form");
       const btn = document.getElementById("submit-btn");
       const msg = document.getElementById("form-msg");
@@ -196,22 +210,35 @@
           return;
         }
         btn.disabled = true;
-        show("Sending…", true);
-        const body =
-          `**Name:** ${name}\n` +
-          `**Institution:** ${institution}\n` +
-          `**Email:** ${email}\n\n` +
-          `**Use case:**\n${reason}\n\n` +
-          `---\n_Submitted via the hyrr.ethz.ch access-request form._`;
+        show("Encrypting & sending…", true);
         try {
+          // End-to-end encrypt the personal data in the browser to the maintainer's
+          // age key. Only ciphertext leaves the browser — the worker, Cloudflare,
+          // and the (public) GitHub issue never see clear-text personal data.
+          const age = await import(AGE_MODULE);
+          const enc = new age.Encrypter();
+          enc.addRecipient(AGE_RECIPIENT);
+          const payload = JSON.stringify(
+            { name, email, institution, reason, submitted: new Date().toISOString(), ua: navigator.userAgent },
+            null, 2,
+          );
+          const armored = age.armor.encode(await enc.encrypt(payload)).trimEnd();
+          const date = new Date().toISOString().slice(0, 10);
+          const issueBody =
+            "Access request — **end-to-end encrypted** (age). No personal data in clear text.\n\n" +
+            "Decrypt locally: `age -d -i hyrr-access-key.txt` (or `sops -d`).\n\n" +
+            "```\n" + armored + "\n```\n";
+
           const res = await fetch(WORKER_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              title: `Access request: ${name} (${institution})`,
-              body,
+              title: `Access request (encrypted) — ${date}`,
+              body: issueBody,
               labels: ["access-request"],
-              email,
+              // Placeholder: the worker requires a non-empty email but does not store
+              // it. The real email is inside the encrypted blob (E2E).
+              email: "e2e-encrypted@hyrr.invalid",
               "cf-turnstile-response": token,
             }),
           });
@@ -219,13 +246,14 @@
           if (res.ok) {
             show(`Request received (#${data.number ?? "?"}). You'll be contacted by email. Thank you!`, true);
             form.reset();
+            if (window.turnstile) window.turnstile.reset();
           } else {
             show(data.error || "Could not submit — please email the maintainer instead.", false);
             if (window.turnstile) window.turnstile.reset();
             btn.disabled = false;
           }
-        } catch {
-          show("Network error — please try again or email the maintainer.", false);
+        } catch (err) {
+          show("Could not encrypt/submit — please email the maintainer instead.", false);
           if (window.turnstile) window.turnstile.reset();
           btn.disabled = false;
         }
