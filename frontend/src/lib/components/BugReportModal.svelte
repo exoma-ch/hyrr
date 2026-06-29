@@ -472,6 +472,13 @@
         {/if}
       </p>
 
+      <p class="hint disclosure">
+        ⚠ This creates a <strong>public</strong> GitHub issue — the title, description,
+        screenshot and attached state are visible to everyone. Please don't include
+        passwords or sensitive personal data. Your email (if given) is used only for
+        follow-up and is <strong>not</strong> published.
+      </p>
+
       {#if resultMsg}
         <p class="result-msg" class:success={resultMsg.ok} class:error={!resultMsg.ok}>
           {resultMsg.text}
@@ -752,6 +759,14 @@
     font-size: 0.7rem;
     color: var(--c-text-subtle);
     margin: 0;
+  }
+
+  .hint.disclosure {
+    color: var(--c-text-muted);
+    padding: 0.3rem 0.5rem;
+    background: var(--c-gold-tint-faint);
+    border-left: 2px solid var(--c-gold);
+    border-radius: 4px;
   }
 
   .result-msg {

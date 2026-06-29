@@ -62,9 +62,10 @@ export function buildBugReportBody(input: BugReportBodyInput): string {
   sections.push(input.reportType === "bug" ? `## Bug Report` : `## Feature Request`);
   const titleLine = (input.title ?? "").trim() || input.description.slice(0, 70);
   if (titleLine) sections.push(`## ${titleLine}`);
-  sections.push(
-    `**Reporter:** ${input.name || "Anonymous"}${input.email ? ` (${input.email})` : ""}`,
-  );
+  // Reporter email is sent to the worker (for follow-up) but intentionally NOT
+  // published here — the issue is public, and a public email is needless
+  // personal-data exposure. Only the optional, self-chosen name is shown.
+  sections.push(`**Reporter:** ${input.name || "Anonymous"}`);
   sections.push(`## Description\n\n${input.description}`);
 
   if (input.screenshotUrl) {
