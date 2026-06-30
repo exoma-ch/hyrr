@@ -179,6 +179,15 @@ test.describe("current profile — Sc-44 preset", () => {
   test.setTimeout(120_000);
 
   test("Sc-44 preset shows sparkline (no irradiation input) + produces results", async ({ page }) => {
+    // This test loads the Ca-44/Sc-44 preset only via the "I'm feeling lucky"
+    // tab (.lucky-tab), which HeaderBar hides at `@media (max-width: 640px)`.
+    // On the narrow mobile projects (iphone-se 375, iphone-14 390) the control
+    // is display:none, so the click never becomes actionable and the test hangs
+    // until the 120 s timeout. ipad (810) keeps it visible and passes. Skip
+    // where the entry point doesn't exist rather than time out on a hidden tab.
+    const vp = page.viewportSize();
+    test.skip(!!vp && vp.width <= 640, "feeling-lucky preset tab is hidden below 640px (mobile)");
+
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
 
