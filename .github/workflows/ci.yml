@@ -234,10 +234,14 @@ jobs:
             exit 1
           fi
 
-      # All frontend-building workflows must use the SSoT copy script.
+      # All workflows that build the app WITH nuclear data must use the SSoT
+      # copy script. Post ETH-deploy migration: deploy-eth.yml is the gated
+      # data-bearing prod deploy; deploy-frontend.yml now ships only the public
+      # landing page (no licensed data, so no copy); promote-to-prod.yml is
+      # archived (.github/workflows-archive/).
       - name: Assert workflows use copy-frontend-data.sh
         run: |
-          for wf in tauri-build deploy-frontend promote-to-prod e2e e2e-tauri; do
+          for wf in tauri-build deploy-eth e2e e2e-tauri; do
             if ! grep -q 'copy-frontend-data.sh' ".github/workflows/${wf}.yml"; then
               echo "::error::${wf}.yml doesn't use scripts/copy-frontend-data.sh — data copy will drift."
               exit 1
