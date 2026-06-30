@@ -163,18 +163,6 @@ test.describe("current profile — generate tab", () => {
 
 // ─── Preset-based profile (Sc-44) ─────────────────────────────────
 
-async function loadSc44ViaFeelingLucky(page: import("@playwright/test").Page) {
-  for (let i = 0; i < 40; i++) {
-    await page.locator(".lucky-tab").click();
-    await page.waitForTimeout(200);
-    const hasCa44 = await page.evaluate(() =>
-      document.querySelector(".layer-stack-h")?.textContent?.includes("Ca-44") ?? false
-    ).catch(() => false);
-    if (hasCa44) return true;
-  }
-  return false;
-}
-
 test.describe("current profile — Sc-44 preset", () => {
   test.setTimeout(120_000);
 
@@ -182,11 +170,14 @@ test.describe("current profile — Sc-44 preset", () => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
 
-    await page.goto(`./${TC99M_HASH}`);
+    // Load the "Sc-44 + beam profile" preset deterministically via the #preset=
+    // deep-link. This works on every viewport — unlike the feeling-lucky tab,
+    // which HeaderBar hides below 640px (so the old "click feeling-lucky up to
+    // 40× until a random Ca-44" approach hung the mobile projects to a 120s
+    // timeout). It also carries the preset's currentProfile, which a #config=
+    // hash can't (it's stripped as too large), so profile mode actually engages.
+    await page.goto(`./#preset=sc44-profile`);
     await waitForSimulation(page);
-
-    const found = await loadSc44ViaFeelingLucky(page);
-    expect(found, "Could not load Sc-44 preset after 40 tries").toBe(true);
 
     // Profile sparkline should be visible
     await expect(page.locator(".profile-sparkline")).toBeVisible({ timeout: 5_000 });
