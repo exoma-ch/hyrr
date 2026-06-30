@@ -23,6 +23,16 @@ export function decodeConfigFromHash(): SimulationConfig | null {
   return decodeConfigFromHashV2();
 }
 
+/** Read a `#preset=<id>` deep-link from the current URL hash, if present.
+ *  Lets any preset be loaded deterministically by URL on every viewport —
+ *  including its currentProfile, which (unlike #config=) presets build locally
+ *  so there's no URL-size limit. Returns null when no preset id is present. */
+export function getPresetIdFromHash(): string | null {
+  const hash = window.location.hash.replace(/^#/, "");
+  const id = new URLSearchParams(hash).get("preset");
+  return id && id.trim() ? id.trim() : null;
+}
+
 /** Strip currentProfile before URL encoding — too large for URL hash. */
 function stripProfile(config: SerializableConfig): SerializableConfig {
   const { currentProfile: _, ...rest } = config;

@@ -1,9 +1,8 @@
 <script lang="ts">
   import { toggleHistory, getHistoryOpen } from "../stores/ui.svelte";
-  import { resetConfig, getSerializableConfig, restoreSerializableConfig, getCurrentProfile } from "../stores/config.svelte";
+  import { resetConfig, getSerializableConfig, restoreSerializableConfig, restoreFromSimConfig, getCurrentProfile } from "../stores/config.svelte";
   import { encodeConfigV2, decodeSerializableFromString } from "../config-url-v2";
   import { PRESETS } from "../presets";
-  import type { SimulationConfig } from "../types";
   import SessionTabs from "./SessionTabs.svelte";
   import HelpModal from "./HelpModal.svelte";
   import { openBugReport } from "../stores/bugreport.svelte";
@@ -61,21 +60,7 @@
 
   function feelingLucky() {
     const idx = Math.floor(Math.random() * PRESETS.length);
-    loadSimConfig(PRESETS[idx].config);
-  }
-
-  /** SSoT config loader — converts SimulationConfig to SerializableConfig
-   *  and routes through restoreSerializableConfig. One path for all loads. */
-  function loadSimConfig(c: SimulationConfig) {
-    restoreSerializableConfig({
-      beam: c.beam,
-      items: c.layers,
-      irradiation_s: c.irradiation_s,
-      cooling_s: c.cooling_s,
-      currentProfile: c.currentProfile
-        ? { timesS: Array.from(c.currentProfile.timesS), currentsMA: Array.from(c.currentProfile.currentsMA) }
-        : undefined,
-    });
+    restoreFromSimConfig(PRESETS[idx].config);
   }
 
   function saveSession(includeResult: boolean) {

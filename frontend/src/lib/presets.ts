@@ -154,3 +154,8 @@ export const PRESETS: Preset[] = [
     },
   },
 ];
+
+/** Look up a preset by its stable id (used by the #preset= deep-link). */
+export function findPreset(id: string): Preset | undefined {
+  return PRESETS.find((p) => p.id === id);
+}
