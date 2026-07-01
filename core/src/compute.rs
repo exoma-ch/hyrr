@@ -7,6 +7,7 @@ use crate::chains::{discover_chains, solve_chain, split_components};
 use crate::constants::{ACTIVITY_CUTOFF_FRACTION, AVOGADRO, LN2, MAX_CHAIN_SIZE};
 use crate::db::DatabaseProtocol;
 use crate::interpolation::{linspace, trapezoid};
+use crate::projectile::Projectile;
 use crate::production::{
     compute_depth_production_rate, compute_production_rate, generate_depth_profile,
     saturation_yield,
@@ -237,6 +238,9 @@ fn compute_layer(
     let mut isotope_results: HashMap<String, IsotopeResult> = HashMap::new();
     let mut depth_production_rates: HashMap<String, Vec<f64>> = HashMap::new();
 
+    // Resolved once — Z/A of the incident projectile for reaction-route balance.
+    let proj_za = Projectile::from_type(projectile);
+
     for (elem, atom_frac) in &layer.elements {
         for (&a_target, &isotope_abundance) in &elem.isotopes {
             let weight = atom_frac * isotope_abundance;
@@ -270,6 +274,13 @@ fn compute_layer(
                 // Normalize "g" → "" — ground state has no suffix (#315 SSoT)
                 let state_suffix = if xs.state == "g" { "" } else { &xs.state };
                 let name = format!("{}-{}{}", symbol, xs.residual_a, state_suffix);
+
+                // Production-route provenance, e.g. "⁹⁸Mo(p,n)" (#444). Emitted
+                // nucleons from mass/charge balance of compound → residual.
+                let target_symbol = db.get_element_symbol(elem.z);
+                let dz = (elem.z + proj_za.z) as i32 - xs.residual_z as i32;
+                let da = (a_target + proj_za.a) as i32 - xs.residual_a as i32;
+                let route = reaction_route(&target_symbol, a_target, projectile.symbol(), dz, da);
 
                 // Depth-resolved rate for this channel. Same integrand as
                 // compute_production_rate in different coordinates (dE → dx); verified
@@ -309,6 +320,13 @@ fn compute_layer(
                     existing.activity_bq = combined_bateman.activity.last().copied().unwrap_or(0.0);
                     existing.time_grid_s = combined_bateman.time_grid;
                     existing.activity_vs_time_bq = combined_bateman.activity;
+                    // A product can come from several routes (different targets /
+                    // channels) — accumulate the distinct ones.
+                    if let Some(r) = &route {
+                        if !existing.reactions.contains(r) {
+                            existing.reactions.push(r.clone());
+                        }
+                    }
                 } else {
                     isotope_results.insert(
                         name.clone(),
@@ -332,7 +350,7 @@ fn compute_layer(
                             activity_ingrowth_bq: 0.0,
                             activity_direct_vs_time_bq: Vec::new(),
                             activity_ingrowth_vs_time_bq: Vec::new(),
-                            reactions: Vec::new(),
+                            reactions: route.iter().cloned().collect(),
                             decay_notations: Vec::new(),
                         },
                     );
@@ -443,6 +461,48 @@ fn format_decay_notation(
     let label = nuc_label(parent_symbol, parent_a, parent_state);
     let mode_label = if mode.is_empty() { "decay" } else { mode };
     format!("{}({})", label, mode_label)
+}
+
+/// Ejectile label for a reaction from mass/charge balance: emitted protons =
+/// ΔZ, emitted neutrons = ΔA − ΔZ (free-nucleon accounting). `γ` for radiative
+/// capture and `α` for the one cluster we name explicitly; everything else is
+/// spelled as `p`/`n` counts (e.g. `2n`, `p2n`). Returns `None` for exotic
+/// balances that can't be rendered as simple p/n(/α) ejectiles (e.g. a residual
+/// heavier/more-charged than the compound — bad data, or a cluster we don't name).
+fn ejectile_notation(dz: i32, da: i32) -> Option<String> {
+    if dz < 0 || da < dz {
+        return None;
+    }
+    let p_out = dz;
+    let n_out = da - dz;
+    if p_out == 0 && n_out == 0 {
+        return Some("γ".to_string());
+    }
+    if p_out == 2 && n_out == 2 {
+        return Some("α".to_string());
+    }
+    let part = |count: i32, sym: &str| match count {
+        0 => String::new(),
+        1 => sym.to_string(),
+        _ => format!("{count}{sym}"),
+    };
+    Some(format!("{}{}", part(p_out, "p"), part(n_out, "n")))
+}
+
+/// Full production-route notation for a channel, e.g. `⁹⁸Mo(p,n)`. The residual
+/// is the row's own isotope, so it isn't repeated. Provenance for the reaction
+/// table (#444) — pairs with `decay_notations` (the ingrowth route). Built here
+/// per-channel (not in the per-depth loop), so a plain `String` is cheap; if this
+/// ever moves into a hot per-depth path, switch to an integer key + format later.
+fn reaction_route(
+    target_symbol: &str,
+    target_a: u32,
+    projectile_symbol: &str,
+    dz: i32,
+    da: i32,
+) -> Option<String> {
+    ejectile_notation(dz, da)
+        .map(|ej| format!("{}({},{})", nuc_label(target_symbol, target_a, ""), projectile_symbol, ej))
 }
 
 fn apply_chain_solver_by_component(
@@ -871,6 +931,49 @@ mod tests {
     use super::*;
     use crate::db::InMemoryDataStore;
     use std::collections::HashMap;
+
+    // ── Reaction-route provenance (#444) ─────────────────────────────────
+
+    #[test]
+    fn ejectile_notation_covers_the_common_channels() {
+        assert_eq!(ejectile_notation(0, 0).as_deref(), Some("γ")); // radiative capture
+        assert_eq!(ejectile_notation(0, 1).as_deref(), Some("n")); // (x,n)
+        assert_eq!(ejectile_notation(0, 2).as_deref(), Some("2n"));
+        assert_eq!(ejectile_notation(0, 3).as_deref(), Some("3n"));
+        assert_eq!(ejectile_notation(1, 1).as_deref(), Some("p")); // (x,p)
+        assert_eq!(ejectile_notation(1, 2).as_deref(), Some("pn")); // (x,pn)
+        assert_eq!(ejectile_notation(2, 2).as_deref(), Some("2p"));
+        assert_eq!(ejectile_notation(2, 4).as_deref(), Some("α")); // named cluster
+    }
+
+    #[test]
+    fn ejectile_notation_rejects_exotic_balances() {
+        assert_eq!(ejectile_notation(-1, 0), None); // negative protons out
+        assert_eq!(ejectile_notation(2, 1), None); // neutrons out < 0
+    }
+
+    #[test]
+    fn reaction_route_matches_spectroscopy_notation() {
+        // p + ⁹⁸Mo → ⁹⁸Tc: compound (43,99) → residual (43,98) ⇒ (p,n)
+        assert_eq!(
+            reaction_route("Mo", 98, "p", (42 + 1) - 43, (98 + 1) - 98).as_deref(),
+            Some("⁹⁸Mo(p,n)")
+        );
+        // p + ¹⁰⁰Mo → ⁹⁹Tc: (43,101) → (43,99) ⇒ (p,2n)
+        assert_eq!(
+            reaction_route("Mo", 100, "p", (42 + 1) - 43, (100 + 1) - 99).as_deref(),
+            Some("¹⁰⁰Mo(p,2n)")
+        );
+        // p + ⁹⁸Mo → ⁹⁹Tc: (43,99) → (43,99) ⇒ (p,γ)
+        assert_eq!(
+            reaction_route("Mo", 98, "p", 0, 0).as_deref(),
+            Some("⁹⁸Mo(p,γ)")
+        );
+        // α cluster channel
+        assert_eq!(reaction_route("Bi", 209, "p", 2, 4).as_deref(), Some("²⁰⁹Bi(p,α)"));
+        // exotic balance ⇒ no route
+        assert_eq!(reaction_route("Mo", 98, "p", -1, 0), None);
+    }
 
     /// Build a minimal IsotopeResult for clamp tests.
     fn iso_with(

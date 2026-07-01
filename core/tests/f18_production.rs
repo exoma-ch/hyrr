@@ -105,5 +105,23 @@ mod tests {
             "F-18 must be produced from O-18(p,n)F-18. Isotopes: {:?}",
             l2.isotope_results.keys().collect::<Vec<_>>()
         );
+
+        // Provenance (#444 / ADR-0003 Phase 0): the F-18 row must carry its
+        // production route, and the dominant channel is ¹⁸O(p,n). This pins the
+        // full compute path (not just the notation helper) — the field was
+        // silently empty before Phase 0, so the frontend reaction filter never lit.
+        let f18 = l2
+            .isotope_results
+            .get("F-18")
+            .expect("F-18 isotope result present");
+        assert!(
+            !f18.reactions.is_empty(),
+            "F-18 must carry a production route; reactions was empty"
+        );
+        assert!(
+            f18.reactions.iter().any(|r| r.contains("¹⁸O(p,n)")),
+            "F-18 route should include ¹⁸O(p,n); got {:?}",
+            f18.reactions
+        );
     }
 }
