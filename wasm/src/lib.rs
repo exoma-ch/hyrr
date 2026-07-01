@@ -8,7 +8,9 @@ use std::collections::HashMap;
 
 mod trace;
 
-use hyrr_core::compute::{compute_neutron_stack, compute_stack};
+use hyrr_core::compute::{
+    compute_neutron_stack, compute_stack, compute_stack_with_secondary_neutrons,
+};
 use hyrr_core::db::{DatabaseProtocol, InMemoryDataStore};
 use hyrr_core::formula::parse_formula;
 use hyrr_core::materials::resolve_material;
@@ -237,8 +239,12 @@ impl WasmDataStore {
             current_profile,
         };
 
-        let result =
-            compute_stack(&self.inner, &mut stack, true).map_err(stopping_error_to_jsvalue)?;
+        let result = if config.secondary_neutron {
+            compute_stack_with_secondary_neutrons(&self.inner, &mut stack, true)
+        } else {
+            compute_stack(&self.inner, &mut stack, true)
+        }
+        .map_err(stopping_error_to_jsvalue)?;
         let sim_result = convert_stack_result(config_json, &result);
         serde_json::to_string(&sim_result).map_err(|e| JsValue::from_str(&e.to_string()))
     }
@@ -662,6 +668,10 @@ struct SimulationConfig {
     /// Time-varying beam current (piecewise-constant).
     #[serde(default, alias = "currentProfile")]
     current_profile: Option<CurrentProfileConfig>,
+    /// Model secondary (x,n) neutron activation on this charged run (ADR-0003
+    /// Phase 2). Off by default.
+    #[serde(default, alias = "secondaryNeutron")]
+    secondary_neutron: bool,
 }
 
 #[derive(Debug, Deserialize)]
