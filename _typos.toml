@@ -29,4 +29,5 @@ extend-exclude = [
   "*.ipynb",
   "uv.lock",
   "*.lock",
+  "secrets/*.sops.*",   # age-encrypted blobs — random base64 trips false positives
 ]
