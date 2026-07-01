@@ -7,11 +7,11 @@ use crate::chains::{discover_chains, solve_chain, split_components};
 use crate::constants::{ACTIVITY_CUTOFF_FRACTION, AVOGADRO, LN2, MAX_CHAIN_SIZE};
 use crate::db::DatabaseProtocol;
 use crate::interpolation::{linspace, trapezoid};
-use crate::projectile::Projectile;
 use crate::production::{
     compute_depth_production_rate, compute_production_rate, generate_depth_profile,
     saturation_yield,
 };
+use crate::projectile::Projectile;
 use crate::stopping::{
     compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm, dedx_mev_per_cm_scalar,
     get_stopping_sources, StoppingError,
@@ -501,8 +501,14 @@ fn reaction_route(
     dz: i32,
     da: i32,
 ) -> Option<String> {
-    ejectile_notation(dz, da)
-        .map(|ej| format!("{}({},{})", nuc_label(target_symbol, target_a, ""), projectile_symbol, ej))
+    ejectile_notation(dz, da).map(|ej| {
+        format!(
+            "{}({},{})",
+            nuc_label(target_symbol, target_a, ""),
+            projectile_symbol,
+            ej
+        )
+    })
 }
 
 fn apply_chain_solver_by_component(
@@ -970,7 +976,10 @@ mod tests {
             Some("⁹⁸Mo(p,γ)")
         );
         // α cluster channel
-        assert_eq!(reaction_route("Bi", 209, "p", 2, 4).as_deref(), Some("²⁰⁹Bi(p,α)"));
+        assert_eq!(
+            reaction_route("Bi", 209, "p", 2, 4).as_deref(),
+            Some("²⁰⁹Bi(p,α)")
+        );
         // exotic balance ⇒ no route
         assert_eq!(reaction_route("Mo", 98, "p", -1, 0), None);
     }
