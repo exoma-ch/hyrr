@@ -82,6 +82,9 @@ interface InternalState {
   irradiation_s: number;
   cooling_s: number;
   currentProfile: CurrentProfile | null;
+  /** Model secondary (x,n) neutron activation on this charged run (ADR-0003
+   *  Phase 2). Off by default. */
+  secondaryNeutron: boolean;
 }
 
 /** Default internal state. */
@@ -91,6 +94,7 @@ const DEFAULT_STATE: InternalState = {
   irradiation_s: 86400,
   cooling_s: 86400,
   currentProfile: null,
+  secondaryNeutron: false,
 };
 
 // ─── Reactive state ─────────────────────────────────────────────────
@@ -254,7 +258,19 @@ export function getConfig(): SimulationConfig {
     irradiation_s: getEffectiveIrradiationS(),
     cooling_s: state.cooling_s,
     currentProfile: state.currentProfile,
+    secondary_neutron: state.secondaryNeutron,
   };
+}
+
+/** Whether secondary (x,n) neutron activation is modelled (ADR-0003 Phase 2). */
+export function getSecondaryNeutron(): boolean {
+  return state.secondaryNeutron;
+}
+
+export function setSecondaryNeutron(on: boolean): void {
+  mutate(() => {
+    state.secondaryNeutron = on;
+  });
 }
 
 export function getBeam(): BeamConfig {
@@ -275,6 +291,8 @@ export interface SerializableConfig {
   irradiation_s: number;
   cooling_s: number;
   currentProfile?: { timesS: number[]; currentsMA: number[] } | null;
+  /** ADR-0003 Phase 2 secondary-neutron toggle (omitted when false). */
+  secondaryNeutron?: boolean;
 }
 
 /** Get the internal state in a JSON-serializable form (preserves groups). */
@@ -291,6 +309,8 @@ export function getSerializableConfig(): SerializableConfig {
     currentProfile: profile
       ? { timesS: Array.from(profile.timesS), currentsMA: Array.from(profile.currentsMA) }
       : null,
+    // Omit when false to keep shared URLs stable for charged-only runs.
+    ...(state.secondaryNeutron ? { secondaryNeutron: true } : {}),
   }));
 }
 
@@ -316,6 +336,7 @@ export function restoreSerializableConfig(c: SerializableConfig): void {
       currentProfile: profile
         ? { timesS: new Float64Array(profile.timesS), currentsMA: new Float64Array(profile.currentsMA) }
         : null,
+      secondaryNeutron: c.secondaryNeutron ?? false,
     };
   });
 }
@@ -330,6 +351,7 @@ export function setConfig(c: SimulationConfig): void {
       irradiation_s: c.irradiation_s,
       cooling_s: c.cooling_s,
       currentProfile: c.currentProfile ?? null,
+      secondaryNeutron: c.secondary_neutron ?? false,
     };
   });
 }

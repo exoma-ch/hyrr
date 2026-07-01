@@ -411,34 +411,45 @@ async function ensureWasmCrossSections(
 ): Promise<void> {
   const { getRequiredElements } = await import("@hyrr/compute");
   const elements = getRequiredElements(config);
-  const projectile = config.beam.projectile;
+
+  // The charged projectile, plus neutrons when secondary activation is modelled
+  // (ADR-0003 Phase 2). Neutron xs are best-effort: if the data path isn't
+  // available the fold simply yields no secondary products (no crash).
+  const projectiles = [config.beam.projectile];
+  if (config.secondary_neutron) projectiles.push("n");
 
   // Use the TS DataStore (created during WASM init) to load XS, then transfer
   if (!wasmTsDataStore) throw new Error("WASM TS DataStore not initialized");
   const ds = wasmTsDataStore;
-  await ds.ensureMultipleCrossSections(projectile, elements);
 
-  for (const sym of elements) {
-    const cacheKey = `${projectile}_${sym}`;
-    // Idempotent: skip elements already transferred into the current store.
-    // Cleared on rebuild so a fresh store reloads them (#344).
-    if (loadedXsKeys.has(cacheKey)) continue;
-    if (ds.xsCache?.has(cacheKey)) {
-      const rawRows = ds.xsCache.get(cacheKey);
-      if (!rawRows || rawRows.length === 0) continue;
+  for (const projectile of projectiles) {
+    try {
+      await ds.ensureMultipleCrossSections(projectile, elements);
+    } catch {
+      continue; // no data for this projectile (e.g. neutron sublibrary absent)
+    }
+    for (const sym of elements) {
+      const cacheKey = `${projectile}_${sym}`;
+      // Idempotent: skip elements already transferred into the current store.
+      // Cleared on rebuild so a fresh store reloads them (#344).
+      if (loadedXsKeys.has(cacheKey)) continue;
+      if (ds.xsCache?.has(cacheKey)) {
+        const rawRows = ds.xsCache.get(cacheKey);
+        if (!rawRows || rawRows.length === 0) continue;
 
-      // Raw parquet rows have: target_A, residual_Z, residual_A, energy_MeV, xs_mb
-      // hi-xs-prod files omit the `state` column — fall back to ""
-      const rows: any[] = rawRows.map((r: any) => ({
-        target_A: Number(r.target_A),
-        residual_Z: Number(r.residual_Z),
-        residual_A: Number(r.residual_A),
-        state: r.state ?? "",
-        energy_MeV: Number(r.energy_MeV),
-        xs_mb: Number(r.xs_mb),
-      }));
-      wasmStore.loadCrossSections(projectile, sym, JSON.stringify(rows));
-      loadedXsKeys.add(cacheKey);
+        // Raw parquet rows have: target_A, residual_Z, residual_A, energy_MeV, xs_mb
+        // hi-xs-prod files omit the `state` column — fall back to ""
+        const rows: any[] = rawRows.map((r: any) => ({
+          target_A: Number(r.target_A),
+          residual_Z: Number(r.residual_Z),
+          residual_A: Number(r.residual_A),
+          state: r.state ?? "",
+          energy_MeV: Number(r.energy_MeV),
+          xs_mb: Number(r.xs_mb),
+        }));
+        wasmStore.loadCrossSections(projectile, sym, JSON.stringify(rows));
+        loadedXsKeys.add(cacheKey);
+      }
     }
   }
 }

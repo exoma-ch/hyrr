@@ -59,6 +59,9 @@ export interface SimulationConfig {
   irradiation_s: number;
   cooling_s: number;
   currentProfile?: CurrentProfile | null;
+  /** Model secondary (x,n) neutron activation on this charged run (ADR-0003
+   *  Phase 2). Serialised as-is; the Rust side reads `secondary_neutron`. */
+  secondary_neutron?: boolean;
 }
 
 /**

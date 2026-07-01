@@ -10,6 +10,8 @@
     getCurrentProfile,
     setCurrentProfile,
     getEffectiveIrradiationS,
+    getSecondaryNeutron,
+    setSecondaryNeutron,
   } from "../stores/config.svelte";
   import { profileStats as computeProfileStats } from "@hyrr/compute";
   import type { CurrentProfile } from "@hyrr/compute";
@@ -148,6 +150,7 @@
 
   // --- Current profile ---
   let currentProfile = $derived(getCurrentProfile());
+  let secondaryNeutron = $derived(getSecondaryNeutron());
   let profileMode = $derived<"constant" | "profile">(currentProfile ? "profile" : "constant");
   let popupOpen = $state(false);
   let stats = $derived(currentProfile ? computeProfileStats(currentProfile) : null);
@@ -235,6 +238,17 @@
         <span class="feedback err">?</span>
       {/if}
     </div>
+  </div>
+
+  <div class="field secondary-neutron">
+    <label class="sn-toggle" title="Also model neutrons produced by (x,n) reactions activating the target (ADR-0003 Phase 2, first-order estimate)">
+      <input
+        type="checkbox"
+        checked={secondaryNeutron}
+        onchange={(e) => setSecondaryNeutron((e.target as HTMLInputElement).checked)}
+      />
+      <span>Secondary n</span>
+    </label>
   </div>
 
   <div class="sim-controls">
