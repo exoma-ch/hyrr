@@ -246,3 +246,10 @@ rnp-*.png
 # Deploy *scripts* (scripts/deploy-eth.sh) and CI stay tracked; only these
 # provisioning mails + notes are kept out of git. SSH keys never live here.
 infra/eth-webhosting/
+
+# Secrets: only sops-encrypted files may be committed here. Block everything
+# else so a plaintext key/whitelist can't be committed by accident.
+/secrets/*
+!/secrets/*.sops.env
+!/secrets/*.sops.yaml
+!/secrets/*.sops.json
