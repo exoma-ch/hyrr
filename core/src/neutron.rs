@@ -244,21 +244,24 @@ pub fn neutron_channel_rate(
     thickness_cm: f64,
     grid_points: usize,
 ) -> f64 {
+    // Σ_t on a grid — empty table ⇒ zero attenuation (thin-target: depth
+    // factor = thickness). Guards against interpolating an empty series.
+    let sigma_t_on = |grid: &[f64]| -> Vec<f64> {
+        if sigma_t_energies_mev.is_empty() {
+            vec![0.0; grid.len()]
+        } else {
+            interp(grid, sigma_t_energies_mev, sigma_t_macro_per_cm, 0.0, 0.0)
+        }
+    };
     let per_atom = if let FluxModel::Monoenergetic { flux: f, e0_mev } = flux {
         let sigma = interp(&[*e0_mev], xs_energies_mev, xs_mb, 0.0, 0.0)[0] * MILLIBARN_CM2;
-        let sig_t = interp(
-            &[*e0_mev],
-            sigma_t_energies_mev,
-            sigma_t_macro_per_cm,
-            0.0,
-            0.0,
-        )[0];
+        let sig_t = sigma_t_on(&[*e0_mev])[0];
         sigma * f * depth_factor_cm(sig_t, thickness_cm)
     } else {
         let grid = flux.energy_grid(grid_points);
         let sigma = xs_on_grid_cm2(&grid, xs_energies_mev, xs_mb);
         let phi = flux.phi(&grid);
-        let sig_t = interp(&grid, sigma_t_energies_mev, sigma_t_macro_per_cm, 0.0, 0.0);
+        let sig_t = sigma_t_on(&grid);
         let integrand: Vec<f64> = (0..grid.len())
             .map(|i| sigma[i] * phi[i] * depth_factor_cm(sig_t[i], thickness_cm))
             .collect();
