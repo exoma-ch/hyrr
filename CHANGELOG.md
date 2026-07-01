@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0](https://github.com/exoma-ch/hyrr/compare/v0.17.0...v0.18.0) (2026-07-01)
+
+
+### Features
+
+* **core:** reaction-route provenance — Phase 0 of neutron activation (ADR-0003) ([#507](https://github.com/exoma-ch/hyrr/issues/507)) ([23f9eee](https://github.com/exoma-ch/hyrr/commit/23f9eee1073aede45d893ea20744708f08f8b77b))
+* **deploy:** ETH webhosting deploy ladder (ent → tst → prd) ([#489](https://github.com/exoma-ch/hyrr/issues/489)) ([45029e2](https://github.com/exoma-ch/hyrr/commit/45029e25d27f6033132e97909e8c893cbd363fa2))
+* **landing:** E2E-encrypt access requests (age) + privacy notice ([#499](https://github.com/exoma-ch/hyrr/issues/499)) ([b75d8b5](https://github.com/exoma-ch/hyrr/commit/b75d8b57ba39ef6a5eaed753d39dd2849573934a))
+* **landing:** point 'Open HYRR' at hyrr.ethz.ch (canonical via redirect) ([#497](https://github.com/exoma-ch/hyrr/issues/497)) ([24098de](https://github.com/exoma-ch/hyrr/commit/24098dee2e9827a3cf89078b4f3a614bd749009f))
+* **landing:** public landing page with access-request form ([#496](https://github.com/exoma-ch/hyrr/issues/496)) ([a4a85c7](https://github.com/exoma-ch/hyrr/commit/a4a85c799dd07120bcc4bc427a97cceedb80a482))
+* neutron activation — Phase 1 primary source engine (ADR-0003) ([#508](https://github.com/exoma-ch/hyrr/issues/508)) ([813f1c2](https://github.com/exoma-ch/hyrr/commit/813f1c2f28c90a749fb7d62356c0339ea15567bb))
+* neutron activation — Phase 2 + full frontend UI (ADR-0003) ([#509](https://github.com/exoma-ch/hyrr/issues/509)) ([f35c16a](https://github.com/exoma-ch/hyrr/commit/f35c16a9dffc9eea28f17eab9969fca0b51b8251))
+
+
+### Bug Fixes
+
+* **bug-report:** don't publish reporter email + disclose public issue ([#500](https://github.com/exoma-ch/hyrr/issues/500)) ([08ca4cd](https://github.com/exoma-ch/hyrr/commit/08ca4cd398f63f807354296ec717fb0e0cf393db))
+* **ci:** add checkout to gh-pages redirect deploy ([#492](https://github.com/exoma-ch/hyrr/issues/492)) ([7c31125](https://github.com/exoma-ch/hyrr/commit/7c3112510f12856391656aad4df90b69e7a86ba8))
+* **ci:** point copy-frontend-data.sh guard at the post-migration deploy set ([#501](https://github.com/exoma-ch/hyrr/issues/501)) ([ae27a21](https://github.com/exoma-ch/hyrr/commit/ae27a21de1fe5fec71c08c08958d6b54c19e8931))
+* **core:** repair stale call sites so embed-data tests + examples compile ([#483](https://github.com/exoma-ch/hyrr/issues/483)) ([c540472](https://github.com/exoma-ch/hyrr/commit/c54047230c09c7e3f2b91d85ff8997d0340bc2e5)), closes [#274](https://github.com/exoma-ch/hyrr/issues/274)
+* **landing:** neutral institution placeholder (drop PSI example) ([#498](https://github.com/exoma-ch/hyrr/issues/498)) ([11346b6](https://github.com/exoma-ch/hyrr/commit/11346b6c6909d2cd7ea8a5ec3aff2e893cce0845))
+
+
+### Miscellaneous
+
+* **deps:** bump actions/checkout from 6 to 7 ([#453](https://github.com/exoma-ch/hyrr/issues/453)) ([1ffb81f](https://github.com/exoma-ch/hyrr/commit/1ffb81f20b7886886ca137de737e7065aeea50e7))
+* **deps:** bump DeterminateSystems/nix-installer-action from 16 to 22 ([#412](https://github.com/exoma-ch/hyrr/issues/412)) ([32ed868](https://github.com/exoma-ch/hyrr/commit/32ed868461222121a7ced39aa4ab645586913eb1))
+
+
+### Documentation
+
+* **adr:** 0003 neutron activation — accepted design record (ADR-0003) ([#510](https://github.com/exoma-ch/hyrr/issues/510)) ([c5ce111](https://github.com/exoma-ch/hyrr/commit/c5ce1118a38e3059fd643a4d5bc9dd940814da58))
+
+
+### CI
+
+* **deploy:** main→ent auto-deploy via heimdall ProxyJump + sops secrets ([#511](https://github.com/exoma-ch/hyrr/issues/511)) ([e0bb497](https://github.com/exoma-ch/hyrr/commit/e0bb497a1ab19c5793e3f00ad602d839d55bafcc))
+
 ## [0.17.0](https://github.com/exoma-ch/hyrr/compare/v0.16.3...v0.17.0) (2026-06-24)
 
 
