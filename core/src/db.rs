@@ -4,6 +4,11 @@ use std::collections::HashMap;
 
 use crate::types::{CrossSectionData, DecayData};
 
+/// Default neutron reaction/attenuation library (ADR-0003 #3). Charged defaults
+/// like `tendl-2023-iso` ship no neutron sublibrary, so neutron cross-sections
+/// are resolved from here. Behind a constant so it can be made selectable (#505).
+pub(crate) const NEUTRON_LIBRARY: &str = "endfb-8.1";
+
 /// Normalize isomeric state for decay/dose lookups.
 ///
 /// Cross-section data uses `"g"` for ground-state products, but decay
@@ -348,9 +353,18 @@ mod np_store {
                 }
             }
 
+            // Neutron reactions come from the neutron library (ADR-0003 #3:
+            // endfb-8.1 by default, behind this wrapper so it can be made
+            // selectable later — #505); the charged default (e.g. tendl-2023-iso)
+            // ships no neutron sublibrary. Everything else uses the store library.
+            let lib = if projectile == "n" {
+                super::NEUTRON_LIBRARY
+            } else {
+                self.library.as_str()
+            };
             let path = self
                 .data_root
-                .join(&self.library)
+                .join(lib)
                 .join("xs")
                 .join(format!("{}_{}.parquet", projectile, symbol));
 
