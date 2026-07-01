@@ -19,6 +19,7 @@ pub mod math;
 pub mod matrix_exp;
 #[cfg(feature = "mcp")]
 pub mod mcp;
+pub mod neutron;
 pub mod production;
 pub mod projectile;
 pub mod stopping;
