@@ -235,10 +235,22 @@ export async function computeStackBackend(
   traceId = "_wasm",
 ): Promise<SimulationResult> {
   const configJson = prepareConfigJson(config);
+  // Neutron source (ADR-0003 Phase 1): projectile "n" routes to the neutron
+  // engine with the configured flux spectrum instead of the charged path.
+  const isNeutronSource = config.beam.projectile === "n";
+  const fluxJson = JSON.stringify(
+    config.neutronFlux ?? { kind: "fast", flux: 1e13, temp_mev: 1.5 },
+  );
 
   switch (activeBackend) {
     case "tauri": {
       const { invoke } = await import("@tauri-apps/api/core");
+      if (isNeutronSource) {
+        // Desktop neutron-source support is a follow-up (no Tauri command yet).
+        throw new Error(
+          "Neutron-source simulation is available in the browser build; the desktop app support is pending.",
+        );
+      }
       const resultJson: string = await invoke("run_compute_stack", {
         configJson,
       });
@@ -249,7 +261,9 @@ export async function computeStackBackend(
       return runWasmWithRecovery(async () => {
         // Ensure cross-sections are loaded for required elements
         await ensureWasmCrossSections(config);
-        const resultJson = wasmStore.computeStack(configJson);
+        const resultJson = isNeutronSource
+          ? wasmStore.computeNeutronStack(configJson, fluxJson)
+          : wasmStore.computeStack(configJson);
         const result = JSON.parse(resultJson);
         result.timestamp = Date.now();
         return result;

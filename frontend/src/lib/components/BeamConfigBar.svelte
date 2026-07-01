@@ -12,9 +12,11 @@
     getEffectiveIrradiationS,
     getSecondaryNeutron,
     setSecondaryNeutron,
+    getNeutronFlux,
+    setNeutronFlux,
   } from "../stores/config.svelte";
   import { profileStats as computeProfileStats } from "@hyrr/compute";
-  import type { CurrentProfile } from "@hyrr/compute";
+  import type { CurrentProfile, NeutronFluxConfig } from "@hyrr/compute";
   import ProfilePreviewMini from "./current-profile/ProfilePreviewMini.svelte";
   import CurrentProfilePopup from "./CurrentProfilePopup.svelte";
   import {
@@ -35,6 +37,14 @@
     { id: "t", label: "t" },
     { id: "h", label: "\u00b3He" },
     { id: "a", label: "\u03b1" },
+    { id: "n", label: "n" }, // neutron source (ADR-0003 Phase 1)
+  ];
+
+  const NEUTRON_SPECTRA: { id: NeutronFluxConfig["kind"]; label: string }[] = [
+    { id: "fast", label: "Fast (fission)" },
+    { id: "thermal", label: "Thermal" },
+    { id: "epithermal", label: "Epithermal" },
+    { id: "monoenergetic", label: "Mono" },
   ];
 
   // Heavy ions disabled until multi-library XS routing is wired (#266).
@@ -151,6 +161,25 @@
   // --- Current profile ---
   let currentProfile = $derived(getCurrentProfile());
   let secondaryNeutron = $derived(getSecondaryNeutron());
+  let isNeutron = $derived(beam.projectile === "n");
+  let neutronFlux = $derived(getNeutronFlux());
+
+  function onSpectrumChange(e: Event) {
+    const kind = (e.target as HTMLSelectElement).value as NeutronFluxConfig["kind"];
+    // Sensible default shape parameter per spectrum kind.
+    const shapeDefaults: Record<NeutronFluxConfig["kind"], Partial<NeutronFluxConfig>> = {
+      fast: { temp_mev: 1.5 },
+      thermal: { kt_mev: 2.53e-8 },
+      epithermal: { e_min_mev: 1e-6, e_max_mev: 0.1 },
+      monoenergetic: { e0_mev: 14 },
+    };
+    setNeutronFlux({ kind, flux: neutronFlux.flux, ...shapeDefaults[kind] });
+  }
+
+  function onFluxChange(e: Event) {
+    const v = parseFloat((e.target as HTMLInputElement).value);
+    if (!isNaN(v) && v > 0) setNeutronFlux({ ...neutronFlux, flux: v });
+  }
   let profileMode = $derived<"constant" | "profile">(currentProfile ? "profile" : "constant");
   let popupOpen = $state(false);
   let stats = $derived(currentProfile ? computeProfileStats(currentProfile) : null);
@@ -178,31 +207,54 @@
     </select>
   </div>
 
-  <div class="field">
-    <label for="bcb-energy">Energy</label>
-    <div class="input-group">
-      <input id="bcb-energy" type="text" inputmode="decimal" value={displayedEnergy} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onEnergyChange} />
-      <span class="unit">MeV</span>
+  {#if !isNeutron}
+    <div class="field">
+      <label for="bcb-energy">Energy</label>
+      <div class="input-group">
+        <input id="bcb-energy" type="text" inputmode="decimal" value={displayedEnergy} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onEnergyChange} />
+        <span class="unit">MeV</span>
+      </div>
     </div>
-  </div>
+  {:else}
+    <div class="field">
+      <label for="bcb-spectrum">Spectrum</label>
+      <select id="bcb-spectrum" value={neutronFlux.kind} onchange={onSpectrumChange}>
+        {#each NEUTRON_SPECTRA as s}
+          <option value={s.id}>{s.label}</option>
+        {/each}
+      </select>
+    </div>
+  {/if}
 
   <!-- Current + Irradiation group: toggle spans both -->
   <div class="current-irrad-group">
-    <div class="current-toggle">
-      <button class="ct-btn" class:active={profileMode === "constant"} onclick={clearProfile}>Constant</button>
-      <button class="ct-btn" class:active={profileMode === "profile"} onclick={openProfilePopup}>Profile</button>
-    </div>
+    {#if !isNeutron}
+      <div class="current-toggle">
+        <button class="ct-btn" class:active={profileMode === "constant"} onclick={clearProfile}>Constant</button>
+        <button class="ct-btn" class:active={profileMode === "profile"} onclick={openProfilePopup}>Profile</button>
+      </div>
+    {/if}
 
     {#if !currentProfile}
       <!-- Constant mode: current + irradiation side by side -->
       <div class="const-fields">
-        <div class="field">
-          <label for="bcb-current">Current</label>
-          <div class="input-group">
-            <input id="bcb-current" type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
-            <span class="unit">µA</span>
+        {#if !isNeutron}
+          <div class="field">
+            <label for="bcb-current">Current</label>
+            <div class="input-group">
+              <input id="bcb-current" type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
+              <span class="unit">µA</span>
+            </div>
           </div>
-        </div>
+        {:else}
+          <div class="field">
+            <label for="bcb-flux">Flux</label>
+            <div class="input-group">
+              <input id="bcb-flux" type="text" inputmode="decimal" value={neutronFlux.flux} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onFluxChange} />
+              <span class="unit">n/cm²s</span>
+            </div>
+          </div>
+        {/if}
         <div class="field">
           <label for="bcb-irrad">Irradiation</label>
           <div class="input-with-feedback">
@@ -240,16 +292,18 @@
     </div>
   </div>
 
-  <div class="field secondary-neutron">
-    <label class="sn-toggle" title="Also model neutrons produced by (x,n) reactions activating the target (ADR-0003 Phase 2, first-order estimate)">
-      <input
-        type="checkbox"
-        checked={secondaryNeutron}
-        onchange={(e) => setSecondaryNeutron((e.target as HTMLInputElement).checked)}
-      />
-      <span>Secondary n</span>
-    </label>
-  </div>
+  {#if !isNeutron}
+    <div class="field secondary-neutron">
+      <label class="sn-toggle" title="Also model neutrons produced by (x,n) reactions activating the target (ADR-0003 Phase 2, first-order estimate)">
+        <input
+          type="checkbox"
+          checked={secondaryNeutron}
+          onchange={(e) => setSecondaryNeutron((e.target as HTMLInputElement).checked)}
+        />
+        <span>Secondary n</span>
+      </label>
+    </div>
+  {/if}
 
   <div class="sim-controls">
     <button class="mode-btn" class:auto={simMode === "auto"} onclick={toggleMode} title="Toggle auto/manual simulation">

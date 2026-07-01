@@ -96,6 +96,7 @@ export type {
   StackItem,
   StackConfig,
   SimulationConfig,
+  NeutronFluxConfig,
   IsotopeResultData,
   DepthPointData,
   LayerResultData,
