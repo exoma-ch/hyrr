@@ -30,10 +30,7 @@ fn parquet_data_store_rejects_empty_dir() {
     let empty = td.path().join("empty");
     fs::create_dir_all(&empty).unwrap();
 
-    let result = hyrr_core::db::ParquetDataStore::new(
-        empty.to_str().unwrap(),
-        "tendl-2023-iso",
-    );
+    let result = hyrr_core::db::ParquetDataStore::new(empty.to_str().unwrap(), "tendl-2023-iso");
     assert!(
         result.is_err(),
         "ParquetDataStore::new should fail on empty data dir"
@@ -48,10 +45,8 @@ fn parquet_data_store_rejects_missing_library() {
     let data = td.path().join("data");
     make_meta_only(&data);
 
-    let result = hyrr_core::db::ParquetDataStore::new(
-        data.to_str().unwrap(),
-        "nonexistent-library",
-    );
+    let result =
+        hyrr_core::db::ParquetDataStore::new(data.to_str().unwrap(), "nonexistent-library");
     assert!(
         result.is_err(),
         "ParquetDataStore::new should fail when library dir is missing"
@@ -74,7 +69,10 @@ fn data_dir_resolve_returns_fallback_on_empty_env() {
     let dir = hyrr_core::data_dir::resolve();
     // Should return the "nucl-parquet" fallback or some path — the point
     // is it doesn't panic.
-    assert!(!dir.is_empty(), "resolve() should return a non-empty string");
+    assert!(
+        !dir.is_empty(),
+        "resolve() should return a non-empty string"
+    );
 
     // Restore.
     if let Some(v) = old_data {

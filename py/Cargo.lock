@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "hyrr-core"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "flate2",
  "fs2",

@@ -28,7 +28,7 @@ mod tests {
             energy_out_mev: None,
             is_monitor: false,
             nist_compound: None,
-                computed_energy_in: 0.0,
+            computed_energy_in: 0.0,
             computed_energy_out: 0.0,
             computed_thickness: 0.0,
         };
@@ -42,8 +42,13 @@ mod tests {
 
         eprintln!("H2O-18 resolution: density={}, elements:", h2o.density);
         for (elem, frac) in &h2o.elements {
-            eprintln!("  Z={} ({}): frac={:.4}, isotopes={:?}",
-                elem.z, db.get_element_symbol(elem.z), frac, elem.isotopes);
+            eprintln!(
+                "  Z={} ({}): frac={:.4}, isotopes={:?}",
+                elem.z,
+                db.get_element_symbol(elem.z),
+                frac,
+                elem.isotopes
+            );
         }
 
         let layer2 = Layer {
@@ -54,7 +59,7 @@ mod tests {
             energy_out_mev: None,
             is_monitor: false,
             nist_compound: None,
-                computed_energy_in: 0.0,
+            computed_energy_in: 0.0,
             computed_energy_out: 0.0,
             computed_thickness: 0.0,
         };
@@ -91,10 +96,14 @@ mod tests {
         );
 
         // F-18 must be present (Z=9, A=18)
-        let has_f18 = l2.isotope_results.keys().any(|name| {
-            name.contains("18") && name.contains("F") || name.contains("9-18")
-        });
-        assert!(has_f18, "F-18 must be produced from O-18(p,n)F-18. Isotopes: {:?}",
-            l2.isotope_results.keys().collect::<Vec<_>>());
+        let has_f18 = l2
+            .isotope_results
+            .keys()
+            .any(|name| name.contains("18") && name.contains("F") || name.contains("9-18"));
+        assert!(
+            has_f18,
+            "F-18 must be produced from O-18(p,n)F-18. Isotopes: {:?}",
+            l2.isotope_results.keys().collect::<Vec<_>>()
+        );
     }
 }

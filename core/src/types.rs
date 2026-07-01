@@ -18,7 +18,11 @@ pub enum ProjectileType {
     Helion,
     Alpha,
     /// Heavy ion with element symbol, Z, and A (e.g., C-12, O-16).
-    HeavyIon { symbol: String, z: u32, a: u32 },
+    HeavyIon {
+        symbol: String,
+        z: u32,
+        a: u32,
+    },
 }
 
 impl Serialize for ProjectileType {
@@ -30,7 +34,8 @@ impl Serialize for ProjectileType {
 impl<'de> Deserialize<'de> for ProjectileType {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        Self::from_str(&s).ok_or_else(|| serde::de::Error::custom(format!("unknown projectile: {s}")))
+        Self::from_str(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown projectile: {s}")))
     }
 }
 
@@ -86,7 +91,7 @@ impl ProjectileType {
     }
 
     pub fn projectile(&self) -> Projectile {
-        Projectile::from_type(&self)
+        Projectile::from_type(self)
     }
 
     pub fn z(&self) -> u32 {

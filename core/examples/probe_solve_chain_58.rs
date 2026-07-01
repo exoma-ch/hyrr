@@ -108,8 +108,16 @@ fn rk4_mo99(
     // Irradiation
     for _ in 0..n_steps_per_phase {
         let (k1_mo, k1_tc) = f(n_mo, n_tc, true);
-        let (k2_mo, k2_tc) = f(n_mo + 0.5 * dt_irr * k1_mo, n_tc + 0.5 * dt_irr * k1_tc, true);
-        let (k3_mo, k3_tc) = f(n_mo + 0.5 * dt_irr * k2_mo, n_tc + 0.5 * dt_irr * k2_tc, true);
+        let (k2_mo, k2_tc) = f(
+            n_mo + 0.5 * dt_irr * k1_mo,
+            n_tc + 0.5 * dt_irr * k1_tc,
+            true,
+        );
+        let (k3_mo, k3_tc) = f(
+            n_mo + 0.5 * dt_irr * k2_mo,
+            n_tc + 0.5 * dt_irr * k2_tc,
+            true,
+        );
         let (k4_mo, k4_tc) = f(n_mo + dt_irr * k3_mo, n_tc + dt_irr * k3_tc, true);
         n_mo += dt_irr * (k1_mo + 2.0 * k2_mo + 2.0 * k3_mo + k4_mo) / 6.0;
         n_tc += dt_irr * (k1_tc + 2.0 * k2_tc + 2.0 * k3_tc + k4_tc) / 6.0;
@@ -119,12 +127,17 @@ fn rk4_mo99(
     // Cooling
     for _ in 0..n_steps_per_phase {
         let (k1_mo, k1_tc) = f(n_mo, n_tc, false);
-        let (k2_mo, k2_tc) =
-            f(n_mo + 0.5 * dt_cool * k1_mo, n_tc + 0.5 * dt_cool * k1_tc, false);
-        let (k3_mo, k3_tc) =
-            f(n_mo + 0.5 * dt_cool * k2_mo, n_tc + 0.5 * dt_cool * k2_tc, false);
-        let (k4_mo, k4_tc) =
-            f(n_mo + dt_cool * k3_mo, n_tc + dt_cool * k3_tc, false);
+        let (k2_mo, k2_tc) = f(
+            n_mo + 0.5 * dt_cool * k1_mo,
+            n_tc + 0.5 * dt_cool * k1_tc,
+            false,
+        );
+        let (k3_mo, k3_tc) = f(
+            n_mo + 0.5 * dt_cool * k2_mo,
+            n_tc + 0.5 * dt_cool * k2_tc,
+            false,
+        );
+        let (k4_mo, k4_tc) = f(n_mo + dt_cool * k3_mo, n_tc + dt_cool * k3_tc, false);
         n_mo += dt_cool * (k1_mo + 2.0 * k2_mo + 2.0 * k3_mo + k4_mo) / 6.0;
         n_tc += dt_cool * (k1_tc + 2.0 * k2_tc + 2.0 * k3_tc + k4_tc) / 6.0;
         t += dt_cool;
@@ -196,8 +209,7 @@ fn run_mo99() {
 
     let a_tc_irr = |t: f64| -> f64 {
         let r = r_mo * br_to_meta;
-        let bracket = (1.0 - (-lam_tc * t).exp())
-            - (lam_mo / lam_tc) * (1.0 - (-lam_mo * t).exp());
+        let bracket = (1.0 - (-lam_tc * t).exp()) - (lam_mo / lam_tc) * (1.0 - (-lam_mo * t).exp());
         r * lam_tc / (lam_tc - lam_mo) * bracket
     };
 
@@ -215,7 +227,10 @@ fn run_mo99() {
 
     // Sample Tc-99m at several irradiation times
     println!("  Tc-99m through irradiation: comparing solver vs analytical-Bateman vs RK4");
-    println!("    {:>5}  {:>11}  {:>11}  {:>11}", "t/h", "solver", "bateman_fn", "rk4_truth");
+    println!(
+        "    {:>5}  {:>11}  {:>11}  {:>11}",
+        "t/h", "solver", "bateman_fn", "rk4_truth"
+    );
     for &t_h in &[1.0_f64, 4.0, 8.0, 12.0, 24.0] {
         let t = t_h * 3600.0;
         let idx = sol

@@ -86,7 +86,10 @@ impl StoppingError {
     pub fn as_json(&self) -> serde_json::Value {
         let mut v = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
         if let Some(obj) = v.as_object_mut() {
-            obj.insert("kind".to_string(), serde_json::Value::String("StoppingError".to_string()));
+            obj.insert(
+                "kind".to_string(),
+                serde_json::Value::String("StoppingError".to_string()),
+            );
         }
         v
     }
@@ -95,12 +98,28 @@ impl StoppingError {
     /// compute step. Caller is the stack-loop orchestrator, which is the only
     /// site that knows which layer index/material was being processed when the
     /// error surfaced. Idempotent — overwrites any pre-existing context.
-    pub fn with_layer_context(mut self, layer_index: usize, layer_material: impl Into<String>) -> Self {
+    pub fn with_layer_context(
+        mut self,
+        layer_index: usize,
+        layer_material: impl Into<String>,
+    ) -> Self {
         let mat = layer_material.into();
         match &mut self {
-            StoppingError::NoSourceTable { layer_index: li, layer_material: lm, .. }
-            | StoppingError::EnergyOutOfRange { layer_index: li, layer_material: lm, .. }
-            | StoppingError::NoTargetData { layer_index: li, layer_material: lm, .. } => {
+            StoppingError::NoSourceTable {
+                layer_index: li,
+                layer_material: lm,
+                ..
+            }
+            | StoppingError::EnergyOutOfRange {
+                layer_index: li,
+                layer_material: lm,
+                ..
+            }
+            | StoppingError::NoTargetData {
+                layer_index: li,
+                layer_material: lm,
+                ..
+            } => {
                 *li = Some(layer_index);
                 *lm = Some(mat);
             }
@@ -139,7 +158,9 @@ fn get_interpolated_dedx(
         });
     }
 
-    if !available_zs.contains(&target_z) && (target_z < available_zs[0] || target_z > *available_zs.last().unwrap()) {
+    if !available_zs.contains(&target_z)
+        && (target_z < available_zs[0] || target_z > *available_zs.last().unwrap())
+    {
         return Err(StoppingError::NoTargetData {
             source_name: source.to_string(),
             target_symbol: db.get_element_symbol(target_z),
@@ -317,7 +338,10 @@ pub fn elemental_dedx(
         Ok(result)
     } else if proj.z == 2 {
         // α (He-4): ASTAR is the NIST reference. E × 4/4 = E, i.e. unscaled.
-        let lookup: Vec<f64> = energies_mev.iter().map(|&e| e * (4.0 / proj.a as f64)).collect();
+        let lookup: Vec<f64> = energies_mev
+            .iter()
+            .map(|&e| e * (4.0 / proj.a as f64))
+            .collect();
         let (result, _) = get_interpolated_dedx(db, SOURCE_ASTAR, target_z, &lookup, projectile)?;
         Ok(result)
     } else {
@@ -420,9 +444,13 @@ pub fn compound_dedx_with_nist(
 /// correct per-element `catima_He3` stopping (#194).
 fn compound_stopping_source(projectile: &ProjectileType) -> &'static str {
     let proj = projectile.projectile();
-    if proj.z == 1 { "PSTAR_compound" }
-    else if proj.z == 2 && proj.a == 4 { "ASTAR_compound" }
-    else { "" } // ³He and heavy ions: no NIST compound table → Bragg additivity.
+    if proj.z == 1 {
+        "PSTAR_compound"
+    } else if proj.z == 2 && proj.a == 4 {
+        "ASTAR_compound"
+    } else {
+        ""
+    } // ³He and heavy ions: no NIST compound table → Bragg additivity.
 }
 
 /// Linear stopping power [MeV/cm].
@@ -435,10 +463,12 @@ pub fn dedx_mev_per_cm(
     energies_mev: &[f64],
     nist_compound: Option<&str>,
 ) -> Result<Vec<f64>, StoppingError> {
-    Ok(compound_dedx_with_nist(db, projectile, composition, energies_mev, nist_compound)?
-        .iter()
-        .map(|&s| s * density_g_cm3)
-        .collect())
+    Ok(
+        compound_dedx_with_nist(db, projectile, composition, energies_mev, nist_compound)?
+            .iter()
+            .map(|&s| s * density_g_cm3)
+            .collect(),
+    )
 }
 
 /// Scalar variant of [`dedx_mev_per_cm`]. Panics on a stopping-data
@@ -451,8 +481,15 @@ pub fn dedx_mev_per_cm_scalar(
     energy_mev: f64,
     nist_compound: Option<&str>,
 ) -> f64 {
-    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_mev], nist_compound)
-        .expect("dedx_mev_per_cm_scalar: caller failed to pre-validate source/target/energy")[0]
+    dedx_mev_per_cm(
+        db,
+        projectile,
+        composition,
+        density_g_cm3,
+        &[energy_mev],
+        nist_compound,
+    )
+    .expect("dedx_mev_per_cm_scalar: caller failed to pre-validate source/target/energy")[0]
 }
 
 /// Compute target thickness [cm] from energy loss.
@@ -472,7 +509,14 @@ pub fn compute_thickness_from_energy(
 
     let midpoints: Vec<f64> = (0..n_points - 1).map(|i| energies[i] + de / 2.0).collect();
 
-    let dedx_arr = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &midpoints, nist_compound)?;
+    let dedx_arr = dedx_mev_per_cm(
+        db,
+        projectile,
+        composition,
+        density_g_cm3,
+        &midpoints,
+        nist_compound,
+    )?;
 
     let mut thickness = 0.0;
     for &dedx_val in &dedx_arr {
@@ -498,7 +542,14 @@ pub fn compute_energy_out(
     }
 
     // Pre-validate by sampling at the entrance energy.
-    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_in_mev], nist_compound)?;
+    dedx_mev_per_cm(
+        db,
+        projectile,
+        composition,
+        density_g_cm3,
+        &[energy_in_mev],
+        nist_compound,
+    )?;
 
     let dx = thickness_cm / n_points as f64;
     let mut energy = energy_in_mev;
@@ -508,7 +559,14 @@ pub fn compute_energy_out(
         // as typed Err(EnergyOutOfRange) instead of panicking via _scalar.
         // See #150 — without this, heavy-ion stacks that bring residual
         // energy below the catima table-min crash compute opaquely.
-        let dedx = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy], nist_compound)?;
+        let dedx = dedx_mev_per_cm(
+            db,
+            projectile,
+            composition,
+            density_g_cm3,
+            &[energy],
+            nist_compound,
+        )?;
         energy -= dedx[0] * dx;
         if energy <= 0.0 {
             return Ok(0.0);
@@ -702,10 +760,18 @@ mod tests {
 
         let dedx = elemental_dedx(&db, &he3, 29, &energies).unwrap();
         for (i, &v) in dedx.iter().enumerate() {
-            assert!(v.is_finite() && v > 0.0, "³He dE/dx at {} MeV: {v}", energies[i]);
+            assert!(
+                v.is_finite() && v > 0.0,
+                "³He dE/dx at {} MeV: {v}",
+                energies[i]
+            );
         }
         for w in dedx.windows(2) {
-            assert!(w[1] < w[0], "³He dE/dx should decrease with energy: {:?}", dedx);
+            assert!(
+                w[1] < w[0],
+                "³He dE/dx should decrease with energy: {:?}",
+                dedx
+            );
         }
         // Same order of magnitude as α at each energy (within 10×).
         let a = elemental_dedx(&db, &alpha, 29, &energies).unwrap();
@@ -749,7 +815,11 @@ mod tests {
         };
         let stamped = err.with_layer_context(2, "havar");
         match stamped {
-            StoppingError::EnergyOutOfRange { layer_index, layer_material, .. } => {
+            StoppingError::EnergyOutOfRange {
+                layer_index,
+                layer_material,
+                ..
+            } => {
                 assert_eq!(layer_index, Some(2));
                 assert_eq!(layer_material.as_deref(), Some("havar"));
             }
@@ -769,7 +839,10 @@ mod tests {
         };
         let json = err.as_json();
         assert!(json.get("layer_index").is_none(), "must not serialize None");
-        assert!(json.get("layer_material").is_none(), "must not serialize None");
+        assert!(
+            json.get("layer_material").is_none(),
+            "must not serialize None"
+        );
 
         let stamped = StoppingError::NoTargetData {
             source_name: "PSTAR".to_string(),
@@ -778,7 +851,8 @@ mod tests {
             available_zs: vec![1, 8, 13, 29],
             layer_index: None,
             layer_material: None,
-        }.with_layer_context(1, "H2O-18");
+        }
+        .with_layer_context(1, "H2O-18");
         let json = stamped.as_json();
         assert_eq!(json["layer_index"], 1);
         assert_eq!(json["layer_material"], "H2O-18");

@@ -75,23 +75,20 @@ pub fn discover_chains(
             let ds = &mode.daughter_state;
             let dkey = format!("{}-{}-{}", dz, da, ds);
 
-            if !isotope_map.contains_key(&dkey) {
+            if let std::collections::hash_map::Entry::Vacant(e) = isotope_map.entry(dkey) {
                 let decay = db.get_decay_data(dz, da, ds);
                 let (half_life, modes) = match decay {
                     Some(d) => (d.half_life_s, d.decay_modes.clone()),
                     None => (None, Vec::new()),
                 };
-                isotope_map.insert(
-                    dkey,
-                    ChainIsotope {
-                        z: dz,
-                        a: da,
-                        state: ds.clone(),
-                        half_life_s: half_life,
-                        production_rate: 0.0,
-                        decay_modes: modes,
-                    },
-                );
+                e.insert(ChainIsotope {
+                    z: dz,
+                    a: da,
+                    state: ds.clone(),
+                    half_life_s: half_life,
+                    production_rate: 0.0,
+                    decay_modes: modes,
+                });
                 queue.push((dz, da, ds.clone(), depth + 1));
             }
         }

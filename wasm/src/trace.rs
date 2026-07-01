@@ -110,19 +110,24 @@ struct RingVisitor {
 
 impl Visit for RingVisitor {
     fn record_str(&mut self, field: &Field, value: &str) {
-        self.data.insert(field.name().to_string(), Value::from(value));
+        self.data
+            .insert(field.name().to_string(), Value::from(value));
     }
     fn record_i64(&mut self, field: &Field, value: i64) {
-        self.data.insert(field.name().to_string(), Value::from(value));
+        self.data
+            .insert(field.name().to_string(), Value::from(value));
     }
     fn record_u64(&mut self, field: &Field, value: u64) {
-        self.data.insert(field.name().to_string(), Value::from(value));
+        self.data
+            .insert(field.name().to_string(), Value::from(value));
     }
     fn record_f64(&mut self, field: &Field, value: f64) {
-        self.data.insert(field.name().to_string(), Value::from(value));
+        self.data
+            .insert(field.name().to_string(), Value::from(value));
     }
     fn record_bool(&mut self, field: &Field, value: bool) {
-        self.data.insert(field.name().to_string(), Value::from(value));
+        self.data
+            .insert(field.name().to_string(), Value::from(value));
     }
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         // Fallback for `?value` Display/Debug fields. In practice only the
@@ -243,7 +248,10 @@ mod tests {
         // Oldest 100 evicted: first retained seq is 100.
         let json = ring.dump_json(Some("abc"));
         assert!(json.contains("\"traceId\":\"abc\""));
-        assert!(json.contains("\"seq\":100"), "oldest entries must be evicted");
+        assert!(
+            json.contains("\"seq\":100"),
+            "oldest entries must be evicted"
+        );
         assert!(!json.contains("\"seq\":99"), "evicted entry must be gone");
     }
 

@@ -47,7 +47,11 @@ impl Col {
     }
 
     fn json_at(&self, i: usize) -> Value {
-        let f64_to_json = |x: f64| Number::from_f64(x).map(Value::Number).unwrap_or(Value::Null);
+        let f64_to_json = |x: f64| {
+            Number::from_f64(x)
+                .map(Value::Number)
+                .unwrap_or(Value::Null)
+        };
         match self {
             Col::I64(_, v) => Value::Number(v[i].into()),
             Col::OptI64(_, v) => v[i].map(|x| Value::Number(x.into())).unwrap_or(Value::Null),
@@ -132,7 +136,8 @@ impl Table {
         let batch = RecordBatch::try_new(Arc::clone(&schema), arrays).map_err(|e| e.to_string())?;
         let mut buf = Vec::new();
         {
-            let mut writer = ArrowWriter::try_new(&mut buf, schema, None).map_err(|e| e.to_string())?;
+            let mut writer =
+                ArrowWriter::try_new(&mut buf, schema, None).map_err(|e| e.to_string())?;
             writer.write(&batch).map_err(|e| e.to_string())?;
             writer.close().map_err(|e| e.to_string())?;
         }
@@ -142,7 +147,12 @@ impl Table {
 
 /// β+ / EC / β- / IT branching fractions for a nuclide, summed across the
 /// sub-modes the data splits EC into (`KshellEC`, `LshellEC`, …).
-pub fn branching_split(db: &dyn DatabaseProtocol, z: u32, a: u32, state: &str) -> (f64, f64, f64, f64) {
+pub fn branching_split(
+    db: &dyn DatabaseProtocol,
+    z: u32,
+    a: u32,
+    state: &str,
+) -> (f64, f64, f64, f64) {
     let (mut bp, mut ec, mut bm, mut it) = (0.0, 0.0, 0.0, 0.0);
     if let Some(decay) = db.get_decay_data(z, a, state) {
         for m in &decay.decay_modes {
@@ -410,7 +420,8 @@ pub fn build_emission_curve(
 pub fn build_emissions(db: &dyn DatabaseProtocol, result: &StackResult, sim_id: &str) -> Table {
     let (mut sid, mut iso_name, mut z, mut a, mut state) = (vec![], vec![], vec![], vec![], vec![]);
     let (mut rad, mut energy, mut intensity) = (vec![], vec![], vec![]);
-    let (mut dmode, mut dz, mut da, mut icc, mut subtype) = (vec![], vec![], vec![], vec![], vec![]);
+    let (mut dmode, mut dz, mut da, mut icc, mut subtype) =
+        (vec![], vec![], vec![], vec![], vec![]);
 
     for (iso_z, iso_a, iso_state, name) in distinct_isotopes(result) {
         for line in db.get_emissions(iso_z, iso_a, &iso_state) {
@@ -484,7 +495,10 @@ mod tests {
 
     #[test]
     fn empty_table_reports_empty() {
-        let t = Table { name: "e", cols: vec![Col::I64("i", vec![])] };
+        let t = Table {
+            name: "e",
+            cols: vec![Col::I64("i", vec![])],
+        };
         assert!(t.is_empty());
         assert_eq!(t.to_json_rows().len(), 0);
     }
@@ -520,7 +534,10 @@ mod tests {
         let oi = col("oi");
         let oi = oi.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(oi.value(0), 7);
-        assert!(oi.is_null(1), "OptI64 None must round-trip to a Parquet null");
+        assert!(
+            oi.is_null(1),
+            "OptI64 None must round-trip to a Parquet null"
+        );
 
         let f = col("f");
         let f = f.as_any().downcast_ref::<Float64Array>().unwrap();
@@ -533,6 +550,9 @@ mod tests {
         let os = col("os");
         let os = os.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(os.value(0), "x");
-        assert!(os.is_null(1), "OptStr None must round-trip to a Parquet null");
+        assert!(
+            os.is_null(1),
+            "OptStr None must round-trip to a Parquet null"
+        );
     }
 }

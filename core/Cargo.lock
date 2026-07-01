@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "hyrr-core"
-version = "0.16.3"
+version = "0.17.0"
 dependencies = [
  "approx",
  "arrow",

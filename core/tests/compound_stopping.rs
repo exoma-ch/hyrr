@@ -8,7 +8,7 @@
 #![cfg(feature = "embed-data")]
 
 use hyrr_core::compute::compute_stack;
-use hyrr_core::db::{DatabaseProtocol, EmbeddedDataStore};
+use hyrr_core::db::EmbeddedDataStore;
 use hyrr_core::materials::resolve_material;
 use hyrr_core::stopping::compute_energy_out;
 use hyrr_core::types::*;
@@ -18,7 +18,10 @@ fn water_uses_nist_compound_stopping() {
     let db = EmbeddedDataStore::new("tendl-2023-iso").unwrap();
 
     let resolution = resolve_material(&db, "H2O", None, None, None).unwrap();
-    eprintln!("H2O resolution: nist_compound={:?}", resolution.nist_compound);
+    eprintln!(
+        "H2O resolution: nist_compound={:?}",
+        resolution.nist_compound
+    );
     assert_eq!(
         resolution.nist_compound.as_deref(),
         Some("WATER_LIQUID"),
@@ -27,28 +30,47 @@ fn water_uses_nist_compound_stopping() {
 
     // Compute energy out through 3mm water at 18 MeV protons
     // with NIST compound stopping
-    let composition: Vec<(u32, f64)> = resolution.elements.iter().map(|(e, f)| {
-        let avg_mass: f64 = e.isotopes.iter().map(|(&a, &ab)| a as f64 * ab).sum();
-        (e.z, f * avg_mass)
-    }).collect();
+    let composition: Vec<(u32, f64)> = resolution
+        .elements
+        .iter()
+        .map(|(e, f)| {
+            let avg_mass: f64 = e.isotopes.iter().map(|(&a, &ab)| a as f64 * ab).sum();
+            (e.z, f * avg_mass)
+        })
+        .collect();
     let total: f64 = composition.iter().map(|(_, w)| w).sum();
     let comp: Vec<(u32, f64)> = composition.iter().map(|&(z, w)| (z, w / total)).collect();
 
     let e_out_nist = compute_energy_out(
-        &db, &ProjectileType::Proton, &comp,
-        resolution.density, 18.0, 0.3, 1000,
+        &db,
+        &ProjectileType::Proton,
+        &comp,
+        resolution.density,
+        18.0,
+        0.3,
+        1000,
         Some("WATER_LIQUID"),
-    ).unwrap();
+    )
+    .unwrap();
 
     let e_out_bragg = compute_energy_out(
-        &db, &ProjectileType::Proton, &comp,
-        resolution.density, 18.0, 0.3, 1000,
+        &db,
+        &ProjectileType::Proton,
+        &comp,
+        resolution.density,
+        18.0,
+        0.3,
+        1000,
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     eprintln!("E_out (NIST):  {:.3} MeV", e_out_nist);
     eprintln!("E_out (Bragg): {:.3} MeV", e_out_bragg);
-    eprintln!("Difference:    {:.2}%", (e_out_nist - e_out_bragg).abs() / e_out_bragg * 100.0);
+    eprintln!(
+        "Difference:    {:.2}%",
+        (e_out_nist - e_out_bragg).abs() / e_out_bragg * 100.0
+    );
 
     // They should differ — NIST is more accurate than Bragg for water
     // The difference is typically 1-3% at these energies
@@ -112,9 +134,14 @@ fn water_simulation_produces_f18_with_nist_stopping() {
     let l2 = &result.layer_results[1];
     assert!(!l2.isotope_results.is_empty(), "L2 should produce isotopes");
 
-    let has_f18 = l2.isotope_results.keys().any(|k| k.contains("F") && k.contains("18"));
+    let has_f18 = l2
+        .isotope_results
+        .keys()
+        .any(|k| k.contains("F") && k.contains("18"));
     assert!(has_f18, "F-18 should be produced");
 
-    eprintln!("L2 energy: {:.2} → {:.2} MeV (NIST compound stopping)",
-        l2.energy_in, l2.energy_out);
+    eprintln!(
+        "L2 energy: {:.2} → {:.2} MeV (NIST compound stopping)",
+        l2.energy_in, l2.energy_out
+    );
 }

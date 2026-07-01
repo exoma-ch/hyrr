@@ -105,7 +105,10 @@ fn f18_args(extra: Value) -> Value {
 
 fn parquet_resources(out: &hyrr_core::mcp::tools::ToolResponse) -> usize {
     for r in &out.resources {
-        assert_eq!(r.mime_type, "application/vnd.apache.parquet", "resource mime");
+        assert_eq!(
+            r.mime_type, "application/vnd.apache.parquet",
+            "resource mime"
+        );
         assert!(!r.blob_base64.is_empty(), "resource blob must be non-empty");
         assert!(r.uri.starts_with("hyrr://sim/"), "resource uri: {}", r.uri);
     }
@@ -119,12 +122,28 @@ fn inventory_tool_reports_f18_with_branching_and_parquet() {
     let out = call_tool(&db, &mut reg, "get_isotope_inventory", &f18_args(json!({})))
         .expect("inventory should succeed");
 
-    assert!(out.text.contains("F-18"), "F-18 must appear in inventory:\n{}", out.text);
+    assert!(
+        out.text.contains("F-18"),
+        "F-18 must appear in inventory:\n{}",
+        out.text
+    );
     // Long-format schema columns are present in the inline JSON.
-    for col in ["production_source", "activity_at_eob_bq", "beta_plus_branching", "half_life_s"] {
-        assert!(out.text.contains(col), "inventory JSON should carry `{col}`");
+    for col in [
+        "production_source",
+        "activity_at_eob_bq",
+        "beta_plus_branching",
+        "half_life_s",
+    ] {
+        assert!(
+            out.text.contains(col),
+            "inventory JSON should carry `{col}`"
+        );
     }
-    assert_eq!(parquet_resources(&out), 1, "exactly one (inventory) Parquet resource");
+    assert_eq!(
+        parquet_resources(&out),
+        1,
+        "exactly one (inventory) Parquet resource"
+    );
 }
 
 #[test]
@@ -140,10 +159,18 @@ fn dataset_tool_emits_all_requested_tables_and_resources() {
     .expect("dataset should succeed");
 
     for table in ["inventory", "cooling", "depth", "emissions"] {
-        assert!(out.text.contains(table), "dataset should mention `{table}` table");
+        assert!(
+            out.text.contains(table),
+            "dataset should mention `{table}` table"
+        );
     }
     // F-18 produced ⇒ inventory + cooling + depth + emissions all non-empty.
-    assert_eq!(parquet_resources(&out), 4, "one Parquet resource per non-empty table:\n{}", out.text);
+    assert_eq!(
+        parquet_resources(&out),
+        4,
+        "one Parquet resource per non-empty table:\n{}",
+        out.text
+    );
 }
 
 #[test]
@@ -158,8 +185,22 @@ fn emission_curve_tool_f18_511_is_positive_and_parquet() {
     )
     .expect("emission curve should succeed");
 
-    assert!(out.text.contains("rate_per_s"), "curve JSON has rate_per_s column");
-    assert!(out.text.contains("annihilation"), "511 keV line is the annihilation pair");
-    assert!(out.text.contains("\"energy_kev\":511"), "511 keV line present:\n{}", out.text);
-    assert_eq!(parquet_resources(&out), 1, "one (emission_curve) Parquet resource");
+    assert!(
+        out.text.contains("rate_per_s"),
+        "curve JSON has rate_per_s column"
+    );
+    assert!(
+        out.text.contains("annihilation"),
+        "511 keV line is the annihilation pair"
+    );
+    assert!(
+        out.text.contains("\"energy_kev\":511"),
+        "511 keV line present:\n{}",
+        out.text
+    );
+    assert_eq!(
+        parquet_resources(&out),
+        1,
+        "one (emission_curve) Parquet resource"
+    );
 }

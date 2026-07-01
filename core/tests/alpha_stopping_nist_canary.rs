@@ -43,18 +43,18 @@ fn make_db() -> Option<ParquetDataStore> {
 /// hyrr today is off by 36–57%, so this canary discriminates cleanly).
 const NIST_ASTAR_AL: &[(f64, f64)] = &[
     // (energy_MeV, dedx_MeV_cm2_per_g)
-    (1.0, 1226.0),  // hyrr today: 698.6  → 0.57×
-    (2.0, 985.9),   // hyrr today: 439.8  → 0.45×
-    (5.0, 605.3),   // hyrr today: 227.1  → 0.38×
-    (10.0, 376.2),  // hyrr today: 134.4  → 0.36×
+    (1.0, 1226.0), // hyrr today: 698.6  → 0.57×
+    (2.0, 985.9),  // hyrr today: 439.8  → 0.45×
+    (5.0, 605.3),  // hyrr today: 227.1  → 0.38×
+    (10.0, 376.2), // hyrr today: 134.4  → 0.36×
 ];
 
 /// NIST ASTAR α-on-Cu total mass stopping power [MeV·cm²/g] (Z=29).
 /// Cross-check on a different element to rule out an Al-specific row error.
 const NIST_ASTAR_CU: &[(f64, f64)] = &[
-    (1.0, 706.3),   // hyrr today: 483.4  → 0.68×
-    (5.0, 431.3),   // hyrr today: 177.3  → 0.41×
-    (10.0, 282.5),  // hyrr today: 108.1  → 0.38×
+    (1.0, 706.3),  // hyrr today: 483.4  → 0.68×
+    (5.0, 431.3),  // hyrr today: 177.3  → 0.41×
+    (10.0, 282.5), // hyrr today: 108.1  → 0.38×
 ];
 
 const TOLERANCE: f64 = 0.05; // 5%

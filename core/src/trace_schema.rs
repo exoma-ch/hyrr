@@ -43,7 +43,12 @@ pub fn compute_stack_done(n_layers: usize, n_isotopes: usize) {
 
 /// Per-layer boundary. Scales with layer count (≤ tens/run), not iterations → `debug`.
 #[inline]
-pub fn compute_layer(layer_index: usize, energy_in_mev: f64, energy_out_mev: f64, n_products: usize) {
+pub fn compute_layer(
+    layer_index: usize,
+    energy_in_mev: f64,
+    energy_out_mev: f64,
+    n_products: usize,
+) {
     debug!(
         event = "compute.layer",
         layer_index, energy_in_mev, energy_out_mev, n_products

@@ -1,5 +1,20 @@
 {
   "nodes": {
+    "crane": {
+      "locked": {
+        "lastModified": 1781825982,
+        "narHash": "sha256-SlXKwIRIhrOSAcTjCB3ftPLzJWZStQIPS7J1FlZPnKk=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "469fd08d0bcf6926321fa973c6777fbc87785dd7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -73,11 +88,30 @@
         "type": "github"
       }
     },
+    "nucl-parquet": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1782221687,
+        "narHash": "sha256-6vPK6uary4oaLSKSS40kWjePTVcyM0nbcW9Wn+huf5E=",
+        "owner": "exoma-ch",
+        "repo": "nucl-parquet",
+        "rev": "00a9efe5eab0c83a9edad8026c43fe246779e2b8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "exoma-ch",
+        "repo": "nucl-parquet",
+        "rev": "00a9efe5eab0c83a9edad8026c43fe246779e2b8",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
+        "crane": "crane",
         "flake-utils": "flake-utils",
         "guardrails": "guardrails",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "nucl-parquet": "nucl-parquet"
       }
     },
     "systems": {

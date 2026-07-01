@@ -46,8 +46,14 @@ fn compact_config(args: &Value) -> Option<Value> {
     let projectile = args.get("projectile")?.as_str()?;
     let energy = args.get("energy_mev")?.as_f64()?;
     let current = args.get("current_ma")?.as_f64()?;
-    let irr = args.get("irradiation_time_s").and_then(|v| v.as_f64()).unwrap_or(86400.0);
-    let cool = args.get("cooling_time_s").and_then(|v| v.as_f64()).unwrap_or(86400.0);
+    let irr = args
+        .get("irradiation_time_s")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(86400.0);
+    let cool = args
+        .get("cooling_time_s")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(86400.0);
     let layers = args.get("layers")?.as_array()?;
 
     let compact_layers: Vec<Value> = layers
@@ -81,7 +87,7 @@ fn compact_config(args: &Value) -> Option<Value> {
 fn base64url_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
@@ -216,11 +222,21 @@ mod tests {
         let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
         for chunk in bytes.chunks(4) {
             let n = chunk.len();
-            let b = |i: usize| if i < n { TABLE[chunk[i] as usize] as u32 } else { 0 };
+            let b = |i: usize| {
+                if i < n {
+                    TABLE[chunk[i] as usize] as u32
+                } else {
+                    0
+                }
+            };
             let triple = (b(0) << 18) | (b(1) << 12) | (b(2) << 6) | b(3);
             out.push((triple >> 16) as u8);
-            if n > 2 { out.push((triple >> 8) as u8); }
-            if n > 3 { out.push(triple as u8); }
+            if n > 2 {
+                out.push((triple >> 8) as u8);
+            }
+            if n > 3 {
+                out.push(triple as u8);
+            }
         }
         out
     }
