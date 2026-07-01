@@ -3,13 +3,18 @@ name: Deploy to ETH webhosting
 # Promotion ladder for the ETH Zürich web instances:
 #   ent (hyrrent.ethz.ch) ─▶ tst (hyrrtst.ethz.ch) ─▶ prd (hyrr.ethz.ch)
 #
-# IMPORTANT — why every job is gated:
-# ETH webhosting SSH (:22) is reachable only from the ETH network / a jump
-# host. GitHub-hosted runners cannot connect (verified from outside: "No route
-# to host"). So this workflow is a no-op until a jump-capable SSH path exists
-# (a self-hosted runner on the ETH network, or a heimdall-style bastion). Flip
-# repo variable CI_DEPLOY_ENABLED=true once that path is in place. Until then,
-# deploy from a Mac on the ETH VPN:  just deploy-eth-ladder  /  just elevate
+# How CI reaches ETH:
+# The webhosting instances (hyrr{ent,tst,prd}.ethz.ch:22) are ETH-network-only,
+# but the heimdall bastion (pcposeth5.ethz.ch:22) is publicly reachable — so a
+# GitHub-hosted runner deploys by ProxyJump-ing the bastion (the SSH-config
+# aliases written below, HYRR_ETH_SSH_PREFIX=ethz-hyrr).
+#
+# Secrets: everything (both SSH keys, known_hosts, the Shibboleth whitelist) is
+# age-encrypted in secrets/eth-deploy.sops.env — versioned + rotatable via git.
+# The ONLY GitHub secret is SOPS_AGE_KEY (the age private key). Bootstrap/rotate:
+#   scripts/bootstrap-eth-secrets.sh --whitelist FILE --set-age-secret
+# Then flip repo variable CI_DEPLOY_ENABLED=true. Local deploys from a Mac on the
+# ETH VPN still work:  just deploy-eth-ladder  /  just elevate
 #
 # This mirrors gerchowl/duplet-webserver's deploy.yml, which hit the same
 # constraint ("GitHub runners can't reach the instances … deploy locally").
@@ -46,7 +51,8 @@ concurrency:
 
 jobs:
   deploy:
-    # Gated until CI has a jump-capable SSH path to *.ethz.ch (see header).
+    # Off until the ETH secrets are in place; flip CI_DEPLOY_ENABLED=true to arm
+    # main→ent auto-deploy via the heimdall ProxyJump (see header).
     if: vars.CI_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     # push → ent; dispatch → chosen env. The GitHub Environment carries the
@@ -60,6 +66,13 @@ jobs:
       # Per-environment docroot override (skips remote conf/servers detection
       # when set). Leave the variable unset to auto-detect.
       HYRR_ETH_DOCROOT: ${{ vars.ETH_DOCROOT }}
+      # Route SSH through the ssh-config aliases (ethz-hyrr{ent,tst,prd}) that
+      # ProxyJump the heimdall bastion — the instances aren't directly reachable
+      # from the runner, but the bastion (pcposeth5.ethz.ch) is.
+      HYRR_ETH_SSH_PREFIX: ethz-hyrr
+      # The Shibboleth access whitelist (license gate) is delivered as a secret
+      # and written to this path; deploy-eth.sh reads it from here.
+      HYRR_ETH_WHITELIST: ${{ github.workspace }}/infra/eth-webhosting/whitelist.txt
     steps:
       - uses: actions/checkout@v7
         with:
@@ -85,17 +98,47 @@ jobs:
         with:
           version: "v0.13.1"
 
-      - name: Load deploy SSH key
+      - uses: DeterminateSystems/nix-installer-action@v22
+
+      - name: Install sops + age
+        run: nix profile install nixpkgs#sops nixpkgs#age
+
+      - name: Decrypt ETH deploy secrets (sops/age) + configure SSH
+        env:
+          # The one bootstrap secret — the age private key that decrypts
+          # secrets/eth-deploy.sops.env (bootstrap-eth-secrets.sh --set-age-secret).
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          echo "${{ secrets.ETH_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          # Pin host keys to avoid TOFU-on-first-deploy; populate this secret
-          # once with: ssh-keyscan hyrrent.ethz.ch hyrrtst.ethz.ch hyrrprd.ethz.ch
-          if [ -n "${{ secrets.ETH_SSH_KNOWN_HOSTS }}" ]; then
-            echo "${{ secrets.ETH_SSH_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
-            chmod 600 ~/.ssh/known_hosts
-          fi
+          # Decrypt the committed, age-encrypted secrets (base64 values).
+          sops -d --output /tmp/eth.env secrets/eth-deploy.sops.env
+          set -a; . /tmp/eth.env; set +a; rm -f /tmp/eth.env
+          # Two keys: the bastion (heimdall) + the instance (hyrr) key. The
+          # instances ProxyJump the (publicly reachable) bastion.
+          printf '%s' "$HEIMDALL_KEY_B64" | base64 -d > ~/.ssh/id_ed25519_ethz
+          printf '%s' "$HYRR_KEY_B64"     | base64 -d > ~/.ssh/id_ed25519_eth-hyrr
+          printf '%s' "$KNOWN_HOSTS_B64"  | base64 -d > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519_ethz ~/.ssh/id_ed25519_eth-hyrr ~/.ssh/known_hosts
+          # ssh-config aliases (leading spaces are fine — ssh_config ignores them).
+          {
+            echo "Host ethz-heimdall"
+            echo "  HostName pcposeth5.ethz.ch"
+            echo "  User larsgerchow"
+            echo "  IdentityFile ~/.ssh/id_ed25519_ethz"
+            echo "  IdentitiesOnly yes"
+            for e in ent tst prd; do
+              echo "Host ethz-hyrr$e"
+              echo "  HostName hyrr$e.ethz.ch"
+              echo "  User w3_hyrr$e"
+              echo "  IdentityFile ~/.ssh/id_ed25519_eth-hyrr"
+              echo "  IdentitiesOnly yes"
+              echo "  ProxyJump ethz-heimdall"
+            done
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          # License whitelist (Shibboleth gate) — the value keeps the deploy gated.
+          mkdir -p infra/eth-webhosting
+          printf '%s' "$WHITELIST_B64" | base64 -d > infra/eth-webhosting/whitelist.txt
 
       - name: Deploy ${{ env.TARGET_ENV }}
         run: scripts/deploy-eth.sh "$TARGET_ENV"
