@@ -1788,6 +1788,7 @@ mod tests {
             isotope_results,
             stopping_power_sources: HashMap::new(),
             depth_production_rates: HashMap::new(),
+            neutron_source_rate: 0.0,
         }
     }
 

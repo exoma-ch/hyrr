@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use hyrr_core::bateman::bateman_activity as rust_bateman;
-use hyrr_core::compute::{compute_neutron_stack, compute_stack};
+use hyrr_core::compute::{
+    compute_neutron_stack, compute_stack, compute_stack_with_secondary_neutrons,
+};
 use hyrr_core::data_fetch;
 use hyrr_core::data_fetch::{FetchProgress, FetchStage};
 use hyrr_core::db::ParquetDataStore;
@@ -70,6 +72,11 @@ impl PyDataStore {
             for (elem, _) in &resolution.elements {
                 db.load_xs(projectile_str, elem.z)
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+                // Phase 2: the secondary neutrons also need the "n" xs loaded.
+                if config.secondary_neutron {
+                    db.load_xs("n", elem.z)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+                }
             }
         }
 
@@ -102,7 +109,12 @@ impl PyDataStore {
         // {"Err": ...} envelope. Surfacing the error as a PyRuntimeError also
         // prevents the failure mode where a compute error serialized to
         // {"Err": ...} was silently read as "no layers" by the Python side.
-        let result = compute_stack(&*db, &mut stack, true).map_err(|e| {
+        let result = if config.secondary_neutron {
+            compute_stack_with_secondary_neutrons(&*db, &mut stack, true)
+        } else {
+            compute_stack(&*db, &mut stack, true)
+        }
+        .map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("compute_stack failed: {e}"))
         })?;
         let json = serde_json::to_string(&result)
@@ -489,6 +501,10 @@ struct SimConfig {
     /// Time-varying beam current (piecewise-constant).
     #[serde(default)]
     current_profile: Option<CurrentProfileCfg>,
+    /// Model secondary (x,n) neutron activation on this charged run (ADR-0003
+    /// Phase 2). Off by default.
+    #[serde(default, alias = "secondaryNeutron")]
+    secondary_neutron: bool,
 }
 
 #[derive(serde::Deserialize)]

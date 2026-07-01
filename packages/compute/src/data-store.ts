@@ -239,8 +239,13 @@ export class DataStore implements DatabaseProtocol {
     const key = `${projectile}_${symbol}`;
     if (this.xsCache.has(key)) return;
 
+    // Neutron reactions ship in the endfb-8.1 sublibrary, copied to a separate
+    // `neutron-xs/` dir (copy-frontend-data.sh `endfb-8.1:neutron-xs`, ADR-0003
+    // #3). Charged projectiles read from `xs/`. Mirrors the Rust NEUTRON_LIBRARY
+    // routing so the browser resolves neutron cross-sections too.
+    const subdir = projectile === "n" ? "neutron-xs" : "xs";
     try {
-      const rows = await readParquetRows(`${this.baseUrl}/xs/${key}.parquet`);
+      const rows = await readParquetRows(`${this.baseUrl}/${subdir}/${key}.parquet`);
       this.xsCache.set(key, rows);
     } catch {
       // File doesn't exist — cache empty

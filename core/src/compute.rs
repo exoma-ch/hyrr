@@ -147,6 +147,7 @@ fn compute_layer(
             isotope_results: HashMap::new(),
             stopping_power_sources: HashMap::new(),
             depth_production_rates: HashMap::new(),
+            neutron_source_rate: 0.0,
         });
     }
 
@@ -238,6 +239,8 @@ fn compute_layer(
 
     let mut isotope_results: HashMap<String, IsotopeResult> = HashMap::new();
     let mut depth_production_rates: HashMap<String, Vec<f64>> = HashMap::new();
+    // Free neutrons/s from (x,n)-type channels — the Phase-2 secondary source.
+    let mut neutron_source_rate = 0.0_f64;
 
     // Resolved once — Z/A of the incident projectile for reaction-route balance.
     let proj_za = Projectile::from_type(projectile);
@@ -282,6 +285,13 @@ fn compute_layer(
                 let dz = (elem.z + proj_za.z) as i32 - xs.residual_z as i32;
                 let da = (a_target + proj_za.a) as i32 - xs.residual_a as i32;
                 let route = reaction_route(&target_symbol, a_target, projectile.symbol(), dz, da);
+
+                // (x,n)-type channel: no charged ejectile (dz==0) ⇒ da free
+                // neutrons emitted per reaction. Restricting to dz==0 excludes
+                // nucleons bound in charged ejectiles like α (spike #506).
+                if dz == 0 && da > 0 {
+                    neutron_source_rate += scaled_rate * da as f64;
+                }
 
                 // Depth-resolved rate for this channel. Same integrand as
                 // compute_production_rate in different coordinates (dE → dx); verified
@@ -426,6 +436,7 @@ fn compute_layer(
         isotope_results,
         stopping_power_sources: sp_sources,
         depth_production_rates,
+        neutron_source_rate,
     })
 }
 
@@ -762,6 +773,7 @@ fn compute_layer_stopping_only(
             isotope_results: HashMap::new(),
             stopping_power_sources: HashMap::new(),
             depth_production_rates: HashMap::new(),
+            neutron_source_rate: 0.0,
         });
     }
 
@@ -846,6 +858,7 @@ fn compute_layer_stopping_only(
         isotope_results: HashMap::new(),
         stopping_power_sources: sp_sources,
         depth_production_rates: HashMap::new(),
+        neutron_source_rate: 0.0,
     })
 }
 
@@ -994,6 +1007,7 @@ fn compute_neutron_layer(
         isotope_results: HashMap::new(),
         stopping_power_sources: HashMap::new(),
         depth_production_rates: HashMap::new(),
+        neutron_source_rate: 0.0,
     };
 
     // Neutron layers are specified by thickness (no energy-loss stepping).
@@ -1127,6 +1141,110 @@ fn compute_neutron_layer(
     }
 }
 
+// ─── Secondary neutron activation (ADR-0003 Phase 2 — (p,xn) neutrons) ──────
+
+/// Effective evaporation temperature for the secondary neutron spectrum (MeV).
+/// Weisskopf evaporation peaks near T; ~1.5 MeV is typical for the compound
+/// nuclei of cyclotron (p,xn) reactions. (The forward-direct / pre-equilibrium
+/// component and the anisotropic bidirectional transport are the Σ_t-dependent
+/// refinement — spike #506 — and become relevant once attenuation is modelled.)
+const SECONDARY_EVAPORATION_T_MEV: f64 = 1.5;
+
+/// Charged-particle run **with** secondary neutron activation (ADR-0003 Phase 2).
+///
+/// 1. Run the charged pass (`compute_stack`); each layer reports its (x,n)
+///    free-neutron production (`neutron_source_rate`).
+/// 2. Treat the summed source `S` [n/s] as an evaporation flux `φ ≈ S/area`
+///    irradiating the stack (a first-order, thin-target, isotropic estimate —
+///    the bidirectional/anisotropic transport is a Σ_t follow-up).
+/// 3. Run the neutron pass with that flux and **superimpose** the results:
+///    activities are linear in production rate, so the total is the sum of the
+///    charged and secondary contributions (no double-counting).
+///
+/// With no (x,n) channels open, `S = 0` and the result equals `compute_stack`.
+pub fn compute_stack_with_secondary_neutrons(
+    db: &dyn DatabaseProtocol,
+    stack: &mut TargetStack,
+    enable_chains: bool,
+) -> Result<StackResult, StoppingError> {
+    let mut charged = compute_stack(db, stack, enable_chains)?;
+
+    let total_source: f64 = charged
+        .layer_results
+        .iter()
+        .map(|lr| lr.neutron_source_rate)
+        .sum();
+    if total_source <= 0.0 {
+        return Ok(charged);
+    }
+
+    let area = stack.area_cm2.max(f64::MIN_POSITIVE);
+    let secondary_flux = FluxModel::Fast {
+        flux: total_source / area,
+        temp_mev: SECONDARY_EVAPORATION_T_MEV,
+    };
+    let secondary = compute_neutron_stack(
+        db,
+        &stack.layers,
+        &secondary_flux,
+        stack.irradiation_time_s,
+        stack.cooling_time_s,
+        stack.area_cm2,
+        enable_chains,
+    );
+
+    for (charged_layer, sec_layer) in charged
+        .layer_results
+        .iter_mut()
+        .zip(secondary.layer_results)
+    {
+        merge_secondary_isotopes(
+            &mut charged_layer.isotope_results,
+            sec_layer.isotope_results,
+        );
+    }
+    Ok(charged)
+}
+
+/// Superimpose secondary-neutron isotope results onto the charged results.
+/// Activities/rates add (linear system); provenance routes merge; a nuclide made
+/// by both routes is tagged `source = "both"`.
+fn merge_secondary_isotopes(
+    charged: &mut HashMap<String, IsotopeResult>,
+    secondary: HashMap<String, IsotopeResult>,
+) {
+    for (name, sec) in secondary {
+        match charged.get_mut(&name) {
+            Some(existing) => {
+                existing.production_rate += sec.production_rate;
+                existing.activity_bq += sec.activity_bq;
+                if existing.time_grid_s == sec.time_grid_s
+                    && existing.activity_vs_time_bq.len() == sec.activity_vs_time_bq.len()
+                {
+                    for (a, b) in existing
+                        .activity_vs_time_bq
+                        .iter_mut()
+                        .zip(&sec.activity_vs_time_bq)
+                    {
+                        *a += b;
+                    }
+                }
+                for r in sec.reactions {
+                    if !existing.reactions.contains(&r) {
+                        existing.reactions.push(r);
+                    }
+                }
+                if existing.source != "both" && existing.source != sec.source {
+                    existing.source = "both".to_string();
+                }
+            }
+            None => {
+                charged.insert(name, sec);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1200,6 +1318,115 @@ mod tests {
             mo99.reactions.iter().any(|r| r == "⁹⁸Mo(n,γ)"),
             "neutron route should be ⁹⁸Mo(n,γ); got {:?}",
             mo99.reactions
+        );
+    }
+
+    // ── Secondary (p,xn) neutron activation, end-to-end (ADR-0003 Phase 2) ──
+
+    #[test]
+    fn secondary_neutrons_from_pn_activate_the_stack() {
+        let mut db = InMemoryDataStore::new("test");
+        db.add_element(29, "Cu");
+        db.add_element(30, "Zn");
+        // PSTAR proton stopping for Cu (mirrors the stopping.rs test pattern).
+        let energies: Vec<f64> = (0..50)
+            .map(|i| 0.001_f64 * 10f64.powf(i as f64 / 10.0))
+            .collect();
+        let dedx_cu: Vec<f64> = energies.iter().map(|&e| 30.0 / e.sqrt()).collect();
+        db.add_stopping_data("PSTAR", 29, energies, dedx_cu);
+        // Charged (p,n): p + ⁶³Cu → ⁶³Zn — emits 1 free neutron.
+        db.add_cross_sections(
+            "p",
+            "Cu",
+            vec![CrossSectionData {
+                target_a: 63,
+                residual_z: 30,
+                residual_a: 63,
+                state: String::new(),
+                energies_mev: vec![1.0, 20.0],
+                xs_mb: vec![500.0, 500.0],
+            }],
+        );
+        // Neutron capture: n + ⁶³Cu → ⁶⁴Cu — activated by the secondary neutrons.
+        db.add_cross_sections(
+            "n",
+            "Cu",
+            vec![CrossSectionData {
+                target_a: 63,
+                residual_z: 29,
+                residual_a: 64,
+                state: String::new(),
+                energies_mev: vec![1e-3, 20.0],
+                xs_mb: vec![100.0, 100.0],
+            }],
+        );
+        db.add_decay_data(DecayData {
+            z: 30,
+            a: 63,
+            state: String::new(),
+            half_life_s: Some(2310.0),
+            decay_modes: vec![],
+        });
+        db.add_decay_data(DecayData {
+            z: 29,
+            a: 64,
+            state: String::new(),
+            half_life_s: Some(45720.0),
+            decay_modes: vec![],
+        });
+
+        let layer = Layer {
+            density_g_cm3: 8.96,
+            elements: vec![(
+                Element {
+                    symbol: "Cu".into(),
+                    z: 29,
+                    isotopes: HashMap::from([(63u32, 1.0)]),
+                },
+                1.0,
+            )],
+            thickness_cm: Some(0.1),
+            areal_density_g_cm2: None,
+            energy_out_mev: None,
+            is_monitor: false,
+            nist_compound: None,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        };
+        let mut stack = TargetStack {
+            beam: Beam::new(ProjectileType::Proton, 15.0, 1.0),
+            layers: vec![layer],
+            irradiation_time_s: 3600.0,
+            cooling_time_s: 0.0,
+            area_cm2: 1.0,
+            current_profile: None,
+        };
+
+        let result = compute_stack_with_secondary_neutrons(&db, &mut stack, true).unwrap();
+        let l = &result.layer_results[0];
+
+        // The layer recorded a positive (p,n) free-neutron source.
+        assert!(
+            l.neutron_source_rate > 0.0,
+            "expected positive (p,n) neutron source"
+        );
+        // Charged (p,n) product present.
+        assert!(
+            l.isotope_results.contains_key("Zn-63"),
+            "charged (p,n) should make Zn-63; got {:?}",
+            l.isotope_results.keys().collect::<Vec<_>>()
+        );
+        // Secondary neutron-capture product present, with the (n,γ) route.
+        let cu64 = l
+            .isotope_results
+            .get("Cu-64")
+            .expect("secondary (n,γ) should make Cu-64");
+        assert!(cu64.production_rate > 0.0, "positive Cu-64 production rate");
+        assert!(
+            cu64.reactions.iter().any(|r| r == "⁶³Cu(n,γ)"),
+            "secondary route should be ⁶³Cu(n,γ); got {:?}",
+            cu64.reactions
         );
     }
     use std::collections::HashMap;
