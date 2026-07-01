@@ -330,6 +330,11 @@ pub struct LayerResult {
     /// Keyed by the same isotope name as isotope_results. Summed across target channels.
     #[serde(default)]
     pub depth_production_rates: HashMap<String, Vec<f64>>,
+    /// Free neutrons produced per second in this layer by (x,n)-type charged
+    /// reactions — the source term for secondary neutron activation (ADR-0003
+    /// Phase 2). Zero on the neutron-source and stopping-only paths.
+    #[serde(default)]
+    pub neutron_source_rate: f64,
 }
 
 /// Full result for all layers in a stack.
