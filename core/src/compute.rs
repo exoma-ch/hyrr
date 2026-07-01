@@ -1196,7 +1196,7 @@ pub fn compute_stack_with_secondary_neutrons(
     for (charged_layer, sec_layer) in charged
         .layer_results
         .iter_mut()
-        .zip(secondary.layer_results.into_iter())
+        .zip(secondary.layer_results)
     {
         merge_secondary_isotopes(
             &mut charged_layer.isotope_results,
