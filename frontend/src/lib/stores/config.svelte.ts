@@ -581,7 +581,14 @@ export function clearLayers(): void {
 
 export function isConfigValid(): boolean {
   const { beam, irradiation_s } = state;
-  if (beam.energy_MeV <= 0 || beam.current_mA <= 0) return false;
+  // A neutron source (ADR-0003) has no beam energy/current — it's defined by a
+  // flux spectrum. Validate the flux instead, or the scheduler would treat every
+  // neutron run as invalid and never fire (→ "no activation").
+  if (beam.projectile === "n") {
+    if (!state.neutronFlux || state.neutronFlux.flux <= 0) return false;
+  } else if (beam.energy_MeV <= 0 || beam.current_mA <= 0) {
+    return false;
+  }
   if (state.items.length === 0) return false;
   if (irradiation_s <= 0) return false;
 
