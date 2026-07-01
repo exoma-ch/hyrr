@@ -19,8 +19,11 @@
 //! resolve a thermal peak at ~2.5e-8 MeV and a fast tail at tens of MeV in one
 //! sampling (spike #506, the #1 pitfall).
 
+use serde::{Deserialize, Serialize};
+
 use crate::constants::MILLIBARN_CM2;
 use crate::interpolation::{geomspace, interp, trapezoid};
+use crate::types::Layer;
 
 /// Thermal energy at 20 °C: kT = 0.0253 eV = 2.53e-8 MeV.
 pub const KT_THERMAL_MEV: f64 = 2.53e-8;
@@ -28,7 +31,11 @@ pub const KT_THERMAL_MEV: f64 = 2.53e-8;
 /// A neutron source's energy spectrum, φ(E) in n/cm²/s/MeV. Each shaped variant
 /// is analytically normalised so `∫φ dE == flux` (the total n/cm²/s). Ported
 /// from the legacy `src/hyrr/neutrons.py` prototype.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Serialised tagged by `kind` for the JSON boundary, e.g.
+/// `{"kind":"thermal","flux":1e13,"kt_mev":2.53e-8}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FluxModel {
     /// Maxwellian thermal: `φ(E) = flux·(2/√π)·√E/kT^{3/2}·exp(−E/kT)`.
     Thermal { flux: f64, kt_mev: f64 },
@@ -52,7 +59,7 @@ pub enum FluxModel {
         phi: Vec<f64>,
     },
     /// Sum of components (e.g. thermal + epithermal + fast).
-    Composite(Vec<FluxModel>),
+    Composite { components: Vec<FluxModel> },
 }
 
 impl FluxModel {
@@ -109,7 +116,7 @@ impl FluxModel {
                 energies_mev: te,
                 phi,
             } => interp(energies_mev, te, phi, 0.0, 0.0),
-            FluxModel::Composite(parts) => {
+            FluxModel::Composite { components: parts } => {
                 let mut acc = vec![0.0; energies_mev.len()];
                 for p in parts {
                     for (a, v) in acc.iter_mut().zip(p.phi(energies_mev)) {
@@ -130,7 +137,9 @@ impl FluxModel {
             | FluxModel::Fast { flux, .. }
             | FluxModel::Monoenergetic { flux, .. } => *flux,
             FluxModel::Custom { energies_mev, phi } => trapezoid(phi, energies_mev),
-            FluxModel::Composite(parts) => parts.iter().map(FluxModel::total_flux).sum(),
+            FluxModel::Composite { components: parts } => {
+                parts.iter().map(FluxModel::total_flux).sum()
+            }
         }
     }
 
@@ -162,7 +171,7 @@ impl FluxModel {
                 energies_mev.first().copied().unwrap_or(KT_THERMAL_MEV),
                 energies_mev.last().copied().unwrap_or(20.0),
             ),
-            FluxModel::Composite(parts) => {
+            FluxModel::Composite { components: parts } => {
                 parts.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
                     let (l, h) = p.support_mev();
                     (lo.min(l), hi.max(h))
@@ -170,6 +179,26 @@ impl FluxModel {
             }
         }
     }
+}
+
+/// JSON config for a neutron-source run — the neutron analogue of `TargetStack`
+/// (ADR-0003 Phase 1). Every layer sees the same incident `flux` (thin-target;
+/// inter-layer Σ_t attenuation is the follow-up). This is the shape the bindings
+/// deserialize at the JSON boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeutronStackConfig {
+    pub layers: Vec<Layer>,
+    pub flux: FluxModel,
+    #[serde(default)]
+    pub irradiation_s: f64,
+    #[serde(default)]
+    pub cooling_s: f64,
+    #[serde(default = "default_area_cm2")]
+    pub area_cm2: f64,
+}
+
+fn default_area_cm2() -> f64 {
+    1.0
 }
 
 /// Interpolate a cross-section [mb] onto `grid`, returning cm² (mb → cm²). Zero
@@ -334,16 +363,18 @@ mod tests {
 
     #[test]
     fn composite_sums_component_fluxes() {
-        let f = FluxModel::Composite(vec![
-            FluxModel::Thermal {
-                flux: 1.0e12,
-                kt_mev: KT_THERMAL_MEV,
-            },
-            FluxModel::Fast {
-                flux: 3.0e11,
-                temp_mev: 1.4,
-            },
-        ]);
+        let f = FluxModel::Composite {
+            components: vec![
+                FluxModel::Thermal {
+                    flux: 1.0e12,
+                    kt_mev: KT_THERMAL_MEV,
+                },
+                FluxModel::Fast {
+                    flux: 3.0e11,
+                    temp_mev: 1.4,
+                },
+            ],
+        };
         assert_eq!(f.total_flux(), 1.3e12);
     }
 
@@ -376,6 +407,27 @@ mod tests {
         assert!(
             (avg / (50.0 * MILLIBARN_CM2) - 1.0).abs() < 1e-3,
             "got {avg}"
+        );
+    }
+
+    #[test]
+    fn flux_model_json_roundtrips_tagged() {
+        let f = FluxModel::Thermal {
+            flux: 1.0e13,
+            kt_mev: KT_THERMAL_MEV,
+        };
+        let j = serde_json::to_string(&f).unwrap();
+        assert!(j.contains("\"kind\":\"thermal\""), "tagged by kind: {j}");
+        assert_eq!(serde_json::from_str::<FluxModel>(&j).unwrap(), f);
+        // Hand-written JSON (the frontend's shape) deserialises.
+        let fast: FluxModel =
+            serde_json::from_str(r#"{"kind":"fast","flux":1e14,"temp_mev":1.4}"#).unwrap();
+        assert_eq!(
+            fast,
+            FluxModel::Fast {
+                flux: 1e14,
+                temp_mev: 1.4
+            }
         );
     }
 
