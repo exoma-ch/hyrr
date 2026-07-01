@@ -180,9 +180,8 @@ closes the #444-class "which channel produced this?" gap).
    with an explicit emphasis: the charged-particle and neutron paths **must share
    the same core reaction-rate / production / Bateman functions** (DRY/SOLID), not
    fork into a parallel neutron pipeline. The shared abstraction is non-trivial —
-   **run a `spike` first** to design the common seam (the `∫σ(E)·kernel(E) dE`
-   reaction-rate integral, the depth-stepping trait, and the
-   production-term→chain-solver handoff) before implementing Phase 1.
+   a `spike` (#506) designed the common seam before Phase-1 code. See "Post-spike
+   refinements" below for the resulting seam (an **enum, not a trait**).
 2. **`f_fwd(E_p)` — go angular from the start.** Do not ship an isotropic-first
    milestone; the secondary transport carries the energy-dependent forward-peaking
    from its first landed version. `f_fwd = ½` remains only the degenerate fallback,
@@ -207,3 +206,61 @@ closes the #444-class "which channel produced this?" gap).
    The two are independent: a run is *either* a neutron-source run *or* a
    charged-particle run (optionally with the secondary toggle) — they don't stack
    in one beam.
+
+## Post-spike refinements (spike #506 — 3 fresh-context reviews)
+
+Rust-architecture, activation-physics, and cross-binding-maintenance reviews all
+returned **adopt-with-changes**, converging on the same corrections:
+
+- **Seam is an enum, not a depth trait.** The charged integral `∫σ/|dE/dx| dE` is
+  a *depth* integral in disguise (`w=1/|dE/dx|` is the Jacobian `dx/dE`; energy↔depth
+  is bijective, σ is *point-evaluated* at the single local energy). The neutron
+  integral folds the *full spectrum* at every depth (`∫σφ dE`) with attenuation as
+  a *separate* spatial operation. These are different integrals; a symmetric trait
+  is over-engineering at N=2. Use a 2-arm enum
+  `IrradiationModel::{Charged(..), Neutron(..)}` that each produce a
+  `DepthField { depths, local_energy, weight }`, reduced by **one shared**
+  `trapezoid` helper, feeding the **already-projectile-agnostic** chain solver.
+  Dispatch at *layer* granularity (not per depth-point) to keep the charged hot
+  loop monomorphized. Introduce a trait only if a 3rd stepping mode ever lands.
+- **Per-projectile energy grid (the #1 silent-failure risk).** The charged path
+  samples ~200 *linear*-in-E points on `[E_out, E_in]`; a thermal Maxwellian peaks
+  at ~2.5e-8 MeV. If the neutron path inherits the linear grid, thermal/epithermal
+  activation is silently, badly wrong. The grid is owned *by the model at the seam
+  boundary* — geomspace (e.g. `[1e-11, 20]` MeV) for neutrons.
+- **Conservation tests stay per-physics.** Keep the exact charged
+  `depth_rate_integrates_to_production_rate` identity; add a *separate* neutron
+  analytic check (`σ̄·N·φ₀·(1−e^{−Σt})/Σ_t`). Never loosen one tolerance to cover
+  both regimes.
+- **Secondary source is two components, not one spectrum × `f_fwd`** (refines
+  Decision 2). `f_fwd(E_p)·φ_evap(E)` is **not physically separable**: Weisskopf
+  evaporation is isotropic; forward-peaking is the *direct/pre-equilibrium*
+  component (a harder, different spectrum). Model **isotropic-evaporation ⊕
+  forward-direct** as two components. Still angular from the first landed version,
+  just physically honest.
+- **Multiplicity restricted to (x,n)-type channels.** The net-neutron count
+  `(A_t+A_p−A_r)−(Z_t+Z_p−Z_r)` overcounts nucleons *bound* in charged ejectiles
+  (a `(p,α)` residual would score 2 "free neutrons" bound in the α). Restrict to
+  `(x,n)`-type channels / subtract bound-ejectile nucleons.
+- **Attenuation-only is a labeled first-flight lower bound.** `Σ_t` includes
+  elastic scatter, so attenuating with the total cross-section *removes*
+  redirected-but-not-absorbed neutrons from the activation budget. Valid while
+  `Σ_t·x ≪ 1`; gate/label for thick / hydrogenous / moderating targets.
+- **`particles_per_second` divides by Z** (`types.rs:118`) — undefined for
+  neutrons. The neutron source is a distinct `Source` arm, not a `Z=0` beam.
+- **Config = one serde-tagged `Source` sum type, not optional-field soup.** Only
+  **two** boundaries are hand-maintained — the MCP JSON Schema (`mcp/tools.rs`) and
+  the compact URL encoder (`config_url.rs`); Py/WASM/Tauri share the serde structs.
+  Model `enum Source { Charged{energy,current,secondary_neutron:bool},
+  Neutron{spectrum,flux} }` with a manual/`untagged` deserializer that **falls back
+  to the legacy flat `{energy_mev,current_ma}` form**, so existing `#config=` hashes
+  and MCP calls keep deserializing. The "neutron requires spectrum" invariant lives
+  in one `TryFrom`, not four bindings.
+- **Provenance is cheap if kept integer-shaped.** `IsotopeResult.reactions` is
+  output-only → zero backward-compat cost. Accumulate a compact integer key
+  `{proj, target_a, prod_za, channel}` in the hot loop, dedupe per isotope, and
+  `format!` the human notation once at the marshal boundary;
+  `#[serde(skip_serializing_if = "Vec::is_empty")]` so charged-only runs don't
+  grow. Pin the `reactions` string format with a test (nothing pins it today).
+
+These refine — do not reverse — the decisions above. Phasing is unchanged.
