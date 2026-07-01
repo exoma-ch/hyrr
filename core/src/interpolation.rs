@@ -12,6 +12,30 @@ pub fn linspace(start: f64, stop: f64, num: usize) -> Vec<f64> {
     (0..num).map(|i| start + i as f64 * step).collect()
 }
 
+/// Generate log-spaced values (like numpy.geomspace). Both bounds must be > 0.
+///
+/// Required for neutron flux/cross-section integration: a Maxwellian thermal
+/// peak sits at ~2.5e-8 MeV while fast neutrons reach tens of MeV — a linear
+/// grid can't resolve both, so the neutron path samples in log-energy
+/// (ADR-0003 spike #506, the #1 silent-failure pitfall).
+pub fn geomspace(start: f64, stop: f64, num: usize) -> Vec<f64> {
+    if num == 0 {
+        return Vec::new();
+    }
+    if num == 1 {
+        return vec![start];
+    }
+    debug_assert!(
+        start > 0.0 && stop > 0.0,
+        "geomspace bounds must be positive"
+    );
+    let (log_start, log_stop) = (start.ln(), stop.ln());
+    let step = (log_stop - log_start) / (num - 1) as f64;
+    (0..num)
+        .map(|i| (log_start + i as f64 * step).exp())
+        .collect()
+}
+
 /// Trapezoidal integration of y over x.
 pub fn trapezoid(y: &[f64], x: &[f64]) -> f64 {
     assert_eq!(y.len(), x.len());

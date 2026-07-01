@@ -8,12 +8,13 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use hyrr_core::bateman::bateman_activity as rust_bateman;
-use hyrr_core::compute::compute_stack;
+use hyrr_core::compute::{compute_neutron_stack, compute_stack};
 use hyrr_core::data_fetch;
 use hyrr_core::data_fetch::{FetchProgress, FetchStage};
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::formula::parse_formula;
 use hyrr_core::materials::resolve_material;
+use hyrr_core::neutron::FluxModel;
 use hyrr_core::production::saturation_yield as rust_sat_yield;
 use hyrr_core::stopping;
 use hyrr_core::types::*;
@@ -107,6 +108,54 @@ impl PyDataStore {
         let json = serde_json::to_string(&result)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
         Ok(json)
+    }
+
+    /// Run neutron-source activation (ADR-0003 Phase 1). `config_json` is a
+    /// SimulationConfig (layers + times; `beam` ignored); `flux_json` is a
+    /// tagged FluxModel, e.g. `{"kind":"fast","flux":1e14,"temp_mev":1.4}`.
+    /// Output: bare StackResult JSON.
+    fn compute_neutron_stack(&self, config_json: &str, flux_json: &str) -> PyResult<String> {
+        let config: SimConfig = serde_json::from_str(config_json)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid config: {e}")))?;
+        let flux: FluxModel = serde_json::from_str(flux_json).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Invalid neutron flux: {e}"))
+        })?;
+
+        let mut db = self
+            .inner
+            .lock()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+
+        // Lazily load the neutron cross-sections for every element present.
+        for lc in &config.layers {
+            let resolution = resolve_material(
+                &*db,
+                &lc.material,
+                lc.enrichment.as_ref(),
+                None,
+                lc.density_g_cm3,
+            )
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            for (elem, _) in &resolution.elements {
+                db.load_xs("n", elem.z)
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+            }
+        }
+
+        let layers =
+            config_to_layers(&*db, &config).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+        let result = compute_neutron_stack(
+            &*db,
+            &layers,
+            &flux,
+            config.irradiation_s,
+            config.cooling_s,
+            1.0,
+            true,
+        );
+        serde_json::to_string(&result)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
     }
 }
 

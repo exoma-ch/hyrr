@@ -8,10 +8,11 @@ use std::collections::HashMap;
 
 mod trace;
 
-use hyrr_core::compute::compute_stack;
+use hyrr_core::compute::{compute_neutron_stack, compute_stack};
 use hyrr_core::db::{DatabaseProtocol, InMemoryDataStore};
 use hyrr_core::formula::parse_formula;
 use hyrr_core::materials::resolve_material;
+use hyrr_core::neutron::FluxModel;
 use hyrr_core::production::generate_depth_profile;
 use hyrr_core::stopping::{
     StoppingError, compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm,
@@ -238,6 +239,37 @@ impl WasmDataStore {
 
         let result =
             compute_stack(&self.inner, &mut stack, true).map_err(stopping_error_to_jsvalue)?;
+        let sim_result = convert_stack_result(config_json, &result);
+        serde_json::to_string(&sim_result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Neutron-source activation (ADR-0003 Phase 1). `config_json` carries the
+    /// layer stack + irradiation/cooling times (same shape as `computeStack`,
+    /// its `beam` ignored); `flux_json` is a tagged `FluxModel`, e.g.
+    /// `{"kind":"fast","flux":1e14,"temp_mev":1.4}`. Every layer sees the same
+    /// incident spectrum (thin-target). Result JSON matches `computeStack`.
+    #[wasm_bindgen(js_name = computeNeutronStack)]
+    pub fn compute_neutron_stack_js(
+        &self,
+        config_json: &str,
+        flux_json: &str,
+    ) -> Result<String, JsValue> {
+        let config: SimulationConfig =
+            serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let flux: FluxModel = serde_json::from_str(flux_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid neutron flux: {e}")))?;
+
+        let layers = config_to_layers(&self.inner, &config).map_err(|e| JsValue::from_str(&e))?;
+
+        let result = compute_neutron_stack(
+            &self.inner,
+            &layers,
+            &flux,
+            config.irradiation_s,
+            config.cooling_s,
+            1.0,
+            true,
+        );
         let sim_result = convert_stack_result(config_json, &result);
         serde_json::to_string(&sim_result).map_err(|e| JsValue::from_str(&e.to_string()))
     }

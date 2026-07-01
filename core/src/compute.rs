@@ -7,6 +7,7 @@ use crate::chains::{discover_chains, solve_chain, split_components};
 use crate::constants::{ACTIVITY_CUTOFF_FRACTION, AVOGADRO, LN2, MAX_CHAIN_SIZE};
 use crate::db::DatabaseProtocol;
 use crate::interpolation::{linspace, trapezoid};
+use crate::neutron::{neutron_channel_rate, FluxModel};
 use crate::production::{
     compute_depth_production_rate, compute_production_rate, generate_depth_profile,
     saturation_yield,
@@ -932,10 +933,275 @@ fn clamp_activities_to_saturation(
     }
 }
 
+// ─── Neutron-source activation (ADR-0003 Phase 1 — primary source) ──────────
+
+/// Energy-grid resolution for the neutron flux×σ fold (log-spaced, per flux).
+const NEUTRON_GRID_POINTS: usize = 400;
+
+/// Compute neutron-source activation of a layered target.
+///
+/// Neutrons carry no beam energy to step down, so — in this thin-target phase —
+/// every layer sees the same incident spectrum `flux` (inter-layer Σ_t
+/// attenuation is the follow-up needing the `nucl-parquet` total-xs reader).
+/// Produces the same [`StackResult`] shape as [`compute_stack`] and feeds the
+/// shared, projectile-agnostic decay-chain solver — the seam is "two pipelines,
+/// one back-half" (spike #506), not a forced trait.
+pub fn compute_neutron_stack(
+    db: &dyn DatabaseProtocol,
+    layers: &[Layer],
+    flux: &FluxModel,
+    irradiation_time_s: f64,
+    cooling_time_s: f64,
+    area_cm2: f64,
+    enable_chains: bool,
+) -> StackResult {
+    let layer_results = layers
+        .iter()
+        .map(|layer| {
+            compute_neutron_layer(
+                db,
+                layer,
+                flux,
+                irradiation_time_s,
+                cooling_time_s,
+                area_cm2,
+                enable_chains,
+            )
+        })
+        .collect();
+    StackResult {
+        layer_results,
+        irradiation_time_s,
+        cooling_time_s,
+    }
+}
+
+fn compute_neutron_layer(
+    db: &dyn DatabaseProtocol,
+    layer: &Layer,
+    flux: &FluxModel,
+    irr_time: f64,
+    cool_time: f64,
+    area: f64,
+    enable_chains: bool,
+) -> LayerResult {
+    let blank = LayerResult {
+        energy_in: 0.0,
+        energy_out: 0.0,
+        delta_e_mev: 0.0,
+        heat_kw: 0.0,
+        depth_profile: Vec::new(),
+        isotope_results: HashMap::new(),
+        stopping_power_sources: HashMap::new(),
+        depth_production_rates: HashMap::new(),
+    };
+
+    // Neutron layers are specified by thickness (no energy-loss stepping).
+    let thickness = layer
+        .thickness_cm
+        .or_else(|| {
+            (layer.density_g_cm3 > 0.0)
+                .then(|| layer.areal_density_g_cm2.map(|ad| ad / layer.density_g_cm3))
+                .flatten()
+        })
+        .unwrap_or(0.0);
+    let avg_a = layer.average_atomic_mass();
+    if thickness <= 0.0 || avg_a <= 0.0 {
+        return blank;
+    }
+    let number_density = layer.density_g_cm3 * AVOGADRO / avg_a; // atoms/cm³
+
+    let mut isotope_results: HashMap<String, IsotopeResult> = HashMap::new();
+
+    for (elem, atom_frac) in &layer.elements {
+        let target_symbol = db.get_element_symbol(elem.z);
+        for (&a_target, &abundance) in &elem.isotopes {
+            let n_target = number_density * atom_frac * abundance;
+            if n_target <= 0.0 {
+                continue;
+            }
+            for xs in &db.get_cross_sections("n", elem.z, a_target) {
+                // Thin-target: empty Σ_t ⇒ the depth factor is the thickness.
+                let rate = neutron_channel_rate(
+                    &xs.energies_mev,
+                    &xs.xs_mb,
+                    flux,
+                    &[],
+                    &[],
+                    n_target,
+                    area,
+                    thickness,
+                    NEUTRON_GRID_POINTS,
+                );
+                if rate <= 0.0 {
+                    continue;
+                }
+
+                let decay = db.get_decay_data(xs.residual_z, xs.residual_a, &xs.state);
+                let half_life = decay.as_ref().and_then(|d| d.half_life_s);
+                let symbol = db.get_element_symbol(xs.residual_z);
+                let state_suffix = if xs.state == "g" { "" } else { &xs.state };
+                let name = format!("{}-{}{}", symbol, xs.residual_a, state_suffix);
+
+                // Neutron production route, e.g. "⁹⁸Mo(n,γ)" — incident n is Z=0, A=1.
+                let dz = elem.z as i32 - xs.residual_z as i32;
+                let da = (a_target + 1) as i32 - xs.residual_a as i32;
+                let route = reaction_route(&target_symbol, a_target, "n", dz, da);
+
+                let bateman = bateman_activity(rate, half_life, irr_time, cool_time, 200);
+                let activity_final = bateman.activity.last().copied().unwrap_or(0.0);
+
+                if let Some(existing) = isotope_results.get_mut(&name) {
+                    let combined_rate = existing.production_rate + rate;
+                    let combined =
+                        bateman_activity(combined_rate, half_life, irr_time, cool_time, 200);
+                    existing.production_rate = combined_rate;
+                    existing.activity_bq = combined.activity.last().copied().unwrap_or(0.0);
+                    existing.time_grid_s = combined.time_grid;
+                    existing.activity_vs_time_bq = combined.activity;
+                    if let Some(r) = &route {
+                        if !existing.reactions.contains(r) {
+                            existing.reactions.push(r.clone());
+                        }
+                    }
+                } else {
+                    isotope_results.insert(
+                        name.clone(),
+                        IsotopeResult {
+                            name,
+                            z: xs.residual_z,
+                            a: xs.residual_a,
+                            state: if xs.state == "g" {
+                                String::new()
+                            } else {
+                                xs.state.clone()
+                            },
+                            half_life_s: half_life,
+                            production_rate: rate,
+                            // Bq/µA is a charged-beam yield metric; n/a for a flux source.
+                            saturation_yield_bq_ua: 0.0,
+                            activity_bq: activity_final,
+                            time_grid_s: bateman.time_grid,
+                            activity_vs_time_bq: bateman.activity,
+                            source: "direct".to_string(),
+                            activity_direct_bq: 0.0,
+                            activity_ingrowth_bq: 0.0,
+                            activity_direct_vs_time_bq: Vec::new(),
+                            activity_ingrowth_vs_time_bq: Vec::new(),
+                            reactions: route.iter().cloned().collect(),
+                            decay_notations: Vec::new(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    if !isotope_results.is_empty() {
+        let peak = isotope_results
+            .values()
+            .map(|i| i.activity_bq)
+            .fold(0.0, f64::max);
+        let cutoff = peak * ACTIVITY_CUTOFF_FRACTION;
+        isotope_results.retain(|_, iso| iso.activity_vs_time_bq.iter().any(|&a| a > cutoff));
+    }
+    if enable_chains && !isotope_results.is_empty() {
+        // Shared back-half. No beam current / profile for a neutron source, so
+        // particles_per_s and nominal_current are inert (used only when a
+        // current_profile is present).
+        isotope_results = apply_chain_solver_by_component(
+            db,
+            isotope_results,
+            irr_time,
+            cool_time,
+            0.0,
+            None,
+            0.0,
+        );
+    }
+    clamp_activities_to_saturation(&mut isotope_results, irr_time);
+
+    LayerResult {
+        isotope_results,
+        ..blank
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::InMemoryDataStore;
+    use crate::neutron::{FluxModel, KT_THERMAL_MEV};
+
+    // ── Neutron-source activation, end-to-end (ADR-0003 Phase 1) ─────────
+
+    #[test]
+    fn neutron_capture_produces_daughter_with_route() {
+        let mut db = InMemoryDataStore::new("test");
+        db.add_element(42, "Mo");
+        // ⁹⁹Mo — 66 h, radioactive so it registers past the activity cutoff.
+        db.add_decay_data(DecayData {
+            z: 42,
+            a: 99,
+            state: String::new(),
+            half_life_s: Some(237_000.0),
+            decay_modes: vec![],
+        });
+        // n + ⁹⁸Mo → ⁹⁹Mo radiative capture, flat 100 mb thermal→fast.
+        db.add_cross_sections(
+            "n",
+            "Mo",
+            vec![CrossSectionData {
+                target_a: 98,
+                residual_z: 42,
+                residual_a: 99,
+                state: String::new(),
+                energies_mev: vec![1e-11, 20.0],
+                xs_mb: vec![100.0, 100.0],
+            }],
+        );
+
+        let layer = Layer {
+            density_g_cm3: 10.28,
+            elements: vec![(
+                Element {
+                    symbol: "Mo".into(),
+                    z: 42,
+                    isotopes: HashMap::from([(98u32, 1.0)]),
+                },
+                1.0,
+            )],
+            thickness_cm: Some(0.1),
+            areal_density_g_cm2: None,
+            energy_out_mev: None,
+            is_monitor: false,
+            nist_compound: None,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        };
+        let flux = FluxModel::Thermal {
+            flux: 1.0e13,
+            kt_mev: KT_THERMAL_MEV,
+        };
+        let result = compute_neutron_stack(&db, &[layer], &flux, 3600.0, 0.0, 1.0, true);
+
+        let l = &result.layer_results[0];
+        let mo99 = l
+            .isotope_results
+            .get("Mo-99")
+            .expect("Mo-99 produced by neutron capture");
+        assert!(
+            mo99.production_rate > 0.0,
+            "expected positive production rate"
+        );
+        assert!(mo99.activity_bq > 0.0, "expected positive activity");
+        assert!(
+            mo99.reactions.iter().any(|r| r == "⁹⁸Mo(n,γ)"),
+            "neutron route should be ⁹⁸Mo(n,γ); got {:?}",
+            mo99.reactions
+        );
+    }
     use std::collections::HashMap;
 
     // ── Reaction-route provenance (#444) ─────────────────────────────────
