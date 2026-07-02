@@ -376,6 +376,23 @@ export function restoreSerializableConfig(c: SerializableConfig): void {
   });
 }
 
+/** SSoT loader for a full SimulationConfig (preset, deep-link, session import).
+ *  Maps to SerializableConfig and routes through restoreSerializableConfig so
+ *  every "load a whole config" path — feeling-lucky, the #preset= deep-link —
+ *  shares one code path. The currentProfile (which can't ride in a #config=
+ *  hash) is carried through here, since presets build it locally. */
+export function restoreFromSimConfig(c: SimulationConfig): void {
+  restoreSerializableConfig({
+    beam: c.beam,
+    items: c.layers,
+    irradiation_s: c.irradiation_s,
+    cooling_s: c.cooling_s,
+    currentProfile: c.currentProfile
+      ? { timesS: Array.from(c.currentProfile.timesS), currentsMA: Array.from(c.currentProfile.currentsMA) }
+      : undefined,
+  });
+}
+
 // ─── Setters ────────────────────────────────────────────────────────
 
 export function setConfig(c: SimulationConfig): void {
