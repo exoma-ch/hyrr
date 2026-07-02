@@ -394,7 +394,15 @@
     align-items: stretch;
     flex: 1;
     min-width: 0;
-    overflow: hidden;
+    /* Scroll, don't clip: on a narrow header the session tabs fill the strip
+       and the right-aligned "Feeling Lucky" tab would be cut off by
+       overflow:hidden (and unclickable). overflow-x:auto keeps it reachable. */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .tab-strip::-webkit-scrollbar {
+    display: none;
   }
 
   /* Feeling Lucky tab */

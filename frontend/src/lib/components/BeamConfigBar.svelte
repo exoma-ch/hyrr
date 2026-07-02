@@ -614,5 +614,14 @@
     .field:last-child {
       grid-column: 1 / -1;
     }
+
+    /* The current/irradiation group carries the profile-preview-btn (a 120px
+       sparkline + stats, white-space:nowrap) which overflows a single 1fr grid
+       cell and lands on top of the next field (Cooling) — its clear × then
+       can't be clicked. Give the group the full row so Cooling wraps below it
+       instead of overlapping. */
+    .current-irrad-group {
+      grid-column: 1 / -1;
+    }
   }
 </style>

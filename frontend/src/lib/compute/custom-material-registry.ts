@@ -17,6 +17,7 @@ import {
   setCustomDensityLookup as setPkgDensityLookup,
   setCustomCompositionLookup as setPkgCompositionLookup,
 } from "@hyrr/compute";
+import { getSessionComposition } from "../config-url-v2";
 
 /** Lazy getter — called on every lookup so mutations are always visible. */
 let getMaterials: () => CustomMaterial[] = () => [];
@@ -26,9 +27,17 @@ let getMaterials: () => CustomMaterial[] = () => [];
 export function initCustomMaterialRegistry(getter: () => CustomMaterial[]): void {
   getMaterials = getter;
 
-  // Wire the @hyrr/compute package lookups (used by config store's migrateMissingDensities)
-  setPkgDensityLookup((id) => lookupByIdentifier(id)?.density ?? null);
-  setPkgCompositionLookup((id) => lookupByIdentifier(id)?.massFractions ?? null);
+  // Wire the @hyrr/compute package lookups (used by config store's
+  // migrateMissingDensities + the compute backend). Chain to session
+  // compositions so a custom that arrived via a share link (#96) still
+  // resolves here — otherwise this re-wire clobbers the session lookup the
+  // decoder installed and the shared layer computes as zero mass.
+  setPkgDensityLookup(
+    (id) => lookupByIdentifier(id)?.density ?? getSessionComposition(id)?.d ?? null,
+  );
+  setPkgCompositionLookup(
+    (id) => lookupByIdentifier(id)?.massFractions ?? getSessionComposition(id)?.e ?? null,
+  );
 }
 
 /** Look up by exact name (for compute backend: name → formula + density). */
