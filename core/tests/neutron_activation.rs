@@ -87,3 +87,56 @@ fn fast_neutron_activates_co59_to_co60() {
         co60.reactions
     );
 }
+
+/// Thermal neutron capture now works: with the resonance-reconstructed thermal
+/// data (nucl-parquet), a Maxwellian thermal flux on cobalt produces Co-60 via
+/// ⁵⁹Co(n,γ). Before reconstruction this folded to ~0 (fast-only data).
+#[test]
+fn thermal_neutron_activates_co59_to_co60() {
+    let Some(dir) = data_dir() else {
+        eprintln!("skipping: no nucl-parquet data dir");
+        return;
+    };
+    let db = ParquetDataStore::new(&dir, "tendl-2023-iso").expect("open data store");
+    let co = Element {
+        symbol: "Co".to_string(),
+        z: 27,
+        isotopes: HashMap::from([(59u32, 1.0)]),
+    };
+    let layer = Layer {
+        density_g_cm3: 8.9,
+        elements: vec![(co, 1.0)],
+        thickness_cm: Some(0.05),
+        areal_density_g_cm2: None,
+        energy_out_mev: None,
+        is_monitor: false,
+        nist_compound: None,
+        computed_energy_in: 0.0,
+        computed_energy_out: 0.0,
+        computed_thickness: 0.0,
+    };
+    // Maxwellian thermal flux (kT = 0.0253 eV = 2.53e-8 MeV).
+    let flux = FluxModel::Thermal {
+        flux: 1.0e14,
+        kt_mev: 2.53e-8,
+    };
+    let result = compute_neutron_stack(&db, &[layer], &flux, 86_400.0, 0.0, 1.0, true);
+    let l = &result.layer_results[0];
+    let co60 = l
+        .isotope_results
+        .iter()
+        .find(|(name, _)| name.starts_with("Co-60"))
+        .map(|(_, iso)| iso)
+        .unwrap_or_else(|| {
+            panic!(
+                "thermal flux must produce Co-60 via ⁵⁹Co(n,γ) with reconstructed \
+                 thermal data; isotopes: {:?}",
+                l.isotope_results.keys().collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        co60.activity_bq > 0.0,
+        "positive Co-60 activity under thermal flux (got {})",
+        co60.activity_bq
+    );
+}

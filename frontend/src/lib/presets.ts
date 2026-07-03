@@ -198,4 +198,17 @@ export const PRESETS: Preset[] = [
       neutronFlux: { kind: "fast", flux: 1e13, temp_mev: 1.4 },
     },
   },
+  {
+    id: "co60-thermal",
+    name: "Co-60 (thermal n,γ)",
+    description:
+      "Reactor thermal-neutron production: thermal n + Co-59 → Co-60 via (n,γ). How Co-60 is actually made — thermal capture (37 b) dominates. Needs the reconstructed thermal cross-sections.",
+    config: {
+      beam: { projectile: "n", energy_MeV: 0.025e-6, current_mA: 0 },
+      layers: [{ material: "Co", thickness_cm: 0.05, density_g_cm3: 8.9 }],
+      irradiation_s: 86400 * 30,
+      cooling_s: 0,
+      neutronFlux: { kind: "thermal", flux: 1e14, kt_mev: 2.53e-8 },
+    },
+  },
 ];
