@@ -180,6 +180,25 @@
     const v = parseFloat((e.target as HTMLInputElement).value);
     if (!isNaN(v) && v > 0) setNeutronFlux({ ...neutronFlux, flux: v });
   }
+
+  // Contextual shape parameter per spectrum kind (mono → E₀, fast → T,
+  // thermal → kT). Epithermal uses a fixed 1/E band, so no single scalar knob.
+  type SpectrumParam = { key: keyof NeutronFluxConfig; label: string; unit: string };
+  let spectrumParam = $derived<SpectrumParam | null>(
+    neutronFlux.kind === "monoenergetic"
+      ? { key: "e0_mev", label: "Energy", unit: "MeV" }
+      : neutronFlux.kind === "fast"
+        ? { key: "temp_mev", label: "Temp", unit: "MeV" }
+        : neutronFlux.kind === "thermal"
+          ? { key: "kt_mev", label: "kT", unit: "MeV" }
+          : null,
+  );
+
+  function onSpectrumParamChange(e: Event) {
+    if (!spectrumParam) return;
+    const v = parseFloat((e.target as HTMLInputElement).value);
+    if (!isNaN(v) && v > 0) setNeutronFlux({ ...neutronFlux, [spectrumParam.key]: v });
+  }
   let profileMode = $derived<"constant" | "profile">(currentProfile ? "profile" : "constant");
   let popupOpen = $state(false);
   let stats = $derived(currentProfile ? computeProfileStats(currentProfile) : null);
@@ -224,6 +243,22 @@
         {/each}
       </select>
     </div>
+    {#if spectrumParam}
+      <div class="field">
+        <label for="bcb-spec-param">{spectrumParam.label}</label>
+        <div class="input-group">
+          <input
+            id="bcb-spec-param"
+            type="text"
+            inputmode="decimal"
+            value={neutronFlux[spectrumParam.key] ?? ""}
+            onfocus={(e) => (e.target as HTMLInputElement).select()}
+            onchange={onSpectrumParamChange}
+          />
+          <span class="unit">{spectrumParam.unit}</span>
+        </div>
+      </div>
+    {/if}
   {/if}
 
   <!-- Current + Irradiation group: toggle spans both -->
@@ -292,20 +327,17 @@
     </div>
   </div>
 
-  {#if !isNeutron}
-    <div class="field secondary-neutron">
-      <label class="sn-toggle" title="Also model neutrons produced by (x,n) reactions activating the target (ADR-0003 Phase 2, first-order estimate)">
-        <input
-          type="checkbox"
-          checked={secondaryNeutron}
-          onchange={(e) => setSecondaryNeutron((e.target as HTMLInputElement).checked)}
-        />
-        <span>Secondary n</span>
-      </label>
-    </div>
-  {/if}
-
   <div class="sim-controls">
+    {#if !isNeutron}
+      <button
+        class="mode-btn sn-btn"
+        class:on={secondaryNeutron}
+        onclick={() => setSecondaryNeutron(!secondaryNeutron)}
+        title="Also model neutrons produced by (x,n) reactions activating the target (ADR-0003 Phase 2, first-order estimate)"
+      >
+        2nd n {secondaryNeutron ? "on" : "off"}
+      </button>
+    {/if}
     <button class="mode-btn" class:auto={simMode === "auto"} onclick={toggleMode} title="Toggle auto/manual simulation">
       {simMode === "auto" ? "Auto" : "Manual"}
     </button>
@@ -441,6 +473,15 @@
     border-color: var(--c-green);
     color: var(--c-green-text);
     background: var(--c-green-tint);
+  }
+
+  /* Secondary-neutron toggle: reads clearly on/off in dark mode (accent-tinted
+     when active), sits just left of the Auto/Manual control. */
+  .sn-btn.on {
+    border-color: var(--c-accent);
+    color: var(--c-accent);
+    background: var(--c-accent-tint);
+    font-weight: 600;
   }
 
   .run-btn {

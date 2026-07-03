@@ -56,7 +56,37 @@ const WITH_GROUP: SerializableConfig = {
   cooling_s: 86400,
 };
 
+const NEUTRON: SerializableConfig = {
+  beam: { projectile: "n", energy_MeV: 14, current_mA: 0 },
+  items: [{ material: "Al", thickness_cm: 0.1, density_g_cm3: 2.7 }],
+  irradiation_s: 86400,
+  cooling_s: 3600,
+  neutronFlux: { kind: "monoenergetic", flux: 1e12, e0_mev: 14.1 },
+};
+
 describe("config-url-v2", () => {
+  it("round-trips a neutron source config (spectrum + flux survive, ADR-0003)", () => {
+    const hash = encodeConfigV2(NEUTRON);
+    const payload = hash.replace("#config=1:", "");
+    const decoded = decodeConfigV2Ser(payload)!;
+    expect(decoded.beam.projectile).toBe("n");
+    // The spectrum + magnitude must survive — else a shared neutron run silently
+    // reverts to the default fast flux (the bug this guards).
+    expect(decoded.neutronFlux).toEqual(NEUTRON.neutronFlux);
+  });
+
+  it("round-trips the secondary-neutron toggle", () => {
+    const cfg: SerializableConfig = {
+      beam: { projectile: "p", energy_MeV: 30, current_mA: 0.1 },
+      items: [{ material: "Ni", thickness_cm: 0.1 }],
+      irradiation_s: 3600,
+      cooling_s: 0,
+      secondaryNeutron: true,
+    };
+    const decoded = decodeConfigV2Ser(encodeConfigV2(cfg).replace("#config=1:", ""))!;
+    expect(decoded.secondaryNeutron).toBe(true);
+  });
+
   it("round-trips simple config", () => {
     const hash = encodeConfigV2(SIMPLE);
     const payload = hash.replace("#config=1:", "");

@@ -114,6 +114,10 @@ function compactConfig(config: SerializableConfig): any {
     }),
     i: config.irradiation_s,
     c: config.cooling_s,
+    // Neutron activation (ADR-0003): carry the spectrum + secondary toggle so a
+    // shared neutron run round-trips (omitted for charged runs to keep URLs short).
+    ...(config.neutronFlux ? { nf: config.neutronFlux } : {}),
+    ...(config.secondaryNeutron ? { sn: true } : {}),
   };
 }
 
@@ -197,6 +201,8 @@ function expandConfigSer(compact: any): SerializableConfig | null {
     }),
     irradiation_s: compact.i,
     cooling_s: compact.c,
+    ...(compact.nf ? { neutronFlux: compact.nf } : {}),
+    ...(compact.sn ? { secondaryNeutron: true } : {}),
   };
 }
 
@@ -219,6 +225,8 @@ function expandConfigFlat(compact: any): SimulationConfig | null {
     layers,
     irradiation_s: compact.i,
     cooling_s: compact.c,
+    ...(compact.nf ? { neutronFlux: compact.nf } : {}),
+    ...(compact.sn ? { secondary_neutron: true } : {}),
   };
 }
 
