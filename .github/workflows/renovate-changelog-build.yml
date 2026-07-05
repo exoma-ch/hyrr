@@ -1,0 +1,102 @@
+# Append Keep-a-Changelog Unreleased entries for Renovate dependency PRs (Refs: #506, #562).
+# Read-only build on pull_request; privileged commit runs via workflow_run from default branch.
+
+name: Renovate changelog build
+
+on:  # yamllint disable-line rule:truthy
+  pull_request:
+    types: [opened, synchronize]
+
+permissions: {}
+
+jobs:
+  resolve-image:
+    name: Resolve image tag
+    if: >-
+      github.event.pull_request.user.login == 'renovate[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    outputs:
+      image-tag: ${{ steps.resolve.outputs.image-tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          sparse-checkout: |
+            .vig-os
+            .github/actions/resolve-image
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve container image
+        id: resolve
+        uses: ./.github/actions/resolve-image
+
+  build:
+    name: Build changelog artifact
+    if: >-
+      github.event.pull_request.user.login == 'renovate[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    needs: [resolve-image]
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/vig-os/devcontainer:${{ needs.resolve-image.outputs.image-tag }}
+    timeout-minutes: 10
+    concurrency:
+      group: renovate-changelog-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Update CHANGELOG.md from Renovate PR metadata
+        id: update
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          GITHUB_REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          renovate-changelog-pr
+          if git diff --quiet CHANGELOG.md 2>/dev/null; then
+            echo "modified=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "modified=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare changelog artifact
+        shell: bash
+        env:
+          MODIFIED: ${{ steps.update.outputs.modified }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p changelog-artifact
+          {
+            echo "MODIFIED=${MODIFIED}"
+            echo "PR_NUMBER=${PR_NUMBER}"
+            echo "HEAD_REF=${HEAD_REF}"
+          } > changelog-artifact/metadata.env
+          if [[ "${MODIFIED}" == "true" ]]; then
+            cp CHANGELOG.md changelog-artifact/
+          fi
+
+      - name: Upload changelog artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: renovate-changelog
+          path: changelog-artifact/
+          retention-days: 1

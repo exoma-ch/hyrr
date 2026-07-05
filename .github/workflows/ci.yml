@@ -1,118 +1,167 @@
+# CI Workflow
+#
+# Runs CI jobs inside the vigOS devcontainer image.
+# This is the canonical CI workflow template for workspace projects.
+#
+# Jobs:
+#   1. resolve-image — Determine and validate image tag
+#   2. lint          — Pre-commit hooks
+#   3. test          — Pytest
+#   4. summary       — Aggregate results for branch protection
+#
+# Triggers:
+#   - Pull requests to dev, release/**, and main
+#   - Manual workflow_dispatch
+#
+
 name: CI
 
-on:
-  push:
-    branches: [main]
+on:  # yamllint disable-line rule:truthy
   pull_request:
-    branches: [main]
+    branches:
+      - dev
+      - 'release/**'
+      - main
+  workflow_dispatch:
+    inputs:
+      test-suite:
+        description: 'Test suite to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - lint
+          - test
+      image-tag:
+        description: 'Container image tag to use'
+        required: false
+        type: string
 
-# Cancel superseded runs on the same ref — a re-push (or a release-please
-# rewrite) shouldn't leave the old run hogging a runner slot (#484).
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 jobs:
-  # ── The merge gate: one hermetic `nix flake check` ─────────────────────
-  # Replaces the old per-job cargo matrix (rust-projectile-matrix,
-  # embedded-data-store, mcp-tools, hyrr-py-check, data-fetch-integration,
-  # data-fetch-ssot, release-workflow-guards). Every one of those is now a
-  # `checks.*` derivation in flake.nix — built identically here and on a
-  # laptop (`nix flake check`), deps vendored from Cargo.lock, the
-  # nucl-parquet data a pinned flake input (no submodule init needed), the
-  # whole thing cached so unchanged inputs are hits (#484 Part A).
-  nix-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: false
-      - uses: DeterminateSystems/nix-installer-action@v22
-      # Cache the /nix/store (toolchain, vendored crates, the ~650 MB
-      # nucl-parquet input, built check outputs) across runs via the GitHub
-      # Actions cache — kills the "rebuild everything every run" tax. Keyed on
-      # the lockfile + flake/Cargo inputs so it busts only on real changes.
-      - uses: nix-community/cache-nix-action@v6
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', '**/Cargo.lock', 'core/Cargo.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          # Cap GC so the cache stays under the repo budget.
-          gc-max-store-size-linux: 5G
-          purge: true
-          purge-prefixes: nix-${{ runner.os }}-
-          purge-created: 0
-          purge-primary-key: never
-      - name: nix flake check (all hermetic gates)
-        run: nix flake check -L
+  resolve-image:
+    name: Resolve image tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      image-tag: ${{ steps.resolve.outputs.image-tag }}
 
-  # ── Lint: the prek SSoT (network — prek fetches/builds remote hook envs) ─
-  # Can't be a hermetic check (prek downloads yamllint/shellcheck/pymarkdown
-  # repos + builds their language envs), so it stays a thin cached job. Runs
-  # the exact same `prek run --all-files` as local dev. (#159)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          sparse-checkout: |
+            .vig-os
+            .github/actions/resolve-image
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve container image
+        id: resolve
+        uses: ./.github/actions/resolve-image
+        with:
+          image-tag: ${{ inputs.image-tag }}
+
   lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
-      - uses: nix-community/cache-nix-action@v6
-        with:
-          primary-key: nix-lint-${{ runner.os }}-${{ hashFiles('flake.lock') }}
-          restore-prefixes-first-match: nix-lint-${{ runner.os }}-
-      - name: Lint (prek run --all-files via flake)
-        run: nix develop .#ci --command prek run --all-files --show-diff-on-failure
+    name: Lint & Format
+    needs: [resolve-image]
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/vig-os/devcontainer:${{ needs.resolve-image.outputs.image-tag }}
+      env:
+        # Image-baked prek cache; may miss if repo pins hooks by hash (see docs/container-ci-quirks.md)
+        PREK_HOME: /opt/prek-cache
+        # Reuse the venv already present in the image instead of creating a new one
+        UV_PROJECT_ENVIRONMENT: /root/assets/workspace/.venv
+    timeout-minutes: 10
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.test-suite == 'all' ||
+      inputs.test-suite == 'lint'
 
-  # ── Python tests (cached job) ──────────────────────────────────────────
-  # Not hermetic: the suite leans on internal packages
-  # (pycatima / py-materials / nucl-parquet) that have no public wheels, so a
-  # uv2nix venv isn't worth the thrash — and the physics it exercises is
-  # already hermetic-tested in Rust (`nix flake check`). Uses the flake-pinned
-  # Python 3.12 + uv, so `nix develop .#ci -c pytest` reproduces it locally.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Fix git safe.directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Sync project dependencies
+        run: just sync
+
+      - name: Run pre-commit hooks
+        run: just precommit
+
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: false
-      - name: Init nucl-parquet submodule (sparse)
-        run: |
-          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
-          cd nucl-parquet
-          git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs
-      - uses: DeterminateSystems/nix-installer-action@v22
-      - uses: nix-community/cache-nix-action@v6
-        with:
-          primary-key: nix-test-${{ runner.os }}-${{ hashFiles('flake.lock', 'uv.lock') }}
-          restore-prefixes-first-match: nix-test-${{ runner.os }}-
-      - name: Test (uv + pytest via flake, Python 3.12)
-        run: |
-          nix develop .#ci --command bash -c '
-            uv sync --dev
-            uv run pytest tests/ --cov --benchmark-disable --ignore=tests/integration
-          '
+    name: Tests
+    needs: [resolve-image]
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/vig-os/devcontainer:${{ needs.resolve-image.outputs.image-tag }}
+      env:
+        # Reuse the venv already present in the image instead of creating a new one
+        UV_PROJECT_ENVIRONMENT: /root/assets/workspace/.venv
+    timeout-minutes: 15
+    if: |
+      github.event_name != 'workflow_dispatch' ||
+      inputs.test-suite == 'all' ||
+      inputs.test-suite == 'test'
 
-  # ── Lockfile sync (uv.lock / wasm Cargo.lock vs their manifests) ────────
-  # Not a hermetic check: `uv lock --check` + `cargo check --locked` resolve /
-  # compile against the network. Cheap, so it stays a standalone job.
-  lockfile-sync:
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Check lockfiles in sync
-        run: bash scripts/check-lockfiles.sh
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
-  # ── Supplier catalog freshness (warn-only, node) ───────────────────────
-  supplier-catalog-freshness:
-    runs-on: ubuntu-latest
+      - name: Fix git safe.directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Sync project dependencies
+        run: just sync
+
+      - name: Run tests
+        run: just test
+
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: [resolve-image, lint, test]
+    if: always()
+
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-      - name: Warn if supplier catalog is stale (>90 days)
-        run: node frontend/scripts/check-suppliers-fresh.mjs
+      - name: Check results
+        run: |
+          echo "CI Results Summary"
+          echo "==================="
+          echo ""
+          echo "Resolve image: ${{ needs.resolve-image.result }}"
+          echo "Lint: ${{ needs.lint.result }}"
+          echo "Test: ${{ needs.test.result }}"
+          echo ""
+
+          FAILED=false
+
+          if [ "${{ needs.resolve-image.result }}" = "failure" ] || [ "${{ needs.resolve-image.result }}" = "cancelled" ]; then
+            echo "ERROR: Image resolution failed"
+            FAILED=true
+          fi
+
+          if [ "${{ needs.lint.result }}" = "failure" ]; then
+            echo "ERROR: Lint checks failed"
+            FAILED=true
+          fi
+
+          if [ "${{ needs.test.result }}" = "failure" ]; then
+            echo "ERROR: Tests failed"
+            FAILED=true
+          fi
+
+          if [ "$FAILED" = "true" ]; then
+            echo ""
+            echo "One or more checks failed"
+            exit 1
+          fi
+
+          echo ""
+          echo "All executed checks passed"

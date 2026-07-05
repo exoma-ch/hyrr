@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-/lib/
-/lib64/
+lib/
+lib64/
 parts/
 sdist/
 var/
@@ -149,7 +149,10 @@ activemq-data/
 
 # Environments
 .env
+# .envrc (use flake) is committed for nix-direnv onboarding (#640); the local
+# evaluation cache and any per-user overrides are not.
 .direnv/
+.envrc.local
 .venv
 env/
 venv/
@@ -215,41 +218,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Personal justfile recipes
+justfile.local
+
 # Pre-commit cache
 .pre-commit-cache/
 
-# Node.js
-node_modules/
-
-# HYRR data (too large for git, downloaded via `hyrr fetch-data`)
-data/hyrr.sqlite
-data/*.sqlite
-data/parquet/
-
-# WASM build output (built by `just wasm` / `just dev`, not committed)
-frontend/src/lib/compute/hyrr-wasm-pkg/
-
-# Tauri
-desktop/src-tauri/target/
-hyrr-*.png
-
-# Local dev screenshots/scratch (separate from hyrr-*.png export naming)
-rnp-*.png
-
-# Playwright MCP scratch — snapshot / page / screencap output (Apr 2026 onwards)
-.playwright-mcp/
-
-# Claude Code runtime locks
-.claude/scheduled_tasks.lock
-
-# ETH webhosting provisioning docs / per-instance notes (local only).
-# Deploy *scripts* (scripts/deploy-eth.sh) and CI stay tracked; only these
-# provisioning mails + notes are kept out of git. SSH keys never live here.
-infra/eth-webhosting/
-
-# Secrets: only sops-encrypted files may be committed here. Block everything
-# else so a plaintext key/whitelist can't be committed by accident.
-/secrets/*
-!/secrets/*.sops.env
-!/secrets/*.sops.yaml
-!/secrets/*.sops.json
+# process-compose / services-flake local dev services state (#795)
+data/

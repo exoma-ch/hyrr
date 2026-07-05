@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Initialize script - runs on host before container starts
 # This script is called from initializeCommand in devcontainer.json
@@ -7,11 +7,56 @@ set -euo pipefail
 
 echo "Initializing devcontainer setup..."
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEVCONTAINER_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Copy host user configuration (git, ssh, gh)
 "$SCRIPT_DIR/copy-host-user-conf.sh"
+
+# Load devcontainer version from root .vig-os config
+load_vig_os_config() {
+    local config_file="$DEVCONTAINER_DIR/../.vig-os"
+    local env_file="$DEVCONTAINER_DIR/.env"
+    local devcontainer_version=""
+
+    if [[ ! -f "$config_file" ]]; then
+        return 0
+    fi
+
+    while IFS= read -r line || [[ -n "${line:-}" ]]; do
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+        case "$line" in
+            DEVCONTAINER_VERSION=*)
+                devcontainer_version="${line#*=}"
+                devcontainer_version="${devcontainer_version#"${devcontainer_version%%[![:space:]]*}"}"
+                devcontainer_version="${devcontainer_version%"${devcontainer_version##*[![:space:]]}"}"
+
+                if [[ "$devcontainer_version" =~ ^\".*\"$ ]]; then
+                    devcontainer_version="${devcontainer_version:1:-1}"
+                elif [[ "$devcontainer_version" =~ ^\'.*\'$ ]]; then
+                    devcontainer_version="${devcontainer_version:1:-1}"
+                fi
+                break
+                ;;
+        esac
+    done < "$config_file"
+
+    if [[ -z "$devcontainer_version" ]]; then
+        return 0
+    fi
+
+    if [[ -f "$env_file" ]] && grep -q "^DEVCONTAINER_VERSION=" "$env_file" 2>/dev/null; then
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            sed -i '' "s|^DEVCONTAINER_VERSION=.*|DEVCONTAINER_VERSION=${devcontainer_version}|" "$env_file"
+        else
+            sed -i "s|^DEVCONTAINER_VERSION=.*|DEVCONTAINER_VERSION=${devcontainer_version}|" "$env_file"
+        fi
+    else
+        echo "DEVCONTAINER_VERSION=${devcontainer_version}" >> "$env_file"
+    fi
+}
 
 # Configure container socket path based on host OS
 configure_socket_path() {
@@ -89,6 +134,7 @@ configure_socket_path() {
     echo "Socket configuration complete (written to .env)"
 }
 
+load_vig_os_config
 configure_socket_path
 
 echo "Initialization complete"

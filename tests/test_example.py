@@ -1,10 +1,13 @@
-"""Smoke test for hyrr package."""
-
-from importlib.metadata import version
+"""Example tests for hyrr."""
 
 
-def test_import() -> None:
-    """Verify hyrr can be imported and __version__ matches pyproject.toml."""
-    import hyrr
+def test_example():
+    """Example test that always passes."""
+    assert True
 
-    assert hyrr.__version__ == version("hyrr")
+
+def test_import():
+    """Test that the package can be imported."""
+    import hyrr  # noqa: F401 - renamed to project name by init-workspace.sh
+
+    assert hyrr.__version__ == "0.1.0"

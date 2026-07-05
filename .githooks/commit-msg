@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Set error handling, fail on any error during script execution
+set -euo pipefail
+
+# Check if we're running inside the dev container
+if [ "${IN_CONTAINER:-}" != "true" ]; then
+	# Outside dev container
+	echo "Please commit your changes within the dev container."
+	exit 1
+fi
+
+# Run pre-commit commit-msg hooks (validates commit message format)
+prek run --hook-stage commit-msg --commit-msg-filename "$1"

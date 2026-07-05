@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 ###############################################################################
 # version-check.sh - Devcontainer Update Checker
 #
@@ -14,7 +14,7 @@
 #   ./version-check.sh interval <dur>   # Set check interval
 #   ./version-check.sh config           # Display current configuration
 #
-# DURATIONS: And (days), Nw (weeks), Nh (hours), Nm (minutes)
+# DURATIONS: Nd (days), Nw (weeks), Nh (hours), Nm (minutes)
 #
 # CONFIGURATION:
 #   Stored in .devcontainer/.local/version-check.conf (gitignored)
@@ -26,7 +26,7 @@ set -euo pipefail
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEVCONTAINER_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Local config directory (gitignored)
@@ -190,17 +190,35 @@ record_check() {
 # VERSION DETECTION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Get current installed version from docker-compose.yml
+# Get current installed version from root .vig-os config
 get_current_version() {
-    local compose_file="$DEVCONTAINER_DIR/docker-compose.yml"
+    local config_file="$DEVCONTAINER_DIR/../.vig-os"
+    local line
+    local version=""
 
-    if [[ ! -f "$compose_file" ]]; then
+    if [[ ! -f "$config_file" ]]; then
         return 1
     fi
 
-    # Extract version from image tag (e.g., ghcr.io/vig-os/devcontainer:1.0.0)
-    local version
-    version=$(grep -o 'ghcr\.io/vig-os/devcontainer:[^"]*' "$compose_file" 2>/dev/null | head -1 | cut -d: -f2)
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+        case "$line" in
+            DEVCONTAINER_VERSION=*)
+                version="${line#*=}"
+                version="${version#"${version%%[![:space:]]*}"}"
+                version="${version%"${version##*[![:space:]]}"}"
+
+                if [[ "$version" =~ ^\".*\"$ ]]; then
+                    version="${version:1:-1}"
+                elif [[ "$version" =~ ^\'.*\'$ ]]; then
+                    version="${version:1:-1}"
+                fi
+                break
+                ;;
+        esac
+    done < "$config_file"
 
     if [[ -z "$version" || "$version" == "dev" || "$version" == "latest" ]]; then
         return 1  # Not a pinned version
@@ -260,10 +278,17 @@ notify_update() {
     echo ""
     echo -e "  Current: ${YELLOW}$current${NC}  →  Latest: ${GREEN}$latest${NC}"
     echo ""
-    echo -e "  To update: ${BOLD}just update${NC}"
-    echo -e "  (or manually: podman pull ghcr.io/vig-os/devcontainer:$latest)"
+    echo -e "  Run from a ${BOLD}host terminal${NC} (not inside the container):"
     echo ""
-    echo -e "  To mute: ${BOLD}just check 7d${NC}   Disable: ${BOLD}just check off${NC}"
+    echo -e "    ${BOLD}just devc-upgrade${NC}"
+    echo ""
+    echo -e "  Or without just:"
+    echo ""
+    echo -e "    curl -sSf https://raw.githubusercontent.com/vig-os/devcontainer/main/install.sh | bash -s -- --force ."
+    echo ""
+    echo -e "  After upgrading, rebuild the container in VS Code."
+    echo ""
+    echo -e "  Mute: ${BOLD}just devc-check 7d${NC}    Disable: ${BOLD}just devc-check off${NC}"
     echo ""
 }
 
@@ -334,7 +359,7 @@ cmd_mute() {
     local seconds
     seconds=$(parse_duration "$duration") || {
         echo "Invalid duration format: $duration"
-        echo "Use: And (days), Nw (weeks), Nh (hours), Nm (minutes)"
+        echo "Use: Nd (days), Nw (weeks), Nh (hours), Nm (minutes)"
         echo "Examples: 7d, 1w, 12h, 30m"
         return 1
     }
@@ -367,7 +392,7 @@ cmd_set_interval() {
     local seconds
     seconds=$(parse_duration "$duration") || {
         echo "Invalid duration format: $duration"
-        echo "Use: And (days), Nw (weeks), Nh (hours), Nm (minutes)"
+        echo "Use: Nd (days), Nw (weeks), Nh (hours), Nm (minutes)"
         return 1
     }
 
