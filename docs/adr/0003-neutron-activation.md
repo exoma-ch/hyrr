@@ -133,7 +133,7 @@ closes the #444-class "which channel produced this?" gap).
   irradiation as a standalone, genuinely useful feature and builds ~80% of the
   infrastructure the secondary case reuses.
 - **Phase 2 — secondary neutron activation (case 2).** `(x,n)` volumetric source
-  + anisotropic bidirectional attenuation transport + the "model secondary neutron
+  - anisotropic bidirectional attenuation transport + the "model secondary neutron
   activation" config toggle; neutron routes appear in the table (built on Phase 0).
 - **Phase 3+ (deferred).** Photonuclear `(γ,n)` (same architecture, new data);
   real `dσ/dEdΩ` angular data to replace parametrized `f_fwd`; time-dependent flux

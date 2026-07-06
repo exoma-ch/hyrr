@@ -1,13 +1,16 @@
 ---
-# .pre-commit-config.yaml — run by `prek` (not pre-commit). See flake.nix.
+# .pre-commit-config.yaml
 
 # Skip generated / vendored / upstream-data / scratch files for ALL hooks.
-# These are not hand-maintained source: physics data tables (must not be
-# reformatted), generated Tauri schemas, logo SVG assets, jupytext notebook
-# pairs, the release-please CHANGELOG, and working/scratch docs.
+# Repo-specific entries (data tables, Tauri schemas, logo SVGs, jupytext
+# notebook pairs, scratch docs) restored from the pre-0.4.0 config — the
+# scaffold upgrade replaced this file and dropped them.
 exclude: |
   (?x)^(
-    data/stopping/.*
+    .github_data/.*
+    | docs/issues/.*
+    | docs/pull-requests/.*
+    | data/stopping/.*
     | .*\.dat
     | desktop/src-tauri/gen/.*
     | notebooks/.*
@@ -17,11 +20,28 @@ exclude: |
     | HANDOFF\.md
   )$
 
+# Build python-language hooks with the project interpreter (3.14) so PEP 758
+# syntax (bare except tuples) never false-flags under an older parser. Refs #803.
+default_language_version:
+  python: python3.14
+
 repos:
   # General Pre-commit Hooks (Fixes formatting issues)
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b  # v5.0.0
     hooks:
+      # Enforce topic branch naming:
+      # - chore/<short_summary> (no issue required)
+      # - <type>/<issue_number>-<short_summary> (for feature, bugfix, etc.)
+      # - worktree/<issue_number> (autonomous worktree branches)
+      # Allows main, dev, and branches matching the convention.
+      - id: no-commit-to-branch
+        name: branch-name (enforce <type>/<issue>-<summary>)
+        args:
+          - --branch
+          - __none__  # override default so main/dev are not protected
+          - --pattern
+          - "^(?!main$)(?!dev$)(?!^(chore)/[a-z0-9]+(-[a-z0-9]+)*$)(?!^(feature|bugfix|hotfix|release|docs|test|refactor)/[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$)(?!^worktree/[0-9]+$).+$"
       - id: check-added-large-files
       - id: check-case-conflict
       - id: check-json
@@ -29,6 +49,9 @@ repos:
       - id: check-symlinks
       - id: check-toml
       - id: check-yaml
+        # git-hooks.nix' check-yaml built-in hardcodes --multi, so match it here
+        # to keep the runner and the checks.pre-commit gate in agreement (#778).
+        args: [--allow-multiple-documents]
       - id: debug-statements
       - id: destroyed-symlinks
       - id: detect-private-key
@@ -39,61 +62,53 @@ repos:
       - id: mixed-line-ending
       - id: trailing-whitespace
 
-  # Python Linting and Formatting (Ruff) — use the flake's ruff (on PATH via
-  # direnv `use flake`) so there's ONE pinned ruff version across pre-commit,
-  # local dev, and CI. Avoids the pre-commit/uv/CI version drift.
+  # Python Linting and Formatting (Ruff, sourced from the flake dev-shell)
   - repo: local
     hooks:
       - id: ruff
-        name: ruff (lint, --fix)
-        entry: ruff check --fix --force-exclude
-        language: system
-        types_or: [python, pyi]
-        require_serial: true
-      - id: ruff-format
-        name: ruff (format)
-        entry: ruff format --force-exclude
-        language: system
-        types_or: [python, pyi]
-        require_serial: true
-      # Pyright — flake's pinned pyright, same invocation as CI's lint job.
-      # pass_filenames:false so it type-checks the whole package (src/hyrr/),
-      # not just the changed files; only triggers when some Python file is staged.
-      - id: pyright
-        name: pyright (type check)
-        entry: pyright src/hyrr/
+        name: ruff (lint/fix python)
+        entry: ruff check --fix
         language: system
         types: [python]
-        pass_filenames: false
-        require_serial: true
+      - id: ruff-format
+        name: ruff-format (format python)
+        entry: ruff format
+        language: system
+        types: [python]
 
   # YAML Linting
   - repo: https://github.com/adrienverge/yamllint
-    rev: v1.35.1
+    rev: 81e9f98ffd059efe8aa9c1b1a42e5cce61b640c6  # v1.35.1
     hooks:
       - id: yamllint
         args: ["--format", "parsable", "--strict"]
 
-  # Shellcheck (.envrc is a direnv file, not a shell script — skip SC2148)
-  - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: v0.10.0.1
+  # Shellcheck (sourced from the flake dev-shell toolchain). The
+  # shellcheck-py wheel bundles a manylinux shellcheck binary that the Nix
+  # image's non-FHS userland cannot exec, and the prek/uv installer cannot
+  # build that wheel under Python 3.14 — so, like ruff/typos/nixfmt (#697,
+  # #701), shellcheck runs as a language:system hook resolved from the flake
+  # (devTools ships `shellcheck`). Refs #778.
+  - repo: local
     hooks:
       - id: shellcheck
         name: shellcheck
-        exclude: ^\.envrc$
+        entry: shellcheck
+        language: system
+        types: [shell]
+        # .envrc files (root + the scaffolded template stub) are direnv stdlib
+        # scripts with no shebang; exclude them from SC2148 at any path.
+        args: ["-x"]
+        exclude: (^|/)\.envrc$
 
-  # Markdown Linting — keep structural rules, drop purely-stylistic ones the
-  # repo doesn't follow (line-length, list-marker style, duplicate headings,
-  # consecutive blanks, mandatory top-level H1, ordered-list numbering).
+  # Markdown Linting (excludes auto-generated docs)
   - repo: https://github.com/jackdewinter/pymarkdown
-    rev: v0.9.23
+    rev: f93643d339dfee2a1022e7b05e8b5a281bfac553  # v0.9.23
     hooks:
       - id: pymarkdown
         name: pymarkdown
-        args:
-          - "-d"
-          - "MD013,MD024,MD004,MD012,MD041,MD029"
-          - "scan"
+        args: ["-c", ".pymarkdown", "fix"]
+        exclude: ^(README\.md|CONTRIBUTE\.md|TESTING\.md)
 
   # Justfile formatting
   - repo: local
@@ -105,67 +120,30 @@ repos:
         files: ^justfile(\..*)?$
         pass_filenames: false
 
-  # Lockfile staleness check
+  # Nix formatting (nixfmt-rfc-style from the flake dev-shell toolchain)
   - repo: local
     hooks:
-      - id: check-lockfiles
-        name: check lockfiles in sync
-        entry: scripts/check-lockfiles.sh
+      - id: nixfmt
+        name: nixfmt (format/check nix files)
+        entry: nixfmt --check
         language: system
-        files: (pyproject\.toml|uv\.lock|wasm/Cargo\.(toml|lock))$
-        pass_filenames: false
+        files: \.nix$
+        types: [file]
 
-  # Typo Linting — flake's typos (downloaded binary doesn't run on NixOS)
+  # Typo Linting (typos sourced from the flake dev-shell)
   - repo: local
     hooks:
       - id: typos
-        name: typos
+        name: typos (source typo checker)
         entry: typos --force-exclude
         language: system
-        pass_filenames: true
-        require_serial: true
 
-  # Typstyle Linting
+  # Security exception expiry enforcement (Refs: #566)
   - repo: local
     hooks:
-      - id: typstyle
-        name: typstyle
-        entry: typstyle
+      - id: check-expirations
+        name: check-expirations (.trivyignore/.vulnixignore expiry enforcement)
+        entry: uv run check-expirations .trivyignore .vulnixignore
         language: system
-        files: ^.*\.typ$
-        pass_filenames: true
-        args: [--inplace]
-
-  # ── guardrails deterministic gates (#159) ───────────────────────────────────
-  # Binaries on PATH via the flake's `gates` package (both `.#ci` and default
-  # shells). CI runs the same set through `nix develop .#ci -c prek run --all-files`.
-  - repo: local
-    hooks:
-      - id: no-fake-impl
-        name: guardrails — no fake/placeholder implementations
-        entry: guardrails-no-fake-impl
-        language: system
-        pass_filenames: true
-      - id: no-conflict-markers
-        name: guardrails — no committed merge-conflict markers
-        entry: guardrails-no-conflict-markers
-        language: system
-        pass_filenames: true
-      # no-commented-code is intentionally NOT enabled: on this repo it is
-      # 13-false-positive / 0-true-positive (it mis-fires on prose comments
-      # ending in ';' and ones describing data shapes like `{ Z, A, ... }`).
-      # Per guardrails' own philosophy a gate must have a low enough FP rate that
-      # nobody reflexively bypasses it; revisit if the heuristic tightens
-      # upstream (gerchowl/guardrails).
-      - id: no-debug-leftovers
-        name: guardrails — no debug-print leftovers (use the tracing facade)
-        # CLI/server output surfaces + the SW-register lifecycle log are legit.
-        entry: env GUARDRAILS_OUTPUT_GLOBS=src/hyrr/cli.py:*/mcp/transport.rs:py-mcp/src/lib.rs:py-mcp/python/hyrr_mcp/*:frontend/src/lib/sw-register.ts:frontend/scripts/*:frontend/e2e/* guardrails-no-debug-leftovers
-        language: system
-        pass_filenames: true
-      - id: no-raw-trace-fields
-        name: guardrails — no raw ?/% field formatters in tracing macros (privacy)
-        # core/src/trace_schema.rs is the single audit surface where shaped fields live.
-        entry: env GUARDRAILS_TRACE_ALLOW_GLOBS=core/src/trace_schema.rs guardrails-no-raw-trace-fields
-        language: system
-        pass_filenames: true
+        files: ^\.(trivyignore|vulnixignore)$
+        pass_filenames: false

@@ -7,7 +7,7 @@ name: E2E (Playwright cross-platform)
 #     Linux-distro container sweep + the prod-like static-host job).
 # So a normal PR triggers ~1 e2e job instead of ~9; the scarce macOS/Windows
 # fan-out runs a few times a week (at releases), not on every push.
-on:
+on:  # yamllint disable-line rule:truthy
   pull_request:
     branches: [main]
     paths:

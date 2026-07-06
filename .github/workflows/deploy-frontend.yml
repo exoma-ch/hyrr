@@ -11,7 +11,7 @@ name: Deploy GitHub Pages landing → hyrr
 #
 # Manual trigger. First run purges the old public app/data from gh-pages
 # (clean: true).
-on:
+on:  # yamllint disable-line rule:truthy
   push:
     branches: [main]
     paths:
@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # push to gh-pages branch
+  contents: write  # push to gh-pages branch
 
 concurrency:
   group: gh-pages-branch

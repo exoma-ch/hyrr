@@ -16,6 +16,11 @@ mis = "mis"           # "mis-target" (comment)
 browseable = "browseable"   # accepted variant of browsable
 unparseable = "unparseable" # accepted variant of unparsable
 encrypter = "encrypter"     # age-encryption API: `new Encrypter()`
+# Merged from the vig-os scaffold's shipped .typos.toml (0.4.0 upgrade):
+# scaffold-shipped content needs these (version-check.sh durations, CVE
+# policy prose in the synced .devcontainer/CHANGELOG.md).
+unexcepted = "unexcepted"
+Nd = "Nd"
 
 # Skip generated / vendored / data paths (prek's global exclude covers most,
 # but typos is also run directly via `just`/CI sometimes).

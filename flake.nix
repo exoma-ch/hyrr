@@ -24,8 +24,17 @@
     };
   };
 
-  outputs = { nixpkgs, flake-utils, guardrails, crane, nucl-parquet, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      nixpkgs,
+      flake-utils,
+      guardrails,
+      crane,
+      nucl-parquet,
+      ...
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
@@ -53,7 +62,7 @@
         # open shared object file".
         pyRuntimeLibs = with pkgs; [
           stdenv.cc.cc.lib # libstdc++.so.6, libgcc_s.so.1
-          zlib             # libz.so.1
+          zlib # libz.so.1
         ];
 
         # Tauri 2 / WebKitGTK system libs (Linux desktop builds only).
@@ -74,7 +83,12 @@
         # Lean Python/lint toolchain — single source of truth for ruff,
         # pyright, uv, and the interpreter. Used by CI lint + test jobs via
         # `nix develop .#ci` so CI tooling versions match local exactly.
-        pythonTooling = with pkgs; [ uv ruff pyright python ];
+        pythonTooling = with pkgs; [
+          uv
+          ruff
+          pyright
+          python
+        ];
 
         # Tools the prek hooks invoke directly (the `language: system` hooks in
         # .pre-commit-config.yaml: typos, typstyle, just-fmt, check-lockfiles)
@@ -83,7 +97,12 @@
         # the stub-ld wall otherwise). `prek` is split out because the `default`
         # shell gets it (and the gates) from mkDevShell's toolbelt — adding it
         # again would double-source it on PATH.
-        hookExtras = with pkgs; [ typos typstyle just git ];
+        hookExtras = with pkgs; [
+          typos
+          typstyle
+          just
+          git
+        ];
         # `ci` is a bare mkShell, so it lists prek + the gate binaries explicitly.
         hookTooling = with pkgs; [ prek ] ++ hookExtras;
 
@@ -93,8 +112,7 @@
           UV_PYTHON_PREFERENCE = "only-system";
         };
 
-        mkLibPath = libs:
-          pkgs.lib.optionalString isLinux (pkgs.lib.makeLibraryPath libs);
+        mkLibPath = libs: pkgs.lib.optionalString isLinux (pkgs.lib.makeLibraryPath libs);
 
         # ══ Hermetic Rust checks (crane, #484) ═══════════════════════════
         # Lift the ci.yml cargo jobs (rust-projectile-matrix, embedded-data-
@@ -141,7 +159,8 @@
         # ── Pure-source guards (lifted verbatim from ci.yml) ─────────────
         # No toolchain/network — just grep/node over the tree. Trivially
         # hermetic, so they belong in `nix flake check` rather than a runner job.
-        mkGuard = name: script:
+        mkGuard =
+          name: script:
           pkgs.runCommandLocal "check-${name}" { } ''
             cd ${./.}
             ${script}
@@ -156,10 +175,13 @@
           # jobs. CI invokes `prek run --all-files` explicitly, so it needs the
           # gate binaries but NOT mkDevShell's auto-install/self-bootstrap — which
           # is why this stays a bare mkShell rather than mkDevShell.
-          ci = pkgs.mkShell ({
-            packages = pythonTooling ++ hookTooling ++ [ gates ];
-            LD_LIBRARY_PATH = mkLibPath pyRuntimeLibs;
-          } // uvEnv);
+          ci = pkgs.mkShell (
+            {
+              packages = pythonTooling ++ hookTooling ++ [ gates ];
+              LD_LIBRARY_PATH = mkLibPath pyRuntimeLibs;
+            }
+            // uvEnv
+          );
 
           # ── Full dev shell (guardrails mkDevShell) ───────────────────
           # This is the shell direnv / `nix develop` / subagents enter. Going
@@ -171,39 +193,45 @@
           default = mkDevShell {
             inherit pkgs;
             name = "hyrr-dev";
-            extra = with pkgs; pythonTooling ++ hookExtras ++ [
-              # ── Rust ──────────────────────────────────────────────
-              rustc
-              cargo
-              clippy
-              rustfmt
-              rust-analyzer
+            extra =
+              with pkgs;
+              pythonTooling
+              ++ hookExtras
+              ++ [
+                # ── Rust ──────────────────────────────────────────────
+                rustc
+                cargo
+                clippy
+                rustfmt
+                rust-analyzer
 
-              # ── WASM ──────────────────────────────────────────────
-              wasm-pack
-              wasm-bindgen-cli
+                # ── WASM ──────────────────────────────────────────────
+                wasm-pack
+                wasm-bindgen-cli
 
-              # ── Node / frontend ───────────────────────────────────
-              nodejs_22
+                # ── Node / frontend ───────────────────────────────────
+                nodejs_22
 
-              # ── Build tools ───────────────────────────────────────
-              pkg-config
-              clang
+                # ── Build tools ───────────────────────────────────────
+                pkg-config
+                clang
 
-              # ── Utilities ─────────────────────────────────────────
-              git-lfs
-            ]
-            ++ pkgs.lib.optionals isLinux tauriLibs
-            ++ pkgs.lib.optionals isDarwin (with pkgs; [
-              libiconv
-              darwin.apple_sdk.frameworks.WebKit
-              darwin.apple_sdk.frameworks.AppKit
-            ]);
+                # ── Utilities ─────────────────────────────────────────
+                git-lfs
+              ]
+              ++ pkgs.lib.optionals isLinux tauriLibs
+              ++ pkgs.lib.optionals isDarwin (
+                with pkgs;
+                [
+                  libiconv
+                  darwin.apple_sdk.frameworks.WebKit
+                  darwin.apple_sdk.frameworks.AppKit
+                ]
+              );
 
             # uv env + native libs for both Rust (webkit/gtk) and Python wheels.
             env = uvEnv // {
-              LD_LIBRARY_PATH = mkLibPath (pyRuntimeLibs
-                ++ pkgs.lib.optionals isLinux tauriLibs);
+              LD_LIBRARY_PATH = mkLibPath (pyRuntimeLibs ++ pkgs.lib.optionals isLinux tauriLibs);
             };
 
             # Appended after the guardrails banner + hook-install. The prek-install
@@ -252,40 +280,52 @@
           # Deny level + intentional allows live in core/Cargo.toml's
           # [lints.clippy] (SSoT, so a bare `cargo clippy` matches CI), hence no
           # `-- --deny warnings` here.
-          rust-clippy = craneLib.cargoClippy (commonRustArgs // {
-            inherit cargoArtifacts;
-            cargoClippyExtraArgs = "--all-targets --all-features";
-          });
+          rust-clippy = craneLib.cargoClippy (
+            commonRustArgs
+            // {
+              inherit cargoArtifacts;
+              cargoClippyExtraArgs = "--all-targets --all-features";
+            }
+          );
 
           # Lib + integration tests with the real pinned data (HYRR_DATA), run
           # serially (data_fetch lock-contention tests need --test-threads=1)
           # and `--include-ignored` to pick up the projectile-matrix tier-1 set.
           # Subsumes ci.yml's rust-projectile-matrix + data-fetch-integration.
-          rust-test = craneLib.cargoTest (commonRustArgs // {
-            inherit cargoArtifacts;
-            HYRR_DATA = nuclData;
-            cargoTestExtraArgs = "-- --include-ignored --test-threads=1";
-          });
+          rust-test = craneLib.cargoTest (
+            commonRustArgs
+            // {
+              inherit cargoArtifacts;
+              HYRR_DATA = nuclData;
+              cargoTestExtraArgs = "-- --include-ignored --test-threads=1";
+            }
+          );
 
           # MCP tool surface (feature `mcp` isn't in the default set) — runs the
           # mcp:: lib tests + the two mcp integration tests against real data.
           # Subsumes ci.yml's mcp-tools job. (A single `--features mcp` run, not
           # a `--lib mcp::` filter, since that filter would also be applied to —
           # and exclude — the `--test` integration binaries.)
-          rust-test-mcp = craneLib.cargoTest (commonRustArgs // {
-            inherit cargoArtifacts;
-            HYRR_DATA = nuclData;
-            cargoExtraArgs = "--features mcp";
-            cargoTestExtraArgs = "-- --test-threads=1";
-          });
+          rust-test-mcp = craneLib.cargoTest (
+            commonRustArgs
+            // {
+              inherit cargoArtifacts;
+              HYRR_DATA = nuclData;
+              cargoExtraArgs = "--features mcp";
+              cargoTestExtraArgs = "-- --test-threads=1";
+            }
+          );
 
           # Embedded data store: build-time tar (#274) + full simulation through
           # it. Subsumes ci.yml's embedded-data-store job.
-          rust-test-embed = craneLib.cargoTest (commonRustArgs // {
-            inherit cargoArtifacts;
-            cargoExtraArgs = "--features embed-data";
-            cargoTestExtraArgs = "--test embedded_data_store";
-          });
+          rust-test-embed = craneLib.cargoTest (
+            commonRustArgs
+            // {
+              inherit cargoArtifacts;
+              cargoExtraArgs = "--features embed-data";
+              cargoTestExtraArgs = "--test embedded_data_store";
+            }
+          );
 
           # PyO3 binding type-drift gate (#181). `cargo check` (not build/test)
           # because the pyo3 `extension-module` feature defers libpython linking
@@ -301,15 +341,21 @@
                 version = "0.0.0";
                 strictDeps = true;
                 preConfigure = provisionCoreSibling;
-                nativeBuildInputs = with pkgs; [ pkg-config python ];
+                nativeBuildInputs = with pkgs; [
+                  pkg-config
+                  python
+                ];
                 PYO3_PYTHON = "${python}/bin/python3.12";
               };
             in
-            craneLib.mkCargoDerivation (pyArgs // {
-              cargoArtifacts = craneLib.buildDepsOnly pyArgs;
-              buildPhaseCargoCommand = "cargo check --release --offline";
-              doInstallCargoArtifacts = false;
-            });
+            craneLib.mkCargoDerivation (
+              pyArgs
+              // {
+                cargoArtifacts = craneLib.buildDepsOnly pyArgs;
+                buildPhaseCargoCommand = "cargo check --release --offline";
+                doInstallCargoArtifacts = false;
+              }
+            );
 
           # ── WASM compute backend (crane, wasm32 compile) ───────────────
           # The artifact the frontend imports (#251). Compiles hyrr-wasm for
@@ -333,12 +379,18 @@
                 CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
                 # wasm32 links with lld (`wasm-ld`); nixpkgs rustc doesn't ship
                 # it self-contained, so put it on PATH.
-                nativeBuildInputs = with pkgs; [ pkg-config lld ];
+                nativeBuildInputs = with pkgs; [
+                  pkg-config
+                  lld
+                ];
               };
             in
-            craneLib.buildPackage (wasmArgs // {
-              cargoArtifacts = craneLib.buildDepsOnly wasmArgs;
-            });
+            craneLib.buildPackage (
+              wasmArgs
+              // {
+                cargoArtifacts = craneLib.buildDepsOnly wasmArgs;
+              }
+            );
 
           # ── Pure-source guards (lifted from ci.yml) ────────────────────
           data-fetch-ssot = mkGuard "data-fetch-ssot" ''
@@ -380,5 +432,6 @@
             fi
           '';
         };
-      });
+      }
+    );
 }

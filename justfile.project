@@ -93,3 +93,46 @@ test-frontend:
 [group('test')]
 test-e2e project="desktop-1280":
     cd frontend && npx playwright test --project={{project}}
+
+# -------------------------------------------------------------------------------
+# BASE RECIPES (relocated from the retired .devcontainer/justfile.base by the
+# 0.4.0 scaffold; the shipped ci.yml calls sync/precommit/test)
+# -------------------------------------------------------------------------------
+
+# Run linter
+[group('quality')]
+lint:
+    uv run ruff check .
+
+# Format code
+[group('quality')]
+format:
+    uv run ruff format .
+
+# Run pre-commit hooks on all files
+[group('quality')]
+precommit:
+    prek run --all-files
+
+# Run tests with pytest
+[group('test')]
+test *args:
+    uv run pytest {{ args }}
+
+# Run tests with coverage
+[group('test')]
+test-cov *args:
+    uv run pytest --cov --cov-report=term-missing {{ args }}
+
+# Sync dependencies (idempotent, fast if nothing changed). Deliberately NOT
+# --all-extras: the `geometry` extra (cadquery-ocp/vtk) ships cp312/cp313-only
+# wheels and must stay out of the 3.14 CI env (see [dependency-groups] note).
+[group('deps')]
+sync:
+    @if [ -f pyproject.toml ]; then uv sync; fi
+
+# Update all dependencies
+[group('deps')]
+update:
+    uv lock --upgrade
+    @just sync

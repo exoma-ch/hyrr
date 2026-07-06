@@ -89,7 +89,7 @@ implementation (the pure-Python compute modules are pre-Rust legacy; see below).
 ## Release & CI
 
 - `release-please` cuts releases from conventional commits; merging its PR tags
-  + creates the GitHub Release. It also auto-syncs `uv.lock` + `wasm/Cargo.lock`
+  - creates the GitHub Release. It also auto-syncs `uv.lock` + `wasm/Cargo.lock`
   on the release PR (`sync-release-lockfiles` job), but a maintainer must
   close→reopen the release PR once to run required CI (GITHUB_TOKEN caveat).
 - Every push to `main` deploys to `/hyrr/tst/` (staging). Promotion to prod

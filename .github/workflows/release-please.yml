@@ -20,7 +20,7 @@ name: Release Please
 # pushes with the same App token so its lockfile commit also triggers the PR's
 # CI (Refs: #445).
 
-on:
+on:  # yamllint disable-line rule:truthy
   push:
     branches: [main]
 
