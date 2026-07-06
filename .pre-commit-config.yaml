@@ -1,7 +1,24 @@
 ---
 # .pre-commit-config.yaml
 
-exclude: ^.github_data/|^docs/issues/|^docs/pull-requests/
+# Skip generated / vendored / upstream-data / scratch files for ALL hooks.
+# Repo-specific entries (data tables, Tauri schemas, logo SVGs, jupytext
+# notebook pairs, scratch docs) restored from the pre-0.4.0 config — the
+# scaffold upgrade replaced this file and dropped them.
+exclude: |
+  (?x)^(
+    .github_data/.*
+    | docs/issues/.*
+    | docs/pull-requests/.*
+    | data/stopping/.*
+    | .*\.dat
+    | desktop/src-tauri/gen/.*
+    | notebooks/.*
+    | .*\.svg
+    | CHANGELOG\.md
+    | development-plan\.md
+    | HANDOFF\.md
+  )$
 
 # Build python-language hooks with the project interpreter (3.14) so PEP 758
 # syntax (bare except tuples) never false-flags under an older parser. Refs #803.
@@ -38,6 +55,9 @@ repos:
       - id: debug-statements
       - id: destroyed-symlinks
       - id: detect-private-key
+        # worker/src/index.ts strips PEM armor markers from a key blob; the
+        # BEGIN/END marker literals there are pattern strings, not a real key.
+        exclude: ^worker/src/index\.ts$
       - id: end-of-file-fixer
       - id: mixed-line-ending
       - id: trailing-whitespace

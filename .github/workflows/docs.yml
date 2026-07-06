@@ -8,7 +8,7 @@
 # merge so a future promote-to-prod doesn't fail half-way through.
 name: Validate docs
 
-on:
+on:  # yamllint disable-line rule:truthy
   pull_request:
     paths:
       - "docs/**"

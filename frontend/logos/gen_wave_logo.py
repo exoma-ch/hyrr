@@ -7,8 +7,9 @@ material layer bars opposite. No grid, no axes, transparent background.
 Outputs: dark, light, and transparent variants + favicon sizes.
 """
 
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -18,6 +19,7 @@ LAYER_COLORS = ["#2dd4bf", "#4ade80", "#fbbf24", "#d97706", "#8b949e"]
 # ── Physics data ────────────────────────────────────────────
 z = np.linspace(0, 10, 300)
 
+
 def bragg_curve(z, z_peak=8.2, width=0.5):
     y = np.zeros_like(z)
     # Flat plateau up to ~60% of range, then sharp rise to peak
@@ -26,13 +28,15 @@ def bragg_curve(z, z_peak=8.2, width=0.5):
     y[mask_plateau] = 0.12 + 0.08 * (z[mask_plateau] / knee)
     mask_rise = (z > knee) & (z <= z_peak)
     t = (z[mask_rise] - knee) / (z_peak - knee)
-    y[mask_rise] = 0.20 + 0.80 * t ** 3.0
+    y[mask_rise] = 0.20 + 0.80 * t**3.0
     # Gaussian falloff after peak (sharp drop)
     mask_fall = z > z_peak
-    y[mask_fall] = np.exp(-((z[mask_fall] - z_peak) / width) ** 2)
+    y[mask_fall] = np.exp(-(((z[mask_fall] - z_peak) / width) ** 2))
     return y
 
+
 bragg = bragg_curve(z) * 4.0
+
 
 def excitation_fn(z, threshold, peak_z, width, amplitude):
     y = np.zeros_like(z)
@@ -52,6 +56,7 @@ def excitation_fn(z, threshold, peak_z, width, amplitude):
     y[y < 0] = 0
     return y
 
+
 xs_channels = [
     {"threshold": 0.0, "peak_z": 2.0, "amplitude": 3.5, "color": "#2dd4bf"},
     {"threshold": 0.0, "peak_z": 1.2, "amplitude": 2.8, "color": "#4ade80"},
@@ -63,8 +68,16 @@ layer_bounds = [0, 2.0, 4.5, 7.0, 8.5, 10.0]
 bar_heights = [2.0, 3.2, 2.5, 1.5, 0.8]
 
 
-def render_logo(bg_color, beam_color, bragg_alpha, xs_alpha, bar_alpha,
-                edge_curve_alpha, bragg_line_alpha, beam_alpha):
+def render_logo(
+    bg_color,
+    beam_color,
+    bragg_alpha,
+    xs_alpha,
+    bar_alpha,
+    edge_curve_alpha,
+    bragg_line_alpha,
+    beam_alpha,
+):
     """Render the 3D logo with given color/alpha settings."""
     fig = plt.figure(figsize=(8, 8), dpi=128)
     fig.patch.set_facecolor(bg_color)
@@ -81,29 +94,84 @@ def render_logo(bg_color, beam_color, bragg_alpha, xs_alpha, bar_alpha,
         color = LAYER_COLORS[i]
         gap = 0.08
 
-        verts_bar = [[(0, y0+gap, 0), (0, y1-gap, 0), (h, y1-gap, 0), (h, y0+gap, 0)]]
-        ax.add_collection3d(Poly3DCollection(verts_bar, alpha=bar_alpha,
-                            facecolor=color, edgecolor=color, linewidth=0.4))
+        verts_bar = [
+            [(0, y0 + gap, 0), (0, y1 - gap, 0), (h, y1 - gap, 0), (h, y0 + gap, 0)]
+        ]
+        ax.add_collection3d(
+            Poly3DCollection(
+                verts_bar,
+                alpha=bar_alpha,
+                facecolor=color,
+                edgecolor=color,
+                linewidth=0.4,
+            )
+        )
 
-        verts_edge = [[(0, y1-gap, -0.15), (h, y1-gap, -0.15), (h, y1-gap, 0), (0, y1-gap, 0)]]
-        ax.add_collection3d(Poly3DCollection(verts_edge, alpha=bar_alpha*0.55,
-                            facecolor=color, edgecolor="none", linewidth=0))
+        verts_edge = [
+            [
+                (0, y1 - gap, -0.15),
+                (h, y1 - gap, -0.15),
+                (h, y1 - gap, 0),
+                (0, y1 - gap, 0),
+            ]
+        ]
+        ax.add_collection3d(
+            Poly3DCollection(
+                verts_edge,
+                alpha=bar_alpha * 0.55,
+                facecolor=color,
+                edgecolor="none",
+                linewidth=0,
+            )
+        )
 
-        verts_right = [[(h, y0+gap, -0.15), (h, y1-gap, -0.15), (h, y1-gap, 0), (h, y0+gap, 0)]]
-        ax.add_collection3d(Poly3DCollection(verts_right, alpha=bar_alpha*0.45,
-                            facecolor=color, edgecolor="none", linewidth=0))
+        verts_right = [
+            [
+                (h, y0 + gap, -0.15),
+                (h, y1 - gap, -0.15),
+                (h, y1 - gap, 0),
+                (h, y0 + gap, 0),
+            ]
+        ]
+        ax.add_collection3d(
+            Poly3DCollection(
+                verts_right,
+                alpha=bar_alpha * 0.45,
+                facecolor=color,
+                edgecolor="none",
+                linewidth=0,
+            )
+        )
 
     # ── Bragg peak ──
     verts_bragg = []
     for i in range(len(z) - 1):
-        verts_bragg.append([
-            (0, z[i], 0), (0, z[i+1], 0),
-            (0, z[i+1], bragg[i+1]), (0, z[i], bragg[i]),
-        ])
-    ax.add_collection3d(Poly3DCollection(verts_bragg, alpha=bragg_alpha,
-                        facecolor="#ef4444", edgecolor="none", linewidth=0))
-    ax.plot(np.zeros_like(z), z, bragg, color="#ef4444",
-            linewidth=1.2, alpha=bragg_line_alpha, zorder=5)
+        verts_bragg.append(
+            [
+                (0, z[i], 0),
+                (0, z[i + 1], 0),
+                (0, z[i + 1], bragg[i + 1]),
+                (0, z[i], bragg[i]),
+            ]
+        )
+    ax.add_collection3d(
+        Poly3DCollection(
+            verts_bragg,
+            alpha=bragg_alpha,
+            facecolor="#ef4444",
+            edgecolor="none",
+            linewidth=0,
+        )
+    )
+    ax.plot(
+        np.zeros_like(z),
+        z,
+        bragg,
+        color="#ef4444",
+        linewidth=1.2,
+        alpha=bragg_line_alpha,
+        zorder=5,
+    )
 
     # ── XS curves ──
     for ch in xs_channels:
@@ -111,20 +179,45 @@ def render_logo(bg_color, beam_color, bragg_alpha, xs_alpha, bar_alpha,
 
         verts_xs = []
         for i in range(len(z) - 1):
-            if xs_vals[i] > 0.01 or xs_vals[i+1] > 0.01:
-                verts_xs.append([
-                    (0, z[i], 0), (0, z[i+1], 0),
-                    (-xs_vals[i+1], z[i+1], 0), (-xs_vals[i], z[i], 0),
-                ])
+            if xs_vals[i] > 0.01 or xs_vals[i + 1] > 0.01:
+                verts_xs.append(
+                    [
+                        (0, z[i], 0),
+                        (0, z[i + 1], 0),
+                        (-xs_vals[i + 1], z[i + 1], 0),
+                        (-xs_vals[i], z[i], 0),
+                    ]
+                )
         if verts_xs:
-            ax.add_collection3d(Poly3DCollection(verts_xs, alpha=xs_alpha,
-                                facecolor=ch["color"], edgecolor="none", linewidth=0))
-        ax.plot(-xs_vals, z, np.zeros_like(z), color=ch["color"],
-                linewidth=1.0, alpha=edge_curve_alpha, zorder=4)
+            ax.add_collection3d(
+                Poly3DCollection(
+                    verts_xs,
+                    alpha=xs_alpha,
+                    facecolor=ch["color"],
+                    edgecolor="none",
+                    linewidth=0,
+                )
+            )
+        ax.plot(
+            -xs_vals,
+            z,
+            np.zeros_like(z),
+            color=ch["color"],
+            linewidth=1.0,
+            alpha=edge_curve_alpha,
+            zorder=4,
+        )
 
     # ── Beam axis ──
-    ax.plot([0, 0], [-0.5, 10.5], [0, 0], color=beam_color,
-            linewidth=2.0, alpha=beam_alpha, zorder=10)
+    ax.plot(
+        [0, 0],
+        [-0.5, 10.5],
+        [0, 0],
+        color=beam_color,
+        linewidth=2.0,
+        alpha=beam_alpha,
+        zorder=10,
+    )
 
     # ── Remove ALL axes, grid, panes, ticks, labels ──
     ax.set_axis_off()
@@ -145,39 +238,88 @@ PUBLIC = "/Users/larsgerchow/Projects/eXoma/hyrr/frontend/public/"
 
 # Dark version (dark bg)
 fig = render_logo(
-    bg_color="#0d1117", beam_color="#58a6ff",
-    bragg_alpha=0.35, xs_alpha=0.30, bar_alpha=0.70,
-    edge_curve_alpha=0.80, bragg_line_alpha=0.75, beam_alpha=0.9,
+    bg_color="#0d1117",
+    beam_color="#58a6ff",
+    bragg_alpha=0.35,
+    xs_alpha=0.30,
+    bar_alpha=0.70,
+    edge_curve_alpha=0.80,
+    bragg_line_alpha=0.75,
+    beam_alpha=0.9,
 )
-fig.savefig(OUT + "hyrr-logo-dark.svg", format="svg", facecolor="#0d1117",
-            bbox_inches="tight", pad_inches=0)
-fig.savefig(OUT + "hyrr-logo-dark.png", format="png", facecolor="#0d1117",
-            dpi=256, bbox_inches="tight", pad_inches=0)
+fig.savefig(
+    OUT + "hyrr-logo-dark.svg",
+    format="svg",
+    facecolor="#0d1117",
+    bbox_inches="tight",
+    pad_inches=0,
+)
+fig.savefig(
+    OUT + "hyrr-logo-dark.png",
+    format="png",
+    facecolor="#0d1117",
+    dpi=256,
+    bbox_inches="tight",
+    pad_inches=0,
+)
 plt.close(fig)
 
 # Light version (white bg, darker colors)
 fig = render_logo(
-    bg_color="#ffffff", beam_color="#0969da",
-    bragg_alpha=0.22, xs_alpha=0.18, bar_alpha=0.50,
-    edge_curve_alpha=0.65, bragg_line_alpha=0.6, beam_alpha=0.9,
+    bg_color="#ffffff",
+    beam_color="#0969da",
+    bragg_alpha=0.22,
+    xs_alpha=0.18,
+    bar_alpha=0.50,
+    edge_curve_alpha=0.65,
+    bragg_line_alpha=0.6,
+    beam_alpha=0.9,
 )
-fig.savefig(OUT + "hyrr-logo-light.svg", format="svg", facecolor="#ffffff",
-            bbox_inches="tight", pad_inches=0)
-fig.savefig(OUT + "hyrr-logo-light.png", format="png", facecolor="#ffffff",
-            dpi=256, bbox_inches="tight", pad_inches=0)
+fig.savefig(
+    OUT + "hyrr-logo-light.svg",
+    format="svg",
+    facecolor="#ffffff",
+    bbox_inches="tight",
+    pad_inches=0,
+)
+fig.savefig(
+    OUT + "hyrr-logo-light.png",
+    format="png",
+    facecolor="#ffffff",
+    dpi=256,
+    bbox_inches="tight",
+    pad_inches=0,
+)
 plt.close(fig)
 
 # Transparent version
 fig = render_logo(
-    bg_color="none", beam_color="#58a6ff",
-    bragg_alpha=0.35, xs_alpha=0.30, bar_alpha=0.70,
-    edge_curve_alpha=0.80, bragg_line_alpha=0.75, beam_alpha=0.9,
+    bg_color="none",
+    beam_color="#58a6ff",
+    bragg_alpha=0.35,
+    xs_alpha=0.30,
+    bar_alpha=0.70,
+    edge_curve_alpha=0.80,
+    bragg_line_alpha=0.75,
+    beam_alpha=0.9,
 )
-fig.savefig(OUT + "hyrr-logo-transparent.svg", format="svg",
-            facecolor="none", transparent=True, bbox_inches="tight", pad_inches=0)
-fig.savefig(OUT + "hyrr-logo-transparent.png", format="png",
-            facecolor="none", transparent=True, dpi=256,
-            bbox_inches="tight", pad_inches=0)
+fig.savefig(
+    OUT + "hyrr-logo-transparent.svg",
+    format="svg",
+    facecolor="none",
+    transparent=True,
+    bbox_inches="tight",
+    pad_inches=0,
+)
+fig.savefig(
+    OUT + "hyrr-logo-transparent.png",
+    format="png",
+    facecolor="none",
+    transparent=True,
+    dpi=256,
+    bbox_inches="tight",
+    pad_inches=0,
+)
 plt.close(fig)
 
 # Favicon sizes (all transparent)
@@ -185,19 +327,36 @@ for size in [32, 180, 192, 512]:
     fig = render_logo(
         bg_color="none",
         beam_color="#58a6ff",
-        bragg_alpha=0.35, xs_alpha=0.30, bar_alpha=0.70,
-        edge_curve_alpha=0.80, bragg_line_alpha=0.75, beam_alpha=0.9,
+        bragg_alpha=0.35,
+        xs_alpha=0.30,
+        bar_alpha=0.70,
+        edge_curve_alpha=0.80,
+        bragg_line_alpha=0.75,
+        beam_alpha=0.9,
     )
-    fig.savefig(OUT + f"hyrr-icon-{size}.png", format="png",
-                facecolor="none", transparent=True, dpi=size / 8,
-                bbox_inches="tight", pad_inches=0)
-    fig.savefig(PUBLIC + f"hyrr-icon-{size}.png", format="png",
-                facecolor="none", transparent=True, dpi=size / 8,
-                bbox_inches="tight", pad_inches=0)
+    fig.savefig(
+        OUT + f"hyrr-icon-{size}.png",
+        format="png",
+        facecolor="none",
+        transparent=True,
+        dpi=size / 8,
+        bbox_inches="tight",
+        pad_inches=0,
+    )
+    fig.savefig(
+        PUBLIC + f"hyrr-icon-{size}.png",
+        format="png",
+        facecolor="none",
+        transparent=True,
+        dpi=size / 8,
+        bbox_inches="tight",
+        pad_inches=0,
+    )
     plt.close(fig)
 
 # Copy transparent versions to public for web use
-import shutil
+import shutil  # noqa: E402  (script: deliberate late import after figure generation)
+
 shutil.copy(OUT + "hyrr-logo-transparent.svg", PUBLIC + "logo.svg")
 shutil.copy(OUT + "hyrr-logo-transparent.svg", PUBLIC + "favicon.svg")
 

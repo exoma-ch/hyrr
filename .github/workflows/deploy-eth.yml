@@ -18,7 +18,7 @@ name: Deploy to ETH webhosting
 #
 # This mirrors gerchowl/duplet-webserver's deploy.yml, which hit the same
 # constraint ("GitHub runners can't reach the instances … deploy locally").
-on:
+on:  # yamllint disable-line rule:truthy
   push:
     branches: [main]
     paths:

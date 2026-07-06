@@ -8,7 +8,7 @@ name: Promote to prod
 #
 # Default input is `main` HEAD; supply an explicit SHA to promote anything
 # from history (e.g., to roll back after a bad promotion).
-on:
+on:  # yamllint disable-line rule:truthy
   workflow_dispatch:
     inputs:
       sha:

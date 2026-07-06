@@ -7,7 +7,7 @@ name: Staging smoke
 #
 # A red smoke here doesn't roll back staging — promote-to-prod is manual,
 # so prod stays untouched. The signal is: don't promote this SHA.
-on:
+on:  # yamllint disable-line rule:truthy
   workflow_run:
     workflows: ["Deploy frontend (staging slot)"]
     types: [completed]
