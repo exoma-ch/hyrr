@@ -108,19 +108,27 @@ jobs:
         run: |
           # Minimal regen: uv lock only repins what changed; `cargo update -p`
           # touches the bumped local crate (and its path dependents) without
-          # churning registry deps.
+          # churning registry deps. EVERY standalone crate has its own Cargo.lock
+          # (no workspace), and the hermetic nix-check builds them with --locked —
+          # so a bumped version must be repinned in ALL of them, not just wasm, or
+          # the release PR's nix-check fails (core/hyrr-mcp/py) on a stale lock.
           uv lock
+          cargo update --manifest-path core/Cargo.toml -p hyrr-core
+          cargo update --manifest-path hyrr-mcp/Cargo.toml -p hyrr-core -p hyrr-mcp
+          cargo update --manifest-path py/Cargo.toml -p hyrr-core
           cargo update --manifest-path wasm/Cargo.toml -p hyrr-core -p hyrr-wasm
+          cargo update --manifest-path desktop/src-tauri/Cargo.toml -p hyrr-core -p hyrr-desktop
       - name: Verify the gate now passes
         run: bash scripts/check-lockfiles.sh
       - name: Commit & push if changed
         run: |
-          if git diff --quiet -- uv.lock wasm/Cargo.lock; then
+          LOCKS=(uv.lock core/Cargo.lock hyrr-mcp/Cargo.lock py/Cargo.lock wasm/Cargo.lock desktop/src-tauri/Cargo.lock)
+          if git diff --quiet -- "${LOCKS[@]}"; then
             echo "Lockfiles already in sync — nothing to push."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add uv.lock wasm/Cargo.lock
-          git commit -m "chore(release): sync uv.lock + wasm/Cargo.lock to bumped version"
+          git add "${LOCKS[@]}"
+          git commit -m "chore(release): sync uv.lock + all Cargo.lock files to bumped version"
           git push
