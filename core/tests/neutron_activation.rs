@@ -158,7 +158,9 @@ fn thermal_neutron_activates_co59_to_co60() {
     let cap = db
         .get_cross_sections("n", 27, 59)
         .into_iter()
-        .find(|x| x.residual_z == 27 && x.residual_a == 60 && (x.state.is_empty() || x.state == "g"))
+        .find(|x| {
+            x.residual_z == 27 && x.residual_a == 60 && (x.state.is_empty() || x.state == "g")
+        })
         .expect("⁵⁹Co(n,γ)→Co-60 ground channel present in endfb-8.0");
     // flux_averaged_xs returns cm²; 1 b = 1e-24 cm².
     let sigma_b = flux_averaged_xs(&cap.energies_mev, &cap.xs_mb, &flux, 400) / 1.0e-24;
