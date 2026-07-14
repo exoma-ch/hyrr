@@ -122,13 +122,13 @@ jobs:
         run: bash scripts/check-lockfiles.sh
       - name: Commit & push if changed
         run: |
-          LOCKS="uv.lock core/Cargo.lock hyrr-mcp/Cargo.lock py/Cargo.lock wasm/Cargo.lock desktop/src-tauri/Cargo.lock"
-          if git diff --quiet -- $LOCKS; then
+          LOCKS=(uv.lock core/Cargo.lock hyrr-mcp/Cargo.lock py/Cargo.lock wasm/Cargo.lock desktop/src-tauri/Cargo.lock)
+          if git diff --quiet -- "${LOCKS[@]}"; then
             echo "Lockfiles already in sync — nothing to push."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add $LOCKS
+          git add "${LOCKS[@]}"
           git commit -m "chore(release): sync uv.lock + all Cargo.lock files to bumped version"
           git push
