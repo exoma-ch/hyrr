@@ -28,8 +28,20 @@ fi
 # here so a stale lock (e.g. an unsynced release version bump) is caught before
 # nix-check does. `cargo metadata --locked` resolves the graph and fails on a stale
 # lock without a full compile, so this stays fast.
+#
+# core/hyrr-mcp/py/desktop path-depend on the nucl-parquet Rust client (default
+# features pull parquet-store; wasm doesn't). Without the submodule those resolve
+# to a missing path and `cargo metadata` fails for the wrong reason — so skip them
+# unless the client is checked out. The dedicated `lockfile-sync` CI job checks
+# the submodule out and runs the full set.
 if command -v cargo &>/dev/null; then
-  for manifest in core/Cargo.toml hyrr-mcp/Cargo.toml py/Cargo.toml wasm/Cargo.toml desktop/src-tauri/Cargo.toml; do
+  if [ -f nucl-parquet/clients/rs/nucl-parquet/Cargo.toml ]; then
+    manifests=(core/Cargo.toml hyrr-mcp/Cargo.toml py/Cargo.toml wasm/Cargo.toml desktop/src-tauri/Cargo.toml)
+  else
+    manifests=(wasm/Cargo.toml)
+    echo "::warning::nucl-parquet submodule not initialized — checking only wasm/Cargo.lock (init the submodule for the full set)"
+  fi
+  for manifest in "${manifests[@]}"; do
     [ -f "$manifest" ] || continue
     if ! cargo metadata --locked --manifest-path "$manifest" --format-version 1 >/dev/null 2>&1; then
       echo "::error::${manifest%/Cargo.toml}/Cargo.lock is out of sync with $manifest. Run: cargo update --manifest-path $manifest -p hyrr-core"
