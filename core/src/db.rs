@@ -7,7 +7,14 @@ use crate::types::{CrossSectionData, DecayData};
 /// Default neutron reaction/attenuation library (ADR-0003 #3). Charged defaults
 /// like `tendl-2023-iso` ship no neutron sublibrary, so neutron cross-sections
 /// are resolved from here. Behind a constant so it can be made selectable (#505).
-pub(crate) const NEUTRON_LIBRARY: &str = "endfb-8.1";
+///
+/// `endfb-8.0` is the authoritative NJOY-processed ENDF/B-VIII.0 pointwise
+/// neutron set (nucl-parquet #265/#268) — it replaced the in-repo resonance
+/// reconstruction (#263). Its thermal region is stored under the ENDF log-log
+/// law (INT=5), so the neutron fold interpolates cross-sections log-log
+/// (`interpolation::interp_log_log`); linear interpolation over-predicts the
+/// thermal region ~30x.
+pub(crate) const NEUTRON_LIBRARY: &str = "endfb-8.0";
 
 /// Normalize isomeric state for decay/dose lookups.
 ///
@@ -354,7 +361,7 @@ mod np_store {
             }
 
             // Neutron reactions come from the neutron library (ADR-0003 #3:
-            // endfb-8.1 by default, behind this wrapper so it can be made
+            // endfb-8.0 by default, behind this wrapper so it can be made
             // selectable later — #505); the charged default (e.g. tendl-2023-iso)
             // ships no neutron sublibrary. Everything else uses the store library.
             let lib = if projectile == "n" {

@@ -76,6 +76,49 @@ pub fn interp(x_new: &[f64], x: &[f64], y: &[f64], left: f64, right: f64) -> Vec
         .collect()
 }
 
+/// Log-log interpolation (ENDF INT=5) — the correct law for neutron
+/// cross-sections. Thermal capture is 1/v and the evaluated data stores that
+/// region compactly on the log-log assumption: a pure-1/v segment is *exact*
+/// from just its two endpoints under log-log, so 1/v nuclides carry no thermal
+/// grid points at all. Linear interpolation of that sparse grid over-predicts
+/// the thermal fold by ~30x (the Maxwellian peak at 0.0253 eV falls in a
+/// multi-decade gap). Within each bracket this interpolates `ln y` linearly in
+/// `ln x`; it falls back to linear for any segment whose endpoints aren't
+/// strictly positive (a channel closing to 0, where `ln` is undefined). Values
+/// outside `[x[0], x[n-1]]` get `left`/`right` (the reaction is closed there).
+pub fn interp_log_log(x_new: &[f64], x: &[f64], y: &[f64], left: f64, right: f64) -> Vec<f64> {
+    let n = x.len();
+    x_new
+        .iter()
+        .map(|&xv| {
+            if xv <= x[0] {
+                return left;
+            }
+            if xv >= x[n - 1] {
+                return right;
+            }
+            let mut lo = 0usize;
+            let mut hi = n - 1;
+            while hi - lo > 1 {
+                let mid = (lo + hi) >> 1;
+                if x[mid] <= xv {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let (x0, x1, y0, y1) = (x[lo], x[hi], y[lo], y[hi]);
+            if x0 > 0.0 && x1 > 0.0 && y0 > 0.0 && y1 > 0.0 {
+                let t = (xv.ln() - x0.ln()) / (x1.ln() - x0.ln());
+                (y0.ln() + t * (y1.ln() - y0.ln())).exp()
+            } else {
+                let t = (xv - x0) / (x1 - x0);
+                y0 + t * (y1 - y0)
+            }
+        })
+        .collect()
+}
+
 /// Log-log linear interpolation for stopping power data.
 /// Returns a closure that interpolates in log-log space with extrapolation at boundaries.
 pub fn make_log_log_interpolator(

@@ -143,7 +143,7 @@ do_build() {
 
   echo "=== 2/4 Copying nuclear data into frontend/public ==="
   scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-    tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
+    tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
 
   echo "=== 3/4 Installing frontend deps ==="
   (cd frontend && npm install)

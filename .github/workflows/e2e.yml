@@ -80,12 +80,12 @@ jobs:
             data/stopping \
             data/tendl-2023-iso/xs \
             data/hi-xs-prod/xs \
-            data/endfb-8.1/xs
+            data/endfb-8.0/xs
 
       - name: Copy nuclear data for frontend
         run: |
           scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
+            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -246,12 +246,12 @@ jobs:
             data/stopping \
             data/tendl-2023-iso/xs \
             data/hi-xs-prod/xs \
-            data/endfb-8.1/xs
+            data/endfb-8.0/xs
 
       - name: Copy nuclear data for frontend
         run: |
           scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
+            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
 
       - name: Build WASM compute engine
         run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
@@ -316,12 +316,12 @@ jobs:
             data/stopping \
             data/tendl-2023-iso/xs \
             data/hi-xs-prod/xs \
-            data/endfb-8.1/xs
+            data/endfb-8.0/xs
 
       - name: Copy nuclear data for frontend
         run: |
           scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
+            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

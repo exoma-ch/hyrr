@@ -157,8 +157,8 @@ export const PRESETS: Preset[] = [
   // Projectile "n": inputs become spectrum + flux (n/cm²/s) instead of energy +
   // current. Neutron layers are defined by thickness (there is no dE/dx to solve
   // an energy-out against). All three are cross-checked against the shipped
-  // endfb-8.1 fast neutron data (~0.1–20 MeV); the products/channels below are
-  // the dominant ones the engine reports.
+  // endfb-8.0 NJOY neutron data (thermal→20 MeV, log-log/INT=5); the products/
+  // channels below are the dominant ones the engine reports.
   {
     id: "co60-nact",
     name: "Co-60 (n,γ)",

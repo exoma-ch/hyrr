@@ -186,16 +186,41 @@ pub fn list_tools() -> Vec<Value> {
                 "properties": {
                     "projectile": {
                         "type": "string",
-                        "description": "Beam projectile: p (proton), d (deuteron), t (tritium), h (helion/³He), a (alpha)",
-                        "enum": ["p", "d", "t", "h", "a"]
+                        "description": "Beam projectile: p (proton), d (deuteron), t (tritium), h (helion/³He), a (alpha), or n (neutron source — defined by 'neutron_flux' instead of energy/current; ADR-0003)",
+                        "enum": ["p", "d", "t", "h", "a", "n"]
                     },
                     "energy_mev": {
                         "type": "number",
-                        "description": "Beam energy in MeV"
+                        "description": "Beam energy in MeV. Required for charged projectiles; ignored for a neutron source (projectile 'n')."
                     },
                     "current_ma": {
                         "type": "number",
-                        "description": "Beam current in mA (micro-amps)"
+                        "description": "Beam current in mA (micro-amps). Required for charged projectiles; ignored for a neutron source (projectile 'n')."
+                    },
+                    "neutron_flux": {
+                        "type": "object",
+                        "description": "Neutron flux spectrum for a neutron source (projectile 'n'; ADR-0003 Phase 1). Tagged by 'kind'. Defaults to a fission-fast spectrum if omitted. Total 'flux' is n/cm²/s.",
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["thermal", "epithermal", "fast", "monoenergetic", "custom", "composite"],
+                                "description": "Spectrum shape."
+                            },
+                            "flux": { "type": "number", "description": "Total flux [n/cm²/s]." },
+                            "kt_mev": { "type": "number", "description": "thermal: Maxwellian temperature kT [MeV] (0.0253 eV = 2.53e-8)." },
+                            "e_min_mev": { "type": "number", "description": "epithermal: lower bound [MeV]." },
+                            "e_max_mev": { "type": "number", "description": "epithermal: upper bound [MeV]." },
+                            "temp_mev": { "type": "number", "description": "fast: evaporation temperature T [MeV] (~1.4 for fission)." },
+                            "e0_mev": { "type": "number", "description": "monoenergetic: energy [MeV]." },
+                            "energies_mev": { "type": "array", "items": { "type": "number" }, "description": "custom: differential spectrum energies [MeV]." },
+                            "phi": { "type": "array", "items": { "type": "number" }, "description": "custom: differential flux φ at each energy [n/cm²/s/MeV]." },
+                            "components": { "type": "array", "items": { "type": "object" }, "description": "composite: list of sub-spectra (each a neutron_flux object)." }
+                        },
+                        "required": ["kind", "flux"]
+                    },
+                    "secondary_neutron": {
+                        "type": "boolean",
+                        "description": "For a charged run: also model Phase-2 secondary (x,n)-driven neutron activation from the beam-produced neutron source (ADR-0003 Phase 2). Ignored for a neutron source."
                     },
                     "layers": {
                         "type": "array",
@@ -228,7 +253,7 @@ pub fn list_tools() -> Vec<Value> {
                         "required": ["times_s", "currents_ma"]
                     }
                 },
-                "required": ["projectile", "energy_mev", "current_ma", "layers"]
+                "required": ["projectile", "layers"]
             }
         }),
         serde_json::json!({
@@ -544,6 +569,24 @@ fn parse_enrichment(
     Ok(Some(overrides))
 }
 
+/// Parse the `neutron_flux` argument into a [`FluxModel`] (ADR-0003 Phase 1).
+///
+/// The JSON is the tagged FluxModel shape, e.g.
+/// `{"kind":"thermal","flux":1e13,"kt_mev":2.53e-8}` or
+/// `{"kind":"fast","flux":1e13,"temp_mev":1.4}`. When omitted (a `projectile:"n"`
+/// run with no spectrum), defaults to a fission-fast spectrum so the run still
+/// produces a sensible result rather than erroring.
+fn parse_neutron_flux(val: Option<&Value>) -> Result<crate::neutron::FluxModel, String> {
+    match val {
+        Some(v) if !v.is_null() => serde_json::from_value::<crate::neutron::FluxModel>(v.clone())
+            .map_err(|e| format!("Invalid 'neutron_flux' (expected a FluxModel, e.g. {{\"kind\":\"thermal\",\"flux\":1e13,\"kt_mev\":2.53e-8}}): {e}")),
+        _ => Ok(crate::neutron::FluxModel::Fast {
+            flux: 1.0e13,
+            temp_mev: 1.4,
+        }),
+    }
+}
+
 /// Parse a simulate-shaped args object and run compute_stack.
 ///
 /// Shared by `simulate` and `compare_simulations` so their input
@@ -557,15 +600,20 @@ fn build_and_run_sim(
         .get("projectile")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'projectile'")?;
-    let projectile = ProjectileType::from_str(projectile_str).ok_or("Invalid projectile type")?;
-    let energy_mev = args
-        .get("energy_mev")
-        .and_then(|v| v.as_f64())
-        .ok_or("Missing 'energy_mev'")?;
-    let current_ma = args
-        .get("current_ma")
-        .and_then(|v| v.as_f64())
-        .ok_or("Missing 'current_ma'")?;
+    // A neutron source (projectile "n") has no ProjectileType and no beam
+    // energy/current — it's defined by a flux spectrum (ADR-0003). Require
+    // energy/current only for charged projectiles.
+    let is_neutron = projectile_str == "n";
+    let energy_mev = match args.get("energy_mev").and_then(|v| v.as_f64()) {
+        Some(e) => e,
+        None if is_neutron => 0.0,
+        None => return Err("Missing 'energy_mev'".to_string()),
+    };
+    let current_ma = match args.get("current_ma").and_then(|v| v.as_f64()) {
+        Some(c) => c,
+        None if is_neutron => 0.0,
+        None => return Err("Missing 'current_ma'".to_string()),
+    };
     let irr_time = args
         .get("irradiation_time_s")
         .and_then(|v| v.as_f64())
@@ -580,7 +628,15 @@ fn build_and_run_sim(
         .and_then(|v| v.as_array())
         .ok_or("Missing 'layers'")?;
 
-    let beam = Beam::new(projectile, energy_mev, current_ma);
+    // Neutron sources have no ProjectileType; compute_neutron_stack takes only
+    // layers + flux, so the beam is a placeholder never read on that path.
+    let beam = if is_neutron {
+        Beam::new(ProjectileType::Proton, 0.0, 0.0)
+    } else {
+        let projectile =
+            ProjectileType::from_str(projectile_str).ok_or("Invalid projectile type")?;
+        Beam::new(projectile, energy_mev, current_ma)
+    };
 
     let mut layers = Vec::new();
     for layer_val in layer_arr {
@@ -652,7 +708,31 @@ fn build_and_run_sim(
         current_profile,
     };
 
-    let result = crate::compute::compute_stack(db, &mut stack, true).map_err(|e| e.to_string())?;
+    // Three compute paths (ADR-0003): a neutron source (`projectile:"n"`) folds a
+    // flux spectrum via compute_neutron_stack; a charged run with
+    // `secondary_neutron:true` adds Phase-2 (x,n)-driven secondary activation;
+    // everything else is the plain charged-particle stack.
+    let result = if is_neutron {
+        let flux = parse_neutron_flux(args.get("neutron_flux"))?;
+        crate::compute::compute_neutron_stack(
+            db,
+            &stack.layers,
+            &flux,
+            stack.irradiation_time_s,
+            stack.cooling_time_s,
+            stack.area_cm2,
+            true,
+        )
+    } else if args
+        .get("secondary_neutron")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        crate::compute::compute_stack_with_secondary_neutrons(db, &mut stack, true)
+            .map_err(|e| e.to_string())?
+    } else {
+        crate::compute::compute_stack(db, &mut stack, true).map_err(|e| e.to_string())?
+    };
     Ok((
         stack,
         result,
