@@ -22,7 +22,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::constants::MILLIBARN_CM2;
-use crate::interpolation::{geomspace, interp, trapezoid};
+use crate::interpolation::{geomspace, interp, interp_log_log, trapezoid};
 use crate::types::Layer;
 
 /// Thermal energy at 20 °C: kT = 0.0253 eV = 2.53e-8 MeV.
@@ -203,8 +203,15 @@ fn default_area_cm2() -> f64 {
 
 /// Interpolate a cross-section [mb] onto `grid`, returning cm² (mb → cm²). Zero
 /// outside the tabulated range (reaction is not open there).
+///
+/// Uses **log-log** interpolation (ENDF INT=5) — the correct law for neutron
+/// cross-sections and the one the evaluated data is stored under: the thermal
+/// 1/v region is tabulated compactly on that assumption (pure-1/v nuclides
+/// carry *no* thermal grid points, being exact from their endpoints). Linear
+/// interpolation of that grid over-predicts the thermal fold by ~30x. See
+/// [`interp_log_log`].
 fn xs_on_grid_cm2(grid: &[f64], xs_energies_mev: &[f64], xs_mb: &[f64]) -> Vec<f64> {
-    interp(grid, xs_energies_mev, xs_mb, 0.0, 0.0)
+    interp_log_log(grid, xs_energies_mev, xs_mb, 0.0, 0.0)
         .into_iter()
         .map(|mb| mb * MILLIBARN_CM2)
         .collect()
@@ -220,7 +227,7 @@ pub fn fold_cross_section(
     grid_points: usize,
 ) -> f64 {
     if let FluxModel::Monoenergetic { flux: f, e0_mev } = flux {
-        let sigma = interp(&[*e0_mev], xs_energies_mev, xs_mb, 0.0, 0.0)[0] * MILLIBARN_CM2;
+        let sigma = interp_log_log(&[*e0_mev], xs_energies_mev, xs_mb, 0.0, 0.0)[0] * MILLIBARN_CM2;
         return sigma * f;
     }
     let grid = flux.energy_grid(grid_points);
@@ -279,11 +286,13 @@ pub fn neutron_channel_rate(
         if sigma_t_energies_mev.is_empty() {
             vec![0.0; grid.len()]
         } else {
-            interp(grid, sigma_t_energies_mev, sigma_t_macro_per_cm, 0.0, 0.0)
+            // Σ_t is neutron data too (1/v absorption + scattering) — log-log,
+            // consistent with the cross-section fold above.
+            interp_log_log(grid, sigma_t_energies_mev, sigma_t_macro_per_cm, 0.0, 0.0)
         }
     };
     let per_atom = if let FluxModel::Monoenergetic { flux: f, e0_mev } = flux {
-        let sigma = interp(&[*e0_mev], xs_energies_mev, xs_mb, 0.0, 0.0)[0] * MILLIBARN_CM2;
+        let sigma = interp_log_log(&[*e0_mev], xs_energies_mev, xs_mb, 0.0, 0.0)[0] * MILLIBARN_CM2;
         let sig_t = sigma_t_on(&[*e0_mev])[0];
         sigma * f * depth_factor_cm(sig_t, thickness_cm)
     } else {

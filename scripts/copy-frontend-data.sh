@@ -15,7 +15,7 @@
 #
 # Example:
 #   scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-#     tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
+#     tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
 set -euo pipefail
 
 NP="${1:?Usage: $0 <nucl-parquet-data-dir> <frontend-public-dir> [library...]}"

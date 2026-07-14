@@ -91,17 +91,17 @@
     "nucl-parquet": {
       "flake": false,
       "locked": {
-        "lastModified": 1783338548,
-        "narHash": "sha256-75JJnCitHWOy71vYiHo0Bk3nA+ovzrT+AjFQXRmsV+c=",
+        "lastModified": 1784043576,
+        "narHash": "sha256-1bh0Zt2WauTs4GYKZDSsSI3Z9YvbqZ2V4th4Gjz6Lok=",
         "owner": "exoma-ch",
         "repo": "nucl-parquet",
-        "rev": "dcd9a557843cc3cbfb797abafeca3bbf748d153d",
+        "rev": "58a00097c104720ae5f84ece9c95988cbfa4301e",
         "type": "github"
       },
       "original": {
         "owner": "exoma-ch",
         "repo": "nucl-parquet",
-        "rev": "dcd9a557843cc3cbfb797abafeca3bbf748d153d",
+        "rev": "58a00097c104720ae5f84ece9c95988cbfa4301e",
         "type": "github"
       }
     },

@@ -19,7 +19,7 @@
     # the same tree the `nucl-parquet` submodule points at; bump both in
     # lockstep. flake=false → consumed as a plain source path.
     nucl-parquet = {
-      url = "github:exoma-ch/nucl-parquet/dcd9a557843cc3cbfb797abafeca3bbf748d153d";
+      url = "github:exoma-ch/nucl-parquet/58a00097c104720ae5f84ece9c95988cbfa4301e";
       flake = false;
     };
   };

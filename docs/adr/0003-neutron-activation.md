@@ -192,6 +192,16 @@ closes the #444-class "which channel produced this?" gap).
    **library wrapper/abstraction** so it can be swapped later without touching call
    sites. A follow-up issue tracks making the neutron library user-selectable
    (alongside `tendl-2023-iso`, which has no neutron sublibrary). *(Issue filed.)*
+
+   > **Update (2026-07):** the neutron default moved from `endfb-8.1` to
+   > **`endfb-8.0`** (nucl-parquet #263 → #265/#268). Rather than reconstruct the
+   > resonance region from ENDF MF=2 ourselves, neutron now ships as the
+   > authoritative **NJOY-processed** ENDF/B-VIII.0 pointwise set (`endfb-8.1`
+   > kept its charged sublibraries). The thermal region is stored under the ENDF
+   > **log-log law (INT=5)**, so `NEUTRON_LIBRARY` is `endfb-8.0` and the neutron
+   > fold interpolates cross-sections log-log (`interpolation::interp_log_log`) —
+   > linear interpolation of that sparse grid over-predicts thermal ~36x. The
+   > wrapper abstraction made this a one-constant swap, exactly as intended.
 4. **Config surface — both cases, distinct shapes:**
    - **Case 1 (primary source):** selecting projectile = **neutron** swaps the beam
      inputs — instead of `(energy_MeV, current_mA)` the UI presents
