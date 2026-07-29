@@ -11,9 +11,17 @@
 import type { SimulationResult } from "./types";
 import type { SerializableConfig } from "./stores/config.svelte";
 import type { DisplayThresholdsState } from "./stores/display-thresholds.svelte";
+import {
+  parseSharedCustomMaterial,
+  type SharedCustomMaterial,
+} from "./shared-custom-materials";
 
-/** v1 → v2 added optional `display` (issue #130). v1 files load fine. */
-export const SESSION_SCHEMA_VERSION = 2;
+/** v1 → v2 added optional `display` (#130). v2 → v3 added optional
+ *  `customMaterials` — the FULL defs of every custom alloy the config
+ *  references, so a stack using a custom alloy is self-contained and
+ *  round-trips across machines (#539). The bump is ADDITIVE: v1/v2 files (no
+ *  `customMaterials`) still load; the field is optional. */
+export const SESSION_SCHEMA_VERSION = 3;
 /** MIME-sensible marker that the file was produced by HYRR. */
 export const SESSION_SCHEMA_ID = "hyrr-session";
 
@@ -29,6 +37,10 @@ export interface SessionFile {
   notes?: string;
   /** Optional UI prefs (display-layer only — never affects the result). */
   display?: DisplayThresholdsState;
+  /** v3 (#539): full defs of every custom alloy referenced by `config`, so the
+   *  file resolves on a fresh machine with an empty custom-material library.
+   *  Omitted when the config references no custom materials. */
+  customMaterials?: SharedCustomMaterial[];
 }
 
 declare const __APP_VERSION__: string;
@@ -38,6 +50,7 @@ export function buildSessionFile(
   result: SimulationResult | null,
   notes?: string,
   display?: DisplayThresholdsState,
+  customMaterials?: SharedCustomMaterial[],
 ): SessionFile {
   return {
     $schema: SESSION_SCHEMA_ID,
@@ -48,6 +61,10 @@ export function buildSessionFile(
     result,
     notes,
     display,
+    // Keep the field absent (not an empty array) when there's nothing to embed,
+    // so config-only files stay byte-identical to the pre-v3 shape.
+    customMaterials:
+      customMaterials && customMaterials.length > 0 ? customMaterials : undefined,
   };
 }
 
@@ -98,6 +115,14 @@ export function parseSessionJson(raw: string): ParseResult {
   if (obj.result !== null && obj.result !== undefined && typeof obj.result !== "object") {
     return { ok: false, error: "Result field has wrong type" };
   }
+  // v3 (#539): embedded custom-material defs. Defensively shape-check each entry
+  // (like the display/result guards) and drop malformed ones rather than
+  // failing the whole load — a partial embed still beats silent name-only loss.
+  const customMaterials = Array.isArray(obj.customMaterials)
+    ? obj.customMaterials
+        .map(parseSharedCustomMaterial)
+        .filter((m: SharedCustomMaterial | null): m is SharedCustomMaterial => m !== null)
+    : undefined;
   return {
     ok: true,
     file: {
@@ -109,6 +134,7 @@ export function parseSessionJson(raw: string): ParseResult {
       result: obj.result ?? null,
       notes: typeof obj.notes === "string" ? obj.notes : undefined,
       display: obj.display && typeof obj.display === "object" ? obj.display : undefined,
+      customMaterials: customMaterials && customMaterials.length > 0 ? customMaterials : undefined,
     },
   };
 }

@@ -10,6 +10,7 @@
   import { cycleTheme, getThemeMode, getResolvedTheme } from "../stores/theme.svelte";
   import { getResult, setResult } from "../stores/results.svelte";
   import { buildSessionFile, downloadSessionFile, pickSessionFile } from "../session-io";
+  import { collectCustomMaterials, hydrateSharedCustomMaterial } from "../shared-custom-materials";
   import { getDisplayThresholds, setDisplayThresholds } from "../stores/display-thresholds.svelte";
   import { openExternalUrl } from "../utils/open-url";
   import { copyText } from "../utils/copy-text";
@@ -25,6 +26,9 @@
   let saveMenuOpen = $state(false);
   let copied = $state<"hash" | "share" | null>(null);
   let loadError = $state("");
+  /** Subtle notice after an import — e.g. an embedded custom material shadowed a
+   *  differing same-named local one (#539). */
+  let loadNotice = $state("");
 
   function loadFromUrl(input: string) {
     loadError = "";
@@ -82,19 +86,35 @@
     saveMenuOpen = false;
     const cfg = getSerializableConfig();
     const res = includeResult ? getResult() : null;
-    const file = buildSessionFile(cfg, res, undefined, getDisplayThresholds());
+    // Embed the FULL defs of every custom alloy the config references so the
+    // file is self-contained and round-trips on a fresh machine (#539).
+    const customMaterials = collectCustomMaterials(cfg);
+    const file = buildSessionFile(cfg, res, undefined, getDisplayThresholds(), customMaterials);
     downloadSessionFile(file);
   }
 
   async function importSession() {
     saveMenuOpen = false;
+    loadNotice = "";
     try {
       const f = await pickSessionFile();
+      // Hydrate embedded custom-material defs BEFORE restoring the config, so
+      // the config store's migrateMissingDensities resolves them from the
+      // embedded defs (not the recipient's possibly-empty or differing local
+      // library). Embedded def WINS over a same-named local material (#539); a
+      // differing collision surfaces a subtle notice.
+      const collisions = (f.customMaterials ?? [])
+        .map(hydrateSharedCustomMaterial)
+        .filter((c): c is NonNullable<typeof c> => c !== null);
       restoreSerializableConfig(f.config);
       if (f.result) {
         setResult(f.result);
       }
       if (f.display) setDisplayThresholds(f.display);
+      if (collisions.length > 0) {
+        const names = collisions.map((c) => c.name).join(", ");
+        loadNotice = `Using the file's version of ${names} — it differs from a material of the same name in your library.`;
+      }
     } catch (e: any) {
       if (!/No file selected/.test(String(e?.message ?? e))) {
         // eslint-disable-next-line no-alert
@@ -192,6 +212,9 @@
             {/if}
             {#if loadError}
               <p class="load-error">{loadError}</p>
+            {/if}
+            {#if loadNotice}
+              <p class="load-notice">{loadNotice}</p>
             {/if}
           </div>
           <div class="menu-sep"></div>
@@ -319,6 +342,11 @@
     margin: 4px 0 0;
     font-size: 0.7rem;
     color: var(--c-red, #c00);
+  }
+  .load-notice {
+    margin: 4px 0 0;
+    font-size: 0.7rem;
+    color: var(--c-text-muted);
   }
   .share-btn {
     display: flex;
