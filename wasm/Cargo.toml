@@ -14,13 +14,24 @@ crate-type = ["cdylib", "rlib"]
 hyrr-core = { path = "../core", default-features = false }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: the config codec (hyrr-core::config_codec) decodes
+# `current_profile` physics values through serde_json — its default float parser
+# can be 1 ULP off, so a value like `0.05 + 3e-4` would not decode to the same
+# f64 the JS `JSON.parse` produces. Cargo feature-unification already carries
+# this from core (which enables it) into the shared serde_json, but we pin it
+# here too so the guarantee is explicit and unification-independent (#539).
+serde_json = { version = "1", features = ["float_roundtrip"] }
 serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1"
 # Tracing ring buffer (#159). `release_max_level_debug` statically strips `trace!`
 # call sites from the wasm blob (keeps debug for the bug-report ring).
 tracing = { version = "0.1", features = ["release_max_level_debug"] }
 js-sys = "0.3"
+
+[dev-dependencies]
+# In-browser/Node harness for the config-codec binding round-trip tests
+# (`tests/codec.rs`), run via `wasm-pack test --node`.
+wasm-bindgen-test = "0.3"
 
 [profile.release]
 opt-level = "s"

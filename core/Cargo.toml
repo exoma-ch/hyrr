@@ -19,6 +19,13 @@ embed-data = ["parquet-store", "dep:tempfile"]
 # the dep is fs/stderr based; the `tracing` facade itself is wasm-safe and
 # always present, so WASM emits the same events into its own ring subscriber.
 trace-jsonl = ["dep:guardrails-trace"]
+# TypeScript type generation (#539 increment 3a). Enables `ts_rs::TS` derives on
+# the `config_codec` canonical types and a gated generator test that writes
+# `packages/compute/src/generated/config-codec.ts`. Deliberately OUT of the
+# default set (and never enabled by `nix flake check`'s `rust-test`) so the
+# hermetic build never triggers ts-rs's file writes — a dedicated CI job
+# regenerates + diffs the committed output instead. See config_codec.rs.
+ts = ["dep:ts-rs"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -44,6 +51,12 @@ flate2 = { version = "1.1.9", default-features = false, features = ["rust_backen
 arrow = { version = "54", optional = true, default-features = false }
 parquet = { version = "54", optional = true, default-features = false, features = ["arrow"] }
 base64 = { version = "0.22", optional = true }
+# TypeScript type generation for the config codec (#539 increment 3a). Optional,
+# gated behind the `ts` feature — pulled in only when regenerating the committed
+# `config-codec.ts`, never by the default/wasm/mcp builds. `serde-json-impl`
+# gives `TS` for the `serde_json::Value` passthrough fields (neutron flux /
+# enrichment) so they render as `JsonValue`.
+ts-rs = { version = "12", features = ["serde-json-impl"], optional = true }
 
 # Native-only deps for the lazy data-fetch path (#52). Gated so wasm32
 # consumers don't pull reqwest/tar/zstd into their dependency graph.
