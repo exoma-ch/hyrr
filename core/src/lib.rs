@@ -6,6 +6,7 @@
 pub mod bateman;
 pub mod chains;
 pub mod compute;
+pub mod config_codec;
 pub mod config_url;
 pub mod constants;
 pub mod data_dir;
