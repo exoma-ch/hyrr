@@ -1,7 +1,8 @@
 /**
  * URL hash config encoding/decoding.
  *
- * Delegates to v2 (compressed) for encoding, supports both v1 and v2 for decoding.
+ * Delegates to the Rust codec (via WASM) for v2 encode/decode; still reads v1
+ * (legacy plain-base64) links on decode.
  */
 
 import type { SimulationConfig } from "./types";
@@ -11,6 +12,7 @@ import {
   decodeSerializableFromHash,
   decodeConfigFromHashV2,
   setConfigInHashV2,
+  type EncodeResult,
 } from "./config-url-v2";
 
 /** Decode a config from the current URL hash — preserves groups. */
@@ -23,21 +25,17 @@ export function decodeConfigFromHash(): SimulationConfig | null {
   return decodeConfigFromHashV2();
 }
 
-/** Strip currentProfile before URL encoding — too large for URL hash. */
-function stripProfile(config: SerializableConfig): SerializableConfig {
-  const { currentProfile: _, ...rest } = config;
-  return rest as SerializableConfig;
-}
-
 /** Update the URL hash with the given serializable config (preserves groups).
- *  CurrentProfile is excluded — it's too large for URL encoding. */
-export function setConfigInHash(config: SerializableConfig): void {
-  setConfigInHashV2(stripProfile(config));
+ *  currentProfile is carried under measure-and-keep — the codec keeps it if the
+ *  whole hash fits the URL budget, else drops it (reported in the returned
+ *  outcome), never silently. */
+export function setConfigInHash(config: SerializableConfig): EncodeResult {
+  return setConfigInHashV2(config);
 }
 
-/** Generate a full shareable URL for a config.
- *  CurrentProfile is excluded — it's too large for URL encoding. */
+/** Generate a full shareable URL for a config. currentProfile is kept if it fits
+ *  the URL budget (measure-and-keep). */
 export function getShareableUrl(config: SerializableConfig): string {
-  const hash = encodeConfigV2(stripProfile(config));
+  const hash = encodeConfigV2(config).hash;
   return `${window.location.origin}${window.location.pathname}${hash}`;
 }
