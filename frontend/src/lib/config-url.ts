@@ -33,9 +33,21 @@ export function setConfigInHash(config: SerializableConfig): EncodeResult {
   return setConfigInHashV2(config);
 }
 
-/** Generate a full shareable URL for a config. currentProfile is kept if it fits
- *  the URL budget (measure-and-keep). */
-export function getShareableUrl(config: SerializableConfig): string {
-  const hash = encodeConfigV2(config).hash;
-  return `${window.location.origin}${window.location.pathname}${hash}`;
+/** A shareable URL plus the codec outcome that produced it. Callers MUST surface
+ *  the outcome (dropped / warnings / link_unusable) — a copied or embedded link
+ *  can be over-budget (dropped currentProfile) or an unusable >30-layer dead
+ *  link, and nothing may be lost silently (#539). */
+export interface ShareableUrl {
+  url: string;
+  outcome: EncodeResult;
+}
+
+/** Generate a full shareable URL for a config, together with the encode outcome.
+ *  currentProfile is kept if it fits the URL budget (measure-and-keep); if it (or
+ *  the whole stack) doesn't, that's reported in `outcome`, never dropped
+ *  silently — the caller is responsible for surfacing it. */
+export function getShareableUrl(config: SerializableConfig): ShareableUrl {
+  const outcome = encodeConfigV2(config);
+  const url = `${window.location.origin}${window.location.pathname}${outcome.hash}`;
+  return { url, outcome };
 }

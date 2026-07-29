@@ -222,6 +222,9 @@
     // getShareableUrl requires SerializableConfig (with `items`, group-aware);
     // getConfig returns SimulationConfig (flat `layers`). Use the right shape
     // for the URL, keep the flat shape for the human-readable debug summary.
+    // The codec outcome rides along so the body can flag an over-budget / dead
+    // reproduce link instead of implying it's lossless (#539 / #546).
+    const share = getShareableUrl(getSerializableConfig());
     return buildBugReportBody({
       reportType,
       title,
@@ -230,7 +233,10 @@
       description,
       screenshotUrl,
       config: getConfig(),
-      configUrl: getShareableUrl(getSerializableConfig()),
+      configUrl: share.url,
+      configDropped: share.outcome.dropped,
+      configWarnings: share.outcome.warnings,
+      configLinkUnusable: share.outcome.link_unusable,
       result: getResult(),
       computeError: getResultError(),
       appVersion: __APP_VERSION__,

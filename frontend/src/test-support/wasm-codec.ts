@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { initConfigCodec } from "../lib/config-codec";
+import { initConfigCodec } from "../lib/config-codec.svelte";
 
 /**
  * Initialize the WASM config codec for node vitest.
  *
- * The browser init (`config-codec.ts` → `wasm.default()`) fetches the `.wasm`
+ * The browser init (`config-codec.svelte.ts` → `wasm.default()`) fetches the `.wasm`
  * over `import.meta.url`, which node's fetch can't resolve. So instantiate the
  * module *synchronously* from the built `.wasm` bytes first; the subsequent
  * `initConfigCodec()` (which calls `default()`) then short-circuits on the

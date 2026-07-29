@@ -5,7 +5,7 @@
  * v1 format: #config=<base64url-of-full-json>                (legacy, decode-only)
  *
  * The encode + v2 decode are produced/consumed by `hyrr-core::config_codec`
- * compiled to WASM (`config-codec.ts`); the `SerializableConfig`↔`CodecConfig`
+ * compiled to WASM (`config-codec.svelte.ts`); the `SerializableConfig`↔`CodecConfig`
  * mapping and the custom-material embed/hydrate live in `config-codec-map.ts`.
  * There is no hand-rolled compact/deflate logic here anymore — that was the
  * drift source #531 belonged to. Only the v1 legacy path (plain base64url of the
@@ -14,7 +14,7 @@
  */
 
 import type { CodecEncodeOutcome } from "@hyrr/compute";
-import { encodeCodec, decodeCodec, isCodecReady, URL_BUDGET_BYTES } from "./config-codec";
+import { encodeCodec, decodeCodec, isCodecReady, URL_BUDGET_BYTES } from "./config-codec.svelte";
 import {
   toCodecConfig,
   fromCodecConfig,

@@ -79,7 +79,10 @@ vi.mock("../stores/results.svelte", () => ({
 // Shareable-URL builder — return a stable fake. The body builder embeds this
 // verbatim, so we just need a known string to grep for if needed.
 vi.mock("../config-url", () => ({
-  getShareableUrl: vi.fn(() => "https://example.test/#config=stub"),
+  getShareableUrl: vi.fn(() => ({
+    url: "https://example.test/#config=stub",
+    outcome: { hash: "#config=stub", dropped: [], warnings: [], link_unusable: false },
+  })),
 }));
 
 // ── Imports (must come after vi.mock) ──────────────────────────────────────
