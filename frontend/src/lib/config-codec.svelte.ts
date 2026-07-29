@@ -11,7 +11,9 @@
  * We init it once at app boot (`initConfigCodec`, awaited before the cold-load
  * decode and before `ready`), so every runtime encode/decode is a plain sync
  * call. `isCodecReady()` lets callers stay defensive if a code path runs before
- * boot completes.
+ * boot completes — and it reads a `$state` signal, so a Svelte `$derived` that
+ * gates on it re-runs the moment the codec flips ready (this file is a
+ * `.svelte.ts` module for exactly that reason).
  *
  * Panic discipline (ADR/memory "wasm-panic-poisons-store"): the WASM `decode`
  * never unwraps on untrusted input — a hostile `#config=` throws a catchable JS
@@ -32,6 +34,11 @@ interface CodecModule {
 
 let mod: CodecModule | null = null;
 let initPromise: Promise<void> | null = null;
+// Reactive ready signal. `mod` holds the (non-proxied) WASM module; this plain
+// boolean is the `$state` a `$derived` can subscribe to — so encode paths gated
+// on `isCodecReady()` recompute when the codec finishes loading, not only when
+// their config input changes (the HeaderBar share-URL `$derived`, #546 nit).
+let codecReady = $state(false);
 
 /** Default whole-hash byte budget for a share/MCP link, mirroring the Rust
  *  `config_codec::DEFAULT_URL_BUDGET_BYTES`. Transport/CDN/QR limits bind well
@@ -59,14 +66,17 @@ export async function initConfigCodec(): Promise<void> {
       // no-op when `initBackend` already ran it.
       if (typeof wasm.default === "function") await wasm.default();
       mod = wasm;
+      codecReady = true;
     })();
   }
   await initPromise;
 }
 
-/** Whether the codec is ready for a synchronous encode/decode. */
+/** Whether the codec is ready for a synchronous encode/decode. Reactive: reading
+ *  this inside a Svelte `$derived`/`$effect` subscribes to the ready flip, so the
+ *  derived recomputes when the codec finishes initializing. */
 export function isCodecReady(): boolean {
-  return mod !== null;
+  return codecReady;
 }
 
 /**

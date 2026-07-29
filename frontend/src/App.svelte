@@ -4,7 +4,7 @@
   import { registerServiceWorker } from "./lib/sw-register";
   import { decodeSerializableConfigFromHash, setConfigInHash } from "./lib/config-url";
   import { getSharedCustomMaterial } from "./lib/config-url-v2";
-  import { initConfigCodec, isCodecReady } from "./lib/config-codec";
+  import { initConfigCodec, isCodecReady } from "./lib/config-codec.svelte";
   import type { EditableMaterial } from "./lib/components/material/DefineForm.svelte";
   import {
     getConfig,
@@ -164,11 +164,13 @@
   async function finishPostDataLoad(): Promise<void> {
     // Cold-load ready-gate (#539 inc3b): a `#config=` share link on first paint
     // must decode through the Rust WASM codec, which is async to initialize.
-    // Await it here — before the decode below and before `ready` — so a shared
-    // link (or a dropped .hyrr.json) never races an uninitialized codec. In the
-    // browser the WASM binary was already instantiated by initBackend, so this
-    // resolves immediately; in Tauri it loads the codec module (native compute
-    // doesn't otherwise pull in WASM).
+    // Await it here — before the `#config=` decode below and before `ready` — so
+    // a shared link never races an uninitialized codec. (This gate covers the
+    // `#config=` URL path ONLY; a `.hyrr.json` session file decodes via
+    // session-io's plain `JSON.parse`, never the codec, so it doesn't depend on
+    // this.) In the browser the WASM binary was already instantiated by
+    // initBackend, so this resolves immediately; in Tauri it loads the codec
+    // module (native compute doesn't otherwise pull in WASM).
     await initConfigCodec();
 
     // Check URL for shared config — URL hash takes priority over session restore

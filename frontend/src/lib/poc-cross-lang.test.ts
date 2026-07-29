@@ -23,7 +23,7 @@ import {
   decodeConfigV2Ser,
   getSharedCustomMaterial,
 } from "./config-url-v2";
-import { encodeCodec, decodeCodec } from "./config-codec";
+import { encodeCodec, decodeCodec } from "./config-codec.svelte";
 import { initWasmCodecForTest } from "../test-support/wasm-codec";
 import { initCustomMaterialRegistry } from "./compute/custom-material-registry";
 
