@@ -1,26 +1,33 @@
-//! Config codec — the **B′ (codec-only)** proof-of-concept for issue #539.
+//! Config codec — the production **B′ (codec-only)** codec for issue #539.
 //!
 //! Today HYRR has three forked config serializers (`.hyrr.json`, the `#config=`
-//! share URL, and this Rust MCP-link encoder in `config_url.rs`). #531 is that
-//! the Rust encoder silently drops the inline custom-material composition that
-//! the TS decoder (`frontend/src/lib/config-url-v2.ts`, `expandLayer`) already
-//! knows how to read (`cl.x`). This module proves the fix: a Rust codec that
+//! share URL, and the Rust MCP-link encoder). #531 was that the Rust encoder
+//! silently dropped the inline custom-material composition that the TS decoder
+//! (`frontend/src/lib/config-url-v2.ts`, `expandLayer`) already knows how to
+//! read (`cl.x`), plus per-layer density overrides and the `secondary_neutron`
+//! toggle. This module is the single canonical codec that
 //!
-//!  1. **emits** the enriched compact payload — including the `x`
-//!     InlineComposition object for custom alloys — so the existing TS decoder
-//!     round-trips it with **zero TS changes**, and
-//!  2. **decodes** a v2 hash back to a canonical config (net-new: `config_url.rs`
-//!     is encode-only today), with the security caps the #539 review panel
-//!     required (compressed-input cap, streaming decompression cap, item/float/
-//!     map bounds, `deny_unknown_fields` on the security-sensitive
-//!     `InlineComposition`).
+//!  1. **encodes** a canonical [`CodecConfig`] to the enriched compact payload —
+//!     including the `x` InlineComposition object for custom alloys, per-layer
+//!     density overrides (`d`), the neutron spectrum (`nf`), the
+//!     `secondary_neutron` toggle (`sn`), and (under [`SizePolicy`]) the
+//!     current profile (`cp`) — so the existing TS decoder round-trips it, and
+//!  2. **decodes** a v2 hash back to a [`CodecConfig`], with the security caps
+//!     the #539 review panel required (compressed-input cap, streaming
+//!     decompression cap, item/float/map bounds, `deny_unknown_fields` on the
+//!     security-sensitive `InlineComposition`).
+//!
+//! The MCP/URL link path (`config_url::share_url`) is a thin adapter that maps
+//! MCP simulate args → [`CodecConfig`] and calls [`encode`]; this is what closes
+//! #531. The canonical [`CodecConfig`] type is Rust-owned, per the B′ verdict.
 //!
 //! Wire format (unchanged, must match `config-url-v2.ts` byte-for-byte
 //! semantics): `#config=1:<base64url(rawDEFLATE(compact-json))>`.
 //!
-//! Scope discipline (per the panel's "codec-only B′" verdict): this is the
-//! codec and its canonical type only — NOT the full domain-model migration, no
-//! ts-rs, no WASM encode path, no session-io rewrite.
+//! Scope discipline (increment 1 of the #539 staging plan): this is the codec,
+//! its canonical type, and the MCP/URL rewire only — NOT the `.hyrr.json` file
+//! self-containment (increment 2), the WASM encode path, ts-rs type-gen, or the
+//! `config-url-v2.ts` collapse (increment 3).
 
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
@@ -47,6 +54,10 @@ const MAX_MAP_ENTRIES: usize = 512;
 const MAX_FORMULA_LEN: usize = 256;
 /// Bound the length of a current-profile sample array.
 const MAX_PROFILE_SAMPLES: usize = 100_000;
+
+/// Default whole-hash byte budget for a share/MCP URL. Transport/CDN/QR limits
+/// bind well before browsers do; the panel fixed ~2 KB as the safe budget.
+pub const DEFAULT_URL_BUDGET_BYTES: usize = 2000;
 
 const V2_PREFIX: &str = "1:";
 
@@ -82,16 +93,17 @@ pub enum CodecError {
 
 // ─── Canonical domain model (Rust-owned, per B′) ─────────────────────────────
 
-/// The canonical simulation config. In full B′ this becomes the single owner of
-/// the config type (shared by file / URL / MCP via WASM). Here it is the
-/// round-trip type for the codec.
+/// The canonical simulation config — the single Rust-owned round-trip type for
+/// the codec. In the #539 endgame (increment 3) this becomes the sole owner of
+/// the config type, shared by file / URL / MCP via WASM.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Config {
+pub struct CodecConfig {
     pub beam: Beam,
     pub items: Vec<Item>,
     pub irradiation_s: f64,
     pub cooling_s: f64,
-    /// Neutron spectrum (ADR-0003) — opaque passthrough for the PoC.
+    /// Neutron spectrum (ADR-0003) — opaque passthrough (the tagged FluxModel
+    /// JSON), carried verbatim so a neutron run round-trips.
     pub neutron_flux: Option<Value>,
     pub secondary_neutron: bool,
     /// Time-varying beam current. Large; subject to `SizePolicy` for URLs.
@@ -155,14 +167,14 @@ pub struct CurrentProfile {
 /// Where the encoded config is going, which decides the `currentProfile` budget.
 ///
 /// * `File` — a `.hyrr.json` download: embed everything, no budget.
-/// * `Url { profile_budget_bytes }` — a share/MCP link: transport/CDN/QR limits
+/// * `Url { budget_bytes }` — a share/MCP link: transport/CDN/QR limits
 ///   bind ~2 KB for the whole hash. If embedding `currentProfile` would blow the
 ///   budget, we DROP it and report it in `EncodeOutcome.dropped` — never
 ///   silently (the panel's non-negotiable).
 #[derive(Debug, Clone, Copy)]
 pub enum SizePolicy {
     File,
-    Url { profile_budget_bytes: usize },
+    Url { budget_bytes: usize },
 }
 
 /// The result of an encode: the hash plus a structured list of anything the
@@ -190,10 +202,11 @@ struct CompactConfig {
     nf: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     sn: Option<bool>,
-    /// currentProfile — NEW compact key. Emitted only under `SizePolicy::File`
-    /// (or a URL that fits budget). NOTE: the TS decoder does not read `cp` yet
-    /// (it ignores unknown top-level keys), so profile round-trips only within
-    /// the Rust/file path for now — full B′ TODO: teach the TS decoder `cp`.
+    /// currentProfile — compact key. Emitted under `SizePolicy::File`, or under
+    /// `SizePolicy::Url` when the whole hash still fits the budget
+    /// (measure-and-keep). The TS decoder reads `cp` as of increment 1
+    /// (`expandConfigSer`/`expandConfigFlat` → `currentProfile`), so the profile
+    /// now round-trips cross-language, not just within the Rust/file path.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     cp: Option<CompactProfile>,
 }
@@ -289,7 +302,7 @@ impl From<&Layer> for CompactLayer {
 }
 
 impl CompactConfig {
-    fn from_config(cfg: &Config, include_profile: bool) -> Self {
+    fn from_config(cfg: &CodecConfig, include_profile: bool) -> Self {
         let l = cfg
             .items
             .iter()
@@ -338,7 +351,7 @@ impl CompactConfig {
 /// Under `SizePolicy::Url`, the `currentProfile` is included only if the whole
 /// hash still fits the budget; otherwise it is dropped and reported in
 /// `EncodeOutcome.dropped`.
-pub fn encode(cfg: &Config, policy: SizePolicy) -> EncodeOutcome {
+pub fn encode(cfg: &CodecConfig, policy: SizePolicy) -> EncodeOutcome {
     match policy {
         SizePolicy::File => {
             let hash = encode_hash(&CompactConfig::from_config(cfg, true));
@@ -347,14 +360,12 @@ pub fn encode(cfg: &Config, policy: SizePolicy) -> EncodeOutcome {
                 dropped: vec![],
             }
         }
-        SizePolicy::Url {
-            profile_budget_bytes,
-        } => {
+        SizePolicy::Url { budget_bytes } => {
             let has_profile = cfg.current_profile.is_some();
             // Try to fit the profile; measure the full hash.
             if has_profile {
                 let with = encode_hash(&CompactConfig::from_config(cfg, true));
-                if with.len() <= profile_budget_bytes {
+                if with.len() <= budget_bytes {
                     return EncodeOutcome {
                         hash: with,
                         dropped: vec![],
@@ -385,10 +396,10 @@ fn encode_hash(compact: &CompactConfig) -> String {
 
 // ─── Decode ──────────────────────────────────────────────────────────────────
 
-/// Decode a v2 config hash back to the canonical `Config`, applying every
+/// Decode a v2 config hash back to the canonical `CodecConfig`, applying every
 /// security cap. Accepts a full URL, a bare `#config=1:…`/`config=1:…` hash, or
 /// the raw `1:<payload>`.
-pub fn decode(input: &str) -> Result<Config, CodecError> {
+pub fn decode(input: &str) -> Result<CodecConfig, CodecError> {
     let payload = extract_v2_payload(input).ok_or(CodecError::NotV2)?;
 
     let compressed = base64url_decode(payload).ok_or(CodecError::Base64)?;
@@ -422,7 +433,7 @@ fn extract_v2_payload(input: &str) -> Option<&str> {
     after.strip_prefix(V2_PREFIX)
 }
 
-fn compact_to_config(c: CompactConfig) -> Result<Config, CodecError> {
+fn compact_to_config(c: CompactConfig) -> Result<CodecConfig, CodecError> {
     if c.l.len() > MAX_ITEMS {
         return Err(CodecError::TooManyItems(c.l.len()));
     }
@@ -475,7 +486,7 @@ fn compact_to_config(c: CompactConfig) -> Result<Config, CodecError> {
         None => None,
     };
 
-    Ok(Config {
+    Ok(CodecConfig {
         beam: Beam {
             projectile: c.b.p,
             energy_mev: c.b.e,
@@ -623,7 +634,7 @@ mod tests {
     /// The PoC alloy — a made-up "poc-inconel" with an explicit density and mass
     /// fractions. This is exactly the custom-material definition #531 silently
     /// drops on the MCP link path today.
-    fn poc_inconel_config() -> Config {
+    fn poc_inconel_config() -> CodecConfig {
         let mut fractions = BTreeMap::new();
         fractions.insert("Ni".to_string(), 0.58);
         fractions.insert("Cr".to_string(), 0.22);
@@ -631,7 +642,7 @@ mod tests {
         fractions.insert("Mo".to_string(), 0.09);
         fractions.insert("Nb".to_string(), 0.036);
         fractions.insert("Ti".to_string(), 0.004);
-        Config {
+        CodecConfig {
             beam: Beam {
                 projectile: "p".to_string(),
                 energy_mev: 28.0,
@@ -668,12 +679,7 @@ mod tests {
     #[test]
     fn roundtrip_custom_alloy_survives() {
         let cfg = poc_inconel_config();
-        let outcome = encode(
-            &cfg,
-            SizePolicy::Url {
-                profile_budget_bytes: 2000,
-            },
-        );
+        let outcome = encode(&cfg, SizePolicy::Url { budget_bytes: 2000 });
         assert!(outcome.dropped.is_empty());
         let decoded = decode(&outcome.hash).expect("decode");
         assert_eq!(decoded, cfg, "full canonical config must round-trip");
@@ -742,7 +748,7 @@ mod tests {
         let url_smooth = encode(
             &smooth,
             SizePolicy::Url {
-                profile_budget_bytes: BUDGET,
+                budget_bytes: BUDGET,
             },
         );
         assert!(
@@ -776,7 +782,7 @@ mod tests {
         let url = encode(
             &big,
             SizePolicy::Url {
-                profile_budget_bytes: BUDGET,
+                budget_bytes: BUDGET,
             },
         );
         // The money assertion: dropped, WITH a structured warning, hash < budget.
@@ -876,19 +882,27 @@ mod tests {
         assert!(check_finite(-8.44, "x").is_ok());
     }
 
-    // (d) Write the cross-language fixture: a config-with-alloy encoded to a hash,
-    //     committed for the vitest cross-lang test to decode with the REAL TS
-    //     decoder. Encoded under Url policy — the actual #531 MCP-link scenario.
+    // (d) Write the cross-language fixture: a config-with-alloy PLUS a small
+    //     currentProfile, encoded to a hash and committed for the vitest
+    //     cross-lang test to decode with the REAL TS decoder. Encoded under Url
+    //     policy — the actual #531 MCP-link scenario. The profile is small so
+    //     measure-and-keep KEEPS it (nothing dropped), proving the TS decoder's
+    //     new `cp` support recovers the profile cross-language (increment 1).
     #[test]
     fn write_cross_lang_fixture() {
-        let cfg = poc_inconel_config();
-        let outcome = encode(
-            &cfg,
-            SizePolicy::Url {
-                profile_budget_bytes: 2000,
-            },
-        );
+        let mut cfg = poc_inconel_config();
+        // A small 5-sample beam-current ramp — comfortably under the URL budget.
+        cfg.current_profile = Some(CurrentProfile {
+            times_s: vec![0.0, 3600.0, 7200.0, 10800.0, 14400.0],
+            currents_ma: vec![0.2, 0.2, 0.15, 0.15, 0.1],
+        });
+        let outcome = encode(&cfg, SizePolicy::Url { budget_bytes: 2000 });
         assert!(outcome.hash.starts_with("#config=1:"));
+        // The profile fits → KEPT (the fixture must carry `cp` for the vitest).
+        assert!(
+            outcome.dropped.is_empty(),
+            "fixture profile must fit the budget so `cp` is emitted"
+        );
 
         let dir = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -912,7 +926,7 @@ mod tests {
 
     #[test]
     fn group_survives_roundtrip() {
-        let cfg = Config {
+        let cfg = CodecConfig {
             beam: Beam {
                 projectile: "p".to_string(),
                 energy_mev: 18.0,
@@ -950,5 +964,68 @@ mod tests {
         };
         let outcome = encode(&cfg, SizePolicy::File);
         assert_eq!(decode(&outcome.hash).unwrap(), cfg);
+    }
+
+    // Full canonical state — the union of everything #531 dropped plus the
+    // neutron fields — round-trips through the codec under the URL policy, and a
+    // realistic profile is KEPT (measure-and-keep), nothing dropped.
+    #[test]
+    fn full_canonical_state_round_trips_and_keeps_realistic_profile() {
+        let mut fractions = BTreeMap::new();
+        fractions.insert("Ni".to_string(), 0.9);
+        fractions.insert("Ti".to_string(), 0.1);
+        let n = 200;
+        let cfg = CodecConfig {
+            beam: Beam {
+                projectile: "p".to_string(),
+                energy_mev: 24.0,
+                current_ma: 0.05,
+            },
+            items: vec![
+                Item::Layer(Layer {
+                    material: "nitinol".to_string(),
+                    thickness_cm: Some(0.2),
+                    density_g_cm3: Some(6.45),
+                    enrichment: Some(json!([{ "element": "Ni", "A": 58, "fraction": 0.99 }])),
+                    custom: Some(CustomMaterial {
+                        density_g_cm3: 6.45,
+                        mass_fractions: Some(fractions),
+                        formula: None,
+                        enrichment: None,
+                    }),
+                    ..Default::default()
+                }),
+                Item::Layer(Layer {
+                    material: "H2O".to_string(),
+                    thickness_cm: Some(2.0),
+                    density_g_cm3: Some(1.0),
+                    ..Default::default()
+                }),
+            ],
+            irradiation_s: 3600.0,
+            cooling_s: 86400.0,
+            neutron_flux: Some(json!({ "kind": "thermal", "flux": 1e13, "kt_mev": 2.53e-8 })),
+            secondary_neutron: true,
+            current_profile: Some(CurrentProfile {
+                times_s: (0..n).map(|i| i as f64 * 3600.0).collect(),
+                currents_ma: (0..n).map(|i| 0.05 + i as f64 * 1e-4).collect(),
+            }),
+        };
+
+        // Measure-and-keep: a realistic 200-sample profile FITS the URL budget.
+        let url = encode(
+            &cfg,
+            SizePolicy::Url {
+                budget_bytes: DEFAULT_URL_BUDGET_BYTES,
+            },
+        );
+        assert!(
+            url.dropped.is_empty(),
+            "realistic profile fits {}-byte budget (hash {} bytes)",
+            DEFAULT_URL_BUDGET_BYTES,
+            url.hash.len()
+        );
+        assert!(url.hash.len() <= DEFAULT_URL_BUDGET_BYTES);
+        assert_eq!(decode(&url.hash).unwrap(), cfg, "full state round-trips");
     }
 }

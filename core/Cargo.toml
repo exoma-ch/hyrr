@@ -22,7 +22,13 @@ trace-jsonl = ["dep:guardrails-trace"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: serde_json's default float parser can be off by 1 ULP, so a
+# value like `0.05 + 3e-4` does NOT decode back to the exact same f64. JS
+# `JSON.parse` is correctly-rounded, so the config codec (config_codec.rs) would
+# otherwise drift by 1 ULP vs the TS decoder on `current_profile` values (which
+# are physics inputs). This feature enables the correctly-rounded parser so Rust
+# decode == JS decode exactly.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 # Tracing facade (#159). Wasm-safe — emitting an event is a no-op without an
 # installed subscriber, so this is always present; the JSONL subscriber (native)

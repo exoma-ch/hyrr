@@ -19,6 +19,30 @@ import type { SerializableConfig } from "./stores/config.svelte";
 
 const V2_PREFIX = "1:";
 const MAX_URL_ITEMS = 30;
+/** Upper bound on current-profile sample count, mirroring the Rust codec's
+ *  `MAX_PROFILE_SAMPLES` (config_codec.rs). A malformed/hostile `cp` key can't
+ *  balloon the restored state past this. */
+const MAX_PROFILE_SAMPLES = 100_000;
+
+/** Validate + expand the compact current-profile key (`cp: { t, c }`) the Rust
+ *  codec now emits (measure-and-keep — present only when it fits the URL
+ *  budget; #539 increment 1). Defensive like the `cl.x` guard: a malformed
+ *  share URL must not poison the restored session. Returns plain `number[]`
+ *  arrays (the `SerializableConfig` shape), or `null` when absent/invalid.
+ */
+function expandProfile(cp: unknown): { timesS: number[]; currentsMA: number[] } | null {
+  if (!cp || typeof cp !== "object") return null;
+  const t = (cp as { t?: unknown }).t;
+  const c = (cp as { c?: unknown }).c;
+  if (!Array.isArray(t) || !Array.isArray(c)) return null;
+  // Equal-length, non-empty, bounded.
+  if (t.length === 0 || t.length !== c.length || t.length > MAX_PROFILE_SAMPLES) return null;
+  for (let i = 0; i < t.length; i++) {
+    if (typeof t[i] !== "number" || !isFinite(t[i])) return null;
+    if (typeof c[i] !== "number" || !isFinite(c[i])) return null;
+  }
+  return { timesS: t as number[], currentsMA: c as number[] };
+}
 
 /** Inline custom-material definition carried by a layer whose material is a
  *  user-saved custom (or hydrated catalog fork). On decode the receiver
@@ -180,6 +204,9 @@ function expandLayer(cl: any): LayerConfig {
 /** Expand compact keys back to SerializableConfig (preserves groups). */
 function expandConfigSer(compact: any): SerializableConfig | null {
   if (!isValidCompact(compact)) return null;
+  // currentProfile (`cp`) — carried by the Rust codec when it fits the URL
+  // budget (#539). restoreSerializableConfig already rehydrates this shape.
+  const profile = expandProfile(compact.cp);
   return {
     beam: {
       projectile: compact.b.p,
@@ -201,6 +228,7 @@ function expandConfigSer(compact: any): SerializableConfig | null {
     }),
     irradiation_s: compact.i,
     cooling_s: compact.c,
+    ...(profile ? { currentProfile: profile } : {}),
     ...(compact.nf ? { neutronFlux: compact.nf } : {}),
     ...(compact.sn ? { secondaryNeutron: true } : {}),
   };
@@ -220,11 +248,21 @@ function expandConfigFlat(compact: any): SimulationConfig | null {
       layers.push(expandLayer(cl));
     }
   }
+  // currentProfile (`cp`) — flat SimulationConfig uses the Float64Array shape.
+  const profile = expandProfile(compact.cp);
   return {
     beam: { projectile: compact.b.p, energy_MeV: compact.b.e, current_mA: compact.b.c },
     layers,
     irradiation_s: compact.i,
     cooling_s: compact.c,
+    ...(profile
+      ? {
+          currentProfile: {
+            timesS: new Float64Array(profile.timesS),
+            currentsMA: new Float64Array(profile.currentsMA),
+          },
+        }
+      : {}),
     ...(compact.nf ? { neutronFlux: compact.nf } : {}),
     ...(compact.sn ? { secondary_neutron: true } : {}),
   };
