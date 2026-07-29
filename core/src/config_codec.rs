@@ -46,8 +46,11 @@ const MAX_COMPRESSED_BYTES: usize = 8 * 1024;
 /// streaming `take(MAX + 1)`, so we never allocate more than this even for a
 /// hostile input that inflates to gigabytes.
 const MAX_DECOMPRESSED_BYTES: u64 = 1024 * 1024; // 1 MiB
-/// Max top-level items (layers + groups). Mirrors the TS `MAX_URL_ITEMS`.
-const MAX_ITEMS: usize = 30;
+/// Max top-level items (layers + groups) the decoder will accept — mirrors the
+/// TS `MAX_URL_ITEMS` in `config-url-v2.ts`. The encoder uses it too, so a stack
+/// too large to *decode* is never emitted as a "view in browser" link the
+/// frontend would silently refuse to load (the panel's non-negotiable).
+pub const MAX_ITEMS: usize = 30;
 /// Bound the size of any embedded map (mass fractions, enrichment element set).
 const MAX_MAP_ENTRIES: usize = 512;
 /// Bound a formula / free-text string length.
@@ -177,13 +180,25 @@ pub enum SizePolicy {
     Url { budget_bytes: usize },
 }
 
-/// The result of an encode: the hash plus a structured list of anything the
-/// size policy forced us to drop, so the caller can surface a visible warning
-/// and offer a lossless fallback.
+/// The result of an encode: the hash plus everything the caller needs to warn
+/// the user instead of ever losing state silently or handing them a dead link.
+///
+/// * `dropped` — structured names of state the size policy *deliberately* left
+///   out (today: `"currentProfile"`), so the caller can offer a lossless path.
+/// * `warnings` — human-readable notes for conditions where nothing specific was
+///   dropped but the link is still not fully sound: the base config is *over
+///   budget* (Fix 1) or the stack has more items than the decoder accepts (Fix
+///   2). Never silent — the panel's non-negotiable.
+/// * `link_unusable` — the config exceeds [`MAX_ITEMS`], so both the Rust and TS
+///   decoders will refuse to load the hash. The caller MUST NOT present it as a
+///   "view in browser" link; it is a dead link. Point at the lossless fallback
+///   instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncodeOutcome {
     pub hash: String,
     pub dropped: Vec<&'static str>,
+    pub warnings: Vec<String>,
+    pub link_unusable: bool,
 }
 
 // ─── Compact wire structs (serde-typed; compact keys) ────────────────────────
@@ -348,9 +363,13 @@ impl CompactConfig {
 
 /// Encode a canonical config to a `#config=1:…` hash under the given size policy.
 ///
-/// Under `SizePolicy::Url`, the `currentProfile` is included only if the whole
-/// hash still fits the budget; otherwise it is dropped and reported in
-/// `EncodeOutcome.dropped`.
+/// Under `SizePolicy::Url` the guarantees are: (1) `currentProfile` is included
+/// only if the whole hash still fits the budget, else it is dropped and reported
+/// in `EncodeOutcome.dropped`; (2) if the profile-less base config STILL exceeds
+/// the budget it is reported via `EncodeOutcome.warnings` — never a silent
+/// over-budget hash (Fix 1); (3) if the stack exceeds [`MAX_ITEMS`] the decoder
+/// refuses to load the link, so `EncodeOutcome.link_unusable` is set and a
+/// warning recorded rather than emitting a dead link (Fix 2).
 pub fn encode(cfg: &CodecConfig, policy: SizePolicy) -> EncodeOutcome {
     match policy {
         SizePolicy::File => {
@@ -358,29 +377,55 @@ pub fn encode(cfg: &CodecConfig, policy: SizePolicy) -> EncodeOutcome {
             EncodeOutcome {
                 hash,
                 dropped: vec![],
+                warnings: vec![],
+                link_unusable: false,
             }
         }
         SizePolicy::Url { budget_bytes } => {
+            let mut dropped: Vec<&'static str> = vec![];
+            let mut warnings: Vec<String> = vec![];
+
+            // Measure-and-keep the profile: keep it only if the whole hash fits.
             let has_profile = cfg.current_profile.is_some();
-            // Try to fit the profile; measure the full hash.
-            if has_profile {
+            let hash = if has_profile {
                 let with = encode_hash(&CompactConfig::from_config(cfg, true));
                 if with.len() <= budget_bytes {
-                    return EncodeOutcome {
-                        hash: with,
-                        dropped: vec![],
-                    };
+                    with
+                } else {
+                    dropped.push("currentProfile");
+                    encode_hash(&CompactConfig::from_config(cfg, false))
                 }
+            } else {
+                encode_hash(&CompactConfig::from_config(cfg, false))
+            };
+
+            // Fix 2: > MAX_ITEMS top-level items → both decoders (Rust
+            // `compact_to_config`, TS `MAX_URL_ITEMS`) reject the hash. Never emit
+            // a dead link; flag it and warn.
+            let n_items = cfg.items.len();
+            let link_unusable = n_items > MAX_ITEMS;
+            if link_unusable {
+                warnings.push(format!(
+                    "stack too large to link ({n_items} > {MAX_ITEMS} layers); use a .hyrr.json export"
+                ));
+            } else if hash.len() > budget_bytes {
+                // Fix 1: even with the profile dropped (or with no profile at
+                // all), the base config can exceed the budget — a huge alloy
+                // mass-fraction map, many layers, etc. Surface it; the panel's
+                // non-negotiable is that this is never silent.
+                warnings.push(format!(
+                    "link is {} bytes, over the {budget_bytes}-byte URL budget — \
+                     some transports/QR codes may reject it; use a .hyrr.json export \
+                     for the full config",
+                    hash.len()
+                ));
             }
-            // No profile, or it blew the budget → drop it, warn.
-            let hash = encode_hash(&CompactConfig::from_config(cfg, false));
+
             EncodeOutcome {
                 hash,
-                dropped: if has_profile {
-                    vec!["currentProfile"]
-                } else {
-                    vec![]
-                },
+                dropped,
+                warnings,
+                link_unusable,
             }
         }
     }
@@ -882,14 +927,12 @@ mod tests {
         assert!(check_finite(-8.44, "x").is_ok());
     }
 
-    // (d) Write the cross-language fixture: a config-with-alloy PLUS a small
-    //     currentProfile, encoded to a hash and committed for the vitest
-    //     cross-lang test to decode with the REAL TS decoder. Encoded under Url
-    //     policy — the actual #531 MCP-link scenario. The profile is small so
-    //     measure-and-keep KEEPS it (nothing dropped), proving the TS decoder's
-    //     new `cp` support recovers the profile cross-language (increment 1).
-    #[test]
-    fn write_cross_lang_fixture() {
+    /// The config the cross-language vitest fixture is built from: a
+    /// config-with-alloy PLUS a small `currentProfile`, encoded under Url policy
+    /// (the actual #531 MCP-link scenario). The profile is small so
+    /// measure-and-keep KEEPS it (nothing dropped), proving the TS decoder's
+    /// `cp` support recovers the profile cross-language (increment 1).
+    fn cross_lang_fixture_hash() -> String {
         let mut cfg = poc_inconel_config();
         // A small 5-sample beam-current ramp — comfortably under the URL budget.
         cfg.current_profile = Some(CurrentProfile {
@@ -900,19 +943,50 @@ mod tests {
         assert!(outcome.hash.starts_with("#config=1:"));
         // The profile fits → KEPT (the fixture must carry `cp` for the vitest).
         assert!(
-            outcome.dropped.is_empty(),
+            outcome.dropped.is_empty() && outcome.warnings.is_empty(),
             "fixture profile must fit the budget so `cp` is emitted"
         );
+        outcome.hash
+    }
 
+    fn cross_lang_fixture_path() -> String {
         let dir = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../frontend/src/lib/__fixtures__"
         );
-        std::fs::create_dir_all(dir).expect("create fixture dir");
-        let path = format!("{dir}/poc-rust-encoded.txt");
+        format!("{dir}/poc-rust-encoded.txt")
+    }
+
+    // (d) Cross-language fixture DRIFT CHECK (Fix 3). The normal test run asserts
+    //     the committed fixture equals freshly-encoded output — it never writes,
+    //     so `cargo test` leaves the working tree clean. If the codec's wire
+    //     output ever drifts from the committed fixture, this fails loudly.
+    //     Regeneration is explicit and opt-in: `REGEN_FIXTURES=1 cargo test`.
+    #[test]
+    fn cross_lang_fixture_matches_encoder() {
         // Trailing newline so the committed fixture is stable under the repo's
         // end-of-file-fixer hook. The TS reader `.trim()`s it.
-        std::fs::write(&path, format!("{}\n", outcome.hash)).expect("write fixture");
+        let expected = format!("{}\n", cross_lang_fixture_hash());
+        let path = cross_lang_fixture_path();
+
+        if std::env::var_os("REGEN_FIXTURES").is_some() {
+            let dir = std::path::Path::new(&path).parent().unwrap();
+            std::fs::create_dir_all(dir).expect("create fixture dir");
+            std::fs::write(&path, &expected).expect("write fixture");
+            return;
+        }
+
+        let committed = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "committed cross-lang fixture {path} unreadable ({e}); \
+                 regenerate with `REGEN_FIXTURES=1 cargo test cross_lang_fixture_matches_encoder`"
+            )
+        });
+        assert_eq!(
+            committed, expected,
+            "cross-lang fixture drifted from the encoder output; \
+             regenerate with `REGEN_FIXTURES=1 cargo test cross_lang_fixture_matches_encoder`"
+        );
     }
 
     #[test]
@@ -1027,5 +1101,111 @@ mod tests {
         );
         assert!(url.hash.len() <= DEFAULT_URL_BUDGET_BYTES);
         assert_eq!(decode(&url.hash).unwrap(), cfg, "full state round-trips");
+    }
+
+    // (Fix 1) A profile-LESS config whose base config STILL exceeds the budget —
+    // a huge, incompressible custom-alloy mass-fraction map — must be reported,
+    // never silently emitted as an over-budget hash with `dropped == []`.
+    #[test]
+    fn over_budget_base_config_is_warned_not_silent() {
+        let mut fractions = BTreeMap::new();
+        // ~600 incompressible entries so DEFLATE can't crush the base config
+        // under 2 KB. Keys are distinct; values high-entropy.
+        let noise = lcg_stream(99, 600);
+        for (i, &u) in noise.iter().enumerate() {
+            fractions.insert(format!("E{i:04}"), (u % 1_000_000) as f64 / 997.0 + 1e-6);
+        }
+        let cfg = CodecConfig {
+            beam: Beam {
+                projectile: "p".to_string(),
+                energy_mev: 20.0,
+                current_ma: 0.1,
+            },
+            items: vec![Item::Layer(Layer {
+                material: "huge-alloy".to_string(),
+                thickness_cm: Some(0.1),
+                custom: Some(CustomMaterial {
+                    density_g_cm3: 5.0,
+                    mass_fractions: Some(fractions),
+                    formula: None,
+                    enrichment: None,
+                }),
+                ..Default::default()
+            })],
+            irradiation_s: 3600.0,
+            cooling_s: 3600.0,
+            neutron_flux: None,
+            secondary_neutron: false,
+            current_profile: None,
+        };
+        let out = encode(
+            &cfg,
+            SizePolicy::Url {
+                budget_bytes: DEFAULT_URL_BUDGET_BYTES,
+            },
+        );
+        // No profile → nothing to drop, but the base config blows the budget.
+        assert!(out.dropped.is_empty(), "no profile to drop");
+        assert!(
+            out.hash.len() > DEFAULT_URL_BUDGET_BYTES,
+            "test setup: base config must exceed the budget (was {} bytes)",
+            out.hash.len()
+        );
+        assert!(!out.link_unusable, "one item — not an item-cap failure");
+        // The money assertion: the over-budget condition is OBSERVABLE, not silent.
+        assert_eq!(out.warnings.len(), 1, "warnings: {:?}", out.warnings);
+        assert!(
+            out.warnings[0].contains("over the"),
+            "warning names the budget: {:?}",
+            out.warnings
+        );
+    }
+
+    // (Fix 2) A stack with more than MAX_ITEMS top-level items is flagged
+    // `link_unusable` + warned — never handed back as a "view in browser" link
+    // the decoder would refuse. Proven by decoding the emitted hash → rejected.
+    #[test]
+    fn oversized_stack_flagged_unusable_and_would_not_decode() {
+        let items: Vec<Item> = (0..MAX_ITEMS + 1)
+            .map(|_| {
+                Item::Layer(Layer {
+                    material: "Cu".to_string(),
+                    thickness_cm: Some(0.01),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let cfg = CodecConfig {
+            beam: Beam {
+                projectile: "p".to_string(),
+                energy_mev: 18.0,
+                current_ma: 0.1,
+            },
+            items,
+            irradiation_s: 3600.0,
+            cooling_s: 3600.0,
+            neutron_flux: None,
+            secondary_neutron: false,
+            current_profile: None,
+        };
+        let out = encode(
+            &cfg,
+            SizePolicy::Url {
+                budget_bytes: DEFAULT_URL_BUDGET_BYTES,
+            },
+        );
+        assert!(out.link_unusable, "{} > {} items", MAX_ITEMS + 1, MAX_ITEMS);
+        assert!(out.dropped.is_empty());
+        assert_eq!(out.warnings.len(), 1, "warnings: {:?}", out.warnings);
+        assert!(
+            out.warnings[0].contains("stack too large"),
+            "warning: {:?}",
+            out.warnings
+        );
+        // Proof it's a dead link: the decoder rejects the very hash we produced.
+        assert_eq!(
+            decode(&out.hash).unwrap_err(),
+            CodecError::TooManyItems(MAX_ITEMS + 1)
+        );
     }
 }
