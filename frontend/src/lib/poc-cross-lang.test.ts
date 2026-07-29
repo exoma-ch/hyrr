@@ -16,24 +16,46 @@
  * This is the #531 failure mode fixed: the Rust encoder now emits `x` (custom
  * alloy) and `cp` (current profile), and the TS decoder recovers both.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   decodeConfigV2Ser,
   getSharedCustomMaterial,
 } from "./config-url-v2";
+import { encodeCodec, decodeCodec } from "./config-codec";
+import { initWasmCodecForTest } from "../test-support/wasm-codec";
 import { initCustomMaterialRegistry } from "./compute/custom-material-registry";
 
 // The recipient has NO local library — the alloy must arrive entirely via the
 // link (the cross-machine break #531 describes).
 initCustomMaterialRegistry(() => []);
 
+// The browser codec is the SAME Rust code as the native MCP encoder, compiled
+// to WASM. Drive it in-process to prove decode- AND byte-identity with a hash a
+// NATIVE `hyrr-core` build produced (the committed fixture).
+beforeAll(async () => {
+  await initWasmCodecForTest();
+});
+
 const FIXTURE = fileURLToPath(
   new URL("./__fixtures__/poc-rust-encoded.txt", import.meta.url),
 );
 
 describe("cross-language codec round-trip (#539)", () => {
+  it("browser (WASM) encode is byte-identical to the native Rust MCP encode", () => {
+    // The fixture was produced by a NATIVE `hyrr-core` build under
+    // SizePolicy::Url{2000}. Decode it through WASM, re-encode the recovered
+    // canonical config through WASM under the same policy, and assert the hash
+    // is identical — one codec, two compile targets, byte-for-byte. This is the
+    // drift class (#531) closed by construction.
+    const nativeHash = readFileSync(FIXTURE, "utf8").trim();
+    const codecCfg = decodeCodec(nativeHash);
+    const wasmOut = encodeCodec(codecCfg, { kind: "url", budget_bytes: 2000 });
+    expect(wasmOut.hash).toBe(nativeHash);
+    expect(wasmOut.dropped).toEqual([]);
+  });
+
   it("decodes a Rust-encoded hash and recovers the embedded custom alloy", () => {
     const hash = readFileSync(FIXTURE, "utf8").trim();
     expect(hash.startsWith("#config=1:")).toBe(true);

@@ -40,9 +40,13 @@
   }
 
   let hasProfile = $derived(getCurrentProfile() !== null);
-  // encodeConfigV2 receives full config — currentProfile is stripped by config-url layer
-  let currentHash = $derived(encodeConfigV2(getSerializableConfig()));
+  // The one Rust codec (via WASM) encodes the full config, currentProfile
+  // included — measure-and-keep decides whether it fits the URL budget. The
+  // outcome carries structured warnings so nothing is ever lost silently (#539).
+  let encodeOutcome = $derived(encodeConfigV2(getSerializableConfig()));
+  let currentHash = $derived(encodeOutcome.hash);
   let shareUrl = $derived(`${SHARE_BASE}${currentHash}`);
+  let profileDropped = $derived(encodeOutcome.dropped.includes("currentProfile"));
 
   async function copyToClipboard(text: string, which: "hash" | "share") {
     // Only show the "Copied!" badge if the write actually succeeded. The macOS
@@ -187,8 +191,24 @@
                 {/if}
               </button>
             </div>
-            {#if hasProfile}
-              <p class="share-warning">Current profile not included in share link — recipient will need the CSV file.</p>
+            {#if encodeOutcome.link_unusable}
+              <p class="load-error">
+                Stack too large to share by link. Use “Save session” or “Export
+                config” below to download the full configuration instead.
+              </p>
+            {:else}
+              {#if profileDropped}
+                <p class="share-warning">
+                  Current profile is too large for the share link and was left
+                  out — the recipient won’t get it. Use “Export config” below for
+                  the full config including the profile.
+                </p>
+              {:else if hasProfile}
+                <p class="share-info">Current profile included in the share link.</p>
+              {/if}
+              {#each encodeOutcome.warnings as w}
+                <p class="share-warning">{w}</p>
+              {/each}
             {/if}
             {#if loadError}
               <p class="load-error">{loadError}</p>
@@ -340,6 +360,12 @@
     margin: 4px 0 0;
     font-size: 0.65rem;
     color: var(--c-warning, #dd6b20);
+    line-height: 1.3;
+  }
+  .share-info {
+    margin: 4px 0 0;
+    font-size: 0.65rem;
+    color: var(--c-text-muted);
     line-height: 1.3;
   }
   .header-bar {

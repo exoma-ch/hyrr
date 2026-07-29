@@ -1,343 +1,83 @@
 /**
- * Compressed URL config encoding with compact JSON keys.
+ * URL config encoding — a thin layer over the ONE canonical Rust codec (#539).
  *
- * v2 format: #config=1:<base64url-of-deflated-compact-json>
- * v1 format: #config=<base64url-of-full-json> (legacy, decode-only)
+ * v2 format: #config=1:<base64url-of-deflated-compact-json>  (Rust `config_codec`)
+ * v1 format: #config=<base64url-of-full-json>                (legacy, decode-only)
  *
- * Supports both flat layers and layer groups for persistence.
+ * The encode + v2 decode are produced/consumed by `hyrr-core::config_codec`
+ * compiled to WASM (`config-codec.ts`); the `SerializableConfig`↔`CodecConfig`
+ * mapping and the custom-material embed/hydrate live in `config-codec-map.ts`.
+ * There is no hand-rolled compact/deflate logic here anymore — that was the
+ * drift source #531 belonged to. Only the v1 legacy path (plain base64url of the
+ * full JSON, never DEFLATEd) is still decoded in TS, since the Rust codec only
+ * speaks v2.
  */
 
-import { deflateSync, inflateSync } from "fflate";
+import type { CodecEncodeOutcome } from "@hyrr/compute";
+import { encodeCodec, decodeCodec, isCodecReady, URL_BUDGET_BYTES } from "./config-codec";
 import {
-  setCustomDensityLookup,
-  setCustomCompositionLookup,
-  formulaToMassFractions,
-} from "@hyrr/compute";
-import { lookupByIdentifier } from "./compute/custom-material-registry";
-import type { SimulationConfig, LayerConfig, BeamConfig } from "./types";
+  toCodecConfig,
+  fromCodecConfig,
+  fromCodecConfigFlat,
+  getSharedCustomMaterial,
+  type SharedCustomMaterial,
+} from "./config-codec-map";
+import type { SimulationConfig } from "./types";
 import type { SerializableConfig } from "./stores/config.svelte";
 
 const V2_PREFIX = "1:";
-const MAX_URL_ITEMS = 30;
-/** Upper bound on current-profile sample count, mirroring the Rust codec's
- *  `MAX_PROFILE_SAMPLES` (config_codec.rs). A malformed/hostile `cp` key can't
- *  balloon the restored state past this. */
-const MAX_PROFILE_SAMPLES = 100_000;
 
-/** Validate + expand the compact current-profile key (`cp: { t, c }`) the Rust
- *  codec now emits (measure-and-keep — present only when it fits the URL
- *  budget; #539 increment 1). Defensive like the `cl.x` guard: a malformed
- *  share URL must not poison the restored session. Returns plain `number[]`
- *  arrays (the `SerializableConfig` shape), or `null` when absent/invalid.
- */
-function expandProfile(cp: unknown): { timesS: number[]; currentsMA: number[] } | null {
-  if (!cp || typeof cp !== "object") return null;
-  const t = (cp as { t?: unknown }).t;
-  const c = (cp as { c?: unknown }).c;
-  if (!Array.isArray(t) || !Array.isArray(c)) return null;
-  // Equal-length, non-empty, bounded.
-  if (t.length === 0 || t.length !== c.length || t.length > MAX_PROFILE_SAMPLES) return null;
-  for (let i = 0; i < t.length; i++) {
-    if (typeof t[i] !== "number" || !isFinite(t[i])) return null;
-    if (typeof c[i] !== "number" || !isFinite(c[i])) return null;
-  }
-  return { timesS: t as number[], currentsMA: c as number[] };
-}
+// Re-exported for consumers that recover a shared custom material from a decoded
+// link (App.svelte's "save this material" flow). The seam itself lives in
+// config-codec-map.ts now.
+export { getSharedCustomMaterial };
+export type { SharedCustomMaterial };
 
-/** Inline custom-material definition carried by a layer whose material is a
- *  user-saved custom (or hydrated catalog fork). On decode the receiver
- *  (a) registers it as a session-only lookup so resolveMaterial finds density
- *  and per-element fractions without the user redefining the material, and
- *  (b) records the full definition so the recipient can save it into their own
- *  library by clicking the material (#96; overlaps #344/#356). */
-interface InlineComposition {
-  /** density g/cm³ */
-  d: number;
-  /** per-element mass fractions, summing to ~1. Optional — recomputed from the
-   *  formula on decode when absent (e.g. a formula-only custom that was saved
-   *  without precomputed fractions). */
-  e?: Record<string, number>;
-  /** chemical formula / original input — lets a formula-only custom travel and
-   *  be saved verbatim on the recipient. */
-  f?: string;
-  /** isotopic enrichment overrides per element symbol. */
-  n?: Record<string, Record<number, number>>;
-}
-
-/** Full custom-material definition recovered from a decoded share link, keyed
- *  by material name. The UI offers these for "save to my library". */
-export interface SharedCustomMaterial {
-  name: string;
-  formula: string;
-  density: number;
-  massFractions?: Record<string, number>;
-  enrichment?: Record<string, Record<number, number>>;
-}
-
-const __sessionCompositions = new Map<string, { d: number; e: Record<string, number> }>();
-const __sharedCustomMaterials = new Map<string, SharedCustomMaterial>();
-
-function registerSessionComposition(name: string, comp: { d: number; e: Record<string, number> }): void {
-  __sessionCompositions.set(name, comp);
-  setCustomDensityLookup((id) => __sessionCompositions.get(id)?.d ?? null);
-  setCustomCompositionLookup((id) => __sessionCompositions.get(id)?.e ?? null);
-}
-
-/** Custom-material definition recovered from a shared link, for the recipient's
- *  "save this material" flow. Null for names that didn't arrive via a link. */
-export function getSharedCustomMaterial(name: string): SharedCustomMaterial | null {
-  return __sharedCustomMaterials.get(name) ?? null;
-}
-
-/** Compact a single layer. */
-function compactLayer(l: LayerConfig): any {
-  const cl: any = { m: l.material };
-  if (l.thickness_cm !== undefined) cl.t = l.thickness_cm;
-  if (l.areal_density_g_cm2 !== undefined) cl.a = l.areal_density_g_cm2;
-  if (l.energy_out_MeV !== undefined) cl.o = l.energy_out_MeV;
-  if (l.enrichment) cl.n = l.enrichment;
-  if (l.is_monitor) cl.f = true;
-  if (l.density_g_cm3 !== undefined) cl.d = l.density_g_cm3;
-  // #96 v3 invariant: embed the full custom-material definition when the
-  // material is a user-saved custom, so the whole layer stack travels in the
-  // link. The receiver registers a session lookup (resolveMaterial finds it
-  // without redefining) AND can save it to their own library. Embed the
-  // formula too — a formula-only custom (no precomputed massFractions, the
-  // #344 case) otherwise sent only its bare name and wouldn't resolve.
-  const cm = lookupByIdentifier(l.material);
-  if (cm) {
-    const x: InlineComposition = { d: cm.density, f: cm.formula };
-    if (cm.massFractions) x.e = cm.massFractions;
-    if (cm.enrichment) x.n = cm.enrichment;
-    cl.x = x;
-  }
-  return cl;
-}
-
-/** Compact key mapping for smaller JSON. Supports groups. */
-function compactConfig(config: SerializableConfig): any {
-  return {
-    b: {
-      p: config.beam.projectile,
-      e: config.beam.energy_MeV,
-      c: config.beam.current_mA,
-    },
-    l: config.items.map((item: any) => {
-      if (item._group || item.mode) {
-        // Group
-        const cg: any = {
-          g: true,
-          l: (item.layers ?? []).map(compactLayer),
-          d: item.mode,
-        };
-        if (item.count !== undefined) cg.k = item.count;
-        if (item.energyThreshold !== undefined) cg.h = item.energyThreshold;
-        return cg;
-      }
-      return compactLayer(item);
-    }),
-    i: config.irradiation_s,
-    c: config.cooling_s,
-    // Neutron activation (ADR-0003): carry the spectrum + secondary toggle so a
-    // shared neutron run round-trips (omitted for charged runs to keep URLs short).
-    ...(config.neutronFlux ? { nf: config.neutronFlux } : {}),
-    ...(config.secondaryNeutron ? { sn: true } : {}),
-  };
-}
-
-/** Validate compact config shape before expanding. */
-function isValidCompact(c: any): boolean {
-  if (!c || typeof c !== "object") return false;
-  if (!c.b || typeof c.b !== "object") return false;
-  if (typeof c.b.p !== "string") return false;
-  if (typeof c.b.e !== "number" || !isFinite(c.b.e)) return false;
-  if (typeof c.b.c !== "number" || !isFinite(c.b.c)) return false;
-  if (!Array.isArray(c.l)) return false;
-  if (c.l.length > MAX_URL_ITEMS) return false;
-  if (typeof c.i !== "number" || !isFinite(c.i)) return false;
-  if (typeof c.c !== "number" || !isFinite(c.c)) return false;
-  return true;
-}
-
-/** Expand a compact layer back. */
-function expandLayer(cl: any): LayerConfig {
-  const layer: LayerConfig = { material: cl.m ?? "" };
-  if (cl.t !== undefined) layer.thickness_cm = cl.t;
-  if (cl.a !== undefined) layer.areal_density_g_cm2 = cl.a;
-  if (cl.o !== undefined) layer.energy_out_MeV = cl.o;
-  if (cl.n) layer.enrichment = cl.n;
-  if (cl.f) layer.is_monitor = true;
-  if (cl.d !== undefined) layer.density_g_cm3 = cl.d;
-  // #96 v3: layer carries the inline custom-material definition. Validate shape
-  // so a malformed share URL can't poison the session.
-  if (cl.x && typeof cl.x === "object" && typeof cl.x.d === "number") {
-    const formula = typeof cl.x.f === "string" ? cl.x.f : undefined;
-    // Mass fractions: prefer the embedded set; otherwise recompute from the
-    // formula so a formula-only custom still resolves on the recipient.
-    let massFractions: Record<string, number> | undefined =
-      cl.x.e && typeof cl.x.e === "object" ? cl.x.e : undefined;
-    if (!massFractions && formula) {
-      const computed = formulaToMassFractions(formula);
-      if (Object.keys(computed).length > 0) massFractions = computed;
-    }
-    if (massFractions) {
-      // Register session-only so resolveMaterial finds it.
-      registerSessionComposition(layer.material, { d: cl.x.d, e: massFractions });
-    }
-    // Set density_g_cm3 so the Rust backend (which doesn't see the TS session
-    // composition) gets the custom density.
-    layer.density_g_cm3 = cl.x.d;
-    // Record the full definition so the recipient can save it to their library
-    // by clicking the material (see getSharedCustomMaterial).
-    __sharedCustomMaterials.set(layer.material, {
-      name: layer.material,
-      formula: formula ?? layer.material,
-      density: cl.x.d,
-      massFractions,
-      enrichment:
-        cl.x.n && typeof cl.x.n === "object" ? cl.x.n : undefined,
-    });
-  }
-  return layer;
-}
-
-/** Expand compact keys back to SerializableConfig (preserves groups). */
-function expandConfigSer(compact: any): SerializableConfig | null {
-  if (!isValidCompact(compact)) return null;
-  // currentProfile (`cp`) — carried by the Rust codec when it fits the URL
-  // budget (#539). restoreSerializableConfig already rehydrates this shape.
-  const profile = expandProfile(compact.cp);
-  return {
-    beam: {
-      projectile: compact.b.p,
-      energy_MeV: compact.b.e,
-      current_mA: compact.b.c,
-    },
-    items: compact.l.map((cl: any) => {
-      if (cl.g) {
-        // Group
-        return {
-          _group: true,
-          layers: (cl.l ?? []).map(expandLayer),
-          mode: cl.d ?? "count",
-          count: cl.k,
-          energyThreshold: cl.h,
-        };
-      }
-      return expandLayer(cl);
-    }),
-    irradiation_s: compact.i,
-    cooling_s: compact.c,
-    ...(profile ? { currentProfile: profile } : {}),
-    ...(compact.nf ? { neutronFlux: compact.nf } : {}),
-    ...(compact.sn ? { secondaryNeutron: true } : {}),
-  };
-}
-
-/** Expand compact keys back to flat SimulationConfig (for backward compat). */
-function expandConfigFlat(compact: any): SimulationConfig | null {
-  if (!isValidCompact(compact)) return null;
-  const layers: LayerConfig[] = [];
-  for (const cl of compact.l) {
-    if (cl.g) {
-      // Flatten group layers
-      for (const gl of cl.l ?? []) {
-        layers.push(expandLayer(gl));
-      }
-    } else {
-      layers.push(expandLayer(cl));
-    }
-  }
-  // currentProfile (`cp`) — flat SimulationConfig uses the Float64Array shape.
-  const profile = expandProfile(compact.cp);
-  return {
-    beam: { projectile: compact.b.p, energy_MeV: compact.b.e, current_mA: compact.b.c },
-    layers,
-    irradiation_s: compact.i,
-    cooling_s: compact.c,
-    ...(profile
-      ? {
-          currentProfile: {
-            timesS: new Float64Array(profile.timesS),
-            currentsMA: new Float64Array(profile.currentsMA),
-          },
-        }
-      : {}),
-    ...(compact.nf ? { neutronFlux: compact.nf } : {}),
-    ...(compact.sn ? { secondary_neutron: true } : {}),
-  };
-}
-
-/** Encode SerializableConfig to v2 compressed hash. */
-export function encodeConfigV2(config: SerializableConfig): string {
-  // Strip currentProfile — too large for URL encoding
-  const { currentProfile: _cp, ...configWithoutProfile } = config;
-  const compact = compactConfig(configWithoutProfile as SerializableConfig);
-  const json = JSON.stringify(compact);
-  const bytes = new TextEncoder().encode(json);
-  const compressed = deflateSync(bytes);
-  const base64 = btoa(String.fromCharCode(...compressed));
-  const base64url = base64
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-  return `#config=${V2_PREFIX}${base64url}`;
-}
-
-/** Decode v2 compressed hash to SerializableConfig. */
-export function decodeConfigV2Ser(encoded: string): SerializableConfig | null {
-  try {
-    const base64url = encoded;
-    const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    const decompressed = inflateSync(bytes);
-    const json = new TextDecoder().decode(decompressed);
-    const compact = JSON.parse(json);
-    return expandConfigSer(compact);
-  } catch {
-    return null;
-  }
-}
-
-/** Decode v2 to flat SimulationConfig (legacy compat). */
-export function decodeConfigV2(encoded: string): SimulationConfig | null {
-  try {
-    const base64url = encoded;
-    const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const decompressed = inflateSync(bytes);
-    const json = new TextDecoder().decode(decompressed);
-    const compact = JSON.parse(json);
-    return expandConfigFlat(compact);
-  } catch {
-    return null;
-  }
-}
+/** The outcome of encoding a config to a share/MCP link: the hash plus the
+ *  structured warnings the UI must surface so state is never lost silently. */
+export type EncodeResult = CodecEncodeOutcome;
 
 /**
- * Decode a config from a hash fragment string (without the leading "#").
- * Accepts both v1 (plain base64) and v2 (compressed) formats.
- * Works with raw hash ("config=1:...") or full URLs ("https://...#config=1:...").
+ * Encode a `SerializableConfig` to a v2 share hash under the URL size policy.
+ *
+ * currentProfile is carried through and kept **if the whole hash fits the
+ * budget** (measure-and-keep) — the Rust codec drops it (reporting it in
+ * `dropped`) only when it doesn't, and flags over-budget / too-many-item stacks
+ * in `warnings` / `link_unusable`. Callers MUST surface these; nothing is ever
+ * lost silently.
  */
-export function decodeSerializableFromString(input: string): SerializableConfig | null {
-  // Extract hash fragment from full URL if needed
-  const hashIdx = input.indexOf("#");
-  const hash = hashIdx >= 0 ? input.slice(hashIdx + 1) : input;
-
-  if (!hash.startsWith("config=")) return null;
-  const payload = hash.slice("config=".length);
-
-  if (payload.startsWith(V2_PREFIX)) {
-    return decodeConfigV2Ser(payload.slice(V2_PREFIX.length));
+export function encodeConfigV2(config: SerializableConfig): EncodeResult {
+  if (!isCodecReady()) {
+    // Defensive: the codec is initialized at boot before `ready`, so runtime
+    // encode paths never hit this. A pre-init read (e.g. opening the share menu
+    // during the splash) gets a benign empty result rather than a thrown error
+    // that would crash a Svelte `$derived`.
+    return { hash: "", dropped: [], warnings: [], link_unusable: false };
   }
+  return encodeCodec(toCodecConfig(config), { kind: "url", budget_bytes: URL_BUDGET_BYTES });
+}
 
-  // v1: plain base64url — always flat, wrap as serializable
+/** Decode a bare v2 payload (base64url, no `1:` prefix) to a SerializableConfig,
+ *  hydrating any embedded custom materials. Returns null on malformed input. */
+export function decodeConfigV2Ser(payload: string): SerializableConfig | null {
+  try {
+    return fromCodecConfig(decodeCodec(V2_PREFIX + payload));
+  } catch {
+    return null;
+  }
+}
+
+/** Decode a bare v2 payload to a flat SimulationConfig (groups flattened). */
+export function decodeConfigV2(payload: string): SimulationConfig | null {
+  try {
+    return fromCodecConfigFlat(decodeCodec(V2_PREFIX + payload));
+  } catch {
+    return null;
+  }
+}
+
+/** v1 legacy decode: plain base64url of the full SimulationConfig JSON. */
+function decodeV1Ser(payload: string): SerializableConfig | null {
   try {
     const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
     const json = decodeURIComponent(escape(atob(base64)));
@@ -353,12 +93,31 @@ export function decodeSerializableFromString(input: string): SerializableConfig 
   }
 }
 
-/** Decode from current window hash. */
+/**
+ * Decode a config from a hash-fragment string (without the leading "#").
+ * Accepts both v1 (plain base64) and v2 (Rust codec) formats, and works with a
+ * raw hash ("config=1:...") or a full URL ("https://...#config=1:...").
+ */
+export function decodeSerializableFromString(input: string): SerializableConfig | null {
+  const hashIdx = input.indexOf("#");
+  const hash = hashIdx >= 0 ? input.slice(hashIdx + 1) : input;
+
+  if (!hash.startsWith("config=")) return null;
+  const payload = hash.slice("config=".length);
+
+  if (payload.startsWith(V2_PREFIX)) {
+    return decodeConfigV2Ser(payload.slice(V2_PREFIX.length));
+  }
+  // v1: plain base64url — always flat, wrap as serializable.
+  return decodeV1Ser(payload);
+}
+
+/** Decode from the current window hash (preserves groups). */
 export function decodeSerializableFromHash(): SerializableConfig | null {
   return decodeSerializableFromString(window.location.hash.slice(1));
 }
 
-/** Decode from hash — flat SimulationConfig (legacy, for backward compat). */
+/** Decode from the current window hash — flat SimulationConfig (legacy). */
 export function decodeConfigFromHashV2(): SimulationConfig | null {
   const hash = window.location.hash.slice(1);
   if (!hash.startsWith("config=")) return null;
@@ -367,7 +126,7 @@ export function decodeConfigFromHashV2(): SimulationConfig | null {
   if (payload.startsWith(V2_PREFIX)) {
     return decodeConfigV2(payload.slice(V2_PREFIX.length));
   }
-
+  // v1 flat.
   try {
     const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
     const json = decodeURIComponent(escape(atob(base64)));
@@ -377,8 +136,10 @@ export function decodeConfigFromHashV2(): SimulationConfig | null {
   }
 }
 
-/** Set v2 compressed config in URL hash. */
-export function setConfigInHashV2(config: SerializableConfig): void {
-  const hash = encodeConfigV2(config);
-  history.replaceState(null, "", hash);
+/** Set the v2 config hash in the URL. Returns the encode outcome so a caller can
+ *  surface warnings; the hash is written to the URL only when non-empty. */
+export function setConfigInHashV2(config: SerializableConfig): EncodeResult {
+  const outcome = encodeConfigV2(config);
+  if (outcome.hash) history.replaceState(null, "", outcome.hash);
+  return outcome;
 }
