@@ -30,4 +30,5 @@ extend-exclude = [
   "uv.lock",
   "*.lock",
   "secrets/*.sops.*",   # age-encrypted blobs — random base64 trips false positives
+  "frontend/src/lib/__fixtures__/*",  # committed base64url codec fixtures (#539) — random base64 trips false positives
 ]
