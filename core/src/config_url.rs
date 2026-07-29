@@ -1,149 +1,228 @@
-//! Config URL encoding — generates shareable links to the hosted frontend.
+//! MCP/URL share-link adapter — maps MCP `simulate` args to the canonical
+//! [`crate::config_codec::CodecConfig`] and encodes a shareable `#config=1:…`
+//! link via the one production codec.
 //!
-//! Produces `#config=1:<base64url-of-deflated-compact-json>` hashes
-//! compatible with the frontend's `config-url-v2.ts` decoder.
+//! This is the thin adapter half of the #539 "codec-only B′" split: all wire
+//! logic (compact keys, DEFLATE, base64url, size policy, security caps) lives in
+//! [`crate::config_codec`]; this module only knows the MCP simulate arg schema.
 //!
-//! SSoT: this is the canonical encoder. The frontend TS version should
-//! eventually import this via WASM.
+//! ## #531 — what this now carries (previously dropped, silently)
+//!
+//! The MCP `simulate` arg schema can express (see `mcp/tools.rs::layer_schema`
+//! and the `simulate` inputSchema):
+//!
+//!  * per-layer `density_g_cm3` override → compact `d`,
+//!  * per-layer `enrichment` (isotopic overrides) → compact `n`,
+//!  * per-layer `energy_out_mev` degrader → compact `o`,
+//!  * top-level `secondary_neutron` toggle → compact `sn`,
+//!  * top-level `neutron_flux` spectrum → compact `nf`,
+//!  * top-level `current_profile` → compact `cp` (measure-and-keep for URLs).
+//!
+//! A **custom alloy** cannot be expressed inline in a layer — the layer schema
+//! has no `composition` field. It is registered out-of-band via the
+//! `define_material` tool (into the session [`MaterialRegistry`]) and referenced
+//! by name. So the composition lives in the registry, and we inline it here:
+//! for each layer whose `material` names a session-defined material, we emit the
+//! `x` InlineComposition (density + mass fractions) the frontend already reads.
+//! The effective per-layer density (override if given, else the registered
+//! density) is what travels, matching what the simulation actually used.
 
-use flate2::write::DeflateEncoder;
-use flate2::Compression;
-use serde_json::{json, Value};
-use std::io::Write;
+use crate::config_codec::{
+    encode, Beam, CodecConfig, CurrentProfile, CustomMaterial, EncodeOutcome, Item, Layer,
+    SizePolicy, DEFAULT_URL_BUDGET_BYTES,
+};
+use crate::materials::MaterialRegistry;
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 const FRONTEND_BASE: &str = "https://exoma-ch.github.io/hyrr/";
 
-/// Build a share URL for a simulation config.
-///
-/// Takes the MCP tool arguments (projectile, energy_mev, current_ma,
-/// irradiation_time_s, cooling_time_s, layers) and produces a full URL.
-pub fn share_url(args: &Value) -> Option<String> {
-    let hash = encode_config_v2(args)?;
-    Some(format!("{}{}", FRONTEND_BASE, hash))
+/// A generated share link plus anything the URL size policy forced us to drop,
+/// so the caller can surface a visible warning (never a silent loss).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShareLink {
+    pub url: String,
+    /// Structured names of dropped state (e.g. `"currentProfile"`). Empty when
+    /// the whole config round-trips.
+    pub dropped: Vec<&'static str>,
 }
 
-/// Encode MCP simulate args to v2 URL hash: `#config=1:<base64url>`.
+/// Build a share URL for a set of MCP `simulate` args, inlining any referenced
+/// session-defined custom materials from `registry`.
 ///
-/// Compatible with the frontend's `decodeConfigV2()`.
-fn encode_config_v2(args: &Value) -> Option<String> {
-    let compact = compact_config(args)?;
-    let json_bytes = serde_json::to_vec(&compact).ok()?;
-
-    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&json_bytes).ok()?;
-    let compressed = encoder.finish().ok()?;
-
-    let base64 = base64url_encode(&compressed);
-    Some(format!("#config=1:{}", base64))
+/// Returns `None` only when the args are unusable (no projectile or no layers).
+pub fn share_url(args: &Value, registry: &MaterialRegistry) -> Option<ShareLink> {
+    let cfg = config_from_args(args, registry)?;
+    let outcome: EncodeOutcome = encode(
+        &cfg,
+        SizePolicy::Url {
+            budget_bytes: DEFAULT_URL_BUDGET_BYTES,
+        },
+    );
+    Some(ShareLink {
+        url: format!("{}{}", FRONTEND_BASE, outcome.hash),
+        dropped: outcome.dropped,
+    })
 }
 
-/// Convert MCP args to the compact v2 JSON format.
-///
-/// Compact keys: b(beam), l(layers), i(irradiation_s), c(cooling_s)
-/// Beam: p(projectile), e(energy), c(current)
-/// Layer: m(material), t(thickness), o(energy_out), n(enrichment), f(monitor)
-fn compact_config(args: &Value) -> Option<Value> {
-    let projectile = args.get("projectile")?.as_str()?;
-    let energy = args.get("energy_mev")?.as_f64()?;
-    let current = args.get("current_ma")?.as_f64()?;
-    let irr = args
+/// Map MCP simulate args → the canonical [`CodecConfig`]. Pure; no I/O.
+fn config_from_args(args: &Value, registry: &MaterialRegistry) -> Option<CodecConfig> {
+    let projectile = args.get("projectile")?.as_str()?.to_string();
+    // Energy / current are absent for a neutron source (projectile "n"); default
+    // to 0.0 so neutron runs still produce a link (the spectrum travels via nf).
+    let energy_mev = args
+        .get("energy_mev")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let current_ma = args
+        .get("current_ma")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let irradiation_s = args
         .get("irradiation_time_s")
-        .and_then(|v| v.as_f64())
+        .and_then(Value::as_f64)
         .unwrap_or(86400.0);
-    let cool = args
+    let cooling_s = args
         .get("cooling_time_s")
-        .and_then(|v| v.as_f64())
+        .and_then(Value::as_f64)
         .unwrap_or(86400.0);
-    let layers = args.get("layers")?.as_array()?;
 
-    let compact_layers: Vec<Value> = layers
+    let layers = args.get("layers")?.as_array()?;
+    let items: Vec<Item> = layers
         .iter()
-        .filter_map(|l| {
-            let mut cl = json!({ "m": l.get("material")?.as_str()? });
-            if let Some(t) = l.get("thickness_cm").and_then(|v| v.as_f64()) {
-                cl["t"] = json!(t);
-            }
-            if let Some(o) = l.get("energy_out_mev").and_then(|v| v.as_f64()) {
-                cl["o"] = json!(o);
-            }
-            if let Some(n) = l.get("enrichment") {
-                if n.is_array() {
-                    cl["n"] = n.clone();
-                }
-            }
-            Some(cl)
-        })
+        .filter_map(|l| layer_from_args(l, registry).map(Item::Layer))
         .collect();
 
-    Some(json!({
-        "b": { "p": projectile, "e": energy, "c": current },
-        "l": compact_layers,
-        "i": irr,
-        "c": cool,
-    }))
+    let neutron_flux = args.get("neutron_flux").filter(|v| !v.is_null()).cloned();
+    let secondary_neutron = args
+        .get("secondary_neutron")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let current_profile = current_profile_from_args(args.get("current_profile"));
+
+    Some(CodecConfig {
+        beam: Beam {
+            projectile,
+            energy_mev,
+            current_ma,
+        },
+        items,
+        irradiation_s,
+        cooling_s,
+        neutron_flux,
+        secondary_neutron,
+        current_profile,
+    })
 }
 
-/// Base64url encode (RFC 4648 §5): +→-, /→_, no padding.
-fn base64url_encode(data: &[u8]) -> String {
-    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+/// Map one MCP layer object → a canonical [`Layer`], inlining the custom
+/// composition when the material names a session-defined material.
+fn layer_from_args(l: &Value, registry: &MaterialRegistry) -> Option<Layer> {
+    let material = l.get("material")?.as_str()?.to_string();
+    let thickness_cm = l.get("thickness_cm").and_then(Value::as_f64);
+    let energy_out_mev = l.get("energy_out_mev").and_then(Value::as_f64);
+    let density_override = l.get("density_g_cm3").and_then(Value::as_f64);
+    // Per-layer isotopic enrichment is carried verbatim (the frontend decoder
+    // reads it back as `layer.enrichment`).
+    let enrichment = l.get("enrichment").filter(|n| n.is_array()).cloned();
 
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
+    // Inline a session-defined custom material's composition (the #531 fix). The
+    // registry is keyed by lowercased name (see `tool_define_material`).
+    let custom = registry.get(&material.to_lowercase()).map(|rt| {
+        // The density the simulation actually used: the per-layer override wins,
+        // else the material's registered density. The frontend decoder lets
+        // `x.d` win over `cl.d`, so travel the effective value here.
+        let effective_density = density_override.unwrap_or(rt.density_g_cm3);
+        let mass_fractions: BTreeMap<String, f64> = rt
+            .mass_fractions
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        CustomMaterial {
+            density_g_cm3: effective_density,
+            mass_fractions: if mass_fractions.is_empty() {
+                None
+            } else {
+                Some(mass_fractions)
+            },
+            // Registry customs are composition-only (no free-text formula).
+            formula: None,
+            enrichment: None,
+        }
+    });
 
-        out.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
-        out.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
-        }
-        if chunk.len() > 2 {
-            out.push(CHARS[(triple & 0x3F) as usize] as char);
-        }
+    Some(Layer {
+        material,
+        thickness_cm,
+        areal_density_g_cm2: None,
+        energy_out_mev,
+        enrichment,
+        is_monitor: false,
+        density_g_cm3: density_override,
+        custom,
+    })
+}
+
+/// Map the MCP `current_profile` object → a canonical [`CurrentProfile`].
+fn current_profile_from_args(val: Option<&Value>) -> Option<CurrentProfile> {
+    let v = val?;
+    let times_s = json_f64_array(v.get("times_s")?)?;
+    let currents_ma = json_f64_array(v.get("currents_ma")?)?;
+    if times_s.is_empty() || times_s.len() != currents_ma.len() {
+        return None;
     }
-    out
+    Some(CurrentProfile {
+        times_s,
+        currents_ma,
+    })
+}
+
+fn json_f64_array(v: &Value) -> Option<Vec<f64>> {
+    v.as_array()?.iter().map(Value::as_f64).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_codec::decode;
+    use crate::materials::RuntimeMaterial;
     use serde_json::json;
+    use std::collections::HashMap;
+
+    fn empty_registry() -> MaterialRegistry {
+        HashMap::new()
+    }
 
     #[test]
-    fn roundtrip_simple_config() {
+    fn simple_config_still_encodes() {
         let args = json!({
             "projectile": "p",
             "energy_mev": 28.0,
             "current_ma": 0.2,
             "irradiation_time_s": 604800.0,
             "cooling_time_s": 86400.0,
-            "layers": [
-                { "material": "Ga", "thickness_cm": 0.15 }
-            ]
+            "layers": [ { "material": "Ga", "thickness_cm": 0.15 } ]
         });
-
-        let url = share_url(&args).unwrap();
-        assert!(url.starts_with("https://exoma-ch.github.io/hyrr/#config=1:"));
-        assert!(url.len() < 300); // should be compact
+        let link = share_url(&args, &empty_registry()).unwrap();
+        assert!(link
+            .url
+            .starts_with("https://exoma-ch.github.io/hyrr/#config=1:"));
+        assert!(link.dropped.is_empty());
+        assert!(link.url.len() < 300);
     }
 
     #[test]
     fn base64url_no_padding_no_plus_no_slash() {
         let args = json!({
-            "projectile": "p",
-            "energy_mev": 16.0,
-            "current_ma": 0.15,
+            "projectile": "p", "energy_mev": 16.0, "current_ma": 0.15,
             "layers": [
                 { "material": "havar", "thickness_cm": 0.003 },
                 { "material": "Mo-100", "thickness_cm": 0.01 },
                 { "material": "Cu", "energy_out_mev": 0.0 }
             ]
         });
-
-        let url = share_url(&args).unwrap();
-        let hash = url.split("#config=1:").nth(1).unwrap();
+        let link = share_url(&args, &empty_registry()).unwrap();
+        let hash = link.url.split("#config=1:").nth(1).unwrap();
         assert!(!hash.contains('+'));
         assert!(!hash.contains('/'));
         assert!(!hash.contains('='));
@@ -151,93 +230,180 @@ mod tests {
 
     #[test]
     fn missing_fields_returns_none() {
-        let args = json!({ "projectile": "p" }); // missing energy, layers
-        assert!(share_url(&args).is_none());
+        let args = json!({ "projectile": "p" }); // no layers
+        assert!(share_url(&args, &empty_registry()).is_none());
     }
 
+    /// The #531 acceptance scenario: a custom alloy (from `define_material`) +
+    /// per-layer density overrides + `secondary_neutron` all round-trip through
+    /// the canonical codec, cross-checked by decoding the emitted hash.
     #[test]
-    fn rust_encoded_url_decodes_to_valid_compact_json() {
-        use flate2::read::DeflateDecoder;
-        use std::io::Read;
+    fn issue_531_full_state_round_trips() {
+        let mut registry = empty_registry();
+        let mut mf = HashMap::new();
+        // AlSi10Mg-ish with sub-0.5% impurities — the #531 "impurities are the
+        // point" case. Full precision, not rounded.
+        mf.insert("Al".to_string(), 0.8815);
+        mf.insert("Si".to_string(), 0.10);
+        mf.insert("Fe".to_string(), 0.0055);
+        mf.insert("Mn".to_string(), 0.0045);
+        mf.insert("Cu".to_string(), 0.0005);
+        mf.insert("Ni".to_string(), 0.0005);
+        mf.insert("Zn".to_string(), 0.0010);
+        mf.insert("Ti".to_string(), 0.0015);
+        mf.insert("Pb".to_string(), 0.0005);
+        mf.insert("Sn".to_string(), 0.0005);
+        registry.insert(
+            "alsi10mg".to_string(),
+            RuntimeMaterial {
+                density_g_cm3: 2.67,
+                mass_fractions: mf,
+                nist_compound: None,
+            },
+        );
 
         let args = json!({
             "projectile": "p",
-            "energy_mev": 16.0,
-            "current_ma": 0.15,
-            "irradiation_time_s": 86400.0,
+            "energy_mev": 18.0,
+            "current_ma": 0.02,
+            "irradiation_time_s": 3600.0,
             "cooling_time_s": 86400.0,
+            "secondary_neutron": true,
             "layers": [
-                { "material": "havar", "thickness_cm": 0.003 },
-                { "material": "Mo-100", "thickness_cm": 0.01 },
-                { "material": "Cu", "energy_out_mev": 0.0 }
+                { "material": "Ti", "thickness_cm": 0.0025 },
+                { "material": "He", "thickness_cm": 3.0, "density_g_cm3": 0.00025 },
+                { "material": "alsi10mg", "thickness_cm": 0.2 },
+                { "material": "H2O", "thickness_cm": 2.0, "density_g_cm3": 1.0 }
             ]
         });
 
-        let url = share_url(&args).unwrap();
-        let hash = url.split("#config=1:").nth(1).unwrap();
+        let link = share_url(&args, &registry).unwrap();
+        assert!(
+            link.dropped.is_empty(),
+            "nothing dropped: {:?}",
+            link.dropped
+        );
 
-        // Decode base64url → bytes
-        let base64 = hash.replace('-', "+").replace('_', "/");
-        // Pad to multiple of 4
-        let padded = match base64.len() % 4 {
-            2 => format!("{}==", base64),
-            3 => format!("{}=", base64),
-            _ => base64,
+        let cfg = decode(&link.url).expect("decode emitted hash");
+
+        // secondary_neutron carried.
+        assert!(cfg.secondary_neutron);
+
+        // Per-layer density overrides carried (He, H2O).
+        let Item::Layer(he) = &cfg.items[1] else {
+            panic!("layer 1")
         };
-        let compressed = base64_decode(&padded);
+        assert_eq!(he.density_g_cm3, Some(0.00025));
+        let Item::Layer(h2o) = &cfg.items[3] else {
+            panic!("layer 3")
+        };
+        assert_eq!(h2o.density_g_cm3, Some(1.0));
 
-        // Inflate
-        let mut decoder = DeflateDecoder::new(&compressed[..]);
-        let mut json_str = String::new();
-        decoder.read_to_string(&mut json_str).unwrap();
-
-        // Parse and verify compact keys
-        let compact: Value = serde_json::from_str(&json_str).unwrap();
-        assert_eq!(compact["b"]["p"], "p");
-        assert_eq!(compact["b"]["e"], 16.0);
-        assert_eq!(compact["b"]["c"], 0.15);
-        assert_eq!(compact["i"], 86400.0);
-        assert_eq!(compact["c"], 86400.0);
-        let layers = compact["l"].as_array().unwrap();
-        assert_eq!(layers.len(), 3);
-        assert_eq!(layers[0]["m"], "havar");
-        assert_eq!(layers[0]["t"], 0.003);
-        assert_eq!(layers[1]["m"], "Mo-100");
-        assert_eq!(layers[2]["m"], "Cu");
-        assert_eq!(layers[2]["o"], 0.0);
+        // Custom alloy composition inlined + impurities preserved at full
+        // precision (the corruption #531 downstream reported).
+        let Item::Layer(alloy) = &cfg.items[2] else {
+            panic!("layer 2")
+        };
+        let cm = alloy.custom.as_ref().expect("alsi10mg inlined");
+        assert_eq!(cm.density_g_cm3, 2.67);
+        let mf = cm.mass_fractions.as_ref().unwrap();
+        assert_eq!(mf.get("Fe"), Some(&0.0055));
+        assert_eq!(mf.get("Cu"), Some(&0.0005));
+        assert_eq!(mf.get("Al"), Some(&0.8815));
     }
 
-    fn base64_decode(input: &str) -> Vec<u8> {
-        const TABLE: &[u8; 128] = &{
-            let mut t = [255u8; 128];
-            let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-            let mut i = 0;
-            while i < 64 {
-                t[chars[i] as usize] = i as u8;
-                i += 1;
-            }
-            t
+    /// A per-layer density override on a custom-material layer wins: the
+    /// effective density (override) travels as `x.d`.
+    #[test]
+    fn custom_layer_density_override_wins() {
+        let mut registry = empty_registry();
+        let mut mf = HashMap::new();
+        mf.insert("Ni".to_string(), 1.0);
+        registry.insert(
+            "myni".to_string(),
+            RuntimeMaterial {
+                density_g_cm3: 8.9,
+                mass_fractions: mf,
+                nist_compound: None,
+            },
+        );
+        let args = json!({
+            "projectile": "p", "energy_mev": 20.0, "current_ma": 0.1,
+            "layers": [ { "material": "myni", "thickness_cm": 0.1, "density_g_cm3": 7.5 } ]
+        });
+        let link = share_url(&args, &registry).unwrap();
+        let cfg = decode(&link.url).unwrap();
+        let Item::Layer(layer) = &cfg.items[0] else {
+            panic!()
         };
-        let bytes: Vec<u8> = input.bytes().filter(|&b| b != b'=' && b != b'\n').collect();
-        let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
-        for chunk in bytes.chunks(4) {
-            let n = chunk.len();
-            let b = |i: usize| {
-                if i < n {
-                    TABLE[chunk[i] as usize] as u32
-                } else {
-                    0
-                }
-            };
-            let triple = (b(0) << 18) | (b(1) << 12) | (b(2) << 6) | b(3);
-            out.push((triple >> 16) as u8);
-            if n > 2 {
-                out.push((triple >> 8) as u8);
-            }
-            if n > 3 {
-                out.push(triple as u8);
-            }
-        }
-        out
+        assert_eq!(layer.custom.as_ref().unwrap().density_g_cm3, 7.5);
+    }
+
+    /// A realistic 200-sample current profile FITS the URL budget → carried,
+    /// nothing dropped (the PoC measure-and-keep finding).
+    #[test]
+    fn realistic_current_profile_is_kept() {
+        let n = 200;
+        let times: Vec<f64> = (0..n).map(|i| i as f64 * 3600.0).collect();
+        let currents: Vec<f64> = (0..n).map(|i| 0.1 + i as f64 * 1e-4).collect();
+        let args = json!({
+            "projectile": "p", "energy_mev": 18.0, "current_ma": 0.1,
+            "layers": [ { "material": "Cu", "thickness_cm": 0.1 } ],
+            "current_profile": { "times_s": times, "currents_ma": currents }
+        });
+        let link = share_url(&args, &empty_registry()).unwrap();
+        assert!(
+            link.dropped.is_empty(),
+            "realistic profile fits the budget: hash {} bytes",
+            link.url.len()
+        );
+        let cfg = decode(&link.url).unwrap();
+        assert_eq!(cfg.current_profile.unwrap().times_s.len(), n);
+    }
+
+    /// A large irregular profile blows the URL budget → dropped WITH a warning.
+    #[test]
+    fn oversized_current_profile_dropped_with_warning() {
+        let m = 1500usize;
+        // Irregular (incompressible) currents so DEFLATE can't crush it.
+        let times: Vec<f64> = (0..m).map(|i| i as f64 * 60.0).collect();
+        let currents: Vec<f64> = (0..m)
+            .map(|i| ((i * 2654435761) % 1_000_000) as f64 / 997.0)
+            .collect();
+        let args = json!({
+            "projectile": "p", "energy_mev": 18.0, "current_ma": 0.1,
+            "layers": [ { "material": "Cu", "thickness_cm": 0.1 } ],
+            "current_profile": { "times_s": times, "currents_ma": currents }
+        });
+        let link = share_url(&args, &empty_registry()).unwrap();
+        assert_eq!(link.dropped, vec!["currentProfile"]);
+        let cfg = decode(&link.url).unwrap();
+        assert!(cfg.current_profile.is_none());
+    }
+
+    #[test]
+    fn neutron_flux_carried() {
+        let args = json!({
+            "projectile": "n",
+            "neutron_flux": { "kind": "thermal", "flux": 1e13, "kt_mev": 2.53e-8 },
+            "layers": [ { "material": "Au", "thickness_cm": 0.01 } ]
+        });
+        let link = share_url(&args, &empty_registry()).unwrap();
+        let cfg = decode(&link.url).unwrap();
+        assert_eq!(cfg.beam.projectile, "n");
+        assert!(cfg.neutron_flux.is_some());
+        assert_eq!(cfg.neutron_flux.unwrap()["kind"], "thermal");
+    }
+
+    #[test]
+    fn decode_accepts_full_url() {
+        // decode accepts the full URL form share_url emits.
+        let args = json!({
+            "projectile": "p", "energy_mev": 10.0, "current_ma": 0.1,
+            "layers": [ { "material": "Cu", "thickness_cm": 0.1 } ]
+        });
+        let link = share_url(&args, &empty_registry()).unwrap();
+        assert!(link.url.contains("#config=1:"));
+        assert!(decode(&link.url).is_ok());
     }
 }

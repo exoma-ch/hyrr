@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { deflateSync } from "fflate";
 import {
   encodeConfigV2,
   decodeConfigV2,
@@ -390,5 +391,69 @@ describe("density_g_cm3 roundtrip", () => {
     const layer = decoded!.items[0] as { material: string; density_g_cm3?: number };
     expect(layer.material).toBe("Ca44O");
     expect(layer.density_g_cm3).toBeCloseTo(3.34);
+  });
+});
+
+// The Rust codec (config_codec.rs) emits a `cp` current-profile key under
+// measure-and-keep; the TS decoder learned to read it in #539 increment 1. The
+// TS encoder does NOT emit `cp` (that's a later WASM increment), so these tests
+// hand-build a compact `cp`-bearing hash the way the Rust codec would.
+describe("currentProfile (cp) decode — #539 increment 1", () => {
+  /** Build a v2 hash from a compact object, mirroring encodeConfigV2's wire
+   *  format (deflate + base64url) but WITHOUT the encoder's currentProfile
+   *  strip — so we can inject `cp` exactly as the Rust codec emits it. */
+  function encodeCompact(compact: unknown): string {
+    const bytes = new TextEncoder().encode(JSON.stringify(compact));
+    const compressed = deflateSync(bytes);
+    const base64 = btoa(String.fromCharCode(...compressed));
+    return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  const BASE = {
+    b: { p: "p", e: 18, c: 0.1 },
+    l: [{ m: "Cu", t: 0.1 }],
+    i: 3600,
+    c: 86400,
+  };
+
+  it("recovers a valid cp into currentProfile { timesS, currentsMA }", () => {
+    const hash = encodeCompact({
+      ...BASE,
+      cp: { t: [0, 3600, 7200], c: [0.1, 0.12, 0.09] },
+    });
+    const decoded = decodeConfigV2Ser(hash);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.currentProfile).toEqual({
+      timesS: [0, 3600, 7200],
+      currentsMA: [0.1, 0.12, 0.09],
+    });
+  });
+
+  it("the flat decoder rebuilds cp as Float64Arrays", () => {
+    const hash = encodeCompact({
+      ...BASE,
+      cp: { t: [0, 60], c: [0.2, 0.1] },
+    });
+    const decoded = decodeConfigV2(hash);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.currentProfile!.timesS).toBeInstanceOf(Float64Array);
+    expect(Array.from(decoded!.currentProfile!.timesS)).toEqual([0, 60]);
+    expect(Array.from(decoded!.currentProfile!.currentsMA)).toEqual([0.2, 0.1]);
+  });
+
+  it("defensively ignores a malformed cp (never poisons the session)", () => {
+    // Mismatched lengths, non-array, and non-finite values must all be dropped
+    // (mirrors the cl.x guard), leaving currentProfile undefined.
+    for (const cp of [
+      { t: [0, 1, 2], c: [0.1, 0.2] }, // length mismatch
+      { t: [0, 1], c: "nope" }, // c not an array
+      { t: [0, NaN], c: [0.1, 0.2] }, // non-finite
+      { t: [], c: [] }, // empty
+      "garbage", // not an object
+    ]) {
+      const decoded = decodeConfigV2Ser(encodeCompact({ ...BASE, cp }));
+      expect(decoded).not.toBeNull();
+      expect(decoded!.currentProfile).toBeUndefined();
+    }
   });
 });

@@ -918,8 +918,18 @@ fn tool_simulate(
         "**Irradiation:** {:.0}s | **Cooling:** {:.0}s\n",
         irr_time, cool_time
     ));
-    if let Some(url) = crate::config_url::share_url(args) {
-        output.push_str(&format!("\n**[View in browser]({})**\n", url));
+    if let Some(link) = crate::config_url::share_url(args, registry) {
+        output.push_str(&format!("\n**[View in browser]({})**\n", link.url));
+        if !link.dropped.is_empty() {
+            // Never a silent loss: the link is over the URL size budget, so some
+            // state was dropped. Tell the user and point at the lossless path.
+            output.push_str(&format!(
+                "\n> ⚠️ The browser link omits: {} (too large for a URL). \
+                 Re-create it in-app to keep the full config, or export a \
+                 `.hyrr.json` session.\n",
+                link.dropped.join(", ")
+            ));
+        }
     }
     output.push('\n');
 

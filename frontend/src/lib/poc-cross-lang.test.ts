@@ -1,17 +1,20 @@
 /**
- * Cross-language round-trip proof for issue #539 (codec-only B′).
+ * Cross-language round-trip proof for issue #539 (codec-only B′), increment 1.
  *
  * The money shot: a `#config=` hash produced by the **Rust** codec
  * (`core/src/config_codec.rs`, committed to `__fixtures__/poc-rust-encoded.txt`
- * by the Rust test `write_cross_lang_fixture`) is decoded by the **real,
- * unmodified** TS decoder `decodeConfigV2Ser`. We assert the embedded custom
- * alloy — density + mass fractions + formula — survives Rust → TS with ZERO
- * changes to the TS decoder.
+ * by the Rust test `write_cross_lang_fixture`) is decoded by the **real** TS
+ * decoder `decodeConfigV2Ser`. We assert that BOTH pieces of #531 state survive
+ * Rust → TS:
  *
- * This is exactly the #531 failure mode inverted: today the Rust encoder never
- * emits the `x` InlineComposition, so MCP links silently drop the alloy. Extend
- * the Rust encoder to emit `x`, and the decoder that was ALREADY there round-
- * trips it — validating that B′ fixes #531 cross-language.
+ *   1. the embedded custom alloy — density + mass fractions + formula (the `x`
+ *      InlineComposition the decoder already read), and
+ *   2. the `currentProfile` — carried under the new `cp` key that the TS
+ *      decoder learned to read in increment 1 (measure-and-keep: the small
+ *      fixture profile fits the URL budget, so Rust emits it).
+ *
+ * This is the #531 failure mode fixed: the Rust encoder now emits `x` (custom
+ * alloy) and `cp` (current profile), and the TS decoder recovers both.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -44,8 +47,8 @@ describe("cross-language codec round-trip (#539)", () => {
     expect(alloyLayer.material).toBe("poc-inconel");
     expect(alloyLayer.density_g_cm3).toBeCloseTo(8.44);
 
-    // THE PROOF: the full custom-material definition — density, formula, and the
-    // per-element mass fractions that alter stopping power — survived Rust → TS.
+    // THE PROOF (1): the full custom-material definition — density, formula, and
+    // the per-element mass fractions that alter stopping power — survived R → TS.
     const shared = getSharedCustomMaterial("poc-inconel");
     expect(shared).not.toBeNull();
     expect(shared!.density).toBeCloseTo(8.44);
@@ -58,5 +61,17 @@ describe("cross-language codec round-trip (#539)", () => {
       Nb: 0.036,
       Ti: 0.004,
     });
+
+    // THE PROOF (2): the currentProfile carried under the new `cp` key was
+    // recovered by the TS decoder (increment 1) as { timesS, currentsMA } — the
+    // shape restoreSerializableConfig rehydrates. This is the beam-current ramp
+    // #531 never carried over a URL.
+    expect(decoded!.currentProfile).toBeDefined();
+    expect(Array.from(decoded!.currentProfile!.timesS)).toEqual([
+      0, 3600, 7200, 10800, 14400,
+    ]);
+    expect(Array.from(decoded!.currentProfile!.currentsMA)).toEqual([
+      0.2, 0.2, 0.15, 0.15, 0.1,
+    ]);
   });
 });
