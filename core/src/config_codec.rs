@@ -99,7 +99,22 @@ pub enum CodecError {
 /// The canonical simulation config — the single Rust-owned round-trip type for
 /// the codec. In the #539 endgame (increment 3) this becomes the sole owner of
 /// the config type, shared by file / URL / MCP via WASM.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// # Cross-language marshalling shape
+///
+/// This type (and its nested types below) carry `Serialize`/`Deserialize` so the
+/// WASM binding (`hyrr-wasm`, #539 increment 3a) can marshal a config across the
+/// JS↔Rust boundary with `serde-wasm-bindgen`, and — under the `ts` feature — a
+/// `ts_rs::TS` derive so the canonical TypeScript type is *generated from this
+/// Rust struct* rather than hand-mirrored (the drift class #531 belongs to). The
+/// TS derive is feature-gated (`ts`) and never enabled by the hermetic
+/// `nix flake check`; a dedicated CI job regenerates + diffs the committed
+/// `packages/compute/src/generated/config-codec.ts`.
+///
+/// Note this is the *canonical* (readable) shape, distinct from the compact
+/// on-the-wire shape (`CompactConfig`, compact keys) that the codec deflates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CodecConfig {
     pub beam: Beam,
     pub items: Vec<Item>,
@@ -107,59 +122,84 @@ pub struct CodecConfig {
     pub cooling_s: f64,
     /// Neutron spectrum (ADR-0003) — opaque passthrough (the tagged FluxModel
     /// JSON), carried verbatim so a neutron run round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub neutron_flux: Option<Value>,
+    #[serde(default)]
     pub secondary_neutron: bool,
     /// Time-varying beam current. Large; subject to `SizePolicy` for URLs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_profile: Option<CurrentProfile>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Beam {
     pub projectile: String,
     pub energy_mev: f64,
     pub current_ma: f64,
 }
 
-/// A top-level item is either a single layer or an authoring group.
-#[derive(Debug, Clone, PartialEq)]
+/// A top-level item is either a single layer or an authoring group. Adjacently
+/// tagged (`{ "kind": "layer" | "group", "data": … }`) so the JS-facing shape
+/// and the generated TS union are both unambiguous.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum Item {
     Layer(Layer),
     Group(Group),
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Layer {
     pub material: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thickness_cm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub areal_density_g_cm2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub energy_out_mev: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enrichment: Option<Value>,
+    #[serde(default)]
     pub is_monitor: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub density_g_cm3: Option<f64>,
     /// The #531 payload: an embedded custom-material definition (→ compact `x`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom: Option<CustomMaterial>,
 }
 
 /// Inline custom-material definition (a custom alloy that must travel with the
 /// link). This is what #531 drops and what makes the loss *silent AND
 /// physics-altering* (density changes stopping power → wrong yield).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CustomMaterial {
     pub density_g_cm3: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mass_fractions: Option<BTreeMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enrichment: Option<Value>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Group {
     pub layers: Vec<Layer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub energy_threshold: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CurrentProfile {
     pub times_s: Vec<f64>,
     pub currents_ma: Vec<f64>,
@@ -174,7 +214,9 @@ pub struct CurrentProfile {
 ///   bind ~2 KB for the whole hash. If embedding `currentProfile` would blow the
 ///   budget, we DROP it and report it in `EncodeOutcome.dropped` — never
 ///   silently (the panel's non-negotiable).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SizePolicy {
     File,
     Url { budget_bytes: usize },
@@ -193,9 +235,13 @@ pub enum SizePolicy {
 ///   decoders will refuse to load the hash. The caller MUST NOT present it as a
 ///   "view in browser" link; it is a dead link. Point at the lossless fallback
 ///   instead.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct EncodeOutcome {
     pub hash: String,
+    // `&'static str` serializes fine (output-only type; never deserialized), but
+    // ts-rs has no `TS` impl for it — pin the generated type explicitly.
+    #[cfg_attr(feature = "ts", ts(type = "Array<string>"))]
     pub dropped: Vec<&'static str>,
     pub warnings: Vec<String>,
     pub link_unusable: bool,
@@ -989,6 +1035,119 @@ mod tests {
             committed, expected,
             "cross-lang fixture drifted from the encoder output; \
              regenerate with `REGEN_FIXTURES=1 cargo test cross_lang_fixture_matches_encoder`"
+        );
+    }
+
+    // ─── ts-rs binding generation + drift gate (#539 increment 3a) ───────────
+    //
+    // The canonical TypeScript types are *generated from the Rust structs above*
+    // (via `ts_rs::TS`), never hand-mirrored — that hand-mirror is the drift
+    // class #531 belongs to. Generation is gated behind the `ts` cargo feature so
+    // the hermetic `nix flake check` (which builds `core` with default features
+    // in `rust-test`, and only *compiles* — never runs — tests under
+    // `rust-clippy --all-features`) never triggers a file write into the
+    // read-only sandbox. It's also write-gated behind `REGEN_TS`: the normal
+    // `cargo test --features ts` run only *asserts* the committed file matches
+    // (reads, never writes), exactly like `cross_lang_fixture_matches_encoder`.
+    // CI regenerates (`REGEN_TS=1`) then `git diff --exit-code`s the path.
+
+    /// Render every canonical codec type into one committed `.ts` module. Uses
+    /// `TS::decl()` (declaration only, no `export`, no cross-file imports — all
+    /// types live in this single file so their names resolve locally) and
+    /// prepends `export ` so the frontend can import them.
+    #[cfg(feature = "ts")]
+    fn render_ts_bindings() -> String {
+        use ts_rs::TS;
+        // Fixed (non-env) config so the render is deterministic across machines.
+        let cfg = ts_rs::Config::default();
+        let mut out = String::new();
+        out.push_str(
+            "// Generated by `REGEN_TS=1 cargo test --features ts` \
+             (see core/src/config_codec.rs). DO NOT EDIT BY HAND.\n\
+             //\n\
+             // Canonical config-codec types, generated from the Rust structs in\n\
+             // `hyrr-core::config_codec`. A CI drift gate (`.github/workflows/ci.yml`,\n\
+             // job `ts-bindings-sync`) regenerates this file and `git diff --exit-code`s\n\
+             // it, so these types can never silently drift from the Rust source of\n\
+             // truth (issue #539).\n\n",
+        );
+        // Order: leaves first so a human reads the file top-down without forward
+        // references (TypeScript doesn't require it, but it's tidier). `JsonValue`
+        // comes first — the `serde_json::Value` passthrough fields (neutron flux,
+        // enrichment) reference it, and this single self-contained file must
+        // define it locally rather than import it.
+        let decls = [
+            <Value as TS>::decl(&cfg),
+            Beam::decl(&cfg),
+            CustomMaterial::decl(&cfg),
+            Layer::decl(&cfg),
+            Group::decl(&cfg),
+            Item::decl(&cfg),
+            CurrentProfile::decl(&cfg),
+            CodecConfig::decl(&cfg),
+            SizePolicy::decl(&cfg),
+            EncodeOutcome::decl(&cfg),
+        ];
+        for decl in decls {
+            out.push_str("export ");
+            out.push_str(&decl);
+            out.push_str("\n\n");
+        }
+        // Normalize to hook-clean output so the repo's `end-of-file-fixer` and
+        // `trailing-whitespace` pre-commit hooks never mutate the committed file
+        // out from under the drift gate: ts-rs emits a trailing space before an
+        // embedded doc comment, and the per-decl `\n\n` leaves a blank line at
+        // EOF. Strip per-line trailing whitespace and end with exactly one
+        // newline. (The generator is the SSoT, so the committed file must match
+        // this byte-for-byte.)
+        let mut cleaned = out
+            .lines()
+            .map(|line| line.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n");
+        while cleaned.ends_with('\n') {
+            cleaned.pop();
+        }
+        cleaned.push('\n');
+        cleaned
+    }
+
+    #[cfg(feature = "ts")]
+    fn ts_bindings_path() -> String {
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../packages/compute/src/generated/config-codec.ts"
+        )
+        .to_string()
+    }
+
+    /// Drift gate: the committed generated TS must equal a fresh render. Never
+    /// writes unless `REGEN_TS` is set (so it's safe even if the `ts` feature is
+    /// ever compiled *and run* under a sandbox — it only reads). Regenerate with
+    /// `REGEN_TS=1 cargo test --features ts ts_bindings`.
+    #[cfg(feature = "ts")]
+    #[test]
+    fn ts_bindings_match_committed() {
+        let generated = render_ts_bindings();
+        let path = ts_bindings_path();
+
+        if std::env::var_os("REGEN_TS").is_some() {
+            let dir = std::path::Path::new(&path).parent().unwrap();
+            std::fs::create_dir_all(dir).expect("create generated dir");
+            std::fs::write(&path, &generated).expect("write ts bindings");
+            return;
+        }
+
+        let committed = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "committed TS bindings {path} unreadable ({e}); regenerate with \
+                 `REGEN_TS=1 cargo test --features ts ts_bindings_match_committed`"
+            )
+        });
+        assert_eq!(
+            committed, generated,
+            "generated TS bindings drifted from the Rust source of truth; \
+             regenerate with `REGEN_TS=1 cargo test --features ts ts_bindings_match_committed`"
         );
     }
 

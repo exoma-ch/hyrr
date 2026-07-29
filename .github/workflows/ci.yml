@@ -115,6 +115,41 @@ jobs:
       - name: Check lockfiles in sync
         run: bash scripts/check-lockfiles.sh
 
+  # ── ts-rs binding drift gate (config codec, #539) ──────────────────────
+  # The canonical TypeScript config-codec types
+  # (packages/compute/src/generated/config-codec.ts) are GENERATED from the Rust
+  # structs in hyrr-core::config_codec via `ts_rs::TS`. This job regenerates them
+  # and `git diff --exit-code`s the path — so the committed types can never
+  # silently drift from the Rust source of truth (the hand-mirror drift class
+  # #531 belongs to). Deliberately NOT a `nix flake check` derivation: ts-rs
+  # writes files during `cargo test`, which fights the read-only nix sandbox, so
+  # the `ts` feature is off in every hermetic check and the generation lives here
+  # as a thin standalone job (like lockfile-sync). Cheap: `--lib
+  # --no-default-features` builds only hyrr-core's lib with the codec (no
+  # arrow/parquet/data), so no nuclear-data checkout is needed to build.
+  ts-bindings-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # cargo needs the nucl-parquet Rust client on disk to resolve the
+      # core -> nucl-parquet optional path-dep (even deactivated under
+      # --no-default-features, the manifest must exist). Sparse: client only.
+      - name: Init nucl-parquet submodule (sparse — Rust client only)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set clients/rs/nucl-parquet
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Regenerate TS bindings from the Rust source of truth
+        run: |
+          REGEN_TS=1 cargo test --manifest-path core/Cargo.toml \
+            --lib --no-default-features --features ts \
+            ts_bindings_match_committed
+      - name: Fail if the generated TS types drifted
+        run: |
+          git diff --exit-code packages/compute/src/generated/ \
+            || { echo "::error::Generated config-codec.ts is stale. Regenerate with \`REGEN_TS=1 cargo test --manifest-path core/Cargo.toml --lib --no-default-features --features ts ts_bindings_match_committed\` and commit."; exit 1; }
+
   # ── Supplier catalog freshness (warn-only, node) ───────────────────────
   supplier-catalog-freshness:
     runs-on: ubuntu-latest

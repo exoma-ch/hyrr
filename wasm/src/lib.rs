@@ -582,6 +582,63 @@ impl WasmDataStore {
 }
 
 // ---------------------------------------------------------------------------
+// Config codec (#539 increment 3a)
+// ---------------------------------------------------------------------------
+//
+// Expose the ONE canonical Rust config codec (`hyrr_core::config_codec`) to the
+// browser so the share-URL / `.hyrr.json` encode+decode is the same bytes the
+// MCP server and desktop app produce — killing the hand-mirrored TS codec drift
+// class (#531). These are free functions (the codec needs no `DataStore`).
+//
+// Marshalling: `serde-wasm-bindgen`. The JS-facing shape is the generated
+// `CodecConfig` / `SizePolicy` / `EncodeOutcome` TS types
+// (`packages/compute/src/generated/config-codec.ts`). `json_compatible()`
+// serializes maps as plain objects (not JS `Map`s) so `mass_fractions` etc.
+// round-trip as the object shape the frontend expects.
+//
+// Panic discipline (wasm memory model — a panic poisons the store, ADR/memory
+// "wasm-panic-poisons-store"): the untrusted-hash `decode` path NEVER unwraps.
+// Every fallible step maps its error to a thrown JS `Error` via `Result`, so a
+// malformed/hostile `#config=` string surfaces as a catchable exception, not an
+// abort.
+
+use hyrr_core::config_codec::{
+    CodecConfig, SizePolicy, decode as codec_decode, encode as codec_encode,
+};
+use serde_wasm_bindgen::Serializer;
+
+/// Encode a canonical config to a `#config=1:…` hash under a size policy.
+///
+/// `config` is a `CodecConfig` object, `policy` a `SizePolicy`
+/// (`{ kind: "file" }` or `{ kind: "url", budget_bytes }`). Returns an
+/// `EncodeOutcome` (`{ hash, dropped, warnings, link_unusable }`). A malformed
+/// `config`/`policy` throws a JS `Error` rather than panicking.
+#[wasm_bindgen(js_name = encodeConfig)]
+pub fn encode_config(config: JsValue, policy: JsValue) -> Result<JsValue, JsValue> {
+    let cfg: CodecConfig = serde_wasm_bindgen::from_value(config)
+        .map_err(|e| JsValue::from_str(&format!("invalid config: {e}")))?;
+    let policy: SizePolicy = serde_wasm_bindgen::from_value(policy)
+        .map_err(|e| JsValue::from_str(&format!("invalid size policy: {e}")))?;
+    let outcome = codec_encode(&cfg, policy);
+    outcome
+        .serialize(&Serializer::json_compatible())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Decode a `#config=1:…` hash back to a canonical `CodecConfig`.
+///
+/// Accepts a full URL, a bare `#config=1:…`/`config=1:…` hash, or the raw
+/// `1:<payload>`. On any decode failure (bad prefix, base64, decompression-bomb
+/// caps, JSON, item/float/map bounds) this throws a JS `Error` carrying the
+/// codec's message — it never panics on the untrusted input.
+#[wasm_bindgen(js_name = decodeConfig)]
+pub fn decode_config(hash: &str) -> Result<JsValue, JsValue> {
+    let cfg = codec_decode(hash).map_err(|e| JsValue::from_str(&format!("decode failed: {e}")))?;
+    cfg.serialize(&Serializer::json_compatible())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
 // Internal JSON serde types for data loading
 // ---------------------------------------------------------------------------
 
@@ -942,5 +999,73 @@ fn convert_stack_result(config_json: &str, result: &StackResult) -> SimulationRe
         config: config_val,
         layers,
         timestamp: 0, // JS will override with Date.now()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Config-codec host tests (#539 increment 3a)
+// ---------------------------------------------------------------------------
+//
+// These run on the native host under `cargo test` (the wasm-bindgen JsValue
+// marshalling is covered separately by `tests/codec.rs` via `wasm-pack test
+// --node`). Their job is to pin the `float_roundtrip` gotcha: they exercise the
+// exact `serde_json` instance this wasm crate resolves — so if feature
+// unification (or the explicit pin in Cargo.toml) ever stopped carrying
+// `float_roundtrip`, this fails on the host, no browser needed.
+#[cfg(test)]
+mod codec_host_tests {
+    use hyrr_core::config_codec::{
+        Beam, CodecConfig, CurrentProfile, Item, Layer, SizePolicy, decode, encode,
+    };
+
+    fn cfg_with_profile(currents: Vec<f64>) -> CodecConfig {
+        let n = currents.len();
+        CodecConfig {
+            beam: Beam {
+                projectile: "p".to_string(),
+                energy_mev: 28.0,
+                current_ma: 0.2,
+            },
+            items: vec![Item::Layer(Layer {
+                material: "Cu".to_string(),
+                thickness_cm: Some(0.1),
+                ..Default::default()
+            })],
+            irradiation_s: 3600.0,
+            cooling_s: 3600.0,
+            neutron_flux: None,
+            secondary_neutron: false,
+            current_profile: Some(CurrentProfile {
+                times_s: (0..n).map(|i| i as f64 * 60.0).collect(),
+                currents_ma: currents,
+            }),
+        }
+    }
+
+    /// The inc1 gotcha: prove `serde_json`'s `float_roundtrip` is active in the
+    /// wasm crate's dependency graph. `0.05 + 3e-4` and friends must survive an
+    /// encode→decode bit-for-bit — which is exactly what the correctly-rounded
+    /// parser guarantees and what JS `JSON.parse` (correctly rounded) matches.
+    #[test]
+    fn float_roundtrip_is_active_in_wasm_crate_graph() {
+        let values: Vec<f64> = vec![
+            0.05_f64 + 3e-4,
+            0.1 + 0.2,
+            1.0 / 3.0,
+            9.999_999_999_999_999e-5,
+            123_456.789_012_345,
+            2.225_073_858_507_201e-308, // near subnormal boundary
+        ];
+        let cfg = cfg_with_profile(values.clone());
+        let outcome = encode(&cfg, SizePolicy::File);
+        let decoded = decode(&outcome.hash).expect("decode");
+        let got = decoded.current_profile.expect("profile").currents_ma;
+        for (want, have) in values.iter().zip(got.iter()) {
+            assert_eq!(
+                want.to_bits(),
+                have.to_bits(),
+                "f64 {want} lost precision through the codec — float_roundtrip not active?"
+            );
+        }
     }
 }
