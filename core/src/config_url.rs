@@ -37,14 +37,22 @@ use std::collections::BTreeMap;
 
 const FRONTEND_BASE: &str = "https://exoma-ch.github.io/hyrr/";
 
-/// A generated share link plus anything the URL size policy forced us to drop,
-/// so the caller can surface a visible warning (never a silent loss).
+/// A generated share link plus everything the caller needs to warn the user
+/// instead of losing state silently or handing them a dead link (mirrors
+/// [`EncodeOutcome`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShareLink {
     pub url: String,
     /// Structured names of dropped state (e.g. `"currentProfile"`). Empty when
     /// the whole config round-trips.
     pub dropped: Vec<&'static str>,
+    /// Human-readable warnings for over-budget or too-large-to-link conditions
+    /// where no specific field was dropped (Fixes 1 & 2).
+    pub warnings: Vec<String>,
+    /// The stack exceeds the decoder's item cap
+    /// ([`crate::config_codec::MAX_ITEMS`]); the frontend would refuse to load
+    /// `url`. The caller MUST NOT present it as a link.
+    pub link_unusable: bool,
 }
 
 /// Build a share URL for a set of MCP `simulate` args, inlining any referenced
@@ -62,6 +70,8 @@ pub fn share_url(args: &Value, registry: &MaterialRegistry) -> Option<ShareLink>
     Some(ShareLink {
         url: format!("{}{}", FRONTEND_BASE, outcome.hash),
         dropped: outcome.dropped,
+        warnings: outcome.warnings,
+        link_unusable: outcome.link_unusable,
     })
 }
 
@@ -379,6 +389,35 @@ mod tests {
         assert_eq!(link.dropped, vec!["currentProfile"]);
         let cfg = decode(&link.url).unwrap();
         assert!(cfg.current_profile.is_none());
+    }
+
+    /// A stack with more than 30 layers → the frontend decoder (`MAX_URL_ITEMS`)
+    /// would refuse to load the link. `share_url` must flag it `link_unusable`
+    /// and warn (Fix 2), and the emitted hash must indeed fail to decode — so the
+    /// MCP layer knows to withhold the dead link.
+    #[test]
+    fn oversized_stack_is_flagged_not_a_dead_link() {
+        let layers: Vec<Value> = (0..31)
+            .map(|_| json!({ "material": "Cu", "thickness_cm": 0.01 }))
+            .collect();
+        let args = json!({
+            "projectile": "p", "energy_mev": 18.0, "current_ma": 0.1,
+            "layers": layers
+        });
+        let link = share_url(&args, &empty_registry()).unwrap();
+        assert!(
+            link.link_unusable,
+            "31 > 30 layers must be flagged unusable"
+        );
+        assert!(link.dropped.is_empty());
+        assert_eq!(link.warnings.len(), 1, "warnings: {:?}", link.warnings);
+        assert!(
+            link.warnings[0].contains("stack too large"),
+            "warning: {:?}",
+            link.warnings
+        );
+        // The emitted hash is genuinely unloadable → decode rejects it.
+        assert!(decode(&link.url).is_err(), "the link would be a dead link");
     }
 
     #[test]

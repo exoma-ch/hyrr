@@ -919,16 +919,34 @@ fn tool_simulate(
         irr_time, cool_time
     ));
     if let Some(link) = crate::config_url::share_url(args, registry) {
-        output.push_str(&format!("\n**[View in browser]({})**\n", link.url));
-        if !link.dropped.is_empty() {
-            // Never a silent loss: the link is over the URL size budget, so some
-            // state was dropped. Tell the user and point at the lossless path.
+        if link.link_unusable {
+            // Never emit a dead link: the stack exceeds the decoder's item cap,
+            // so the frontend would silently refuse to load it. Show the warning
+            // and point at the lossless path instead of the link.
             output.push_str(&format!(
-                "\n> ⚠️ The browser link omits: {} (too large for a URL). \
-                 Re-create it in-app to keep the full config, or export a \
-                 `.hyrr.json` session.\n",
-                link.dropped.join(", ")
+                "\n> ⚠️ No browser link — {}.\n",
+                link.warnings.join("; ")
             ));
+        } else {
+            output.push_str(&format!("\n**[View in browser]({})**\n", link.url));
+            if !link.dropped.is_empty() || !link.warnings.is_empty() {
+                // Never a silent loss: some state was dropped and/or the link is
+                // over the URL size budget. Tell the user and point at the
+                // lossless path.
+                let mut notes: Vec<String> = Vec::new();
+                if !link.dropped.is_empty() {
+                    notes.push(format!(
+                        "omits {} (too large for a URL)",
+                        link.dropped.join(", ")
+                    ));
+                }
+                notes.extend(link.warnings.iter().cloned());
+                output.push_str(&format!(
+                    "\n> ⚠️ The browser link {}. Re-create it in-app to keep the \
+                     full config, or export a `.hyrr.json` session.\n",
+                    notes.join("; ")
+                ));
+            }
         }
     }
     output.push('\n');
