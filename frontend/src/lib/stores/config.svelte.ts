@@ -390,6 +390,11 @@ export function restoreFromSimConfig(c: SimulationConfig): void {
     currentProfile: c.currentProfile
       ? { timesS: Array.from(c.currentProfile.timesS), currentsMA: Array.from(c.currentProfile.currentsMA) }
       : undefined,
+    // Neutron state must ride through, or #preset= (and any SimConfig load)
+    // silently falls back to DEFAULT_NEUTRON_FLUX — corrupting the physics of
+    // the neutron presets (e.g. co60-thermal → fast spectrum). #503 review.
+    secondaryNeutron: c.secondary_neutron,
+    neutronFlux: c.neutronFlux,
   });
 }
 
