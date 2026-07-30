@@ -663,16 +663,15 @@
 
   /* Filters bar pinned just below the sticky top bar (--top-bar-h is published
      by a ResizeObserver on .top-bar). z-index below the top bar so it tucks
-     under it; the background + gap-bleed keep content from peeking through when
-     pinned. */
+     under it. Background matches the page (not the card's --c-bg-subtle) so
+     the wrapper is invisible in flow — the filter card renders identically to
+     its sibling panels (#532) — while still masking scrolled content behind
+     the card's rounded corners when pinned. */
   .filter-sticky {
     position: sticky;
     top: var(--top-bar-h, 2.5rem);
     z-index: 15;
-    background: var(--c-bg-subtle, var(--c-bg, #1a1a2e));
-    padding-block: 0.4rem;
-    margin-block: -0.4rem;
-    border-bottom: 1px solid var(--c-border);
+    background: var(--c-bg-page, #0f1117);
   }
 
   .top-bar {
