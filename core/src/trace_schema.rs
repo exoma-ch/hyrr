@@ -62,6 +62,20 @@ pub fn stopping_fallback(projectile: &str, requested: &str, used: &str) {
     warn!(event = "stopping.fallback", projectile, requested, used);
 }
 
+/// The layer's isotope inventory dropped `n_dropped` entries as numerical
+/// dust (issue #533). The relative floor is `ACTIVITY_CUTOFF_FRACTION` of
+/// both the peak per-isotope activity across the time-series and the peak
+/// production rate — long-lived low-yield products above the rate floor are
+/// kept even when their activity trace sits under the activity floor. Emitted
+/// at `debug` (per-layer, bounded frequency); anchor for "never silent" (§533).
+#[inline]
+pub fn layer_inventory_pruned(layer_index: usize, n_kept: usize, n_dropped: usize) {
+    debug!(
+        event = "compute.layer.inventory_pruned",
+        layer_index, n_kept, n_dropped
+    );
+}
+
 /// Context: which nuclear-data library a run resolved to. Emitted once per run.
 #[inline]
 pub fn library_selected(library: &str) {

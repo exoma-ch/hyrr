@@ -173,6 +173,85 @@ fn dataset_tool_emits_all_requested_tables_and_resources() {
     );
 }
 
+/// Regression test for issue #533.
+///
+/// A dilute Al + Mn (3×10⁻⁴) binary bombarded with 15 MeV protons produces
+/// Fe-55 via ⁵⁵Mn(p,n)⁵⁵Fe. Fe-55 has t½ = 2.7 y, so its EOB activity is
+/// suppressed by ~(λ · t_irr) = 7×10⁻⁴ of saturation; combined with the trace
+/// Mn abundance, its activity sits ~4×10⁻⁷ under the saturated Si-27 matrix
+/// peak — below the 1e-6 relative floor. The old prune silently dropped it
+/// from `get_isotope_inventory` (and every other inventory-derived surface).
+///
+/// After the fix, Fe-55 survives via the peak-relative production-rate arm
+/// of the prune criterion (Mn abundance / peak matrix rate ≈ 3×10⁻⁴, safely
+/// above the 1e-6 rate floor), and `list_producing_layers` answers truthfully.
+#[test]
+fn issue_533_long_lived_minor_product_survives_inventory_and_list() {
+    let db = store();
+    let mut reg = MaterialRegistry::new();
+
+    // Define the AlMn 3e-4 material via the MCP `define_material` tool — the
+    // same path a client uses.
+    let _def = call_tool(
+        &db,
+        &mut reg,
+        "define_material",
+        &json!({
+            "name": "almn_3e4",
+            "density_g_cm3": 2.7,
+            "composition": [
+                {"element": "Al", "fraction": 0.9997},
+                {"element": "Mn", "fraction": 0.0003}
+            ]
+        }),
+    )
+    .expect("define_material should succeed");
+
+    let args = json!({
+        "projectile": "p",
+        "energy_mev": 15.0,
+        "current_ma": 20.0,
+        "layers": [{"material": "almn_3e4", "thickness_cm": 0.05}],
+        "irradiation_time_s": 86400.0,
+        "cooling_time_s": 86400.0
+    });
+
+    let inv = call_tool(&db, &mut reg, "get_isotope_inventory", &args)
+        .expect("inventory should succeed");
+    assert!(
+        inv.text.contains("Fe-55"),
+        "Fe-55 (long-lived low-yield Mn product) must survive the inventory \
+         prune (#533). Inventory text was:\n{}",
+        inv.text
+    );
+
+    // The list-producing-layers tool has to answer truthfully: it must NOT
+    // claim no layer produces Fe-55 (the pre-fix behavior).
+    let listing = call_tool(
+        &db,
+        &mut reg,
+        "list_producing_layers",
+        &{
+            let mut a = args.clone();
+            a.as_object_mut()
+                .unwrap()
+                .insert("isotope".to_string(), json!("Fe-55"));
+            a
+        },
+    )
+    .expect("list_producing_layers should succeed");
+    assert!(
+        !listing.text.contains("No layer in this stack produces"),
+        "list_producing_layers must not deny Fe-55's existence (#533). Got:\n{}",
+        listing.text
+    );
+    assert!(
+        listing.text.contains("Fe-55"),
+        "listing header should name Fe-55:\n{}",
+        listing.text
+    );
+}
+
 #[test]
 fn emission_curve_tool_f18_511_is_positive_and_parquet() {
     let db = store();

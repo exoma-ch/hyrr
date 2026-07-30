@@ -1897,6 +1897,7 @@ mod tests {
             stopping_power_sources: HashMap::new(),
             depth_production_rates: HashMap::new(),
             neutron_source_rate: 0.0,
+            pruned_negligible_count: 0,
         }
     }
 
