@@ -14,7 +14,7 @@
  */
 
 import type { CodecEncodeOutcome } from "@hyrr/compute";
-import { encodeCodec, decodeCodec, isCodecReady, URL_BUDGET_BYTES } from "./config-codec.svelte";
+import { encodeCodec, decodeCodec, isCodecReady, URL_BUDGET_BYTES, SHARE_BASE } from "./config-codec.svelte";
 import {
   toCodecConfig,
   fromCodecConfig,
@@ -54,7 +54,10 @@ export function encodeConfigV2(config: SerializableConfig): EncodeResult {
     // that would crash a Svelte `$derived`.
     return { hash: "", dropped: [], warnings: [], link_unusable: false };
   }
-  return encodeCodec(toCodecConfig(config), { kind: "url", budget_bytes: URL_BUDGET_BYTES });
+  // Measure-and-keep is against the WHOLE share URL, so discount the base the
+  // hash gets prefixed with (mirrors Rust `share_url`'s FRONTEND_BASE subtract).
+  const budget_bytes = Math.max(0, URL_BUDGET_BYTES - SHARE_BASE.length);
+  return encodeCodec(toCodecConfig(config), { kind: "url", budget_bytes });
 }
 
 /** Decode a bare v2 payload (base64url, no `1:` prefix) to a SerializableConfig,

@@ -177,6 +177,10 @@ export async function deleteCustomMaterial(id: string): Promise<void> {
 
   // Refresh reactive state
   await loadCustomMaterials();
+  // Also drop any embedded (session/URL-imported) shadow of this name — a
+  // deleted local material shouldn't be silently resurrected by an old embed.
+  // Note: if the name still appears in a layer, resolution then falls through
+  // to formula-parsing that name, which is the intended "it's gone" behaviour.
   if (nameToForget) forgetSharedCustomMaterial(nameToForget);
 }
 

@@ -11,13 +11,12 @@
   import { getResult, setResult } from "../stores/results.svelte";
   import { buildSessionFile, downloadSessionFile, pickSessionFile } from "../session-io";
   import { collectCustomMaterials, hydrateSharedCustomMaterial } from "../config-codec-map";
+  import { SHARE_BASE } from "../config-codec.svelte";
   import { getDisplayThresholds, setDisplayThresholds } from "../stores/display-thresholds.svelte";
   import { openExternalUrl } from "../utils/open-url";
   import { copyText } from "../utils/copy-text";
   import { Bug, Check, CircleHelp, Clipboard, History, Link, Monitor, Moon, Save, Sun } from "lucide-svelte";
   import logoUrl from "/logo.svg?url";
-
-  const SHARE_BASE = "https://exoma-ch.github.io/hyrr/";
 
   let historyOpen = $derived(getHistoryOpen());
   let helpOpen = $state(false);

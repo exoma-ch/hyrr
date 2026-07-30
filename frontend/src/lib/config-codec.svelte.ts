@@ -45,6 +45,14 @@ let codecReady = $state(false);
  *  before browsers do. */
 export const URL_BUDGET_BYTES = 2000;
 
+/** Base a copied share URL is prefixed with (`SHARE_BASE + hash`). Mirrors the
+ *  Rust `config_url::FRONTEND_BASE`. The share budget is measured on the WHOLE
+ *  URL, so the encoder must subtract this base's length before deciding what
+ *  fits — otherwise the browser link silently runs over budget by |SHARE_BASE|
+ *  (the bug #542 nit 2 fixed on the Rust/MCP side but not yet the browser one).
+ *  Single source of truth: HeaderBar imports this rather than redeclaring it. */
+export const SHARE_BASE = "https://exoma-ch.github.io/hyrr/";
+
 /**
  * Load + initialize the WASM codec module once (idempotent, concurrency-safe).
  *
