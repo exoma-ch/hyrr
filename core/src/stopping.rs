@@ -868,9 +868,17 @@ mod tests {
         let projectile = ProjectileType::Proton;
         // pure Al @ 2.7 g/cm³, single-element composition — mass fraction = 1.
         let composition = vec![(13u32, 1.0)];
-        let thickness =
-            compute_thickness_from_energy(&db, &projectile, &composition, 2.7, 5.0, 0.0, 1000, None)
-                .expect("energy_out = 0 must not panic / EnergyOutOfRange (#527)");
+        let thickness = compute_thickness_from_energy(
+            &db,
+            &projectile,
+            &composition,
+            2.7,
+            5.0,
+            0.0,
+            1000,
+            None,
+        )
+        .expect("energy_out = 0 must not panic / EnergyOutOfRange (#527)");
         assert!(
             thickness > 0.0 && thickness.is_finite(),
             "expected positive finite range, got {thickness}"
@@ -887,9 +895,17 @@ mod tests {
         let composition = vec![(13u32, 1.0)];
         // 1.5 MeV entrance → midpoints[0] would be 1.5/1998 ≈ 0.00075 MeV
         // (< table min 0.001 MeV) under the old code.
-        let thickness =
-            compute_thickness_from_energy(&db, &projectile, &composition, 2.7, 1.5, 0.0, 1000, None)
-                .expect("small energy_in + zero energy_out must not error (#527)");
+        let thickness = compute_thickness_from_energy(
+            &db,
+            &projectile,
+            &composition,
+            2.7,
+            1.5,
+            0.0,
+            1000,
+            None,
+        )
+        .expect("small energy_in + zero energy_out must not error (#527)");
         assert!(
             thickness > 0.0 && thickness.is_finite(),
             "expected positive finite range, got {thickness}"
@@ -907,17 +923,8 @@ mod tests {
         let composition = vec![(13u32, 1.0)];
         // 2 MeV proton in Al has range ~0.005 cm; 5 cm is 1000× that — the beam
         // ranges out well before the loop exits.
-        let e_out = compute_energy_out(
-            &db,
-            &projectile,
-            &composition,
-            2.7,
-            2.0,
-            5.0,
-            1000,
-            None,
-        )
-        .expect("beam-fully-stopped layer must return Ok, not EnergyOutOfRange (#527)");
+        let e_out = compute_energy_out(&db, &projectile, &composition, 2.7, 2.0, 5.0, 1000, None)
+            .expect("beam-fully-stopped layer must return Ok, not EnergyOutOfRange (#527)");
         assert_eq!(e_out, 0.0, "fully-stopped beam must exit at 0 MeV");
     }
 
