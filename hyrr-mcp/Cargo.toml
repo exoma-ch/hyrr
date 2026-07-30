@@ -10,8 +10,14 @@ name = "hyrr-mcp"
 path = "src/main.rs"
 
 [dependencies]
+# hyrr-core carries the canonical data-fetch path (#529 fix): DATA_VERSION
+# derives from the pinned nucl-parquet submodule's catalog.json at build
+# time — the single source of truth for the release tag / URL / cache dir —
+# and FetchError surfaces network/404 failures loudly instead of continuing
+# with a half-populated cache. hyrr-core transitively brings in the
+# nucl-parquet crate via its `parquet-store` feature, without the `fetch`
+# feature (we no longer use `nucl_parquet::DataDir::ensure_lazy`).
 hyrr-core = { path = "../core", features = ["mcp", "trace-jsonl"] }
-nucl-parquet = { path = "../nucl-parquet/clients/rs/nucl-parquet", features = ["fetch"] }
 
 [profile.release]
 strip = true

@@ -678,7 +678,6 @@ name = "hyrr-mcp"
 version = "0.18.0"
 dependencies = [
  "hyrr-core",
- "nucl-parquet",
 ]
 
 [[package]]
@@ -999,11 +998,8 @@ dependencies = [
  "arrow",
  "bytes",
  "parquet",
- "reqwest",
  "serde_json",
- "tar",
  "thiserror",
- "zstd",
 ]
 
 [[package]]

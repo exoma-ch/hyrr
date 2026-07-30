@@ -700,21 +700,76 @@ fn require_free_space(min_bytes: u64) -> Result<()> {
 }
 
 /// Extract a `.tar.zst` archive into `dest`. If `prefixes` is non-empty,
-/// keeps only entries whose path *starts with* one of the listed prefixes
-/// (the prefix is matched as a literal string against the entry path).
-/// Pass `&[]` to extract everything.
+/// keeps only entries whose *normalised* path (see [`normalise_entry_path`])
+/// starts with one of the listed prefixes. Pass `&[]` to extract everything.
 ///
 /// Filters macOS `._*` resource-fork files which sometimes leak into
 /// archives produced on Macs.
 ///
-/// Path semantics: prefixes match the leading characters of `entry.path()`.
-/// E.g. `"data/tendl-2025/"` matches `data/tendl-2025/xs/p_Cu.parquet` but
-/// not `data/tendl-2024/`. The trailing slash matters — without it,
+/// Path semantics: prefixes match the leading characters of the normalised
+/// path. E.g. `"data/tendl-2025/"` matches `data/tendl-2025/xs/p_Cu.parquet`
+/// but not `data/tendl-2024/`. The trailing slash matters — without it,
 /// `"data/tendl-2"` would also match `data/tendl-2024/`. Callers should
 /// always include the slash for directory-scoped extracts.
 pub fn extract_tarball(archive: &Path, dest: &Path, prefixes: &[&str]) -> Result<()> {
     let mut noop = no_op_progress();
     extract_tarball_with_progress(archive, dest, prefixes, &mut noop)
+}
+
+/// Normalise a tar entry path to the on-disk cache layout (`data/...`).
+///
+/// The upstream release tarball is built with
+/// `tar --zstd -C data -cf ... .`, so entries land at the archive root
+/// (`./meta/…`, `./stopping/…`, `./tendl-2023-iso/…`). The offline
+/// bundle (`export_offline_bundle`) uses `tar.append_dir_all("data", &data)`
+/// so its entries are already `data/…`-prefixed. Both are valid tarball
+/// shapes we consume, so this helper folds them onto a single canonical
+/// on-disk layout that the rest of `data_fetch` and
+/// [`crate::data_dir::resolve`] key off (`<cache_dir>/data/meta/…`).
+///
+/// Steps:
+///   1. Strip a leading `./` or `/`.
+///   2. If the result is empty (the root `./` entry), return `None`.
+///   3. If the result already starts with `data/` or IS `data`, keep as-is.
+///   4. Otherwise prepend `data/`.
+///
+/// Before the tarball-layout fix that shipped alongside the #529
+/// version-drift fix, `MANDATORY_PREFIXES` looked for `data/meta/` etc.
+/// against raw entry paths like `./meta/…` — every filter comparison
+/// failed, `install_tarball_atomic` silently promoted an empty partial
+/// dir, wrote the `.complete` sentinel, and every consumer downstream
+/// saw an "empty but complete" cache. That was the second half of #529
+/// (silent-empty physics results); this normalisation is what closes
+/// it off. Kept as a `pub fn` so future maintainers can unit-test the
+/// mapping without going through a fake tarball.
+pub fn normalise_entry_path(path: &Path) -> Option<PathBuf> {
+    // Windows uses `\` as its separator; tarball entries are POSIX-style
+    // even on Windows, so operate on the string form and rebuild a PathBuf.
+    let raw = path.to_string_lossy();
+    let mut s = raw.as_ref();
+    // Strip `./` or `/` roots (as many as present — some tarball tools
+    // emit `./`, some `././`).
+    loop {
+        if let Some(rest) = s.strip_prefix("./") {
+            s = rest;
+            continue;
+        }
+        if let Some(rest) = s.strip_prefix('/') {
+            s = rest;
+            continue;
+        }
+        break;
+    }
+    // Bare root entry (`./` or `/`) — nothing to extract.
+    if s.is_empty() || s == "." {
+        return None;
+    }
+    // Already `data/…` or the `data` root dir entry itself — keep as-is.
+    if s == "data" || s.starts_with("data/") {
+        return Some(PathBuf::from(s));
+    }
+    // Root-level entry — prepend `data/`.
+    Some(PathBuf::from(format!("data/{s}")))
 }
 
 /// Progress-aware variant of [`extract_tarball`]. Emits one
@@ -736,6 +791,8 @@ pub fn extract_tarball_with_progress(
 
     fs::create_dir_all(dest)?;
     let mut entries_done: u64 = 0;
+    let mut files_written: u64 = 0;
+    let mut entries_seen: u64 = 0;
     progress(FetchProgress {
         stage: FetchStage::Extracting,
         bytes_done: 0,
@@ -746,13 +803,15 @@ pub fn extract_tarball_with_progress(
         .map_err(|e| FetchError::Extract(e.to_string()))?
     {
         let mut entry = entry.map_err(|e| FetchError::Extract(e.to_string()))?;
-        let path = entry
+        let raw_path = entry
             .path()
             .map_err(|e| FetchError::Extract(e.to_string()))?
             .into_owned();
+        entries_seen += 1;
 
-        // Skip macOS resource-fork files
-        if path
+        // Skip macOS resource-fork files. Match on the raw path — the
+        // `._*` convention lives at any depth, regardless of layout.
+        if raw_path
             .file_name()
             .and_then(|n| n.to_str())
             .map(|n| n.starts_with("._"))
@@ -761,16 +820,24 @@ pub fn extract_tarball_with_progress(
             continue;
         }
 
+        // Fold both tarball shapes onto the canonical `data/…` on-disk
+        // layout — see `normalise_entry_path`. `None` means the entry
+        // is the archive root (`./` or `/`), which has no on-disk
+        // effect and can be skipped.
+        let Some(norm_path) = normalise_entry_path(&raw_path) else {
+            continue;
+        };
+        let norm_str = norm_path.to_string_lossy();
+
         if !prefixes.is_empty() {
-            let path_str = path.to_string_lossy();
             // A prefix without a trailing slash matches a file (e.g.
             // "data/catalog.json"); with a trailing slash, only entries
             // strictly under that directory.
             let matches = prefixes.iter().any(|p| {
                 if p.ends_with('/') {
-                    path_str.starts_with(p)
+                    norm_str.starts_with(p)
                 } else {
-                    path_str == *p || path_str.starts_with(&format!("{p}/"))
+                    norm_str == *p || norm_str.starts_with(&format!("{p}/"))
                 }
             });
             if !matches {
@@ -790,19 +857,51 @@ pub fn extract_tarball_with_progress(
         if !(etype.is_file() || etype.is_dir()) {
             return Err(FetchError::UnsafeTarballEntry {
                 kind: format!("{etype:?}"),
-                path,
+                path: raw_path,
             });
         }
 
+        // Use `unpack` (with an explicit full path) rather than
+        // `unpack_in(dest)` — the latter uses the entry's raw path
+        // relative to `dest`, which would defeat the normalisation
+        // above for root-level tarballs.
+        let full_dest = dest.join(&norm_path);
+        if let Some(parent) = full_dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
         entry
-            .unpack_in(dest)
+            .unpack(&full_dest)
             .map_err(|e| FetchError::Extract(e.to_string()))?;
         entries_done += 1;
+        if etype.is_file() {
+            files_written += 1;
+        }
         progress(FetchProgress {
             stage: FetchStage::Extracting,
             bytes_done: entries_done,
             bytes_total: None,
         });
+    }
+
+    // Silent-empty-extraction guard (#529, second half). If the tarball
+    // held entries but none survived the prefix filter and file-type
+    // gate, refuse to promote — otherwise `install_tarball_atomic`
+    // would rename an empty partial dir to the cache and write the
+    // `.complete` sentinel over the top, tricking every consumer into
+    // treating the cache as usable. The pre-fix symptom was exactly
+    // this: user set no `--data-dir`, fetch "succeeded", first tool
+    // call died on a missing stopping table.
+    //
+    // Empty archive + empty `prefixes` (an unusual but legal input) is
+    // NOT an error — a caller that explicitly asks to extract nothing
+    // from a well-formed empty archive should get an empty dest. The
+    // guard triggers only when we saw entries and wrote nothing.
+    if entries_seen > 0 && files_written == 0 {
+        return Err(FetchError::Extract(format!(
+            "extracted 0 files from an archive with {entries_seen} entries — \
+             tarball layout mismatch (expected root or `data/`-prefixed entries) \
+             or every entry was filtered out"
+        )));
     }
     Ok(())
 }
@@ -1417,6 +1516,45 @@ mod tests {
         tar.finish().unwrap();
     }
 
+    /// Build a tarball whose entries match the **actual GitHub release
+    /// layout** — root-level `./meta/…`, `./stopping/…`, `./<library>/…`
+    /// with no `data/` prefix. Produced by nucl-parquet's
+    /// `.github/workflows/release-data.yml` via
+    /// `tar --zstd -C data -cf … .` (see #529, second half).
+    ///
+    /// Callers use this to exercise `normalise_entry_path` end-to-end:
+    /// a real release tarball must extract to `<dest>/data/meta/…` even
+    /// though the archive itself carries the entries at root.
+    fn make_release_layout_tarball(out: &Path) {
+        let file = fs::File::create(out).unwrap();
+        let encoder = zstd::stream::Encoder::new(file, 0).unwrap().auto_finish();
+        let mut tar = tar::Builder::new(encoder);
+        // The `./` root entry is a real tarball artefact (`tar -C data
+        // -cf . .` emits it); the normaliser must skip it, not extract
+        // it as a file. Include it explicitly to lock that in.
+        let mut h_root = tar::Header::new_gnu();
+        h_root.set_size(0);
+        h_root.set_mode(0o755);
+        h_root.set_entry_type(tar::EntryType::Directory);
+        h_root.set_cksum();
+        tar.append_data(&mut h_root, "./", std::io::empty())
+            .unwrap();
+
+        for (path, payload) in &[
+            ("./meta/abundances.parquet", b"abundances" as &[u8]),
+            ("./stopping/PSTAR.parquet", b"pstar"),
+            ("./catalog.json", b"{\"data_version\":\"test\"}"),
+            ("./tendl-test/xs/p_Cu.parquet", b"xs-p-cu"),
+        ] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(payload.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            tar.append_data(&mut h, path, *payload).unwrap();
+        }
+        tar.finish().unwrap();
+    }
+
     #[test]
     fn cache_paths_use_data_version() {
         let _g = SERIAL.lock().unwrap();
@@ -1714,6 +1852,181 @@ mod tests {
             b"test-marker"
         );
         assert!(dest.join("data/tendl-test/xs/p_Cu.parquet").exists());
+    }
+
+    /// Unit coverage for [`normalise_entry_path`]. Cheap to run and
+    /// documents the mapping table verbatim — a future refactor that
+    /// tweaks the rules will trip this before the round-trip fixtures.
+    #[test]
+    fn normalise_entry_path_maps_both_tarball_layouts() {
+        let cases: &[(&str, Option<&str>)] = &[
+            // Root marker entries — no on-disk effect.
+            ("./", None),
+            ("/", None),
+            (".", None),
+            // Release-layout entries (root-level) — get `data/` prepended.
+            (
+                "./meta/abundances.parquet",
+                Some("data/meta/abundances.parquet"),
+            ),
+            (
+                "./stopping/PSTAR.parquet",
+                Some("data/stopping/PSTAR.parquet"),
+            ),
+            ("./catalog.json", Some("data/catalog.json")),
+            (
+                "./tendl-2023-iso/xs/p_Cu.parquet",
+                Some("data/tendl-2023-iso/xs/p_Cu.parquet"),
+            ),
+            // Same but without the `./` prefix — still root-level.
+            (
+                "meta/abundances.parquet",
+                Some("data/meta/abundances.parquet"),
+            ),
+            // Offline-bundle layout — already `data/`-prefixed, pass through.
+            (
+                "data/meta/abundances.parquet",
+                Some("data/meta/abundances.parquet"),
+            ),
+            (
+                "data/stopping/PSTAR.parquet",
+                Some("data/stopping/PSTAR.parquet"),
+            ),
+            // The bare `data` root dir entry itself.
+            ("data", Some("data")),
+            ("data/", Some("data/")),
+            // Absolute-looking path — leading `/` stripped, then treated
+            // as root-level.
+            ("/meta/foo", Some("data/meta/foo")),
+        ];
+        for (input, expected) in cases {
+            let got = normalise_entry_path(Path::new(input));
+            assert_eq!(
+                got.as_deref(),
+                expected.map(Path::new),
+                "normalise_entry_path({input:?}) = {got:?}, expected {expected:?}"
+            );
+        }
+    }
+
+    /// End-to-end: a real-release-shaped tarball (root-level entries
+    /// with a `./` root marker) must extract to `<dest>/data/…` — the
+    /// same on-disk layout as an offline-bundle tarball. This is the
+    /// second half of #529: before the fix, the extract filter matched
+    /// zero entries, `install_tarball_atomic` silently promoted an
+    /// empty partial dir, and every downstream consumer saw a "complete
+    /// but empty" cache.
+    #[test]
+    fn extract_tarball_normalises_release_layout_to_data_prefix() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("release.tar.zst");
+        make_release_layout_tarball(&archive);
+
+        let dest = td.path().join("dest");
+        extract_tarball(&archive, &dest, &[]).unwrap();
+        assert_eq!(
+            fs::read(dest.join("data/meta/abundances.parquet")).unwrap(),
+            b"abundances"
+        );
+        assert_eq!(
+            fs::read(dest.join("data/stopping/PSTAR.parquet")).unwrap(),
+            b"pstar"
+        );
+        assert!(dest.join("data/catalog.json").exists());
+        assert!(dest.join("data/tendl-test/xs/p_Cu.parquet").exists());
+        // The `./` root entry must NOT be materialised as a stray dir
+        // at `dest/./` (or any other bogus location).
+        let stray: Vec<_> = fs::read_dir(&dest)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name() != std::ffi::OsStr::new("data"))
+            .collect();
+        assert!(
+            stray.is_empty(),
+            "stray non-data entries at dest root: {stray:?}"
+        );
+    }
+
+    /// Real-release-shape tarball → `MANDATORY_PREFIXES` filter. The
+    /// combination that broke #529 in production: entries at root
+    /// (`./meta/…`, `./stopping/…`) with prefixes `data/meta/`,
+    /// `data/stopping/`, etc. Post-fix, normalisation folds the
+    /// entries onto `data/…` and the filter matches — so the extract
+    /// yields real files and the silent-empty guard doesn't fire.
+    #[test]
+    fn install_from_release_layout_populates_mandatory_paths() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("release.tar.zst");
+        make_release_layout_tarball(&archive);
+
+        // Extract with the mandatory prefixes (what `ensure_meta_stopping`
+        // uses in production). Post-#529 the release layout must survive
+        // this filter.
+        let dest = td.path().join("dest");
+        extract_tarball(&archive, &dest, MANDATORY_PREFIXES).unwrap();
+        assert!(dest.join("data/meta/abundances.parquet").exists());
+        assert!(dest.join("data/stopping/PSTAR.parquet").exists());
+        assert!(dest.join("data/catalog.json").exists());
+        // The library subtree is NOT in MANDATORY_PREFIXES, so it must
+        // NOT be extracted here — `ensure_library` layers it on top.
+        assert!(
+            !dest.join("data/tendl-test").exists(),
+            "MANDATORY_PREFIXES filter should have excluded tendl-test/"
+        );
+    }
+
+    /// Silent-empty-extraction guard (#529). An archive with entries
+    /// none of which pass the filter must return an error, not a
+    /// bare-empty dest. Before this guard, `install_tarball_atomic`
+    /// would promote the empty partial dir over the cache and write
+    /// the `.complete` sentinel — the exact failure mode of #529 in
+    /// production.
+    #[test]
+    fn extract_errors_when_all_entries_filtered_out() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("release.tar.zst");
+        make_release_layout_tarball(&archive);
+
+        // Prefix that matches nothing in the tarball. Pre-fix this
+        // returned Ok(()) with a bare-empty dest.
+        let dest = td.path().join("dest");
+        let err = extract_tarball(&archive, &dest, &["data/does-not-exist/"]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            matches!(err, FetchError::Extract(_)),
+            "expected Extract variant, got {err:?}"
+        );
+        assert!(
+            msg.contains("extracted 0 files"),
+            "diagnostic must call out zero-files result: {msg}"
+        );
+    }
+
+    /// End-to-end #529 recovery: `install_tarball_atomic` fed a
+    /// release-layout tarball with `MANDATORY_PREFIXES` populates the
+    /// cache at `<cache>/data/meta/…` + `<cache>/data/stopping/…` and
+    /// writes the `.complete` sentinel — the shape
+    /// `data_dir::resolve` expects when handing off to the MCP
+    /// transport.
+    #[test]
+    fn ensure_meta_stopping_populates_cache_from_release_layout_tarball() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("release.tar.zst");
+        make_release_layout_tarball(&archive);
+
+        // `install_from_tarball` uses prefix `["data"]` (extract
+        // everything under data/…). Post-fix the release-layout tarball
+        // normalises through the `data/` prefix, so this succeeds.
+        install_from_tarball(&archive).unwrap();
+        assert!(is_cache_complete());
+        let data = cache_dir().unwrap().join("data");
+        assert!(data.join("meta/abundances.parquet").exists());
+        assert!(data.join("stopping/PSTAR.parquet").exists());
+        assert!(data.join("catalog.json").exists());
     }
 
     /// Stale partial dirs (left by SIGKILL'd previous runs) must be
