@@ -29,3 +29,19 @@ pub const LONG_HALFLIFE_THRESHOLD_S: f64 = 1e10;
 
 /// Max chain size for matrix exponential solver.
 pub const MAX_CHAIN_SIZE: usize = 40;
+
+/// Beam energy below which the projectile is treated as stopped [MeV].
+///
+/// PSTAR/ASTAR tables end near 1 keV; catima varies but is comparable. Below
+/// this floor the residual range is sub-µm for any physical target (nanometers
+/// for a keV proton in metal), and — more importantly — a stopping-power lookup
+/// underneath the table minimum returns `EnergyOutOfRange` and aborts the whole
+/// run. So `compute_energy_out` treats "energy stepped below MIN_TRACKED" the
+/// same as "energy stepped below 0" (beam stopped; downstream layers see zero
+/// flux), and `compute_thickness_from_energy` clamps the integration lower
+/// bound so a user-configured `energy_out = 0` degrader still computes a
+/// finite thickness instead of panicking on sub-keV midpoints (issue #527).
+///
+/// Also aligned with the `energy_out.max(0.01)` inline clamps in `compute_layer`
+/// and `compute_production_rate` — same "stopped" floor, one canonical name.
+pub const MIN_TRACKED_ENERGY_MEV: f64 = 0.01;

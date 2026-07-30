@@ -1,6 +1,8 @@
 //! Production rate integration and depth profiles.
 
-use crate::constants::{ELEMENTARY_CHARGE, MEV_TO_JOULE, MILLIBARN_CM2, MIN_PEAK_XS_MB};
+use crate::constants::{
+    ELEMENTARY_CHARGE, MEV_TO_JOULE, MILLIBARN_CM2, MIN_PEAK_XS_MB, MIN_TRACKED_ENERGY_MEV,
+};
 use crate::interpolation::{interp, linspace, trapezoid};
 
 /// Result of production rate computation.
@@ -25,7 +27,7 @@ pub fn compute_production_rate(
     target_volume_cm3: f64,
     n_points: usize,
 ) -> ProductionRateResult {
-    let e_low = energy_out_mev.max(0.01);
+    let e_low = energy_out_mev.max(MIN_TRACKED_ENERGY_MEV);
     let energies = linspace(e_low, energy_in_mev, n_points);
 
     // Interpolate cross-section onto grid (zero outside data range)
