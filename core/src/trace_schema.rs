@@ -68,6 +68,21 @@ pub fn library_selected(library: &str) {
     info!(event = "data.library.selected", library);
 }
 
+/// A requested target element's cross-section file is absent from the library
+/// (neither the symbol-named `{proj}_{Symbol}.parquet` nor the Z-named
+/// `{proj}_Z{Z}.parquet` fallback exists in `{library}/xs/`). This produces
+/// zero isotopes for that element — the caller sees "no channels" rather than
+/// a hard error, so we surface it as a warning so the silence is not silent
+/// (#488). Emitted at most once per (projectile, Z) per store instance because
+/// the XS cache blocks re-loads. Degraded-but-recovered → `warn`.
+#[inline]
+pub fn xs_data_missing(library: &str, projectile: &str, target_z: u32, symbol: &str) {
+    warn!(
+        event = "data.xs.missing",
+        library, projectile, target_z, symbol
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Native-only events (filesystem paths → redacted) + native init
 // ---------------------------------------------------------------------------
@@ -170,6 +185,7 @@ mod tests {
         compute_stack_done(2, 87);
         stopping_fallback("a", "ASTAR", "catima");
         library_selected("tendl-2023-iso");
+        xs_data_missing("tendl-2023-iso", "p", 88, "Ra");
     }
 
     /// Native path-bearing events redact `$HOME` before emission. Redaction
