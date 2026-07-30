@@ -66,7 +66,45 @@ impl JsonRpcResponse {
 /// MCP server info.
 const SERVER_NAME: &str = "hyrr";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
-const PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// MCP protocol revisions this server can speak on the wire.
+///
+/// Per the MCP spec (revisions list at
+/// <https://modelcontextprotocol.io/specification>), a compliant server
+/// echoes the client's requested `protocolVersion` in `initialize` when
+/// the version is supported, and otherwise returns its own latest
+/// supported revision. See [`negotiate_protocol_version`].
+///
+/// We keep `2024-11-05` (the first revision) in this set for back-compat
+/// with older clients. The upper bound is deliberately capped at
+/// `2025-06-18`: the newer `2026-07-28` revision reshapes the transport
+/// (stateless request/response + MCP Apps / MCP Tasks / OAuth) around
+/// HTTP, and a stdio tools-only server gains nothing from claiming it.
+/// See #535 for the audit that produced this list.
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18"];
+
+/// The revision returned to a client that requests something we don't
+/// recognise (typically: a future revision we haven't audited yet).
+/// Kept as the newest entry in [`SUPPORTED_PROTOCOL_VERSIONS`].
+pub const LATEST_SUPPORTED_PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// Choose the protocol revision to advertise on `initialize`.
+///
+/// Rules (per MCP spec):
+///  * If the client asked for a version we support, echo it back.
+///  * Otherwise (unknown revision, or the client sent nothing), return
+///    our latest supported revision so the client can decide whether it
+///    can downgrade.
+pub fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
+    if let Some(requested) = requested {
+        for supported in SUPPORTED_PROTOCOL_VERSIONS {
+            if *supported == requested {
+                return supported;
+            }
+        }
+    }
+    LATEST_SUPPORTED_PROTOCOL_VERSION
+}
 
 /// Default nuclear data library — sourced from `hyrr.json` at build time (#269).
 /// tendl-2023-iso has full ground/metastable isomeric splitting;
@@ -157,23 +195,57 @@ pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
             }
         };
 
-        let response = handle_request(&db, &mut materials, request);
-        let _ = writeln!(stdout, "{}", serde_json::to_string(&response).unwrap());
-        let _ = stdout.flush();
+        // Notifications produce no response frame — see [`handle_request`].
+        if let Some(response) = handle_request(&db, &mut materials, request) {
+            let _ = writeln!(stdout, "{}", serde_json::to_string(&response).unwrap());
+            let _ = stdout.flush();
+        }
     }
 }
 
+/// Return `true` when the incoming frame is a JSON-RPC 2.0 *notification*
+/// and therefore MUST NOT receive a response.
+///
+/// A notification is characterised by the absence of `id` (JSON-RPC 2.0
+/// §4.1). MCP additionally namespaces its own notifications under the
+/// `notifications/*` method prefix; a well-behaved client will always
+/// send those without an `id`, but we defensively treat any frame in
+/// that namespace as a notification so a malformed client can't trick
+/// us into replying.
+fn is_notification(request: &JsonRpcRequest) -> bool {
+    request.id.is_none() || request.method.starts_with("notifications/")
+}
+
+/// Route a parsed JSON-RPC frame to its handler.
+///
+/// Returns `None` for JSON-RPC notifications (see [`is_notification`]);
+/// the caller must write nothing to stdout in that case. All other
+/// requests return `Some(response)` — either a successful result or a
+/// structured JSON-RPC error.
 fn handle_request(
     db: &crate::db::ParquetDataStore,
     materials: &mut MaterialRegistry,
     request: JsonRpcRequest,
-) -> JsonRpcResponse {
+) -> Option<JsonRpcResponse> {
+    if is_notification(&request) {
+        // Notifications are processed for side-effects only. Today we
+        // hold no per-connection state that any `notifications/*`
+        // frame would need to mutate (in particular `initialized` is a
+        // no-op ack), so we simply drop the frame without responding.
+        return None;
+    }
+
     let id = request.id.clone();
 
-    match request.method.as_str() {
+    let response = match request.method.as_str() {
         "initialize" => {
+            let requested = request
+                .params
+                .get("protocolVersion")
+                .and_then(|v| v.as_str());
+            let version = negotiate_protocol_version(requested);
             let result = serde_json::json!({
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": version,
                 "capabilities": {
                     "tools": {}
                 },
@@ -185,10 +257,8 @@ fn handle_request(
             JsonRpcResponse::success(id, result)
         }
 
-        "notifications/initialized" => {
-            // No response needed for notifications
-            JsonRpcResponse::success(id, Value::Null)
-        }
+        // MCP utility method — an empty result is the spec-mandated ack.
+        "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
 
         "tools/list" => {
             let tool_list = tools::list_tools();
@@ -245,5 +315,114 @@ fn handle_request(
         }
 
         _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method)),
+    };
+
+    Some(response)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Protocol-level regression tests for #535. These exercise
+    //! negotiation + notification-silence without touching the physics
+    //! DB, so they run hermetically (no `nucl-parquet` data required).
+
+    use super::*;
+
+    fn make_request(id: Option<Value>, method: &str, params: Value) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id,
+            method: method.to_string(),
+            params,
+        }
+    }
+
+    // -- negotiation ---------------------------------------------------
+
+    #[test]
+    fn negotiate_echoes_supported_version() {
+        for supported in SUPPORTED_PROTOCOL_VERSIONS {
+            assert_eq!(
+                negotiate_protocol_version(Some(supported)),
+                *supported,
+                "should echo supported version {supported} verbatim"
+            );
+        }
+    }
+
+    #[test]
+    fn negotiate_returns_latest_for_unknown_version() {
+        // A revision we've never heard of (e.g. a future spec bump).
+        assert_eq!(
+            negotiate_protocol_version(Some("2099-12-31")),
+            LATEST_SUPPORTED_PROTOCOL_VERSION,
+        );
+    }
+
+    #[test]
+    fn negotiate_returns_latest_when_client_omits_version() {
+        assert_eq!(
+            negotiate_protocol_version(None),
+            LATEST_SUPPORTED_PROTOCOL_VERSION,
+        );
+    }
+
+    #[test]
+    fn latest_is_included_in_supported_set() {
+        assert!(
+            SUPPORTED_PROTOCOL_VERSIONS.contains(&LATEST_SUPPORTED_PROTOCOL_VERSION),
+            "LATEST_SUPPORTED must be one of SUPPORTED_PROTOCOL_VERSIONS",
+        );
+    }
+
+    #[test]
+    fn original_revision_still_supported_for_back_compat() {
+        // Older clients pinned to 2024-11-05 must keep working.
+        assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&"2024-11-05"));
+    }
+
+    // -- notification detection ---------------------------------------
+
+    #[test]
+    fn notification_has_no_id() {
+        let req = make_request(None, "notifications/initialized", Value::Null);
+        assert!(is_notification(&req));
+    }
+
+    #[test]
+    fn notifications_namespace_is_always_a_notification() {
+        // Even if a misbehaving client attaches an id, MCP `notifications/*`
+        // must never be answered.
+        let req = make_request(
+            Some(Value::from(1u64)),
+            "notifications/cancelled",
+            Value::Null,
+        );
+        assert!(is_notification(&req));
+    }
+
+    #[test]
+    fn normal_request_with_id_is_not_a_notification() {
+        let req = make_request(Some(Value::from(1u64)), "tools/list", Value::Null);
+        assert!(!is_notification(&req));
+    }
+
+    // -- initialize routing (no DB needed) ----------------------------
+    //
+    // handle_request needs a ParquetDataStore for tools/*, but the
+    // `initialize` / `ping` / notification arms don't touch it — so we
+    // just do the routing logic here by hand to match what
+    // handle_request does for those arms.
+
+    #[test]
+    fn initialize_echoes_client_requested_supported_version() {
+        let version = negotiate_protocol_version(Some("2024-11-05"));
+        assert_eq!(version, "2024-11-05");
+    }
+
+    #[test]
+    fn initialize_falls_back_to_latest_for_unknown_client_version() {
+        let version = negotiate_protocol_version(Some("2030-01-01"));
+        assert_eq!(version, LATEST_SUPPORTED_PROTOCOL_VERSION);
     }
 }
