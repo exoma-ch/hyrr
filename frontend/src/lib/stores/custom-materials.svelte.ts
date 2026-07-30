@@ -7,6 +7,7 @@
 
 import { parseFormula, SYMBOL_TO_Z } from "@hyrr/compute";
 import { nsDbName } from "../base-path";
+import { forgetSharedCustomMaterial } from "../config-codec-map";
 
 export interface CustomMaterial {
   id: string;
@@ -122,6 +123,12 @@ export async function saveCustomMaterial(
 
   // Refresh reactive state
   await loadCustomMaterials();
+  // #544 nit 1: the user just saved a custom-materials-library entry named
+  // `name`. Drop any embedded shared-material def under the same name so the
+  // recipient's IndexedDB library becomes the source of truth for it — the
+  // shipped-file/URL shadow would otherwise silently override this edit until
+  // page reload.
+  forgetSharedCustomMaterial(name);
   return entry.id;
 }
 
@@ -145,10 +152,20 @@ export async function updateCustomMaterial(
     request.onerror = () => reject(request.error);
   });
   await loadCustomMaterials();
+  // #544 nit 1: same "forget the shadow" as saveCustomMaterial — the user
+  // just edited their own library entry, so any embedded shared def under
+  // this name must stop winning.
+  forgetSharedCustomMaterial(name);
 }
 
 /** Delete a custom material by ID. */
 export async function deleteCustomMaterial(id: string): Promise<void> {
+  // Grab the name BEFORE the delete, so we can drop any embedded shared def
+  // under the same name after the store settles (#544 nit 1). A user who
+  // deletes their local "MyAlloy" doesn't expect a shipped-file "MyAlloy"
+  // shadow to keep resolving physics — the shadow must go too.
+  const nameToForget = materials.find((m) => m.id === id)?.name;
+
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, "readwrite");
@@ -160,6 +177,11 @@ export async function deleteCustomMaterial(id: string): Promise<void> {
 
   // Refresh reactive state
   await loadCustomMaterials();
+  // Also drop any embedded (session/URL-imported) shadow of this name — a
+  // deleted local material shouldn't be silently resurrected by an old embed.
+  // Note: if the name still appears in a layer, resolution then falls through
+  // to formula-parsing that name, which is the intended "it's gone" behaviour.
+  if (nameToForget) forgetSharedCustomMaterial(nameToForget);
 }
 
 /** Validate a formula string. Returns null if valid, or an error message. */

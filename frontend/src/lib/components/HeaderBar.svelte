@@ -10,13 +10,12 @@
   import { getResult, setResult } from "../stores/results.svelte";
   import { buildSessionFile, downloadSessionFile, pickSessionFile } from "../session-io";
   import { collectCustomMaterials, hydrateSharedCustomMaterial } from "../config-codec-map";
+  import { SHARE_BASE } from "../config-codec.svelte";
   import { getDisplayThresholds, setDisplayThresholds } from "../stores/display-thresholds.svelte";
   import { openExternalUrl } from "../utils/open-url";
   import { copyText } from "../utils/copy-text";
   import { Bug, Check, CircleHelp, Clipboard, History, Link, Monitor, Moon, Save, Sun } from "lucide-svelte";
   import logoUrl from "/logo.svg?url";
-
-  const SHARE_BASE = "https://exoma-ch.github.io/hyrr/";
 
   let historyOpen = $derived(getHistoryOpen());
   let helpOpen = $state(false);
@@ -86,7 +85,7 @@
     saveMenuOpen = false;
     loadNotice = "";
     try {
-      const f = await pickSessionFile();
+      const { file: f, warnings } = await pickSessionFile();
       // Hydrate embedded custom-material defs BEFORE restoring the config, so
       // the config store's migrateMissingDensities resolves them from the
       // embedded defs (not the recipient's possibly-empty or differing local
@@ -100,10 +99,19 @@
         setResult(f.result);
       }
       if (f.display) setDisplayThresholds(f.display);
+      // Compose the load notice: parser warnings first (dropped malformed
+      // embedded defs — #551 nit 1), then collision notices (embedded def
+      // shadows a same-named local material — #539). Both surface silently-
+      // wrong-outcomes: the alternative is the user never learning.
+      const notices: string[] = [];
+      notices.push(...warnings);
       if (collisions.length > 0) {
         const names = collisions.map((c) => c.name).join(", ");
-        loadNotice = `Using the file's version of ${names} — it differs from a material of the same name in your library.`;
+        notices.push(
+          `Using the file's version of ${names} — it differs from a material of the same name in your library.`,
+        );
       }
+      loadNotice = notices.join(" ");
     } catch (e: any) {
       if (!/No file selected/.test(String(e?.message ?? e))) {
         // eslint-disable-next-line no-alert

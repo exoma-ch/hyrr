@@ -289,7 +289,12 @@
     const shared = !cm && mat ? getSharedCustomMaterial(mat) : null;
     materialPopupPrefill = shared
       ? {
-          formula: shared.formula,
+          // Fall back to `name` for the DefineForm's `formula` field — the
+          // form treats formula as required and the recipient is about to
+          // fill it in anyway. The codec-level parser no longer defaults
+          // formula to name (#551 nit 2), but at the UI layer that fallback
+          // is safe: it seeds a form for editing, not a compute lookup.
+          formula: shared.formula ?? shared.name,
           name: shared.name,
           density: shared.density,
           editingCustomId: "",

@@ -10,7 +10,7 @@ export type JsonValue = number | string | boolean | Array<JsonValue> | { [key in
 
 export type Beam = { projectile: string, energy_mev: number, current_ma: number, };
 
-export type CustomMaterial = { density_g_cm3: number, mass_fractions?: { [key in string]: number } | null, formula?: string | null, enrichment?: JsonValue | null, };
+export type CustomMaterial = { density_g_cm3: number, mass_fractions?: { [key in string]: number } | null, formula?: string | null, enrichment?: JsonValue | null, nist_compound?: string | null, };
 
 export type Layer = { material: string, thickness_cm?: number | null, areal_density_g_cm2?: number | null, energy_out_mev?: number | null, enrichment?: JsonValue | null, is_monitor: boolean, density_g_cm3?: number | null,
 /**

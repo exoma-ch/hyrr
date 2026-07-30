@@ -58,6 +58,7 @@ fn sample_config() -> CodecConfig {
                     mass_fractions: Some(fractions),
                     formula: Some("Ni58Cr22".to_string()),
                     enrichment: None,
+                    nist_compound: None,
                 }),
                 ..Default::default()
             }),

@@ -174,6 +174,12 @@ pub struct Layer {
 /// Inline custom-material definition (a custom alloy that must travel with the
 /// link). This is what #531 drops and what makes the loss *silent AND
 /// physics-altering* (density changes stopping power → wrong yield).
+///
+/// `nist_compound` (#542): NIST PSTAR compound name (e.g. `WATER_LIQUID`) when
+/// the custom material is compound-backed. Carrying it lets the recipient use
+/// ICRU-measured stopping tables instead of Bragg additivity. Compact key `c`.
+/// A compound-only material (empty `mass_fractions`) can still travel because
+/// this field alone is enough to identify the stopping model on the other side.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CustomMaterial {
@@ -184,6 +190,8 @@ pub struct CustomMaterial {
     pub formula: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enrichment: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nist_compound: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -322,6 +330,9 @@ struct CompactLayer {
 /// The security-sensitive one — the only struct with `deny_unknown_fields`, so a
 /// malformed/hostile share link can't smuggle extra keys into the custom-mat
 /// definition (panel requirement).
+///
+/// Compact keys: `d` density, `e` mass fractions, `f` formula, `n` enrichment,
+/// `c` nist_compound (#542 — carries the ICRU-measured stopping-table identity).
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 struct CompactInlineComposition {
@@ -332,6 +343,8 @@ struct CompactInlineComposition {
     f: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     n: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    c: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -357,6 +370,7 @@ impl From<&Layer> for CompactLayer {
                 e: cm.mass_fractions.clone(),
                 f: cm.formula.clone(),
                 n: cm.enrichment.clone(),
+                c: cm.nist_compound.clone(),
             }),
         }
     }
@@ -640,11 +654,17 @@ fn compact_to_custom(x: CompactInlineComposition) -> Result<CustomMaterial, Code
             return Err(CodecError::StringTooLong(f.len()));
         }
     }
+    if let Some(c) = &x.c {
+        if c.len() > MAX_FORMULA_LEN {
+            return Err(CodecError::StringTooLong(c.len()));
+        }
+    }
     Ok(CustomMaterial {
         density_g_cm3: x.d,
         mass_fractions: x.e,
         formula: x.f,
         enrichment: x.n,
+        nist_compound: x.c,
     })
 }
 
@@ -748,6 +768,7 @@ mod tests {
                         mass_fractions: Some(fractions),
                         formula: Some("Ni58Cr22Fe5Mo9Nb3.6Ti0.4".to_string()),
                         enrichment: None,
+                        nist_compound: None,
                     }),
                     ..Default::default()
                 }),
@@ -931,6 +952,68 @@ mod tests {
             decode(&hash2).unwrap_err(),
             CodecError::DecompressedTooLarge
         );
+    }
+
+    // (#542 nit 1) `nist_compound` round-trips through the codec. A compound-
+    // backed custom (empty `mass_fractions`, only a compound identifier) is
+    // preserved end-to-end so the recipient's stopping model matches the sender's.
+    #[test]
+    fn nist_compound_roundtrips_on_custom_material() {
+        // Compound-only: no composition, just density + compound id.
+        let cfg = CodecConfig {
+            beam: Beam {
+                projectile: "p".to_string(),
+                energy_mev: 20.0,
+                current_ma: 0.1,
+            },
+            items: vec![Item::Layer(Layer {
+                material: "just-water".to_string(),
+                thickness_cm: Some(0.1),
+                custom: Some(CustomMaterial {
+                    density_g_cm3: 1.0,
+                    mass_fractions: None,
+                    formula: None,
+                    enrichment: None,
+                    nist_compound: Some("WATER_LIQUID".to_string()),
+                }),
+                ..Default::default()
+            })],
+            irradiation_s: 3600.0,
+            cooling_s: 3600.0,
+            neutron_flux: None,
+            secondary_neutron: false,
+            current_profile: None,
+        };
+        let out = encode(&cfg, SizePolicy::File);
+        let dec = decode(&out.hash).unwrap();
+        assert_eq!(dec, cfg);
+        let Item::Layer(layer) = &dec.items[0] else {
+            panic!()
+        };
+        assert_eq!(
+            layer.custom.as_ref().unwrap().nist_compound.as_deref(),
+            Some("WATER_LIQUID")
+        );
+    }
+
+    // A hostile `x.c` (nist_compound) that exceeds MAX_FORMULA_LEN is rejected
+    // — proves the cap is wired for the new field, not just declared.
+    #[test]
+    fn oversized_nist_compound_rejected() {
+        let long = "A".repeat(MAX_FORMULA_LEN + 1);
+        let compact = json!({
+            "b": { "p": "p", "e": 28.0, "c": 0.2 },
+            "l": [ { "m": "x", "x": { "d": 1.0, "c": long } } ],
+            "i": 1.0, "c": 1.0
+        });
+        let json_bytes = serde_json::to_vec(&compact).unwrap();
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(&json_bytes).unwrap();
+        let hash = format!("#config=1:{}", base64url_encode(&enc.finish().unwrap()));
+        assert!(matches!(
+            decode(&hash).unwrap_err(),
+            CodecError::StringTooLong(_)
+        ));
     }
 
     // Extra hardening coverage: deny_unknown_fields on InlineComposition.
@@ -1228,6 +1311,7 @@ mod tests {
                         mass_fractions: Some(fractions),
                         formula: None,
                         enrichment: None,
+                        nist_compound: None,
                     }),
                     ..Default::default()
                 }),
@@ -1291,6 +1375,7 @@ mod tests {
                     mass_fractions: Some(fractions),
                     formula: None,
                     enrichment: None,
+                    nist_compound: None,
                 }),
                 ..Default::default()
             })],

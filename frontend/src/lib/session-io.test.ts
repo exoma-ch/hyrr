@@ -292,6 +292,9 @@ describe("session-io custom-material self-containment (#539)", () => {
         { name: "NoDensity", formula: "Fe" }, // dropped: missing density
         { density: 3.1 }, // dropped: missing name
         "garbage", // dropped: not an object
+        // #551 nit 1: non-finite composition value must be dropped, not
+        // passed through as silent NaN into resolveIsotopics.
+        { name: "NaNy", formula: "CuSn", density: 8.82, massFractions: { Cu: NaN, Sn: 0.12 } },
       ],
     });
     const parsed = parseSessionJson(file);
@@ -299,6 +302,25 @@ describe("session-io custom-material self-containment (#539)", () => {
     if (!parsed.ok) return;
     expect(parsed.file.customMaterials).toHaveLength(1);
     expect(parsed.file.customMaterials![0].name).toBe("Good");
+    // The parser MUST surface the drop count so the UI can warn — never silent.
+    expect(parsed.warnings).toHaveLength(1);
+    expect(parsed.warnings[0]).toMatch(/Dropped 4/);
+  });
+
+  it("clean load: parseSessionJson returns an empty warnings array", () => {
+    const clean = JSON.stringify({
+      $schema: "hyrr-session",
+      schema_version: 3,
+      hyrr_version: "0.18.0",
+      saved_at: new Date().toISOString(),
+      config: { beam: { projectile: "p", energy_MeV: 16, current_mA: 0.15 }, items: [], irradiation_s: 1, cooling_s: 1 },
+      result: null,
+      customMaterials: [{ name: "Good", formula: "Cu", density: 8.96 }],
+    });
+    const parsed = parseSessionJson(clean);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.warnings).toEqual([]);
   });
 });
 
