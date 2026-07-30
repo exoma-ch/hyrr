@@ -2,9 +2,10 @@
   import { onMount } from "svelte";
   import "./lib/stores/theme.svelte"; // initialise theme (applies data-theme attribute)
   import { registerServiceWorker } from "./lib/sw-register";
-  import { decodeSerializableConfigFromHash, setConfigInHash } from "./lib/config-url";
+  import { decodeSerializableConfigFromHash, setConfigInHash, getPresetIdFromHash } from "./lib/config-url";
   import { getSharedCustomMaterial } from "./lib/config-url-v2";
   import { initConfigCodec, isCodecReady } from "./lib/config-codec.svelte";
+  import { findPreset } from "./lib/presets";
   import type { EditableMaterial } from "./lib/components/material/DefineForm.svelte";
   import {
     getConfig,
@@ -18,6 +19,7 @@
     redo,
     getSerializableConfig,
     restoreSerializableConfig,
+    restoreFromSimConfig,
   } from "./lib/stores/config.svelte";
   import {
     getResult,
@@ -173,10 +175,17 @@
     // module (native compute doesn't otherwise pull in WASM).
     await initConfigCodec();
 
-    // Check URL for shared config — URL hash takes priority over session restore
-    const urlConfig = decodeSerializableConfigFromHash();
+    // Check URL for a deep-link, then a shared config — both take priority over
+    // session restore. `#preset=<id>` loads a named preset (incl. its
+    // currentProfile, which can't ride in a #config= hash), so presets are
+    // reachable by URL on every viewport — not just via the desktop-only
+    // feeling-lucky tab.
+    const presetId = getPresetIdFromHash();
+    const preset = presetId ? findPreset(presetId) : undefined;
+    const urlConfig = preset ? null : decodeSerializableConfigFromHash();
     await restoreSessions();
-    if (urlConfig) restoreSerializableConfig(urlConfig);
+    if (preset) restoreFromSimConfig(preset.config);
+    else if (urlConfig) restoreSerializableConfig(urlConfig);
 
     await loadCustomMaterials();
 

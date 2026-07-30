@@ -376,6 +376,28 @@ export function restoreSerializableConfig(c: SerializableConfig): void {
   });
 }
 
+/** SSoT loader for a full SimulationConfig (preset, deep-link, session import).
+ *  Maps to SerializableConfig and routes through restoreSerializableConfig so
+ *  every "load a whole config" path — feeling-lucky, the #preset= deep-link —
+ *  shares one code path. The currentProfile (which can't ride in a #config=
+ *  hash) is carried through here, since presets build it locally. */
+export function restoreFromSimConfig(c: SimulationConfig): void {
+  restoreSerializableConfig({
+    beam: c.beam,
+    items: c.layers,
+    irradiation_s: c.irradiation_s,
+    cooling_s: c.cooling_s,
+    currentProfile: c.currentProfile
+      ? { timesS: Array.from(c.currentProfile.timesS), currentsMA: Array.from(c.currentProfile.currentsMA) }
+      : undefined,
+    // Neutron state must ride through, or #preset= (and any SimConfig load)
+    // silently falls back to DEFAULT_NEUTRON_FLUX — corrupting the physics of
+    // the neutron presets (e.g. co60-thermal → fast spectrum). #503 review.
+    secondaryNeutron: c.secondary_neutron,
+    neutronFlux: c.neutronFlux,
+  });
+}
+
 // ─── Setters ────────────────────────────────────────────────────────
 
 export function setConfig(c: SimulationConfig): void {
