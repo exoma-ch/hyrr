@@ -216,8 +216,8 @@ fn issue_533_long_lived_minor_product_survives_inventory_and_list() {
         "cooling_time_s": 86400.0
     });
 
-    let inv = call_tool(&db, &mut reg, "get_isotope_inventory", &args)
-        .expect("inventory should succeed");
+    let inv =
+        call_tool(&db, &mut reg, "get_isotope_inventory", &args).expect("inventory should succeed");
     assert!(
         inv.text.contains("Fe-55"),
         "Fe-55 (long-lived low-yield Mn product) must survive the inventory \
@@ -227,18 +227,13 @@ fn issue_533_long_lived_minor_product_survives_inventory_and_list() {
 
     // The list-producing-layers tool has to answer truthfully: it must NOT
     // claim no layer produces Fe-55 (the pre-fix behavior).
-    let listing = call_tool(
-        &db,
-        &mut reg,
-        "list_producing_layers",
-        &{
-            let mut a = args.clone();
-            a.as_object_mut()
-                .unwrap()
-                .insert("isotope".to_string(), json!("Fe-55"));
-            a
-        },
-    )
+    let listing = call_tool(&db, &mut reg, "list_producing_layers", &{
+        let mut a = args.clone();
+        a.as_object_mut()
+            .unwrap()
+            .insert("isotope".to_string(), json!("Fe-55"));
+        a
+    })
     .expect("list_producing_layers should succeed");
     assert!(
         !listing.text.contains("No layer in this stack produces"),

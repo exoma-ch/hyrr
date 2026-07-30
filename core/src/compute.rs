@@ -380,6 +380,9 @@ fn compute_layer(
 
     // Prune numerical-dust isotopes — but NOT long-lived low-yield products
     // (issue #533). See `prune_negligible_isotopes` for the criterion.
+    // NOTE: prune runs BEFORE the chain solver — decay daughters (whose
+    // production_rate is 0) are not yet in the map, so the rate arm never
+    // misjudges them.
     let pruned_negligible_count = prune_negligible_isotopes(&mut isotope_results);
 
     // Chain solver
@@ -1182,7 +1185,8 @@ fn compute_neutron_layer(
     }
 
     // See #533 — prune criterion is peak-relative in BOTH activity and
-    // production rate, so long-lived low-yield products survive.
+    // production rate, so long-lived low-yield products survive. Runs BEFORE
+    // the chain solver (daughters with production_rate == 0 not yet present).
     let pruned_negligible_count = prune_negligible_isotopes(&mut isotope_results);
     if enable_chains && !isotope_results.is_empty() {
         // Shared back-half. No beam current / profile for a neutron source, so

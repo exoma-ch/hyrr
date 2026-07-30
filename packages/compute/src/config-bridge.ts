@@ -126,6 +126,9 @@ export interface LayerResultData {
   isotopes: IsotopeResultData[];
   depth_profile: DepthPointData[];
   depth_production_rates?: Record<string, number[]>;
+  /** Isotopes removed by the negligible-inventory prune (#533); absent/0 when
+   *  nothing was filtered (TS fallback engine never prunes). */
+  pruned_negligible_count?: number;
 }
 
 export interface SimulationResult {

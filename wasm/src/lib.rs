@@ -780,6 +780,9 @@ struct LayerResultJson {
     depth_profile: Vec<DepthPointJson>,
     #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
     depth_production_rates: std::collections::HashMap<String, Vec<f64>>,
+    /// Isotopes removed by the negligible-inventory prune (#533) — surfaced so
+    /// the browser JSON payload is never silently filtered.
+    pruned_negligible_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -991,6 +994,7 @@ fn convert_stack_result(config_json: &str, result: &StackResult) -> SimulationRe
                 isotopes,
                 depth_profile,
                 depth_production_rates: lr.depth_production_rates.clone(),
+                pruned_negligible_count: lr.pruned_negligible_count,
             }
         })
         .collect();
