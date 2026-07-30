@@ -23,16 +23,19 @@ def _print_help() -> None:
         "USAGE:\n"
         "    hyrr-mcp [--data-dir PATH] [--library ID]\n\n"
         "OPTIONS:\n"
-        "    --data-dir PATH   Override nucl-parquet data directory\n"
-        f"    --library ID      Nuclear data library, e.g. {default_lib} (default), endfb-8.1\n"
-        "    --version, -V     Print version and exit\n"
-        "    --help, -h        Print this help and exit\n\n"
+        "    --data-dir PATH    Override nucl-parquet data directory\n"
+        f"    --library ID       Nuclear data library, e.g. {default_lib} (default), endfb-8.1\n"
+        "    --version, -V      Print version and exit\n"
+        "    --help, -h         Print this help and exit\n\n"
         "ENVIRONMENT:\n"
-        "    HYRR_DATA         Nucl-parquet data directory (if --data-dir not set)\n"
-        "    HYRR_LIBRARY      Nuclear data library (if --library not set)\n\n"
-        "On first run, ~5 MB of metadata is fetched from GitHub.\n"
-        "Cross-section data is fetched per-element on demand as tools\n"
-        "query it. Cached in ~/.nucl-parquet/.\n\n"
+        "    HYRR_DATA          Nucl-parquet data directory (if --data-dir not set)\n"
+        "    NUCL_PARQUET_DATA  Nucl-parquet data directory (backward-compat alternative)\n"
+        "    HYRR_LIBRARY       Nuclear data library (if --library not set)\n\n"
+        "On first run (no local data, no --data-dir / HYRR_DATA), fetches the\n"
+        "nucl-parquet release matching the submodule-pinned data version\n"
+        "(~54 MB metadata + stopping tables plus the requested library subtree).\n"
+        "Cached in ~/.hyrr/nucl-parquet/v{V}/. A failed fetch is a hard error\n"
+        "with a clear diagnostic — never a silent-empty data dir.\n\n"
         "Register with Claude Code:\n"
         "    claude mcp add hyrr -- uvx hyrr-mcp\n"
     )
@@ -57,9 +60,17 @@ def main() -> int:
     # Resolve library: --library arg → HYRR_LIBRARY env → DEFAULT_LIBRARY.
     library = _arg_value(argv, "--library") or os.environ.get("HYRR_LIBRARY") or None
 
-    # Resolve data dir: explicit --data-dir / HYRR_DATA wins, otherwise
-    # resolve locally → auto-fetch from GitHub on first run (~30 MB).
-    data_dir = _arg_value(argv, "--data-dir") or os.environ.get("HYRR_DATA")
+    # Resolve data dir: explicit --data-dir / HYRR_DATA / NUCL_PARQUET_DATA
+    # wins verbatim. Otherwise `_native.ensure_data` resolves locally
+    # (managed cache / sibling clone) and falls back to fetching the
+    # CalVer release matching the submodule-pinned DATA_VERSION (#529).
+    # A failed fetch raises RuntimeError with the expected release tag +
+    # URL + cache dir — no silent partial-cache fallthrough.
+    data_dir = (
+        _arg_value(argv, "--data-dir")
+        or os.environ.get("HYRR_DATA")
+        or os.environ.get("NUCL_PARQUET_DATA")
+    )
     if data_dir is None:
         data_dir = _native.ensure_data(library)
 
