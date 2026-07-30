@@ -335,6 +335,14 @@ pub struct LayerResult {
     /// Phase 2). Zero on the neutron-source and stopping-only paths.
     #[serde(default)]
     pub neutron_source_rate: f64,
+    /// How many produced isotopes were pruned as numerical dust before the
+    /// chain solver ran (issue #533). Non-zero values are surfaced so the
+    /// filter is never silent — the pruned entries had activity below the
+    /// relative floor *and* production rate below the relative rate floor
+    /// (long-lived, low-yield minor-component products are exempt from the
+    /// activity floor and reach the reported inventory).
+    #[serde(default)]
+    pub pruned_negligible_count: usize,
 }
 
 /// Full result for all layers in a stack.

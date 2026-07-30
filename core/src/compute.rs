@@ -101,6 +101,13 @@ pub fn compute_stack(
         .map_err(|e| e.with_layer_context(idx, material_hint))?;
         // Per-layer boundary (debug — scales with layer count, not iterations).
         crate::trace_schema::compute_layer(idx, energy_in, lr.energy_out, lr.isotope_results.len());
+        if lr.pruned_negligible_count > 0 {
+            crate::trace_schema::layer_inventory_pruned(
+                idx,
+                lr.isotope_results.len(),
+                lr.pruned_negligible_count,
+            );
+        }
         energy_in = lr.energy_out;
         layer_results.push(lr);
     }
@@ -153,6 +160,7 @@ fn compute_layer(
             stopping_power_sources: HashMap::new(),
             depth_production_rates: HashMap::new(),
             neutron_source_rate: 0.0,
+            pruned_negligible_count: 0,
         });
     }
 
@@ -375,19 +383,12 @@ fn compute_layer(
         }
     }
 
-    // Prune negligible isotopes
-    if !isotope_results.is_empty() {
-        let peak_activity: f64 = isotope_results
-            .values()
-            .flat_map(|iso| iso.activity_vs_time_bq.iter())
-            .cloned()
-            .fold(0.0_f64, f64::max);
-
-        let cutoff = peak_activity * ACTIVITY_CUTOFF_FRACTION;
-        if cutoff > 0.0 {
-            isotope_results.retain(|_, iso| iso.activity_vs_time_bq.iter().any(|&a| a > cutoff));
-        }
-    }
+    // Prune numerical-dust isotopes — but NOT long-lived low-yield products
+    // (issue #533). See `prune_negligible_isotopes` for the criterion.
+    // NOTE: prune runs BEFORE the chain solver — decay daughters (whose
+    // production_rate is 0) are not yet in the map, so the rate arm never
+    // misjudges them.
+    let pruned_negligible_count = prune_negligible_isotopes(&mut isotope_results);
 
     // Chain solver
     let enable_chains = enable_chains || current_profile.is_some();
@@ -442,6 +443,7 @@ fn compute_layer(
         stopping_power_sources: sp_sources,
         depth_production_rates,
         neutron_source_rate,
+        pruned_negligible_count,
     })
 }
 
@@ -780,6 +782,7 @@ fn compute_layer_stopping_only(
             stopping_power_sources: HashMap::new(),
             depth_production_rates: HashMap::new(),
             neutron_source_rate: 0.0,
+            pruned_negligible_count: 0,
         });
     }
 
@@ -865,6 +868,7 @@ fn compute_layer_stopping_only(
         stopping_power_sources: sp_sources,
         depth_production_rates: HashMap::new(),
         neutron_source_rate: 0.0,
+        pruned_negligible_count: 0,
     })
 }
 
@@ -878,6 +882,65 @@ fn integrate_heat(profile: &[DepthPoint], area_cm2: f64) -> f64 {
 
     let power_w = area_cm2 * trapezoid(&heat, &depths);
     power_w * 1e-3 // W -> kW
+}
+
+/// Drop isotopes that are numerical dust — but keep long-lived low-yield
+/// products (issue #533).
+///
+/// The original filter compared each isotope's peak activity in the time
+/// series against `peak_activity_all * ACTIVITY_CUTOFF_FRACTION`. That is a
+/// safe floor for short-lived matrix products (which saturate near `R`), but
+/// it silently drops long-lived species whose EOB activity is suppressed by
+/// `(λ · t_irr)`: e.g. Fe-55 (t½ = 2.7 y) from trace Mn in Al vanishes
+/// under the Si-27 matrix peak even though its atom inventory is exactly
+/// the number waste-disposal work needs. Reported in #533.
+///
+/// The fix is peak-relative in BOTH activity and production rate: keep an
+/// isotope if its activity trace exceeds the activity floor **or** its
+/// production rate exceeds the rate floor. Production rate is a
+/// half-life-independent proxy for the atom inventory the isotope will
+/// eventually contribute; for saturated short-lived species `activity ≈ R`
+/// and the two conditions agree, so the noise floor is unchanged there.
+///
+/// Returns the count of dropped isotopes so `LayerResult` can surface the
+/// drop (`pruned_negligible_count`) — the filter is never silent.
+fn prune_negligible_isotopes(isotope_results: &mut HashMap<String, IsotopeResult>) -> usize {
+    if isotope_results.is_empty() {
+        return 0;
+    }
+
+    let peak_activity: f64 = isotope_results
+        .values()
+        .flat_map(|iso| iso.activity_vs_time_bq.iter())
+        .cloned()
+        .fold(0.0_f64, f64::max);
+    let peak_rate: f64 = isotope_results
+        .values()
+        .map(|iso| iso.production_rate)
+        .fold(0.0_f64, f64::max);
+
+    let activity_cutoff = peak_activity * ACTIVITY_CUTOFF_FRACTION;
+    let rate_cutoff = peak_rate * ACTIVITY_CUTOFF_FRACTION;
+    if activity_cutoff <= 0.0 && rate_cutoff <= 0.0 {
+        return 0;
+    }
+
+    let before = isotope_results.len();
+    isotope_results.retain(|_, iso| {
+        // Keep short-lived matrix products whose activity trace punches
+        // through the activity floor …
+        let above_activity =
+            activity_cutoff > 0.0 && iso.activity_vs_time_bq.iter().any(|&a| a > activity_cutoff);
+        // … and long-lived low-yield products whose activity is suppressed
+        // by (λ · t_irr) but whose atom inventory is material later. Rate
+        // is the invariant here — activity of a T½ ≫ t_irr species tracks
+        // (λ · t_irr) below R and can sit orders of magnitude under the
+        // matrix peak while its production rate is still radiologically
+        // interesting (#533).
+        let above_rate = rate_cutoff > 0.0 && iso.production_rate > rate_cutoff;
+        above_activity || above_rate
+    });
+    before - isotope_results.len()
 }
 
 /// Clamp each isotope's activity time-series and scalar activities to the
@@ -974,10 +1037,11 @@ pub fn compute_neutron_stack(
     area_cm2: f64,
     enable_chains: bool,
 ) -> StackResult {
-    let layer_results = layers
+    let layer_results: Vec<LayerResult> = layers
         .iter()
-        .map(|layer| {
-            compute_neutron_layer(
+        .enumerate()
+        .map(|(idx, layer)| {
+            let lr = compute_neutron_layer(
                 db,
                 layer,
                 flux,
@@ -985,7 +1049,15 @@ pub fn compute_neutron_stack(
                 cooling_time_s,
                 area_cm2,
                 enable_chains,
-            )
+            );
+            if lr.pruned_negligible_count > 0 {
+                crate::trace_schema::layer_inventory_pruned(
+                    idx,
+                    lr.isotope_results.len(),
+                    lr.pruned_negligible_count,
+                );
+            }
+            lr
         })
         .collect();
     StackResult {
@@ -1014,6 +1086,7 @@ fn compute_neutron_layer(
         stopping_power_sources: HashMap::new(),
         depth_production_rates: HashMap::new(),
         neutron_source_rate: 0.0,
+        pruned_negligible_count: 0,
     };
 
     // Neutron layers are specified by thickness (no energy-loss stepping).
@@ -1117,14 +1190,10 @@ fn compute_neutron_layer(
         }
     }
 
-    if !isotope_results.is_empty() {
-        let peak = isotope_results
-            .values()
-            .map(|i| i.activity_bq)
-            .fold(0.0, f64::max);
-        let cutoff = peak * ACTIVITY_CUTOFF_FRACTION;
-        isotope_results.retain(|_, iso| iso.activity_vs_time_bq.iter().any(|&a| a > cutoff));
-    }
+    // See #533 — prune criterion is peak-relative in BOTH activity and
+    // production rate, so long-lived low-yield products survive. Runs BEFORE
+    // the chain solver (daughters with production_rate == 0 not yet present).
+    let pruned_negligible_count = prune_negligible_isotopes(&mut isotope_results);
     if enable_chains && !isotope_results.is_empty() {
         // Shared back-half. No beam current / profile for a neutron source, so
         // particles_per_s and nominal_current are inert (used only when a
@@ -1143,6 +1212,7 @@ fn compute_neutron_layer(
 
     LayerResult {
         isotope_results,
+        pruned_negligible_count,
         ..blank
     }
 }
@@ -1663,6 +1733,74 @@ mod tests {
             clamped[2] > clamped[3] && clamped[3] > clamped[4],
             "post-EOB activity must decay, not plateau: {clamped:?}"
         );
+    }
+
+    /// Regression test for issue #533.
+    ///
+    /// A long-lived, low-yield minor-component product (Fe-55, t½ = 2.7 y, in
+    /// dilute Mn-in-Al) has EOB activity suppressed by (λ · t_irr) — for a
+    /// 1-day irradiation, that's ~7×10⁻⁴ of its saturation. Riding under a
+    /// saturated short-lived matrix peak (Si-27), its activity ratio can drop
+    /// well below the 1e-6 relative floor even though the atom inventory is
+    /// exactly the number waste-classification work needs.
+    ///
+    /// The old prune (peak-relative on activity only) silently dropped it.
+    /// The new prune keeps it via the peak-relative production-rate criterion,
+    /// and `pruned_negligible_count` reports any drops that DO happen.
+    #[test]
+    fn prune_keeps_long_lived_low_yield_products_and_reports_drops() {
+        // Peak: short-lived matrix product (Si-27-like), fully saturated.
+        // R = 1e10 atoms/s, t½ = 4.16 s → activity saturates ≈ R.
+        let peak_r = 1.0e10_f64;
+        let peak_activity = 1.0e10_f64;
+        let peak = iso_with("Si-27", 4.16, peak_r, vec![peak_activity; 5]);
+
+        // The isotope of interest: Fe-55-like, produced at 1e5 atoms/s
+        // (rate/peak_rate = 1e-5, safely above the 1e-6 rate floor), but its
+        // EOB activity is 5e3 Bq — activity/peak_activity = 5e-7, well BELOW
+        // the 1e-6 activity floor. Old prune dropped this. New prune keeps it.
+        let long_lived_rate = 1.0e5_f64;
+        let long_lived_activity = 5.0e3_f64;
+        let long_lived_hl = 2.7 * 365.25 * 86400.0; // Fe-55: 2.7 years
+        let long_lived = iso_with(
+            "Fe-55",
+            long_lived_hl,
+            long_lived_rate,
+            vec![long_lived_activity; 5],
+        );
+
+        // Genuine dust: production rate AND activity both under the 1e-6
+        // relative floor. Must be dropped.
+        let dust = iso_with("Cr-51", 2.4e6, 1.0, vec![1.0; 5]);
+
+        let mut results = HashMap::new();
+        results.insert("Si-27".to_string(), peak);
+        results.insert("Fe-55".to_string(), long_lived);
+        results.insert("Cr-51".to_string(), dust);
+
+        let dropped = prune_negligible_isotopes(&mut results);
+
+        // Load-bearing: the long-lived low-yield product survives.
+        assert!(
+            results.contains_key("Fe-55"),
+            "long-lived low-yield product must not be silently dropped (#533); \
+             surviving keys: {:?}",
+            results.keys().collect::<Vec<_>>()
+        );
+        // The matrix peak stays.
+        assert!(results.contains_key("Si-27"));
+        // Genuine dust is dropped.
+        assert!(!results.contains_key("Cr-51"));
+        // Never silent: the drop count is surfaced on `LayerResult`.
+        assert_eq!(dropped, 1, "must report the one true-dust drop");
+    }
+
+    /// Empty input: helper is a no-op, reports zero drops (no NaN cutoffs).
+    #[test]
+    fn prune_negligible_isotopes_handles_empty_input() {
+        let mut results: HashMap<String, IsotopeResult> = HashMap::new();
+        assert_eq!(prune_negligible_isotopes(&mut results), 0);
+        assert!(results.is_empty());
     }
 
     #[test]
