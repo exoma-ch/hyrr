@@ -35,6 +35,12 @@ use crate::materials::MaterialRegistry;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+/// URL prefix prepended to every share hash — the shipped URL is
+/// `FRONTEND_BASE + hash`. `share_url` deducts this from the codec-level budget
+/// so the WHOLE URL fits inside [`DEFAULT_URL_BUDGET_BYTES`] (#542 nit 2). Kept
+/// as a `const` (not runtime-configurable) so the budget arithmetic is
+/// straightforward and audit-visible; if you change the deploy base, update
+/// this and the length subtraction re-derives.
 const FRONTEND_BASE: &str = "https://exoma-ch.github.io/hyrr/";
 
 /// A generated share link plus everything the caller needs to warn the user
@@ -61,10 +67,16 @@ pub struct ShareLink {
 /// Returns `None` only when the args are unusable (no projectile or no layers).
 pub fn share_url(args: &Value, registry: &MaterialRegistry) -> Option<ShareLink> {
     let cfg = config_from_args(args, registry)?;
+    // #542 nit 2: budget the WHOLE URL, not just the hash. The shipped URL is
+    // `FRONTEND_BASE + hash`, so the codec's per-hash budget must be smaller
+    // by exactly the base's length. `saturating_sub` guards against a
+    // pathological config where `FRONTEND_BASE.len() >= DEFAULT_URL_BUDGET_BYTES`
+    // (would only happen if someone shrinks the budget drastically).
+    let hash_budget = DEFAULT_URL_BUDGET_BYTES.saturating_sub(FRONTEND_BASE.len());
     let outcome: EncodeOutcome = encode(
         &cfg,
         SizePolicy::Url {
-            budget_bytes: DEFAULT_URL_BUDGET_BYTES,
+            budget_bytes: hash_budget,
         },
     );
     Some(ShareLink {
@@ -138,6 +150,15 @@ fn layer_from_args(l: &Value, registry: &MaterialRegistry) -> Option<Layer> {
 
     // Inline a session-defined custom material's composition (the #531 fix). The
     // registry is keyed by lowercased name (see `tool_define_material`).
+    //
+    // #542 nit 1: also carry `nist_compound` when the runtime material sets it
+    // (compound-backed customs — e.g. WATER_LIQUID). Two things follow:
+    //  1. a compound-backed material with EMPTY `mass_fractions` still yields a
+    //     `CustomMaterial` (density + compound id travel — previously the whole
+    //     `custom` was dropped in that branch, silent cross-machine loss).
+    //  2. a composition-backed material with a *known* compound-table alias
+    //     still gains the ICRU-measured stopping-power identity on the other
+    //     side, matching what compute uses locally.
     let custom = registry.get(&material.to_lowercase()).map(|rt| {
         // The density the simulation actually used: the per-layer override wins,
         // else the material's registered density. The frontend decoder lets
@@ -158,6 +179,7 @@ fn layer_from_args(l: &Value, registry: &MaterialRegistry) -> Option<Layer> {
             // Registry customs are composition-only (no free-text formula).
             formula: None,
             enrichment: None,
+            nist_compound: rt.nist_compound.clone(),
         }
     });
 
@@ -444,5 +466,161 @@ mod tests {
         let link = share_url(&args, &empty_registry()).unwrap();
         assert!(link.url.contains("#config=1:"));
         assert!(decode(&link.url).is_ok());
+    }
+
+    /// #542 nit 1 (compound-backed customs). A composition-backed custom whose
+    /// runtime material also declares `nist_compound` carries that identifier
+    /// across the wire — the recipient's compute can then pick up the ICRU-
+    /// measured stopping table instead of falling back to Bragg additivity.
+    #[test]
+    fn compound_backed_custom_carries_nist_compound() {
+        let mut registry = empty_registry();
+        let mut mf = HashMap::new();
+        mf.insert("H".to_string(), 0.11);
+        mf.insert("O".to_string(), 0.89);
+        registry.insert(
+            "my-water".to_string(),
+            RuntimeMaterial {
+                density_g_cm3: 1.0,
+                mass_fractions: mf,
+                nist_compound: Some("WATER_LIQUID".to_string()),
+            },
+        );
+        let args = json!({
+            "projectile": "p", "energy_mev": 20.0, "current_ma": 0.1,
+            "layers": [ { "material": "my-water", "thickness_cm": 0.1 } ]
+        });
+        let link = share_url(&args, &registry).unwrap();
+        let cfg = decode(&link.url).unwrap();
+        let Item::Layer(layer) = &cfg.items[0] else {
+            panic!("layer 0")
+        };
+        let cm = layer.custom.as_ref().expect("custom present");
+        assert_eq!(cm.nist_compound.as_deref(), Some("WATER_LIQUID"));
+        assert!(cm.mass_fractions.is_some(), "composition still travels");
+    }
+
+    /// #542 nit 1 (latent case). A COMPOUND-ONLY custom material (empty
+    /// `mass_fractions`, only a `nist_compound`) must still travel — density +
+    /// compound identifier — instead of being silently dropped to `custom: None`.
+    /// Not hit today because `define_material` mandates composition, but the
+    /// branch is defended so a future compound-only tool path can't regress
+    /// into cross-machine loss.
+    #[test]
+    fn compound_only_custom_still_travels() {
+        let mut registry = empty_registry();
+        registry.insert(
+            "just-water".to_string(),
+            RuntimeMaterial {
+                density_g_cm3: 1.0,
+                mass_fractions: HashMap::new(), // COMPOUND-ONLY — empty
+                nist_compound: Some("WATER_LIQUID".to_string()),
+            },
+        );
+        let args = json!({
+            "projectile": "p", "energy_mev": 20.0, "current_ma": 0.1,
+            "layers": [ { "material": "just-water", "thickness_cm": 0.1 } ]
+        });
+        let link = share_url(&args, &registry).unwrap();
+        let cfg = decode(&link.url).unwrap();
+        let Item::Layer(layer) = &cfg.items[0] else {
+            panic!("layer 0")
+        };
+        let cm = layer.custom.as_ref().expect("custom is not dropped");
+        assert_eq!(cm.density_g_cm3, 1.0);
+        assert!(cm.mass_fractions.is_none(), "no composition to carry");
+        assert_eq!(cm.nist_compound.as_deref(), Some("WATER_LIQUID"));
+    }
+
+    /// #542 nit 2. The URL budget must count the WHOLE URL (FRONTEND_BASE +
+    /// hash), not just the hash. Two properties are checked:
+    ///
+    /// 1. A share URL emitted with no drops/warnings is genuinely within the
+    ///    budget *counted from the full URL* (base + hash), not just the hash.
+    ///    Under the pre-fix code this could silently exceed the budget by up to
+    ///    `FRONTEND_BASE.len()` bytes.
+    /// 2. A hash that would sit in the URL-base gap
+    ///    `(DEFAULT_URL_BUDGET_BYTES - FRONTEND_BASE.len(), DEFAULT_URL_BUDGET_BYTES]`
+    ///    triggers a drop or warning (the fix's actual seam). Property (1) is
+    ///    the load-bearing invariant; property (2) is the direct behavioural
+    ///    proof — skipped only when no such config exists in a small scan
+    ///    (unlikely, but keeps the test hermetic against DEFLATE-ratio shifts).
+    #[test]
+    fn budget_counts_full_url_not_just_hash() {
+        use crate::config_codec::DEFAULT_URL_BUDGET_BYTES;
+
+        // Incompressible profile — DEFLATE can't crush it, so hash length
+        // scales predictably with sample count.
+        fn build(samples: usize) -> serde_json::Value {
+            let times: Vec<f64> = (0..samples).map(|i| i as f64 * 60.0).collect();
+            let currents: Vec<f64> = (0..samples)
+                .map(|i| ((i.wrapping_mul(2654435761)) % 1_000_000) as f64 / 997.0)
+                .collect();
+            json!({
+                "projectile": "p", "energy_mev": 18.0, "current_ma": 0.1,
+                "layers": [ { "material": "Cu", "thickness_cm": 0.1 } ],
+                "current_profile": { "times_s": times, "currents_ma": currents }
+            })
+        }
+
+        // Property (1): every emitted "no drops, no warnings" link fits the
+        // whole-URL budget. Scan a range covering hashes both well under and
+        // right at the budget boundary — the invariant must hold at every
+        // point, including the boundary where the pre-fix code could exceed.
+        for n in (100usize..=250).step_by(5) {
+            let link = share_url(&build(n), &empty_registry()).unwrap();
+            if link.dropped.is_empty() && link.warnings.is_empty() {
+                assert!(
+                    link.url.len() <= DEFAULT_URL_BUDGET_BYTES,
+                    "silent over-budget: {} bytes > {} (n={}, dropped={:?}, warnings={:?})",
+                    link.url.len(),
+                    DEFAULT_URL_BUDGET_BYTES,
+                    n,
+                    link.dropped,
+                    link.warnings
+                );
+            }
+        }
+
+        // Property (2): if the scan can land a hash in the URL-base gap, the
+        // fixed share_url must surface a drop or warning. A miss here doesn't
+        // fail the test — DEFLATE ratio may have shifted such that no scanned
+        // sample count trips the seam — but a hit locks the behavioural proof.
+        for n in (100usize..=300).step_by(1) {
+            let cfg = config_from_args(&build(n), &empty_registry()).unwrap();
+            // Ask the codec directly (without the URL-base subtraction) to
+            // find sizes that would slip through the pre-fix path.
+            let raw = encode(
+                &cfg,
+                SizePolicy::Url {
+                    budget_bytes: DEFAULT_URL_BUDGET_BYTES,
+                },
+            );
+            let hash_len = raw.hash.len();
+            let in_gap = hash_len > DEFAULT_URL_BUDGET_BYTES - FRONTEND_BASE.len()
+                && hash_len <= DEFAULT_URL_BUDGET_BYTES
+                && raw.dropped.is_empty()
+                && raw.warnings.is_empty();
+            if !in_gap {
+                continue;
+            }
+            let link = share_url(&build(n), &empty_registry()).unwrap();
+            let observed = !link.dropped.is_empty() || !link.warnings.is_empty();
+            assert!(
+                observed,
+                "fix regression: n={n} produces a hash in the URL-base gap \
+                 (hash={hash_len} B, base={} B, full={} B) — share_url must \
+                 report it (dropped or warned), but got dropped={:?} warnings={:?}",
+                FRONTEND_BASE.len(),
+                link.url.len(),
+                link.dropped,
+                link.warnings
+            );
+            return; // one proof is enough; done.
+        }
+        // Fell through the whole scan without hitting the gap. Property (1)
+        // above still proves no-silent-loss; the scanning failure is a soft
+        // signal that DEFLATE ratios have shifted — widen the range if a
+        // future maintainer wants direct proof of Property (2) again.
     }
 }

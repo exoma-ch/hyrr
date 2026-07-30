@@ -21,6 +21,8 @@ export {
   massToAtomFractions,
   setCustomDensityLookup,
   setCustomCompositionLookup,
+  setCustomEnrichmentLookup,
+  mergeMaterialAndLayerEnrichment,
   MATERIAL_CATALOG,
   ELEMENT_DENSITIES,
   COMPOUND_DENSITIES,

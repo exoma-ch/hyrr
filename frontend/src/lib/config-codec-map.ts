@@ -20,6 +20,7 @@
 import {
   setCustomDensityLookup,
   setCustomCompositionLookup,
+  setCustomEnrichmentLookup,
   formulaToMassFractions,
 } from "@hyrr/compute";
 import type {
@@ -35,29 +36,88 @@ import type { SerializableConfig } from "./stores/config.svelte";
 // ─── Shared custom-material registry (the hydrate seam) ──────────────────────
 
 /** Full custom-material definition recovered from a decoded share link, keyed
- *  by material name. The UI offers these for "save to my library". */
+ *  by material name. The UI offers these for "save to my library".
+ *
+ *  `formula` is optional (#551 nit 2): the codec doesn't guarantee one, and
+ *  the parser no longer falls back to `name` (that would silently derive a
+ *  composition when `name` happens to parse as a chemical formula). */
 export interface SharedCustomMaterial {
   name: string;
-  formula: string;
+  formula?: string;
   density: number;
   massFractions?: Record<string, number>;
   enrichment?: Record<string, Record<number, number>>;
 }
 
-const __sessionCompositions = new Map<string, { d: number; e: Record<string, number> }>();
+/** Session-lookup entry. `e` (mass fractions) and `enr` (element→isotope
+ *  overrides) are optional: a density-only entry still needs to shadow the
+ *  local library so the recipient's compute picks up the shipped density
+ *  (#544 nit 3). `enr` was previously discarded — it now travels into the
+ *  compute lookup so embedded enriched alloys don't silently compute with
+ *  natural abundances (#544 nit 2). */
+interface SessionEntry {
+  d: number;
+  e?: Record<string, number>;
+  enr?: Record<string, Record<number, number>>;
+}
+const __sessionCompositions = new Map<string, SessionEntry>();
 const __sharedCustomMaterials = new Map<string, SharedCustomMaterial>();
 
-/** Register a session-only composition lookup so `resolveMaterial()` finds the
- *  embedded density + per-element fractions without the user redefining the
- *  material. The lookup consults the session (embedded) map FIRST, then falls
- *  back to the local IndexedDB library — so an embedded def WINS over a
- *  same-named local material (the #539 collision rule) while local-only
- *  materials still resolve. `resolveMaterial` consults these setters before the
- *  local library (see `materials.ts`), so the session entry actually wins. */
-function registerSessionComposition(name: string, comp: { d: number; e: Record<string, number> }): void {
-  __sessionCompositions.set(name, comp);
-  setCustomDensityLookup((id) => __sessionCompositions.get(id)?.d ?? lookupByIdentifier(id)?.density ?? null);
-  setCustomCompositionLookup((id) => __sessionCompositions.get(id)?.e ?? lookupByIdentifier(id)?.massFractions ?? null);
+/** Wire the three `@hyrr/compute` lookup setters once — session (embedded) map
+ *  first, then the local IndexedDB library. Called by `registerSessionEntry`
+ *  after every mutation and by `forgetSharedCustomMaterial` after every
+ *  removal, so both directions reflect immediately. The setters are idempotent
+ *  and take the *current* map by closure, so `initCustomMaterialRegistry` (in
+ *  `custom-material-registry.ts`, called at boot) is not re-run — only the
+ *  wiring order is: local-library → shared-embed. The embedded map WINS by
+ *  being consulted first, which is the #539 collision rule. */
+function rewireLookups(): void {
+  setCustomDensityLookup(
+    (id) => __sessionCompositions.get(id)?.d ?? lookupByIdentifier(id)?.density ?? null,
+  );
+  setCustomCompositionLookup(
+    (id) => __sessionCompositions.get(id)?.e ?? lookupByIdentifier(id)?.massFractions ?? null,
+  );
+  // #544 nit 2: an embedded custom-material def's isotopic enrichment now
+  // reaches the compute path. Per-layer enrichment still wins over these
+  // material-level defaults (merge is in `resolveMaterial`).
+  setCustomEnrichmentLookup(
+    (id) => __sessionCompositions.get(id)?.enr ?? lookupByIdentifier(id)?.enrichment ?? null,
+  );
+}
+
+/** Store one session lookup entry (density + optional composition + optional
+ *  enrichment) and (re)wire the compute lookups. Density-only entries are
+ *  supported (#544 nit 3) — the recipient still needs the shipped density
+ *  even if composition can't be recovered. */
+function registerSessionEntry(name: string, entry: SessionEntry): void {
+  __sessionCompositions.set(name, entry);
+  rewireLookups();
+}
+
+/** Drop an embedded shared-material entry from the session (#544 nit 1).
+ *  Called by the custom-materials store on save/update/delete of a same-named
+ *  local material, so the shipped-file/URL shadow doesn't outlast the user's
+ *  own edit. A no-op when nothing was embedded under that name. Returns true
+ *  if an entry was actually removed. */
+export function forgetSharedCustomMaterial(name: string): boolean {
+  const hadSession = __sessionCompositions.delete(name);
+  const hadShared = __sharedCustomMaterials.delete(name);
+  if (hadSession || hadShared) {
+    rewireLookups();
+    return true;
+  }
+  return false;
+}
+
+/** Test-only: clear every embedded shared-material entry from the session.
+ *  Not exported for production callers — see `forgetSharedCustomMaterial` for
+ *  the per-name path. Kept here (not `test-support/`) so tests can reset the
+ *  module-level maps between cases without reaching into private state. */
+export function _clearSharedCustomMaterialsForTest(): void {
+  __sessionCompositions.clear();
+  __sharedCustomMaterials.clear();
+  rewireLookups();
 }
 
 /** Custom-material definition recovered from a shared config (URL or file), for
@@ -99,14 +159,23 @@ function collisionAgainstLocal(def: SharedCustomMaterial): HydrateCollision | nu
 }
 
 /** Hydrate one embedded custom-material def into the session: register a session
- *  composition lookup (so `resolveMaterial` finds it) AND record the full def
- *  for the "save to my library" offer. Recomputes `massFractions` from the
- *  formula when absent (formula-only custom, #344). Returns a collision record
- *  when the embedded def shadows a DIFFERING local same-named material, else
- *  null. This is the ONE hydrate path shared by the share-URL decoder
+ *  entry (so `resolveMaterial` finds density + composition + enrichment) AND
+ *  record the full def for the "save to my library" offer. Recomputes
+ *  `massFractions` from the formula when absent (formula-only custom, #344).
+ *  Returns a collision record when the embedded def shadows a DIFFERING local
+ *  same-named material, else null.
+ *
+ *  This is the ONE hydrate path shared by the share-URL decoder
  *  (`fromCodecLayer` → `hydrateCustom`) and the `.hyrr.json` file loader
- *  (`HeaderBar.importSession`), so the collision rule and the
- *  formula→massFractions recompute live in one place. */
+ *  (`HeaderBar.importSession`), so the collision rule, formula→massFractions
+ *  recompute, and enrichment pass-through all live in one place.
+ *
+ *  Registration policy (fixes #544 nit 2 + nit 3):
+ *   - always registers density (density-only entries shadow local so shipped
+ *     density wins even when composition can't be recovered);
+ *   - registers composition when we have it (embedded or formula-derived);
+ *   - registers enrichment when present so compute honours the shipped
+ *     isotopic overrides — no more silent natural-abundance fallback. */
 export function hydrateSharedCustomMaterial(def: SharedCustomMaterial): HydrateCollision | null {
   const collision = collisionAgainstLocal(def);
 
@@ -115,9 +184,15 @@ export function hydrateSharedCustomMaterial(def: SharedCustomMaterial): HydrateC
     const computed = formulaToMassFractions(def.formula);
     if (Object.keys(computed).length > 0) massFractions = computed;
   }
-  if (massFractions) {
-    registerSessionComposition(def.name, { d: def.density, e: massFractions });
-  }
+  // Always register: density alone is enough to shadow the local library —
+  // otherwise a density-only shipped def is silently overridden by the
+  // recipient's same-named local material (#544 nit 3). Composition and
+  // enrichment ride along when present.
+  registerSessionEntry(def.name, {
+    d: def.density,
+    e: massFractions,
+    enr: def.enrichment,
+  });
   __sharedCustomMaterials.set(def.name, {
     name: def.name,
     formula: def.formula || def.name,
@@ -165,27 +240,73 @@ export function collectCustomMaterials(config: SerializableConfig): SharedCustom
 }
 
 /** Defensive shape guard for an embedded def read from an untrusted file. Drops
- *  entries missing a name or a finite density rather than failing the load. */
+ *  the entry when any numeric field is non-finite — the alternative would flow
+ *  NaN through `resolveIsotopics` into the physics (#551 nit 1: silent wrong
+ *  physics). Dropping the whole entry is safer than dropping individual
+ *  numbers: a partially-composited alloy would still be silently wrong; a
+ *  wholly-absent one at least fails loudly at resolve time.
+ *
+ *  Formula defaults to `undefined` when absent (#551 nit 2 — the pre-#550
+ *  behaviour). Falling back to `name` would silently derive a composition when
+ *  the name happens to parse as a chemical formula (e.g. a custom named "H2O"
+ *  with no formula field). */
 export function parseSharedCustomMaterial(v: unknown): SharedCustomMaterial | null {
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
   if (typeof o.name !== "string" || !o.name) return null;
-  if (typeof o.density !== "number" || !isFinite(o.density)) return null;
-  const massFractions =
-    o.massFractions && typeof o.massFractions === "object"
-      ? (o.massFractions as Record<string, number>)
-      : undefined;
-  const enrichment =
-    o.enrichment && typeof o.enrichment === "object"
-      ? (o.enrichment as Record<string, Record<number, number>>)
-      : undefined;
+  if (typeof o.density !== "number" || !Number.isFinite(o.density)) return null;
+
+  const massFractions = validateNumericMap(o.massFractions);
+  if (massFractions === "invalid") return null;
+
+  const enrichment = validateEnrichment(o.enrichment);
+  if (enrichment === "invalid") return null;
+
   return {
     name: o.name,
-    formula: typeof o.formula === "string" ? o.formula : o.name,
+    formula: typeof o.formula === "string" && o.formula ? o.formula : undefined,
     density: o.density,
-    massFractions,
-    enrichment,
+    massFractions: massFractions ?? undefined,
+    enrichment: enrichment ?? undefined,
   };
+}
+
+/** Validate a `{key: number}` map. Returns:
+ *   - undefined when the field is absent or not an object (nothing to carry);
+ *   - the map itself when every value is finite;
+ *   - `"invalid"` when any value is non-finite (caller should drop the whole
+ *     enclosing entry — see `parseSharedCustomMaterial`). */
+function validateNumericMap(v: unknown): Record<string, number> | undefined | "invalid" {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "object") return "invalid";
+  const out: Record<string, number> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof val !== "number" || !Number.isFinite(val)) return "invalid";
+    out[k] = val;
+  }
+  return out;
+}
+
+/** Validate the nested `{element: {A: number}}` enrichment shape. Same
+ *  "invalid → drop entry" contract as `validateNumericMap`. */
+function validateEnrichment(
+  v: unknown,
+): Record<string, Record<number, number>> | undefined | "invalid" {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "object") return "invalid";
+  const out: Record<string, Record<number, number>> = {};
+  for (const [el, inner] of Object.entries(v as Record<string, unknown>)) {
+    if (!inner || typeof inner !== "object") return "invalid";
+    const bag: Record<number, number> = {};
+    for (const [aStr, frac] of Object.entries(inner as Record<string, unknown>)) {
+      const A = Number(aStr);
+      if (!Number.isInteger(A) || A <= 0) return "invalid";
+      if (typeof frac !== "number" || !Number.isFinite(frac)) return "invalid";
+      bag[A] = frac;
+    }
+    out[el] = bag;
+  }
+  return out;
 }
 
 // ─── SerializableConfig → canonical CodecConfig (encode side) ─────────────────
@@ -275,11 +396,18 @@ export function toCodecConfig(config: SerializableConfig): CodecConfig {
  *  `CodecCustomMaterial` to the transport-neutral `SharedCustomMaterial` and
  *  hands off to the one shared hydrate seam (`hydrateSharedCustomMaterial`), so
  *  the share-URL path and the `.hyrr.json` file path register the session lookup
- *  and record the "save to my library" def through identical code. */
+ *  and record the "save to my library" def through identical code.
+ *
+ *  #551 nit 2: `formula` is `undefined` when the codec didn't carry one — do
+ *  NOT fall back to `name`. Falling back to `name` would silently derive a
+ *  composition from a name that happens to parse as a chemical formula (e.g.
+ *  a custom named "H2O" without a formula field). The hydrate seam already
+ *  handles a formula-only custom via `formulaToMassFractions(def.formula)`;
+ *  when no real formula ships, nothing is composed. */
 function hydrateCustom(name: string, cm: CodecCustomMaterial): void {
   hydrateSharedCustomMaterial({
     name,
-    formula: cm.formula ?? name,
+    formula: cm.formula ?? undefined,
     density: cm.density_g_cm3,
     massFractions: cm.mass_fractions ?? undefined,
     enrichment: (cm.enrichment as SharedCustomMaterial["enrichment"]) ?? undefined,

@@ -83,9 +83,13 @@ export function downloadSessionFile(file: SessionFile): void {
   URL.revokeObjectURL(url);
 }
 
-/** Validate and coerce an arbitrary JSON value into a SessionFile. */
+/** Validate and coerce an arbitrary JSON value into a SessionFile.
+ *  On success, `warnings` is non-empty when we dropped malformed entries the
+ *  file was better off without (e.g. `customMaterials[i]` with a non-finite
+ *  composition value, #551 nit 1). The caller SHOULD surface these — silent
+ *  drops are the failure mode this whole hardening pass exists to prevent. */
 export type ParseResult =
-  | { ok: true; file: SessionFile }
+  | { ok: true; file: SessionFile; warnings: string[] }
   | { ok: false; error: string };
 
 export function parseSessionJson(raw: string): ParseResult {
@@ -118,13 +122,32 @@ export function parseSessionJson(raw: string): ParseResult {
   // v3 (#539): embedded custom-material defs. Defensively shape-check each entry
   // (like the display/result guards) and drop malformed ones rather than failing
   // the whole load — a partial embed still beats silent name-only loss.
+  //
+  // #551 nit 1: `parseSharedCustomMaterial` drops entries with non-finite
+  // composition/enrichment values (would-be silent NaN physics). Count the
+  // drops and surface them via `warnings` — the alternative (silent) is
+  // exactly the failure mode the hardening exists to prevent.
+  let embeddedRaw = 0;
+  let embeddedKept = 0;
   const customMaterials = Array.isArray(obj.customMaterials)
-    ? obj.customMaterials
+    ? (embeddedRaw = obj.customMaterials.length,
+      obj.customMaterials
         .map(parseSharedCustomMaterial)
-        .filter((m: SharedCustomMaterial | null): m is SharedCustomMaterial => m !== null)
+        .filter((m: SharedCustomMaterial | null): m is SharedCustomMaterial => m !== null))
     : undefined;
+  if (customMaterials) embeddedKept = customMaterials.length;
+  const warnings: string[] = [];
+  if (embeddedRaw > embeddedKept) {
+    const dropped = embeddedRaw - embeddedKept;
+    warnings.push(
+      `Dropped ${dropped} embedded custom-material def${dropped === 1 ? "" : "s"} with ` +
+        `missing/invalid values (name, density, mass fractions, or enrichment). ` +
+        `Referenced materials will fall back to library resolution — check the layer stack.`,
+    );
+  }
   return {
     ok: true,
+    warnings,
     file: {
       $schema: SESSION_SCHEMA_ID,
       schema_version: obj.schema_version,
@@ -139,12 +162,20 @@ export function parseSessionJson(raw: string): ParseResult {
   };
 }
 
+/** Parsed session plus any non-fatal warnings the parser wants to surface
+ *  (e.g. dropped malformed embedded custom-material entries, #551 nit 1). */
+export interface LoadedSession {
+  file: SessionFile;
+  warnings: string[];
+}
+
 /**
  * Open a file picker and load a .hyrr.json file. Resolves with the parsed
- * session or throws with the first error encountered. Browser-only — the
- * Tauri path uses `tauri-plugin-dialog` upstream.
+ * session + any non-fatal warnings, or throws with the first error
+ * encountered. Browser-only — the Tauri path uses `tauri-plugin-dialog`
+ * upstream.
  */
-export function pickSessionFile(): Promise<SessionFile> {
+export function pickSessionFile(): Promise<LoadedSession> {
   return new Promise((resolve, reject) => {
     const input = document.createElement("input");
     input.type = "file";
@@ -156,7 +187,7 @@ export function pickSessionFile(): Promise<SessionFile> {
         const text = await file.text();
         const r = parseSessionJson(text);
         if (!r.ok) return reject(new Error(r.error));
-        resolve(r.file);
+        resolve({ file: r.file, warnings: r.warnings });
       } catch (e: any) {
         reject(e);
       }
@@ -165,10 +196,10 @@ export function pickSessionFile(): Promise<SessionFile> {
   });
 }
 
-/** Read a File object (from drop-target or picker) into a SessionFile. */
-export async function readSessionFile(file: File): Promise<SessionFile> {
+/** Read a File object (from drop-target or picker) into a LoadedSession. */
+export async function readSessionFile(file: File): Promise<LoadedSession> {
   const text = await file.text();
   const r = parseSessionJson(text);
   if (!r.ok) throw new Error(r.error);
-  return r.file;
+  return { file: r.file, warnings: r.warnings };
 }
