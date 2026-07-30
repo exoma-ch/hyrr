@@ -281,6 +281,48 @@ mod np_store {
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
+    /// Resolve the on-disk XS parquet for `(projectile, target_z, symbol)`.
+    ///
+    /// Tries the symbol-named file first (`{proj}_{Symbol}.parquet` — the
+    /// historical convention that every element used to follow) and then falls
+    /// back to the Z-named file (`{proj}_Z{Z}.parquet` — how nucl-parquet
+    /// currently ships elements whose symbol was not settled at data-build
+    /// time, plus the ones with no stable natural isotopes: Tc, Pm, Po, Rn,
+    /// Ra, Ac, and the transuranics). Returns `None` when neither form exists
+    /// so the caller can surface the miss (#488).
+    ///
+    /// Extracted from `ensure_xs` as a pure function so it's testable without
+    /// a real nucl-parquet tree.
+    fn resolve_xs_path(
+        xs_dir: &Path,
+        projectile: &str,
+        target_z: u32,
+        symbol: &str,
+    ) -> Option<PathBuf> {
+        let sym_path = xs_dir.join(format!("{}_{}.parquet", projectile, symbol));
+        if sym_path.exists() {
+            return Some(sym_path);
+        }
+        let z_path = xs_dir.join(format!("{}_Z{}.parquet", projectile, target_z));
+        if z_path.exists() {
+            return Some(z_path);
+        }
+        None
+    }
+
+    /// Test hook — the parent module's unit test drives `resolve_xs_path`
+    /// against a tempdir. Kept behind `#[cfg(test)]` so it never leaks into
+    /// the public API.
+    #[cfg(test)]
+    pub(super) fn resolve_xs_path_for_test(
+        xs_dir: &Path,
+        projectile: &str,
+        target_z: u32,
+        symbol: &str,
+    ) -> Option<PathBuf> {
+        resolve_xs_path(xs_dir, projectile, target_z, symbol)
+    }
+
     /// Nuclear data store backed by the `nucl-parquet` Rust client crate.
     ///
     /// Delegates all data access to upstream typed databases (`StoppingDb`,
@@ -351,7 +393,24 @@ mod np_store {
 
         /// Ensure XS data is cached for a (projectile, element) pair.
         /// Called lazily from `get_cross_sections`.
-        fn ensure_xs(&self, projectile: &str, symbol: &str) {
+        ///
+        /// Resolves the on-disk file by trying the symbol-named form
+        /// (`{proj}_{Symbol}.parquet`, the historical convention) and then the
+        /// Z-named form (`{proj}_Z{Z}.parquet`) — the latter is how nucl-parquet
+        /// ships high-Z elements whose IUPAC symbol collides with something else
+        /// or whose symbol was not settled at data-build time (Ra, Ac, Pa, Np,
+        /// Pu, Am, Cm, Bk, Cf, Es, Fm, Md, Db, plus Tc/Pm/Po/Rn). #488.
+        ///
+        /// Because `CrossSectionDb::open` derives target_z from the filename
+        /// (`p_Cu.parquet` → 29) and would fail on `p_Z88.parquet` (no symbol
+        /// match), we always read the bytes ourselves and use
+        /// `CrossSectionDb::from_bytes(target_z, …)` — target_z is known from
+        /// the caller. This keeps both naming conventions on the same path.
+        ///
+        /// When neither variant exists in the library, emits
+        /// `trace_schema::xs_data_missing` so the previously-silent "no data →
+        /// zero isotopes" failure is at least visible in traces (#488).
+        fn ensure_xs(&self, projectile: &str, target_z: u32, symbol: &str) {
             let cache_key = format!("{}_{}", projectile, symbol);
             {
                 let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
@@ -369,15 +428,15 @@ mod np_store {
             } else {
                 self.library.as_str()
             };
-            let path = self
-                .data_root
-                .join(lib)
-                .join("xs")
-                .join(format!("{}_{}.parquet", projectile, symbol));
+            let xs_dir = self.data_root.join(lib).join("xs");
+            let resolved = resolve_xs_path(&xs_dir, projectile, target_z, symbol);
 
-            let xs_list = if path.exists() {
-                match CrossSectionDb::open(&path) {
-                    Ok(db) => {
+            let xs_list = match resolved {
+                Some(path) => match std::fs::read(&path)
+                    .ok()
+                    .and_then(|bytes| CrossSectionDb::from_bytes(target_z, &bytes).ok())
+                {
+                    Some(db) => {
                         let mut list = Vec::new();
                         for (ta, rz, ra, state) in db.reaction_keys() {
                             let pairs = db.entries_state(ta, rz, ra, state);
@@ -395,10 +454,12 @@ mod np_store {
                         }
                         list
                     }
-                    Err(_) => Vec::new(),
+                    None => Vec::new(),
+                },
+                None => {
+                    crate::trace_schema::xs_data_missing(lib, projectile, target_z, symbol);
+                    Vec::new()
                 }
-            } else {
-                Vec::new()
             };
 
             self.xs_cache
@@ -415,7 +476,7 @@ mod np_store {
             target_z: u32,
         ) -> Result<(), Box<dyn std::error::Error>> {
             let symbol = self.get_element_symbol(target_z);
-            self.ensure_xs(projectile, &symbol);
+            self.ensure_xs(projectile, target_z, &symbol);
             Ok(())
         }
     }
@@ -428,7 +489,7 @@ mod np_store {
             target_a: u32,
         ) -> Vec<CrossSectionData> {
             let symbol = self.get_element_symbol(target_z);
-            self.ensure_xs(projectile, &symbol);
+            self.ensure_xs(projectile, target_z, &symbol);
 
             let cache_key = format!("{}_{}", projectile, symbol);
             let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
@@ -690,6 +751,73 @@ mod tests {
         // Lookup with "m" should NOT match (different state)
         assert!(db.get_decay_data(21, 44, "m").is_none());
     }
+
+    /// #488: the resolver must prefer the symbol-named file, fall back to the
+    /// Z-named form, and return None when neither exists. Hermetic — no
+    /// nucl-parquet submodule required.
+    #[cfg(feature = "parquet-store")]
+    #[test]
+    fn resolve_xs_path_prefers_symbol_then_falls_back_to_z() {
+        use super::np_store::resolve_xs_path_for_test as resolve_xs_path;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let xs_dir = tmp.path();
+
+        // Nothing on disk → None (missing case, caller warns).
+        assert!(resolve_xs_path(xs_dir, "p", 88, "Ra").is_none());
+
+        // Only the Z-named form exists → fallback picks it up.
+        let z_path = xs_dir.join("p_Z88.parquet");
+        std::fs::write(&z_path, b"").expect("write z-form");
+        assert_eq!(resolve_xs_path(xs_dir, "p", 88, "Ra"), Some(z_path));
+
+        // Symbol form present → it wins over the Z form.
+        let sym_path = xs_dir.join("p_Ra.parquet");
+        std::fs::write(&sym_path, b"").expect("write sym-form");
+        assert_eq!(resolve_xs_path(xs_dir, "p", 88, "Ra"), Some(sym_path));
+    }
+
+    /// #488 regression: every element that nucl-parquet ships as a Z-named
+    /// file must round-trip through the store's symbol/Z maps, so
+    /// `get_element_symbol(z)` returns a symbol the resolver can pair against
+    /// the Z-named fallback. If any of these ever go missing from
+    /// `z_to_symbol`, the element becomes unreachable again.
+    #[cfg(feature = "parquet-store")]
+    #[test]
+    fn znamed_elements_all_round_trip_symbol_and_z() {
+        // These are the elements shipped as `{proj}_Z{Z}.parquet` in
+        // tendl-2023-iso; symbols come from the IUPAC table nucl-parquet
+        // owns (`z_to_symbol`). Update this list if nucl-parquet adds or
+        // renames a Z-only element.
+        let expected = [
+            (43, "Tc"),
+            (61, "Pm"),
+            (84, "Po"),
+            (86, "Rn"),
+            (88, "Ra"),
+            (89, "Ac"),
+            (91, "Pa"),
+            (93, "Np"),
+            (94, "Pu"),
+            (95, "Am"),
+            (96, "Cm"),
+            (97, "Bk"),
+            (98, "Cf"),
+            (99, "Es"),
+            (100, "Fm"),
+            (101, "Md"),
+            (105, "Db"),
+        ];
+        for (z, sym) in expected {
+            let actual = nucl_parquet::z_to_symbol(z);
+            assert_eq!(
+                actual,
+                Some(sym),
+                "z_to_symbol({z}) should be {sym:?} — Z-name fallback pairs \
+                 files as {{proj}}_Z{{Z}}.parquet ↔ symbol {sym}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -809,7 +937,14 @@ mod embedded_store {
             })
         }
 
-        fn ensure_xs(&self, projectile: &str, symbol: &str) {
+        /// Ensure XS data is cached for a (projectile, element) pair.
+        ///
+        /// Same symbol → Z-form fallback as `NpDataStore::ensure_xs` (#488):
+        /// try `{lib}/xs/{proj}_{Symbol}.parquet` first, then
+        /// `{lib}/xs/{proj}_Z{Z}.parquet`. Emits `xs_data_missing` when
+        /// neither entry is in the embedded tar so the previously-silent
+        /// "high-Z target → zero isotopes" failure surfaces in traces.
+        fn ensure_xs(&self, projectile: &str, target_z: u32, symbol: &str) {
             let cache_key = format!("{}_{}", projectile, symbol);
             {
                 let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
@@ -818,12 +953,17 @@ mod embedded_store {
                 }
             }
 
-            let tar_path = format!("{}/xs/{}_{}.parquet", self.library, projectile, symbol);
-            let xs_list = match self.tar_index.get(&tar_path) {
+            let sym_key = format!("{}/xs/{}_{}.parquet", self.library, projectile, symbol);
+            let z_key = format!("{}/xs/{}_Z{}.parquet", self.library, projectile, target_z);
+            let resolved = self
+                .tar_index
+                .get(&sym_key)
+                .or_else(|| self.tar_index.get(&z_key));
+
+            let xs_list = match resolved {
                 Some(&(offset, len)) => {
                     let data = extract_bytes(offset, len);
-                    let z = self.symbol_to_z.get(symbol).copied().unwrap_or(0);
-                    match CrossSectionDb::from_bytes(z, data) {
+                    match CrossSectionDb::from_bytes(target_z, data) {
                         Ok(db) => {
                             let mut list = Vec::new();
                             for (ta, rz, ra, state) in db.reaction_keys() {
@@ -845,7 +985,15 @@ mod embedded_store {
                         Err(_) => Vec::new(),
                     }
                 }
-                None => Vec::new(),
+                None => {
+                    crate::trace_schema::xs_data_missing(
+                        &self.library,
+                        projectile,
+                        target_z,
+                        symbol,
+                    );
+                    Vec::new()
+                }
             };
 
             let mut cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
@@ -874,7 +1022,7 @@ mod embedded_store {
                 Some(s) => s.clone(),
                 None => return Vec::new(),
             };
-            self.ensure_xs(projectile, &symbol);
+            self.ensure_xs(projectile, target_z, &symbol);
             let cache_key = format!("{}_{}", projectile, symbol);
             let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
             let xs = cache
