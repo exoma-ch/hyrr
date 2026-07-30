@@ -16,27 +16,16 @@ import type {
   DecayData,
   DecayMode,
 } from "./types";
+import { SYMBOL_TO_Z, Z_TO_SYMBOL } from "./formula";
+import { xsPathCandidates, logMissingXs } from "./xs-path";
 
-// Hardcoded element symbols as fallback
-const ELEMENT_SYMBOLS: Record<number, string> = {
-  1: "H", 2: "He", 3: "Li", 4: "Be", 5: "B", 6: "C", 7: "N", 8: "O",
-  9: "F", 10: "Ne", 11: "Na", 12: "Mg", 13: "Al", 14: "Si", 15: "P",
-  16: "S", 17: "Cl", 18: "Ar", 19: "K", 20: "Ca", 21: "Sc", 22: "Ti",
-  23: "V", 24: "Cr", 25: "Mn", 26: "Fe", 27: "Co", 28: "Ni", 29: "Cu",
-  30: "Zn", 31: "Ga", 32: "Ge", 33: "As", 34: "Se", 35: "Br", 36: "Kr",
-  37: "Rb", 38: "Sr", 39: "Y", 40: "Zr", 41: "Nb", 42: "Mo", 43: "Tc",
-  44: "Ru", 45: "Rh", 46: "Pd", 47: "Ag", 48: "Cd", 49: "In", 50: "Sn",
-  51: "Sb", 52: "Te", 53: "I", 54: "Xe", 55: "Cs", 56: "Ba", 57: "La",
-  58: "Ce", 59: "Pr", 60: "Nd", 61: "Pm", 62: "Sm", 63: "Eu", 64: "Gd",
-  65: "Tb", 66: "Dy", 67: "Ho", 68: "Er", 69: "Tm", 70: "Yb", 71: "Lu",
-  72: "Hf", 73: "Ta", 74: "W", 75: "Re", 76: "Os", 77: "Ir", 78: "Pt",
-  79: "Au", 80: "Hg", 81: "Tl", 82: "Pb", 83: "Bi", 84: "Po", 85: "At",
-  86: "Rn", 87: "Fr", 88: "Ra", 89: "Ac", 90: "Th", 91: "Pa", 92: "U",
-};
-
-const SYMBOL_TO_Z: Record<string, number> = Object.fromEntries(
-  Object.entries(ELEMENT_SYMBOLS).map(([z, sym]) => [sym, Number(z)]),
-);
+// Fallback element-symbol map used when the store is queried before
+// `meta/elements.parquet` has been loaded (or when that file is missing).
+// Sourced from the complete IUPAC table in `formula.ts` — Z=1..118 —
+// because the previous copy stopped at Z=92 and left `hasCrossSections`
+// blind to transuranics that nucl-parquet does ship as `{proj}_Z{Z}.parquet`
+// (Np, Pu, Am, Cm, Bk, Cf, Es, Fm, Md, Db). (#488)
+const ELEMENT_SYMBOLS = Z_TO_SYMBOL;
 
 interface ParquetRow {
   [key: string]: number | string | null;
@@ -234,7 +223,20 @@ export class DataStore implements DatabaseProtocol {
     return this.initialized;
   }
 
-  /** Ensure cross-section data is loaded for a projectile+element. */
+  /** Ensure cross-section data is loaded for a projectile+element.
+   *
+   *  Tries the symbol-named file first (`{proj}_{Symbol}.parquet`, the
+   *  historical convention every element used to follow) and falls back to
+   *  the Z-named form (`{proj}_Z{Z}.parquet`) that nucl-parquet uses for
+   *  high-Z elements — Tc, Pm, Po, Rn, Ra, Ac, Pa, and the transuranics
+   *  (Np, Pu, Am, Cm, Bk, Cf, Es, Fm, Md, Db). This is the browser mirror of
+   *  the Rust fix in PR #555 (`core/src/db.rs::resolve_xs_path`) for #488.
+   *
+   *  When neither form is on the server we cache empty and warn via
+   *  `logMissingXs` — the previous silent 404 turned "no data" into "zero
+   *  isotopes" with no operator-visible signal. Callers that just want a
+   *  coverage probe (`hasCrossSections`) still get the same negative answer
+   *  as before via the empty-array cache. */
   async ensureCrossSections(projectile: string, symbol: string): Promise<void> {
     const key = `${projectile}_${symbol}`;
     if (this.xsCache.has(key)) return;
@@ -245,13 +247,26 @@ export class DataStore implements DatabaseProtocol {
     // Mirrors the Rust NEUTRON_LIBRARY routing so the browser resolves neutron
     // cross-sections too.
     const subdir = projectile === "n" ? "neutron-xs" : "xs";
-    try {
-      const rows = await readParquetRows(`${this.baseUrl}/${subdir}/${key}.parquet`);
-      this.xsCache.set(key, rows);
-    } catch {
-      // File doesn't exist — cache empty
-      this.xsCache.set(key, []);
+    // Z lookup for the fallback URL: prefer the store's fully-populated map
+    // (elements.parquet has every element), fall back to the hardcoded
+    // Z=1..118 table for the ensure-called-before-init path.
+    const targetZ = this.symbolToZ.get(symbol) ?? SYMBOL_TO_Z[symbol] ?? 0;
+    const candidates = xsPathCandidates(subdir, projectile, targetZ, symbol);
+
+    for (const relPath of candidates) {
+      try {
+        const rows = await readParquetRows(`${this.baseUrl}/${relPath}`);
+        this.xsCache.set(key, rows);
+        return;
+      } catch {
+        // Try next candidate.
+      }
     }
+
+    // Both candidates 404'd. Cache empty so hasCrossSections returns false,
+    // and surface the miss so it isn't silent (#488).
+    this.xsCache.set(key, []);
+    logMissingXs(projectile, targetZ, symbol);
   }
 
   /** Ensure cross-sections for multiple elements. */
