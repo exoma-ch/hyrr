@@ -764,6 +764,17 @@ pub fn normalise_entry_path(path: &Path) -> Option<PathBuf> {
     if s.is_empty() || s == "." {
         return None;
     }
+    // Path-traversal guard: reject any entry with a `..` component. We build
+    // the on-disk path with `dest.join(norm)` and unpack to it directly (not
+    // via tar-rs's sanitising `unpack_in`), so a surviving `..` would escape
+    // `dest` — e.g. `data/../../etc/foo` or a root-level `../../tmp/pwn`. The
+    // fetch source is a network Release asset (or a user-supplied
+    // `--install-from` tarball), so this must be hostile-input safe. Reject
+    // loudly by dropping the entry here; the caller's file-type gate and the
+    // `starts_with(dest)` assertion at unpack are defence-in-depth. See #529.
+    if s.split('/').any(|c| c == "..") {
+        return None;
+    }
     // Already `data/…` or the `data` root dir entry itself — keep as-is.
     if s == "data" || s.starts_with("data/") {
         return Some(PathBuf::from(s));
@@ -822,8 +833,8 @@ pub fn extract_tarball_with_progress(
 
         // Fold both tarball shapes onto the canonical `data/…` on-disk
         // layout — see `normalise_entry_path`. `None` means the entry
-        // is the archive root (`./` or `/`), which has no on-disk
-        // effect and can be skipped.
+        // is the archive root (`./` or `/`), or a rejected `..`-traversal
+        // entry — either way it has no on-disk effect and is skipped.
         let Some(norm_path) = normalise_entry_path(&raw_path) else {
             continue;
         };
@@ -866,6 +877,16 @@ pub fn extract_tarball_with_progress(
         // relative to `dest`, which would defeat the normalisation
         // above for root-level tarballs.
         let full_dest = dest.join(&norm_path);
+        // Defence-in-depth: `normalise_entry_path` already drops `..` entries,
+        // but assert the resolved path stays under `dest` before we unpack to
+        // it (we bypass tar-rs's own `unpack_in` sandbox). Belt and braces on
+        // a network-sourced archive.
+        if !full_dest.starts_with(dest) {
+            return Err(FetchError::UnsafeTarballEntry {
+                kind: "path-traversal".to_string(),
+                path: raw_path,
+            });
+        }
         if let Some(parent) = full_dest.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -895,7 +916,10 @@ pub fn extract_tarball_with_progress(
     // Empty archive + empty `prefixes` (an unusual but legal input) is
     // NOT an error — a caller that explicitly asks to extract nothing
     // from a well-formed empty archive should get an empty dest. The
-    // guard triggers only when we saw entries and wrote nothing.
+    // guard triggers only when we saw entries and wrote no *files*. A
+    // directories-only survivor set (no parquet payload) is exactly the
+    // poisoning shape #529 guards against, so counting files — not
+    // entries — is deliberate: our data contract always ships files.
     if entries_seen > 0 && files_written == 0 {
         return Err(FetchError::Extract(format!(
             "extracted 0 files from an archive with {entries_seen} entries — \
@@ -1898,6 +1922,13 @@ mod tests {
             // Absolute-looking path — leading `/` stripped, then treated
             // as root-level.
             ("/meta/foo", Some("data/meta/foo")),
+            // Path-traversal entries — rejected outright (#529 review).
+            // A `..` in any component escapes `dest` under `dest.join`.
+            ("../../tmp/pwn", None),
+            ("data/../../etc/passwd", None),
+            ("meta/../../../root/.ssh/authorized_keys", None),
+            ("./../evil", None),
+            ("..", None),
         ];
         for (input, expected) in cases {
             let got = normalise_entry_path(Path::new(input));
