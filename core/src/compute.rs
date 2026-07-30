@@ -4,7 +4,9 @@ use std::collections::HashMap;
 
 use crate::bateman::bateman_activity;
 use crate::chains::{discover_chains, solve_chain, split_components};
-use crate::constants::{ACTIVITY_CUTOFF_FRACTION, AVOGADRO, LN2, MAX_CHAIN_SIZE};
+use crate::constants::{
+    ACTIVITY_CUTOFF_FRACTION, AVOGADRO, LN2, MAX_CHAIN_SIZE, MIN_TRACKED_ENERGY_MEV,
+};
 use crate::db::DatabaseProtocol;
 use crate::interpolation::{linspace, trapezoid};
 use crate::neutron::{neutron_channel_rate, FluxModel};
@@ -134,7 +136,10 @@ fn compute_layer(
     // querying dE/dx at 0 MeV (which trips EnergyOutOfRange under the table_min
     // floor). Mirrors the depth-preview behavior so the user sees the stack as
     // configured, with the deposited-here layers cleanly empty. See #211.
-    if energy_in <= 0.0 {
+    // Sub-tracked-floor energies (e.g. a hair above zero from the previous
+    // layer's Euler residual) are folded into the same branch — otherwise the
+    // dE/dx precheck below would abort with EnergyOutOfRange (#527).
+    if energy_in <= MIN_TRACKED_ENERGY_MEV {
         layer.computed_energy_in = 0.0;
         layer.computed_energy_out = 0.0;
         layer.computed_thickness = layer.thickness_cm.unwrap_or(0.0);
@@ -201,7 +206,7 @@ fn compute_layer(
 
     let sp_sources = get_stopping_sources(db, projectile, &composition)?;
 
-    let layer_e_low_for_validate = energy_out.max(0.01);
+    let layer_e_low_for_validate = energy_out.max(MIN_TRACKED_ENERGY_MEV);
     dedx_mev_per_cm(
         db,
         projectile,
@@ -229,7 +234,7 @@ fn compute_layer(
     // produces uneven depth steps (sparse near beam entry, tight at Bragg peak); 300
     // pts keeps the visible stair-step well below pixel-scale at typical plot widths.
     // Proper fix tracked separately — uniform-in-depth grid via dE/dx back-solve.
-    let layer_e_low = energy_out.max(0.01);
+    let layer_e_low = energy_out.max(MIN_TRACKED_ENERGY_MEV);
     let layer_energies = linspace(layer_e_low, energy_in, 300);
     let layer_dedx = dedx_fn(&layer_energies);
 
@@ -759,8 +764,9 @@ fn compute_layer_stopping_only(
     energy_in: f64,
     area: f64,
 ) -> Result<LayerResult, StoppingError> {
-    // Beam already stopped upstream — see [`compute_layer`] for rationale (#211).
-    if energy_in <= 0.0 {
+    // Beam already stopped upstream — see [`compute_layer`] for rationale
+    // (#211 / sub-tracked-floor handling for #527).
+    if energy_in <= MIN_TRACKED_ENERGY_MEV {
         layer.computed_energy_in = 0.0;
         layer.computed_energy_out = 0.0;
         layer.computed_thickness = layer.thickness_cm.unwrap_or(0.0);
@@ -826,7 +832,7 @@ fn compute_layer_stopping_only(
 
     let sp_sources = get_stopping_sources(db, projectile, &composition)?;
 
-    let layer_e_low = energy_out.max(0.01);
+    let layer_e_low = energy_out.max(MIN_TRACKED_ENERGY_MEV);
     let layer_energies = linspace(layer_e_low, energy_in, 300);
     let layer_dedx = dedx_mev_per_cm(db, projectile, &composition, density, &layer_energies, nist)?;
 
