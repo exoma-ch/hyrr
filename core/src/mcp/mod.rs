@@ -6,5 +6,7 @@
 
 pub mod cache;
 pub mod dataset;
+pub mod dose;
+pub mod nuclide;
 pub mod tools;
 pub mod transport;
