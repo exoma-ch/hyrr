@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::io::{self, BufRead, Write};
 
 use super::tools;
+use crate::db::DatabaseProtocol;
 use crate::materials::MaterialRegistry;
 
 /// JSON-RPC 2.0 request.
@@ -244,6 +245,11 @@ fn handle_request(
                 .get("protocolVersion")
                 .and_then(|v| v.as_str());
             let version = negotiate_protocol_version(requested);
+            // MCP `instructions` (#528) — self-descriptive scope so a fresh
+            // client can tell what HYRR does and, more importantly, what it
+            // does NOT model (primary-only under a beam-stop = 0 for the
+            // downstream layers, silently). The library id is injected so
+            // the string matches the actually-loaded dataset.
             let result = serde_json::json!({
                 "protocolVersion": version,
                 "capabilities": {
@@ -252,7 +258,8 @@ fn handle_request(
                 "serverInfo": {
                     "name": SERVER_NAME,
                     "version": SERVER_VERSION
-                }
+                },
+                "instructions": tools::server_instructions(db.library()),
             });
             JsonRpcResponse::success(id, result)
         }

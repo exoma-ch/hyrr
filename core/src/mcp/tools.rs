@@ -12,6 +12,78 @@ use std::sync::Arc;
 
 use super::cache;
 use super::dataset::{self, Table};
+use super::dose::compute_stack_dose;
+use super::nuclide;
+
+/// Scope suffix appended to every production-tool description (#528).
+///
+/// Names the projectiles, the (p,x)-only default library scope, and the two
+/// escape hatches (`projectile: "n"` for a neutron source; `secondary_neutron:
+/// true` on a charged run for Phase-2 activation). Kept intentionally terse —
+/// the full paragraph lives in the server `instructions`; this is the tag that
+/// travels with each tool description so a client scanning `tools/list` can
+/// see the caveat at the tool level too.
+const SCOPE_SUFFIX: &str = "\n\nSCOPE: primary charged-particle (p,x) production for \
+projectiles p/d/t/h/a; residual-nuclei only, no prompt reaction products. \
+Downstream layers behind a fully-stopped beam report 0 activation unless \
+`secondary_neutron: true` is set (Phase-2 (x,n) → activation). A pure neutron \
+source is available via `projectile: \"n\"` + `neutron_flux`, but only if the \
+active library ships a neutron sublibrary — the default `tendl-2023-iso` does \
+not. Units: activity [Bq], half-life [s], energy [MeV], cross-section [mb], \
+dose constant k [µSv·m²·MBq⁻¹·h⁻¹].";
+
+/// Server-level `instructions` (#528) — the paragraph the MCP `initialize`
+/// result hands to a fresh client so it can self-discover HYRR's scope and
+/// limits without reading the source.
+///
+/// Includes the actual loaded library id so a client can distinguish
+/// `tendl-2023-iso` (charged-particle only, isomeric split) from
+/// `tendl-2025` (charged-particle only, no isomeric split) from any future
+/// library shipping neutron cross-sections. Load-bearing: the "downstream
+/// layers behind a beam stop = 0 activation" caveat prevents an agent from
+/// silently reporting a water-coolant layer behind a target as safe.
+pub fn server_instructions(library: &str) -> String {
+    format!(
+        "HYRR — Hierarchical Yield and Radionuclide Rates. \
+Simulates radio-isotope production in stacked target assemblies from a \
+charged-particle beam. Rust physics core (∫σ/dEdx integration, Bateman \
+chains, PSTAR/ASTAR stopping) with per-decay ENSDF emission data and dose \
+constants.\n\n\
+Active nuclear data library: `{library}`. Supported projectiles: p (proton), \
+d (deuteron), t (tritium), h (³He / helion), a (alpha). Cross-sections are \
+looked up in the active library's projectile sublibrary — check \
+`list_reaction_channels` before assuming a channel is data-backed.\n\n\
+SCOPE — what HYRR models:\n\
+  - Primary charged-particle reactions: (p,x), (d,x), (t,x), (h,x), (a,x). \
+    Residual-nuclei production only.\n\
+  - Bateman decay chains through daughters/grand-daughters.\n\
+  - Per-layer heat deposition and depth profiles (energy budget, stopping).\n\
+  - Per-decay γ / X-ray / Auger / conversion-electron / β± / annihilation \
+    emission lines (from ENSDF).\n\
+  - Gamma dose rate at a point: k · A / r² using ENSDF-derived specific \
+    gamma constants k [µSv·m²·MBq⁻¹·h⁻¹] via `get_dose_rate` / \
+    `get_dose_constant`.\n\n\
+SCOPE — what HYRR does NOT model by default:\n\
+  - Secondary-neutron activation. Downstream layers behind a fully-stopped \
+    beam (e.g. a water coolant layer behind a target/beamstop) report ~0 \
+    primary activation and this is often WRONG because they still see the \
+    secondary-neutron field. Opt in with `secondary_neutron: true` on a \
+    charged run for Phase-2 (x,n)-driven activation, or run a pure neutron \
+    source via `projectile: \"n\"` + `neutron_flux`. If neither is set, treat \
+    the downstream-layer number as a floor, not a total.\n\
+  - Neutron cross-sections in `tendl-2023-iso` (charged-particle only \
+    sublibrary). `projectile: \"n\"` requires a library with a neutron \
+    sublibrary.\n\
+  - Photon shielding / attenuation: `get_dose_rate` is bare-source dose (no \
+    shielding_layers arg).\n\
+  - Prompt γ / n emission at the reaction vertex (only residual-nuclei \
+    decay emission).\n\n\
+Discovery tools: `list_materials`, `list_reaction_channels`, \
+`list_producing_layers`, `get_nuclide_data` (raw per-nuclide data lookup — \
+half-life / decay modes / γ-lines / dose constant / natural abundance).\n\n\
+Every tool response is suffixed with the active library id."
+    )
+}
 
 /// An embedded binary resource attached to a tool result. `blob_base64` holds
 /// standard-base64-encoded bytes (#427 uses this for Parquet tables).
@@ -180,7 +252,7 @@ pub fn list_tools() -> Vec<Value> {
     vec![
         serde_json::json!({
             "name": "simulate",
-            "description": "Run a HYRR isotope production simulation for a target stack. Returns production rates, activities, and yields for all produced isotopes.",
+            "description": format!("Run a HYRR isotope production simulation for a target stack. Returns production rates, activities, and yields for all produced isotopes.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -300,7 +372,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "list_reaction_channels",
-            "description": "List all production channels (residual nuclei) for a given projectile on a target isotope, with peak cross-section and energy range per channel. Returns a summary — for full σ(E) curves, use nucl-parquet-mcp's get_cross_sections.",
+            "description": format!("List all production channels (residual nuclei) for a given projectile on a target isotope, with peak cross-section and energy range per channel. Returns a summary — for full σ(E) curves, use nucl-parquet-mcp's get_cross_sections.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -322,7 +394,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_stack_energy_budget",
-            "description": "Per-layer energy degradation and heat deposition for a target stack. No activation/isotope math — use this to answer 'will this stack stop the beam?' or 'how much heat in layer N?' without running a full simulation.",
+            "description": format!("Per-layer energy degradation and heat deposition for a target stack. No activation/isotope math — use this to answer 'will this stack stop the beam?' or 'how much heat in layer N?' without running a full simulation.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -352,7 +424,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_isotope_production_curve",
-            "description": "Activity or depth profile for one named isotope from a simulation. `vs=time` returns buildup+cooling activity [Bq] vs time grid. `vs=cooling` returns the cooling tail only. `vs=depth` returns depth [cm] + local production rate [atoms/s/cm]. When several layers produce the isotope, pass `layer_index` (1-based, matching `simulate` output) to choose which one; if omitted, the first producing layer in beam order is used and a warning naming the other producing layers is prepended. Use `list_producing_layers` to discover every layer that makes the isotope.",
+            "description": format!("Activity or depth profile for one named isotope from a simulation. `vs=time` returns buildup+cooling activity [Bq] vs time grid. `vs=cooling` returns the cooling tail only. `vs=depth` returns depth [cm] + local production rate [atoms/s/cm]. When several layers produce the isotope, pass `layer_index` (1-based, matching `simulate` output) to choose which one; if omitted, the first producing layer in beam order is used and a warning naming the other producing layers is prepended. Use `list_producing_layers` to discover every layer that makes the isotope.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -374,7 +446,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "list_producing_layers",
-            "description": "List every layer in a stack that produces a named isotope, with each layer's energy window and end-of-bombardment activity [Bq]. Cheap discovery tool — lets you find which layer to pass as `layer_index` to `get_isotope_production_curve` without parsing a full `simulate` output. Takes the same stack arguments as `simulate`.",
+            "description": format!("List every layer in a stack that produces a named isotope, with each layer's energy window and end-of-bombardment activity [Bq]. Cheap discovery tool — lets you find which layer to pass as `layer_index` to `get_isotope_production_curve` without parsing a full `simulate` output. Takes the same stack arguments as `simulate`.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -394,7 +466,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "compare_simulations",
-            "description": "Run two simulations and compare first-layer isotope activities side-by-side. Useful for comparing beam energies, targets, or irradiation times.",
+            "description": format!("Run two simulations and compare first-layer isotope activities side-by-side. Useful for comparing beam energies, targets, or irradiation times.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -412,7 +484,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_decay_data",
-            "description": "Get decay data for a specific nuclide (half-life, decay modes, daughters).",
+            "description": "Get decay data for a specific nuclide (half-life, decay modes, daughters). Complementary to `get_nuclide_data`, which also returns dose constant + per-decay emission lines + natural abundance in one call.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -435,7 +507,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_simulation_dataset",
-            "description": "Full structured export of a simulation as long-format tables — both inline JSON (for direct reasoning) and attached Parquet resources (for polars/pandas). Always returns the inventory table (one row per isotope × layer × source, with production rate, saturation yield, end-of-bombardment + end-of-cooling activity, half-life, and β+/EC/β−/IT branching). Set `cooling`, `depth`, and/or `emissions` to also include the cooling-tail (activity vs time), depth-profile (production rate vs depth), and per-decay emission-line tables. Cheap: backed by a config-hashed cache, so repeat queries on the same config don't recompute.",
+            "description": format!("Full structured export of a simulation as long-format tables — both inline JSON (for direct reasoning) and attached Parquet resources (for polars/pandas). Always returns the inventory table (one row per isotope × layer × source, with production rate, saturation yield, end-of-bombardment + end-of-cooling activity, half-life, and β+/EC/β−/IT branching). Set `cooling`, `depth`, and/or `emissions` to also include the cooling-tail (activity vs time), depth-profile (production rate vs depth), and per-decay emission-line tables. Cheap: backed by a config-hashed cache, so repeat queries on the same config don't recompute.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -454,7 +526,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_isotope_inventory",
-            "description": "Cheap 'what's in the can' query: just the inventory table (one row per isotope × layer × source — production rate, saturation yield, EOB + cooling activity, half-life, branching). No time series, no depth. Inline JSON plus a Parquet resource. Same stack arguments as `simulate`.",
+            "description": format!("Cheap 'what's in the can' query: just the inventory table (one row per isotope × layer × source — production rate, saturation yield, EOB + cooling activity, half-life, branching). No time series, no depth. Inline JSON plus a Parquet resource. Same stack arguments as `simulate`.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -470,7 +542,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_emission_curve",
-            "description": "Per-isotope / per-line photon (or particle) emission-rate time series: rate_per_s(t) = total stack activity × intensity_per_decay, summed across layers. Long-format {t_s, isotope, energy_kev, emission_type, rate_per_s}, inline JSON + Parquet resource. The load-bearing surface for 511 keV purity windows, HPGe spectrum prediction, and dose-rate envelopes. Optional filters narrow the output: `isotope`, `emission_type` (gamma/xray/auger/ce/beta-/beta+/annihilation), `energy_kev` (± `energy_tolerance_kev`).",
+            "description": format!("Per-isotope / per-line photon (or particle) emission-rate time series: rate_per_s(t) = total stack activity × intensity_per_decay, summed across layers. Long-format {{t_s, isotope, energy_kev, emission_type, rate_per_s}}, inline JSON + Parquet resource. The load-bearing surface for 511 keV purity windows, HPGe spectrum prediction, and dose-rate envelopes. Optional filters narrow the output: `isotope`, `emission_type` (gamma/xray/auger/ce/beta-/beta+/annihilation), `energy_kev` (± `energy_tolerance_kev`).{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -485,6 +557,58 @@ pub fn list_tools() -> Vec<Value> {
                     "energy_kev": { "type": "number", "description": "Restrict to lines within ± energy_tolerance_kev of this energy (e.g. 511)." },
                     "energy_tolerance_kev": { "type": "number", "description": "Tolerance for energy_kev matching [keV]. Default 1.0." },
                     "vs": { "type": "string", "enum": ["time", "cooling"], "description": "'time' = full irradiation + cooling timeline; 'cooling' = cooling tail only. Default 'time'." }
+                },
+                "required": ["projectile", "energy_mev", "current_ma", "layers"]
+            }
+        }),
+        // ─── #459 — raw per-nuclide escape hatch ────────────────────────────
+        serde_json::json!({
+            "name": "get_nuclide_data",
+            "description": "Raw uncurated per-nuclide data lookup — half-life, decay modes, dose constant (µSv·m²·MBq⁻¹·h⁻¹ at 1 m), per-decay emission lines (γ/x-ray/Auger/CE/β±/annihilation with absolute intensity_per_decay), and natural abundance if any. Assembled from what hyrr-core already exposes (DecayDb, DoseDb, ENSDF emissions, natural abundances); no new physics. Read-only, one nuclide per call. Use this when no curated task tool covers the datum you need (e.g. 'what's the half-life / γ-lines / k of ⁶⁸Ga?'). Empty fields are returned as [] / null (never omitted) so the shape is stable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "z": { "type": "integer", "description": "Atomic number" },
+                    "a": { "type": "integer", "description": "Mass number" },
+                    "state": {
+                        "type": "string",
+                        "description": "Nuclear state ('' for ground, 'm' / 'm1' / 'm2' for metastable). Defaults to ground state.",
+                        "default": ""
+                    }
+                },
+                "required": ["z", "a"]
+            }
+        }),
+        // ─── #440 / #441 — dose (specific gamma constant + point-source rate) ──
+        serde_json::json!({
+            "name": "get_dose_constant",
+            "description": "Specific gamma dose-rate constant k [µSv·m²·MBq⁻¹·h⁻¹] for one nuclide, as loaded from the active library's meta/dose_constants.parquet (ENSDF-derived, validated against RADAR reference values). Returns k + source-quality tag ('ensdf' | 'it-approx' | 'zero'). k is the dose rate at 1 m per MBq of point-source activity — scale by activity / distance² for a specific case (see `get_dose_rate`). Accepts EITHER `isotope: 'F-18'` OR (`z`, `a`, `state?`).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "isotope": {
+                        "type": "string",
+                        "description": "Isotope name like 'F-18' or 'Sc-44m'. Alternative to (z, a, state)."
+                    },
+                    "z": { "type": "integer", "description": "Atomic number (used with `a`; ignored if `isotope` is set)." },
+                    "a": { "type": "integer", "description": "Mass number (used with `z`; ignored if `isotope` is set)." },
+                    "state": { "type": "string", "description": "Nuclear state, e.g. 'm' for metastable. Defaults to ground state.", "default": "" }
+                }
+            }
+        }),
+        serde_json::json!({
+            "name": "get_dose_rate",
+            "description": format!("Gamma dose rate [µSv/h] at `distance_cm` from a point-source stack (bare, no shielding). Runs the simulation (via the config-hashed cache — cheap on repeat), sums k_i · (A_i / 1e6) / r² across every produced isotope in every layer at the end-of-cooling time. Reports the total, a per-isotope breakdown (activity, k, dose contribution, fraction), and — critically — any produced isotope with non-negligible activity but NO dose constant in the library (surfaced in `missing_dose_constant`, dose set to 0, never silently omitted). Same stack arguments as `simulate`, plus `distance_cm` (default 100.0 = 1 m). No photon shielding.{SCOPE_SUFFIX}"),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
+                    "energy_mev": { "type": "number" },
+                    "current_ma": { "type": "number" },
+                    "layers": { "type": "array", "items": layer_schema(false) },
+                    "irradiation_time_s": { "type": "number" },
+                    "cooling_time_s": { "type": "number", "description": "Cooling time in seconds — dose is computed at the end of this window (default 86400). Pass 0 for end-of-bombardment dose." },
+                    "distance_cm": { "type": "number", "description": "Point-source distance in cm (default 100 = 1 m). Refuses distances below ~1 cm as the near-field approximation is invalid there." }
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
@@ -523,6 +647,9 @@ pub fn call_tool(
         "get_simulation_dataset" => tool_get_simulation_dataset(db, &*materials, arguments)?,
         "get_isotope_inventory" => tool_get_isotope_inventory(db, &*materials, arguments)?,
         "get_emission_curve" => tool_get_emission_curve(db, &*materials, arguments)?,
+        "get_nuclide_data" => tool_get_nuclide_data(db, arguments)?.into(),
+        "get_dose_constant" => tool_get_dose_constant(db, arguments)?.into(),
+        "get_dose_rate" => tool_get_dose_rate(db, &*materials, arguments)?.into(),
         _ => return Err(format!("Unknown tool: {}", name)),
     };
     response.text = format!("{}\n\n---\n*Library: {}*\n", response.text, db.library());
@@ -1838,7 +1965,199 @@ fn tool_get_emission_curve(
     Ok(ToolResponse { text, resources })
 }
 
-fn format_halflife(seconds: f64) -> String {
+// ─── #459: get_nuclide_data ────────────────────────────────────────────────
+
+/// Uncurated per-nuclide data lookup. Accepts `{z, a, state?}`; returns the
+/// assembled record from [`nuclide::nuclide_data`] as a pretty-printed JSON
+/// text block. See the module doc for the shape.
+fn tool_get_nuclide_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+    let z = args
+        .get("z")
+        .and_then(|v| v.as_u64())
+        .ok_or("Missing 'z' (atomic number)")? as u32;
+    let a = args
+        .get("a")
+        .and_then(|v| v.as_u64())
+        .ok_or("Missing 'a' (mass number)")? as u32;
+    let state = args.get("state").and_then(|v| v.as_str()).unwrap_or("");
+
+    let data = nuclide::nuclide_data(db, z, a, state);
+    let iso = data
+        .get("isotope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(unknown)")
+        .to_string();
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    Ok(format!(
+        "# Nuclide data: {iso}\n\nAssembled from decay data, dose constants, ENSDF emissions, and natural abundances \
+already loaded in the active library. Optional fields (`half_life_s`, `dose_constant`, \
+`natural_abundance`) are `null` when the library has no entry; arrays are `[]`, never omitted.\n\n\
+```json\n{json}\n```\n"
+    ))
+}
+
+// ─── #440 / #441: dose tools ───────────────────────────────────────────────
+
+/// Parse `{isotope: "F-18"}` — case-insensitive symbol lookup via
+/// [`DatabaseProtocol::get_element_z`] — or fall back to `{z, a, state?}`.
+/// Returns `(z, a, state, canonical_name)`. `state` is anything after the
+/// mass number (e.g. `"Sc-44m"` → `state = "m"`).
+fn parse_nuclide_arg(
+    db: &dyn DatabaseProtocol,
+    args: &Value,
+) -> Result<(u32, u32, String, String), String> {
+    if let Some(iso) = args.get("isotope").and_then(|v| v.as_str()) {
+        // "F-18" | "Sc-44" | "Sc-44m" — split at the '-', mass number is the
+        // leading digit run, everything after is the isomer state tag.
+        let (sym, tail) = iso
+            .split_once('-')
+            .ok_or_else(|| format!("Isotope '{iso}' must be like 'F-18' or 'Sc-44m'"))?;
+        let mass_digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let state: String = tail.chars().skip(mass_digits.len()).collect();
+        let a: u32 = mass_digits
+            .parse()
+            .map_err(|_| format!("Isotope '{iso}' — could not parse mass number"))?;
+        let z = db.get_element_z(sym);
+        if z == 0 {
+            return Err(format!("Isotope '{iso}' — unknown element symbol '{sym}'"));
+        }
+        let canonical = format!("{sym}-{a}{state}");
+        return Ok((z, a, state, canonical));
+    }
+    let z = args
+        .get("z")
+        .and_then(|v| v.as_u64())
+        .ok_or("Missing 'isotope' or 'z'")? as u32;
+    let a = args
+        .get("a")
+        .and_then(|v| v.as_u64())
+        .ok_or("Missing 'isotope' or 'a'")? as u32;
+    let state = args
+        .get("state")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let sym = db.get_element_symbol(z);
+    let canonical = format!("{sym}-{a}{state}");
+    Ok((z, a, state, canonical))
+}
+
+/// `k` (specific gamma dose constant) for one nuclide, as loaded from the
+/// active library's `meta/dose_constants.parquet`.
+fn tool_get_dose_constant(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+    let (z, a, state, iso) = parse_nuclide_arg(db, args)?;
+
+    match db.get_dose_constant(z, a, &state) {
+        Some((k, source)) => {
+            let payload = serde_json::json!({
+                "isotope": iso,
+                "z": z, "a": a, "state": state,
+                "k_usv_m2_per_mbq_h": k,
+                "source": source,
+            });
+            let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+            Ok(format!(
+                "# Dose constant: {iso}\n\n\
+k = {k:.6} µSv·m²·MBq⁻¹·h⁻¹ (dose rate at 1 m per MBq of point-source activity) \
+— source: `{source}`.\n\n\
+Scale by activity/1e6 · k / r² for arbitrary distance; use `get_dose_rate` for a full stack.\n\n\
+```json\n{json}\n```\n"
+            ))
+        }
+        None => Ok(format!(
+            "# Dose constant: {iso}\n\n\
+No dose constant loaded for {iso} in the active library. This is expected for \
+stable nuclides and for nuclides that ENSDF's dose-constant table doesn't \
+cover (some very short-lived states, some obscure isomers). `get_nuclide_data` \
+will report the same — the underlying `DoseDb::dose_constant` returned None.\n"
+        )),
+    }
+}
+
+/// Bare-source dose rate [µSv/h] from every produced isotope in a simulated
+/// stack, at `distance_cm`. Delegates the sum to [`compute_stack_dose`] so
+/// the per-isotope breakdown table and the total agree by construction.
+fn tool_get_dose_rate(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<String, String> {
+    let distance_cm = args
+        .get("distance_cm")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(100.0);
+    if distance_cm <= 0.0 {
+        return Err("'distance_cm' must be positive".to_string());
+    }
+
+    let result = cached_sim(db, registry, args)?;
+    let dose = compute_stack_dose(db, &result, distance_cm, 0.0);
+    let (projectile_str, energy_mev, current_ma) = beam_args(args);
+
+    let mut output = String::new();
+    output.push_str(&format!(
+        "# Dose rate at {:.2} cm from the stack\n\n",
+        distance_cm
+    ));
+    output.push_str(&format!(
+        "**Beam:** {} at {:.2} MeV, {:.3} mA | **Irradiation:** {:.0}s | **End-of-cooling:** {:.0}s\n\n",
+        projectile_str, energy_mev, current_ma,
+        result.irradiation_time_s, result.cooling_time_s
+    ));
+    output.push_str(&format!(
+        "**Total dose rate:** {:.3e} µSv/h  \n\
+**Total activity (stack):** {:.3e} Bq  \n\
+**Distance:** {:.2} cm (bare source, inverse-square, no shielding)\n\n",
+        dose.total_dose_rate_usv_h, dose.total_activity_bq, distance_cm
+    ));
+
+    if !dose.missing_k.is_empty() {
+        output.push_str(&format!(
+            "> ⚠️ {} produced isotope(s) had no dose constant in the active library \
+and contribute **0** to the total: {}. The reported total is a LOWER BOUND.\n\n",
+            dose.missing_k.len(),
+            dose.missing_k.join(", ")
+        ));
+    }
+
+    if dose.contributions.is_empty() {
+        output.push_str("No isotopes produced.\n");
+        return Ok(output);
+    }
+
+    // Per-isotope table, sorted (StackDose already sorts by dose descending).
+    output.push_str(
+        "| Isotope | Activity [Bq] | k [µSv·m²·MBq⁻¹·h⁻¹] | Dose [µSv/h] | Fraction | k source |\n",
+    );
+    output.push_str("|---------|---------------|-----------------------|--------------|----------|----------|\n");
+    let total = dose.total_dose_rate_usv_h;
+    for c in dose.contributions.iter().take(50) {
+        let k_str = c
+            .k_usv_m2_per_mbq_h
+            .map(|k| format!("{:.4}", k))
+            .unwrap_or_else(|| "— (missing)".to_string());
+        let frac = if total > 0.0 {
+            format!("{:.1}%", 100.0 * c.dose_rate_usv_h / total)
+        } else {
+            "—".to_string()
+        };
+        let src = c.source.as_deref().unwrap_or("—");
+        output.push_str(&format!(
+            "| {} | {:.3e} | {} | {:.3e} | {} | {} |\n",
+            c.isotope, c.activity_bq, k_str, c.dose_rate_usv_h, frac, src
+        ));
+    }
+    if dose.contributions.len() > 50 {
+        output.push_str(&format!(
+            "\n_({} additional isotopes with smaller contributions omitted from the table.)_\n",
+            dose.contributions.len() - 50
+        ));
+    }
+
+    Ok(output)
+}
+
+pub(crate) fn format_halflife(seconds: f64) -> String {
     if seconds < 60.0 {
         format!("{:.2} s", seconds)
     } else if seconds < 3600.0 {
