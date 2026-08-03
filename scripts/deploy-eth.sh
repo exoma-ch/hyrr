@@ -116,17 +116,38 @@ SOPS_ENV_FILE="secrets/eth-deploy.sops.env"
 check_whitelist_fresh() {
   [ -f "$SOPS_ENV_FILE" ] || return 0
   command -v sops >/dev/null 2>&1 || return 0
+  local decrypted
+  decrypted=$(sops -d "$SOPS_ENV_FILE" 2>/dev/null) || return 0
+  [ -n "$decrypted" ] || return 0   # no age key / cannot decrypt → nothing to check
+
+  # Decryption worked but the key we compare against is gone. That is a config
+  # error, not "no key available" — a guard whose whole purpose is to kill
+  # silent failure must not skip silently itself, so say so out loud.
+  local b64
+  b64=$(printf '%s\n' "$decrypted" | grep '^WHITELIST_B64=' | cut -d= -f2-) || b64=""
+  if [ -z "$b64" ]; then
+    echo "WARNING: $SOPS_ENV_FILE decrypted but has no WHITELIST_B64 entry —" >&2
+    echo "         cannot verify '$WHITELIST_FILE' is current; deploying unverified." >&2
+    return 0
+  fi
+
   local expected
-  expected=$(sops -d "$SOPS_ENV_FILE" 2>/dev/null \
-    | grep '^WHITELIST_B64=' | cut -d= -f2- | base64 -d 2>/dev/null) || return 0
-  [ -n "$expected" ] || return 0   # no age key / cannot decrypt → nothing to check
+  expected=$(printf '%s' "$b64" | base64 -d 2>/dev/null) || return 0
+  [ -n "$expected" ] || return 0
 
   # Compare the entry SET (sorted, comments and blanks stripped), not raw bytes:
   # ordering and comment edits are not access changes, and a byte compare would
-  # fail on a trailing newline an editor added.
+  # fail on a trailing newline an editor added. Case-folded because eppn/mail
+  # are case-insensitive at the Shibboleth layer, so a case-only edit is not an
+  # access change and must not be reported as drift.
+  # `|| x=""` on both: under `set -euo pipefail` a grep that matches nothing
+  # (an all-comments whitelist) would otherwise abort the script with a bare
+  # exit 1, pre-empting the friendlier "whitelist is empty" error below.
   local want have
-  want=$(printf '%s\n' "$expected"   | grep -vE '^[[:space:]]*#|^[[:space:]]*$' | sort -u)
-  have=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$WHITELIST_FILE" 2>/dev/null | sort -u)
+  want=$(printf '%s\n' "$expected" | grep -vE '^[[:space:]]*#|^[[:space:]]*$' \
+    | tr '[:upper:]' '[:lower:]' | sort -u) || want=""
+  have=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$WHITELIST_FILE" 2>/dev/null \
+    | tr '[:upper:]' '[:lower:]' | sort -u) || have=""
   [ "$want" = "$have" ] && return 0
 
   # Never print the entries themselves — they are personal data (eppn/mail).
@@ -138,8 +159,9 @@ check_whitelist_fresh() {
   echo "         sops -d $SOPS_ENV_FILE | grep '^WHITELIST_B64=' \\" >&2
   echo "           | cut -d= -f2- | base64 -d > $WHITELIST_FILE" >&2
   echo "" >&2
-  echo "       (To CHANGE access, edit the SSoT — 'sops set $SOPS_ENV_FILE" >&2
-  echo "        '\"'\"'[\"WHITELIST_B64\"]'\"'\"' \"\$(base64 -w0 < list.txt)\"' — then regenerate.)" >&2
+  echo "       To CHANGE access, edit the encrypted SSoT (not this file) with" >&2
+  echo "       'sops $SOPS_ENV_FILE' — it decrypts WHITELIST_B64 in your editor —" >&2
+  echo "       then regenerate the local copy with the command above." >&2
   exit 6
 }
 
