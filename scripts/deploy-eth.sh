@@ -101,6 +101,69 @@ REOF
 # a redeploy can't silently un-gate the site. Whitelist is gitignored (public
 # repo); each entry is matched against BOTH principalName and mail (OR'd).
 WHITELIST_FILE="${HYRR_ETH_WHITELIST:-infra/eth-webhosting/whitelist.txt}"
+SOPS_ENV_FILE="secrets/eth-deploy.sops.env"
+
+# The whitelist file is gitignored, so the SSoT is WHITELIST_B64 inside
+# secrets/eth-deploy.sops.env. A local plaintext copy therefore goes stale the
+# moment someone grants access via `sops set` — and a stale copy deploys
+# SILENTLY: the run is green, the gate looks deployed, and an approved user is
+# simply missing (or a revoked one still has access). Compare the two before
+# writing the gate and refuse on drift.
+#
+# Skips cleanly when the SSoT is unreadable — CI materialises the whitelist from
+# the WHITELIST_B64 Actions secret and has no age key, so there is nothing to
+# compare against there and the file is authoritative by construction.
+check_whitelist_fresh() {
+  [ -f "$SOPS_ENV_FILE" ] || return 0
+  command -v sops >/dev/null 2>&1 || return 0
+  local decrypted
+  decrypted=$(sops -d "$SOPS_ENV_FILE" 2>/dev/null) || return 0
+  [ -n "$decrypted" ] || return 0   # no age key / cannot decrypt → nothing to check
+
+  # Decryption worked but the key we compare against is gone. That is a config
+  # error, not "no key available" — a guard whose whole purpose is to kill
+  # silent failure must not skip silently itself, so say so out loud.
+  local b64
+  b64=$(printf '%s\n' "$decrypted" | grep '^WHITELIST_B64=' | cut -d= -f2-) || b64=""
+  if [ -z "$b64" ]; then
+    echo "WARNING: $SOPS_ENV_FILE decrypted but has no WHITELIST_B64 entry —" >&2
+    echo "         cannot verify '$WHITELIST_FILE' is current; deploying unverified." >&2
+    return 0
+  fi
+
+  local expected
+  expected=$(printf '%s' "$b64" | base64 -d 2>/dev/null) || return 0
+  [ -n "$expected" ] || return 0
+
+  # Compare the entry SET (sorted, comments and blanks stripped), not raw bytes:
+  # ordering and comment edits are not access changes, and a byte compare would
+  # fail on a trailing newline an editor added. Case-folded because eppn/mail
+  # are case-insensitive at the Shibboleth layer, so a case-only edit is not an
+  # access change and must not be reported as drift.
+  # `|| x=""` on both: under `set -euo pipefail` a grep that matches nothing
+  # (an all-comments whitelist) would otherwise abort the script with a bare
+  # exit 1, pre-empting the friendlier "whitelist is empty" error below.
+  local want have
+  want=$(printf '%s\n' "$expected" | grep -vE '^[[:space:]]*#|^[[:space:]]*$' \
+    | tr '[:upper:]' '[:lower:]' | sort -u) || want=""
+  have=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$WHITELIST_FILE" 2>/dev/null \
+    | tr '[:upper:]' '[:lower:]' | sort -u) || have=""
+  [ "$want" = "$have" ] && return 0
+
+  # Never print the entries themselves — they are personal data (eppn/mail).
+  echo "ERROR: '$WHITELIST_FILE' is out of sync with the encrypted SSoT" >&2
+  echo "       ($SOPS_ENV_FILE :: WHITELIST_B64) — refusing to deploy a stale" >&2
+  echo "       access list. Local entries: $(printf '%s\n' "$have" | grep -c .); SSoT entries: $(printf '%s\n' "$want" | grep -c .)." >&2
+  echo "" >&2
+  echo "       Regenerate the local copy from the SSoT, then re-run:" >&2
+  echo "         sops -d $SOPS_ENV_FILE | grep '^WHITELIST_B64=' \\" >&2
+  echo "           | cut -d= -f2- | base64 -d > $WHITELIST_FILE" >&2
+  echo "" >&2
+  echo "       To CHANGE access, edit the encrypted SSoT (not this file) with" >&2
+  echo "       'sops $SOPS_ENV_FILE' — it decrypts WHITELIST_B64 in your editor —" >&2
+  echo "       then regenerate the local copy with the command above." >&2
+  exit 6
+}
 
 write_gate() { # write_gate <dir>
   if [ ! -f "$WHITELIST_FILE" ]; then
@@ -109,6 +172,7 @@ write_gate() { # write_gate <dir>
     echo "       set HYRR_ETH_WHITELIST." >&2
     exit 5
   fi
+  check_whitelist_fresh
   local ids
   ids=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$WHITELIST_FILE" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
   [ -n "$ids" ] || { echo "ERROR: whitelist '$WHITELIST_FILE' is empty" >&2; exit 5; }
