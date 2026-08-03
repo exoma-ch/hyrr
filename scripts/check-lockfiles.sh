@@ -4,6 +4,7 @@
 # Checks:
 #   1. uv.lock matches pyproject.toml (uv lock --check)
 #   2. every crate's Cargo.lock matches its manifest (cargo metadata --locked)
+#   3. package-lock.json records each npm workspace's real package.json version
 #
 # Exits non-zero on the first mismatch with a clear fix suggestion.
 # Used by prek (local git hook) and CI.
@@ -50,6 +51,45 @@ if command -v cargo &>/dev/null; then
   done
 else
   echo "::warning::cargo not found — skipping Cargo.lock checks"
+fi
+
+# --- package-lock.json (npm workspaces) ---
+# release-please bumps frontend/package.json through `extra-files`, but nothing
+# regenerated package-lock.json — so the lockfile's recorded workspace version
+# silently sat a release behind (0.17.0 vs 0.18.0). The next `npm install`
+# "helpfully" corrects it, dirtying the working tree mid-build and blocking a
+# checkout. Compare the lockfile's version for each LOCAL workspace against its
+# package.json: offline, no registry round-trip, and it targets exactly that
+# drift class (a dependency-graph check would need the network and is already
+# covered by `npm ci` in the build jobs).
+if [ -f package-lock.json ]; then
+  if command -v python3 &>/dev/null; then
+    if ! python3 - <<'PY'; then rc=1; fi
+import json, os, sys
+
+lock = json.load(open("package-lock.json"))
+bad = []
+for path, meta in (lock.get("packages") or {}).items():
+    # "" is the root project; node_modules/* are resolved deps, not workspaces.
+    if not path or path.startswith("node_modules") or "version" not in meta:
+        continue
+    manifest = os.path.join(path, "package.json")
+    if not os.path.exists(manifest):
+        continue
+    actual = json.load(open(manifest)).get("version")
+    if actual and actual != meta["version"]:
+        bad.append((path, meta["version"], actual))
+
+for path, locked, actual in bad:
+    print(
+        f"::error::package-lock.json records {path} at {locked}, "
+        f"but {path}/package.json says {actual}. Run: npm install --package-lock-only"
+    )
+sys.exit(1 if bad else 0)
+PY
+  else
+    echo "::warning::python3 not found — skipping package-lock.json check"
+  fi
 fi
 
 if [ "$rc" -eq 0 ]; then

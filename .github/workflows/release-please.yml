@@ -104,6 +104,9 @@ jobs:
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Regenerate lockfiles to match bumped versions
         run: |
           # Minimal regen: uv lock only repins what changed; `cargo update -p`
@@ -118,11 +121,16 @@ jobs:
           cargo update --manifest-path py/Cargo.toml -p hyrr-core
           cargo update --manifest-path wasm/Cargo.toml -p hyrr-core -p hyrr-wasm
           cargo update --manifest-path desktop/src-tauri/Cargo.toml -p hyrr-core -p hyrr-desktop
+          # release-please bumps frontend/package.json via `extra-files` but does
+          # not touch package-lock.json, so the lockfile's workspace version sat a
+          # release behind until the next `npm install` silently rewrote it mid-
+          # build. --package-lock-only repins the version without installing.
+          npm install --package-lock-only --ignore-scripts
       - name: Verify the gate now passes
         run: bash scripts/check-lockfiles.sh
       - name: Commit & push if changed
         run: |
-          LOCKS=(uv.lock core/Cargo.lock hyrr-mcp/Cargo.lock py/Cargo.lock wasm/Cargo.lock desktop/src-tauri/Cargo.lock)
+          LOCKS=(uv.lock core/Cargo.lock hyrr-mcp/Cargo.lock py/Cargo.lock wasm/Cargo.lock desktop/src-tauri/Cargo.lock package-lock.json)
           if git diff --quiet -- "${LOCKS[@]}"; then
             echo "Lockfiles already in sync — nothing to push."
             exit 0
@@ -130,5 +138,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "${LOCKS[@]}"
-          git commit -m "chore(release): sync uv.lock + all Cargo.lock files to bumped version"
+          git commit -m "chore(release): sync uv.lock + all Cargo.lock files + package-lock.json to bumped version"
           git push
