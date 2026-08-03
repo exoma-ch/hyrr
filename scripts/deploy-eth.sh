@@ -101,6 +101,47 @@ REOF
 # a redeploy can't silently un-gate the site. Whitelist is gitignored (public
 # repo); each entry is matched against BOTH principalName and mail (OR'd).
 WHITELIST_FILE="${HYRR_ETH_WHITELIST:-infra/eth-webhosting/whitelist.txt}"
+SOPS_ENV_FILE="secrets/eth-deploy.sops.env"
+
+# The whitelist file is gitignored, so the SSoT is WHITELIST_B64 inside
+# secrets/eth-deploy.sops.env. A local plaintext copy therefore goes stale the
+# moment someone grants access via `sops set` — and a stale copy deploys
+# SILENTLY: the run is green, the gate looks deployed, and an approved user is
+# simply missing (or a revoked one still has access). Compare the two before
+# writing the gate and refuse on drift.
+#
+# Skips cleanly when the SSoT is unreadable — CI materialises the whitelist from
+# the WHITELIST_B64 Actions secret and has no age key, so there is nothing to
+# compare against there and the file is authoritative by construction.
+check_whitelist_fresh() {
+  [ -f "$SOPS_ENV_FILE" ] || return 0
+  command -v sops >/dev/null 2>&1 || return 0
+  local expected
+  expected=$(sops -d "$SOPS_ENV_FILE" 2>/dev/null \
+    | grep '^WHITELIST_B64=' | cut -d= -f2- | base64 -d 2>/dev/null) || return 0
+  [ -n "$expected" ] || return 0   # no age key / cannot decrypt → nothing to check
+
+  # Compare the entry SET (sorted, comments and blanks stripped), not raw bytes:
+  # ordering and comment edits are not access changes, and a byte compare would
+  # fail on a trailing newline an editor added.
+  local want have
+  want=$(printf '%s\n' "$expected"   | grep -vE '^[[:space:]]*#|^[[:space:]]*$' | sort -u)
+  have=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$WHITELIST_FILE" 2>/dev/null | sort -u)
+  [ "$want" = "$have" ] && return 0
+
+  # Never print the entries themselves — they are personal data (eppn/mail).
+  echo "ERROR: '$WHITELIST_FILE' is out of sync with the encrypted SSoT" >&2
+  echo "       ($SOPS_ENV_FILE :: WHITELIST_B64) — refusing to deploy a stale" >&2
+  echo "       access list. Local entries: $(printf '%s\n' "$have" | grep -c .); SSoT entries: $(printf '%s\n' "$want" | grep -c .)." >&2
+  echo "" >&2
+  echo "       Regenerate the local copy from the SSoT, then re-run:" >&2
+  echo "         sops -d $SOPS_ENV_FILE | grep '^WHITELIST_B64=' \\" >&2
+  echo "           | cut -d= -f2- | base64 -d > $WHITELIST_FILE" >&2
+  echo "" >&2
+  echo "       (To CHANGE access, edit the SSoT — 'sops set $SOPS_ENV_FILE" >&2
+  echo "        '\"'\"'[\"WHITELIST_B64\"]'\"'\"' \"\$(base64 -w0 < list.txt)\"' — then regenerate.)" >&2
+  exit 6
+}
 
 write_gate() { # write_gate <dir>
   if [ ! -f "$WHITELIST_FILE" ]; then
@@ -109,6 +150,7 @@ write_gate() { # write_gate <dir>
     echo "       set HYRR_ETH_WHITELIST." >&2
     exit 5
   fi
+  check_whitelist_fresh
   local ids
   ids=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$WHITELIST_FILE" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
   [ -n "$ids" ] || { echo "ERROR: whitelist '$WHITELIST_FILE' is empty" >&2; exit 5; }
