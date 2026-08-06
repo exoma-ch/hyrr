@@ -127,6 +127,13 @@ pub fn run_mcp_server(data_dir: &str) {
 /// tool's data fetches happen against this library for the lifetime of
 /// the process.
 pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
+    // Kick off the opt-out, cached, non-blocking update check (#571)
+    // BEFORE the pre-flight data-dir probe so the background thread has
+    // the maximum head start against a fast-arriving `initialize` frame.
+    // Fail-silent by construction: no stderr, no retries, no visible
+    // effect on an air-gapped host beyond "no update notice".
+    crate::update_check::spawn_background_check_if_stale(crate::update_check::SERVER_VERSION);
+
     // Pre-flight: verify the data directory actually contains a nucl-parquet
     // tree. ParquetDataStore::new only loads the eager metadata files; many
     // tools fault later when they reach for cross-sections / abundances /
@@ -204,6 +211,56 @@ pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
     }
 }
 
+/// Build the version + update-awareness footer appended to `instructions`
+/// at `initialize` (#571).
+///
+/// Three sources, all fail-silent:
+///  * running version + compiled-in nucl-parquet `DATA_VERSION` — always
+///    present.
+///  * air-gapped staleness notice — CalVer-based, no network. Fires when
+///    the pinned data is ≥ `DEFAULT_STALENESS_MONTHS` old. Safe on
+///    air-gapped installs.
+///  * optional network update notice — read from the on-disk cache
+///    populated by the background thread in `run_mcp_server_with_library`.
+///    Silently absent when the cache is empty / stale / disabled by env.
+///
+/// The rendering is intentionally one line per fact so an LLM client
+/// relaying it back to the user in a chat doesn't have to reformat.
+/// Prefixed with `\n\n---\n\n` so the split from the primary
+/// instructions is visually obvious in Markdown-rendering clients.
+pub fn build_version_footer() -> String {
+    use crate::update_check;
+    let mut out = String::new();
+    out.push_str("\n\n---\n\n");
+    out.push_str(&format!(
+        "Running: `hyrr {}` (nuclear data `{}`).",
+        SERVER_VERSION,
+        crate::data_fetch::data_version(),
+    ));
+    if let Some(notice) =
+        update_check::data_staleness_notice(update_check::DEFAULT_STALENESS_MONTHS)
+    {
+        out.push_str(&format!(
+            " Warning: the compiled-in nuclear data (`{}`) is {} months old \
+             (threshold: {} months) — consider upgrading with `uvx hyrr-mcp@latest`.",
+            notice.data_version, notice.months_stale, notice.threshold_months,
+        ));
+    }
+    if let Some(check) = update_check::read_cached_check() {
+        if check.newer_available {
+            out.push_str(&format!(
+                " A newer release (`{}`) is available; upgrade with \
+                 `uvx hyrr-mcp@latest` (recommended MCP client config: keep \
+                 the package unpinned and add `--refresh` occasionally so \
+                 uvx pulls new releases; pinning `hyrr-mcp=={}` freezes \
+                 forever).",
+                check.latest, check.current,
+            ));
+        }
+    }
+    out
+}
+
 /// Return `true` when the incoming frame is a JSON-RPC 2.0 *notification*
 /// and therefore MUST NOT receive a response.
 ///
@@ -250,6 +307,15 @@ fn handle_request(
             // does NOT model (primary-only under a beam-stop = 0 for the
             // downstream layers, silently). The library id is injected so
             // the string matches the actually-loaded dataset.
+            //
+            // Append the running version + update-awareness footer (#571) so
+            // an agent relays "you're on X, Y is available" to the user
+            // without any per-tool-call nag. This is a strictly *reading*
+            // path — the network check runs on a background thread spawned
+            // in `run_mcp_server_with_library`; here we only read whatever
+            // (if anything) has landed in the cache.
+            let mut instructions = tools::server_instructions(db.library());
+            instructions.push_str(&build_version_footer());
             let result = serde_json::json!({
                 "protocolVersion": version,
                 "capabilities": {
@@ -259,7 +325,7 @@ fn handle_request(
                     "name": SERVER_NAME,
                     "version": SERVER_VERSION
                 },
-                "instructions": tools::server_instructions(db.library()),
+                "instructions": instructions,
             });
             JsonRpcResponse::success(id, result)
         }
@@ -431,5 +497,46 @@ mod tests {
     fn initialize_falls_back_to_latest_for_unknown_client_version() {
         let version = negotiate_protocol_version(Some("2030-01-01"));
         assert_eq!(version, LATEST_SUPPORTED_PROTOCOL_VERSION);
+    }
+
+    // -- version footer (#571) ----------------------------------------
+
+    #[test]
+    fn version_footer_always_names_running_version_and_data_version() {
+        // The footer must ALWAYS carry the two identifiers, regardless
+        // of network / cache / env state — this is the load-bearing
+        // "who am I" fact an MCP agent relays to the user.
+        let footer = build_version_footer();
+        assert!(
+            footer.contains(SERVER_VERSION),
+            "footer must name SERVER_VERSION = {SERVER_VERSION}, got: {footer}"
+        );
+        assert!(
+            footer.contains(crate::data_fetch::data_version()),
+            "footer must name compiled-in DATA_VERSION = {}, got: {footer}",
+            crate::data_fetch::data_version(),
+        );
+        // Separator so a Markdown-rendering client renders the split
+        // between primary instructions and the version footer.
+        assert!(
+            footer.contains("---"),
+            "footer must open with a section separator"
+        );
+    }
+
+    #[test]
+    fn version_footer_does_not_block_on_network() {
+        // Load-bearing pitfall from #571: `initialize` MUST NOT block on
+        // network I/O. The footer is the initialize-time render, so it
+        // must complete promptly regardless of network state. We give
+        // it a generous 500 ms ceiling — the fast path is µs-scale
+        // (env read + optional cache file read).
+        let t0 = std::time::Instant::now();
+        let _ = build_version_footer();
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "build_version_footer took {elapsed:?}; must never block on network"
+        );
     }
 }
