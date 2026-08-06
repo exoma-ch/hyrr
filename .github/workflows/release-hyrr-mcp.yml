@@ -121,7 +121,17 @@ jobs:
 
           if [ ${#matched[@]} -ne 1 ]; then
             echo "::error::expected exactly 1 wheel matching '${{ matrix.target.wheel-glob }}' for ${{ matrix.target.name }}, found ${#matched[@]}"
-            printf '  built: %s\n' "${all[@]:-<none>}"
+            # Expanded via an explicit emptiness test rather than
+            # "${all[@]:-<none>}": macos-14's system bash is 3.2, where that
+            # fallback form still trips `set -u` on an empty array. This
+            # branch only runs when the leg is already failing, so losing the
+            # diagnostic to an unbound-variable error would be exactly the
+            # wrong time for it.
+            if [ ${#all[@]} -eq 0 ]; then
+              echo "  built: <none>"
+            else
+              printf '  built: %s\n' "${all[@]}"
+            fi
             exit 1
           fi
           if [ ${#all[@]} -ne 1 ]; then
@@ -250,20 +260,36 @@ jobs:
           pip install dist/*.whl
           which hyrr-mcp
           hyrr-mcp --version
-      # Proves the MCP stdio server actually answers on this arch, not just
-      # that the extension module imports. Replays the FIRST line of the
-      # canonical parity fixture (`initialize`) rather than hand-rolling a
-      # request, so this cannot drift from the real protocol contract. Only
-      # the first line is used deliberately: `initialize` needs no nuclear
-      # data, so this job skips the ~400 MB submodule checkout entirely.
-      # Full tool coverage is the x86_64 `parity (linux)` job's business.
-      - name: JSON-RPC initialize round-trip
+      # What this proves, precisely: the compiled `_native` extension module
+      # loads and executes on aarch64, and a real call crosses the FFI
+      # boundary into Rust and returns. That is the failure mode this job
+      # exists for — a wheel that is mis-tagged, built for the wrong arch, or
+      # linked against the wrong libc installs fine and dies here.
+      #
+      # It deliberately does NOT drive the JSON-RPC loop. `run_mcp_server*`
+      # constructs the ParquetDataStore *before* reading stdin, so even an
+      # `initialize` request needs nuclear data present — which on a bare
+      # runner means `ensure_data()` firing a live ~54 MB fetch from GitHub
+      # Releases. That would make every hyrr-mcp release depend on the
+      # matching nucl-parquet data release already being published, and would
+      # put a network fetch on the critical path of the release pipeline.
+      # Bad trade for a smoke test. Deep functional coverage is the x86_64
+      # `parity (linux)` job's business — it checks out the data to do it.
+      - name: Exercise the native extension
         run: |
           set -euo pipefail
           . .venv/bin/activate
-          head -1 scripts/mcp_parity_fixture.jsonl | hyrr-mcp 2>/dev/null | head -1 > resp.json
-          cat resp.json
-          python -c 'import json; r=json.load(open("resp.json")); assert r.get("id")==1 and "result" in r, r; print("initialize OK on aarch64")'
+
+          # __version__ comes from the compiled module, so this already
+          # requires a successful native import.
+          hyrr-mcp --version
+
+          # --help calls _native.default_library(), i.e. a real FFI round trip
+          # into Rust returning a value — not just a module import.
+          hyrr-mcp --help | tee help.txt
+          grep -q 'Stdio MCP server' help.txt
+
+          python -c 'import hyrr_mcp; print("native import OK on aarch64:", hyrr_mcp.__version__)'
 
   # Last line of defence against a partial release (#461, #573).
   #

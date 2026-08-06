@@ -89,8 +89,21 @@ exercising the x86_64 wheel):
   exact expected artifact set (four wheels with named platform tags, plus
   one sdist) before anything reaches PyPI;
 - a **`smoke-test-aarch64`** job that installs the real aarch64 wheel on a
-  real arm64 runner and replays the first line of the canonical parity
-  fixture, so the artifact is proven to *run*, not merely to exist.
+  real arm64 runner and exercises the native extension, so the artifact is
+  proven to *run*, not merely to exist.
+
+The smoke test deliberately stops at the FFI boundary rather than driving
+the JSON-RPC loop. `run_mcp_server_with_library` constructs the
+`ParquetDataStore` *before* it reads stdin, so even an `initialize` request
+requires nuclear data — which on a bare runner means `ensure_data()` firing
+a live ~54 MB fetch from GitHub Releases. That would put a network download
+on the critical path of every release and make each `hyrr-mcp` tag depend on
+the matching `nucl-parquet` data release already being published. A smoke
+test should not add fragility to the pipeline it guards. The failure mode
+this job exists for — a wheel that is mis-tagged, built for the wrong
+architecture, or linked against the wrong libc — is caught by a successful
+native import and one real call into Rust. Deep functional coverage stays
+with the x86_64 `parity (linux)` job, which checks out the data to do it.
 
 ### 4. Commit `py-mcp/Cargo.lock`
 
@@ -101,6 +114,17 @@ than freshly generated: a fresh resolve drifted 88 packages from what the
 rest of the tree pins, including major bumps (`syn` 2→3, `shlex` 1→2) that
 would have landed in a published wheel with no review. Seeded, the shared
 subgraph matches `core` exactly and only pyo3 and its build deps are added.
+
+A committed lockfile is only as good as what keeps it fresh, so two
+counterparts land with it. `release-please.yml`'s `sync-release-lockfiles`
+gains `py-mcp` in both its `cargo update` list and its `LOCKS` array —
+without that, `py-mcp` path-depends on `../core`, so the first version bump
+after this change would have left the lock stale and turned the required
+`lockfile-sync` gate red on every subsequent release PR. And
+`.github/dependabot.yml` gains `/py-mcp`, so its transitive graph is bumped
+on the same weekly cadence as its siblings rather than freezing at whatever
+it was seeded with. Committing a lock without those two is how you trade a
+reproducibility gap for a rot problem.
 
 ## Alternatives considered
 
