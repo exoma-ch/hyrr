@@ -163,6 +163,56 @@ run_case '{"version":""}' "" "$good_ht"
 expect_refusal "verify_remote fails closed on an empty expected version" \
   "could not read 'version'"
 
+# ── write_gate ─────────────────────────────────────────────────────
+# The generated .htaccess is the licensing gate. Assert both halves: the site
+# stays closed, and version.json is the ONLY thing opened.
+#
+# Run from a fake repo root, so the relative SOPS_ENV_FILE does not resolve:
+# on a machine that can decrypt the real SSoT, check_whitelist_fresh correctly
+# refuses a synthetic whitelist (exit 6) and write_gate never runs. That guard
+# working is #565 behaving; here it just has to be out of the way.
+gate_root="$work/gateroot"
+gate_dir="$gate_root/dist"
+rm -rf "$gate_root"
+mkdir -p "$gate_root/scripts" "$gate_dir"
+cp "$DEPLOY" "$gate_root/scripts/"
+printf '# a comment\n\nsomeone@ethz.ch\nother@ethz.ch\n' > "$work/whitelist.txt"
+(
+  # shellcheck source=/dev/null  # path is built at runtime
+  HYRR_ETH_WHITELIST="$work/whitelist.txt" HYRR_DEPLOY_ETH_LIB=1 source "$gate_root/scripts/deploy-eth.sh"
+  write_gate "$gate_dir"
+) >/dev/null 2>&1
+gate_out="$(cat "$gate_dir/.htaccess" 2>/dev/null)"
+
+gate_has() { # gate_has <name> <fragment>
+  if [ "${gate_out#*"$2"}" != "$gate_out" ]; then report "$1" pass; else
+    report "$1 (missing '$2')" fail
+  fi
+}
+
+gate_has "write_gate demands a session site-wide" "$GATE_LINE"
+gate_has "write_gate matches the whitelist on principalName" \
+  "Require shib-attr principalName someone@ethz.ch other@ethz.ch"
+gate_has "write_gate matches the whitelist on mail" \
+  "Require shib-attr mail someone@ethz.ch other@ethz.ch"
+gate_has "write_gate opens version.json" '<Files "version.json">'
+gate_has "write_gate uses a lazy session for version.json" "ShibRequestSetting requireSession 0"
+gate_has "write_gate grants access to version.json" "Require all granted"
+
+# The exception must be scoped. An unscoped "Require all granted" would open
+# the entire instance — the worst possible outcome of this change.
+if [ "$(printf '%s\n' "$gate_out" | grep -c 'Require all granted')" -eq 1 ] &&
+   [ "$(printf '%s\n' "$gate_out" | grep -c '</Files>')" -eq 1 ]; then
+  report "write_gate keeps 'Require all granted' inside exactly one <Files> block" pass
+else
+  report "write_gate keeps 'Require all granted' inside exactly one <Files> block" fail
+fi
+
+# A gate written by write_gate must satisfy verify_remote — otherwise the two
+# halves of this feature disagree and every real deploy fails.
+run_case "$good_json" "$good_json" "$gate_out"
+expect_ok "verify_remote accepts the .htaccess that write_gate actually produces"
+
 if [ "$failed" -eq 0 ]; then
   echo "All deploy-eth verification tests passed."
 else

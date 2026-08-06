@@ -115,8 +115,20 @@ REOF
 # is set; wasm-bindgen falls back streaming→arrayBuffer). Baked into the build so
 # a redeploy can't silently un-gate the site. Whitelist is gitignored (public
 # repo); each entry is matched against BOTH principalName and mail (OR'd).
+#
+# ⚠ CANARY ON ent FIRST when changing the generated .htaccess. AllowOverride
+# here permits AuthConfig but not FileInfo, and a directive outside the allowed
+# set does not degrade — it 500s the WHOLE instance. <Files> plus Require and
+# ShibRequestSetting are all AuthConfig, so the version.json exception below is
+# expected to be legal, but walk it up the ent → tst → prd ladder regardless.
 WHITELIST_FILE="${HYRR_ETH_WHITELIST:-infra/eth-webhosting/whitelist.txt}"
 SOPS_ENV_FILE="secrets/eth-deploy.sops.env"
+
+# Build-provenance file emitted into dist/ by frontend/scripts/version-info.ts,
+# and the single filename that is served without an AAI session (see write_gate
+# and scripts/verify-deploy.sh). Named once so the gate, the server-side check
+# and the public check cannot drift apart.
+VERSION_FILE="version.json"
 
 # The whitelist file is gitignored, so the SSoT is WHITELIST_B64 inside
 # secrets/eth-deploy.sops.env. A local plaintext copy therefore goes stale the
@@ -200,6 +212,19 @@ AuthType shibboleth
 ShibRequestSetting requireSession 1
 Require shib-attr principalName ${ids}
 Require shib-attr mail ${ids}
+
+# ${VERSION_FILE} is the ONE deliberate exception (#401). It carries version,
+# commit and build timestamp — all three already public on the Releases page,
+# and none of it licensed nuclear data. Exposing it is what lets a deploy be
+# verified from outside the gate; without it an unauthenticated poll only ever
+# reaches the AAI WAYF and "succeeds" with a 200 that means nothing.
+# This is Shibboleth's documented lazy-session pattern: requireSession 0 stops
+# mod_shib forcing a redirect, and the inner Require overrides the outer one
+# for this file only.
+<Files "${VERSION_FILE}">
+  ShibRequestSetting requireSession 0
+  Require all granted
+</Files>
 HT
 }
 
@@ -259,22 +284,22 @@ do_build() {
 verify_remote() { # verify_remote <env> <docroot>
   local env="$1" docroot="$2" expected actual gate
 
-  if [ ! -f frontend/dist/version.json ]; then
-    echo "ERROR: frontend/dist/version.json is missing — cannot verify the deploy." >&2
-    echo "       A dist built before #401 has no version.json; rebuild without" >&2
+  if [ ! -f "frontend/dist/${VERSION_FILE}" ]; then
+    echo "ERROR: frontend/dist/${VERSION_FILE} is missing — cannot verify the deploy." >&2
+    echo "       A dist built before #401 has no ${VERSION_FILE}; rebuild without" >&2
     echo "       HYRR_SKIP_BUILD=1 and redeploy." >&2
     exit 7
   fi
-  expected="$(json_field version < frontend/dist/version.json)"
+  expected="$(json_field version < "frontend/dist/${VERSION_FILE}")"
   if [ -z "$expected" ]; then
-    echo "ERROR: could not read 'version' out of frontend/dist/version.json." >&2
+    echo "ERROR: could not read 'version' out of frontend/dist/${VERSION_FILE}." >&2
     exit 7
   fi
 
   echo "=== Verifying deployment on $(env_host "$env") (server-side) ==="
 
   # shellcheck disable=SC2029  # $docroot is expanded locally, on purpose.
-  actual="$(remote "$env" "cat '${docroot}/version.json' 2>/dev/null" | json_field version)"
+  actual="$(remote "$env" "cat '${docroot}/${VERSION_FILE}' 2>/dev/null" | json_field version)"
   if [ "$actual" != "$expected" ]; then
     echo "ERROR: deployed version does not match the bundle just built." >&2
     echo "       expected: ${expected}" >&2
@@ -282,7 +307,7 @@ verify_remote() { # verify_remote <env> <docroot>
     echo "       The rsync reported success, so suspect the docroot: '${docroot}'." >&2
     exit 7
   fi
-  echo "    version.json = ${actual}  ✓"
+  echo "    ${VERSION_FILE} = ${actual}  ✓"
 
   # shellcheck disable=SC2029  # $docroot is expanded locally, on purpose.
   gate="$(remote "$env" "cat '${docroot}/.htaccess' 2>/dev/null")"
