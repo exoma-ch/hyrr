@@ -21,8 +21,20 @@ pub const MEV_TO_JOULE: f64 = 1.602_176_634e-13;
 /// Minimum peak cross-section (mb) on the integration grid to consider active.
 pub const MIN_PEAK_XS_MB: f64 = 1e-6;
 
-/// Activity cutoff fraction relative to peak EOB activity.
-pub const ACTIVITY_CUTOFF_FRACTION: f64 = 1e-6;
+/// Dust threshold for production rate [atoms/s] — anything strictly below this
+/// is treated as numerical noise (subnormal / underflow residue) and pruned
+/// from the isotope inventory before the chain solver runs. This is not a
+/// relevance filter — real production rates span many orders of magnitude and
+/// the caller decides what "small" means via the reporting-layer
+/// `activity_floor_bq` (issue #567). `f64::MIN_POSITIVE` (~2.2e-308) is the
+/// smallest normal positive f64; smaller values are subnormal and cannot
+/// meaningfully accumulate in downstream arithmetic.
+///
+/// Deliberately **unit-agnostic**: the prune applies it to a production rate
+/// (atoms/s) *and* to activity samples (Bq). It is a floating-point-magnitude
+/// floor, not a physical quantity, so one constant is honest for both — naming
+/// it after either unit would not be.
+pub const DUST_MAGNITUDE_THRESHOLD: f64 = f64::MIN_POSITIVE;
 
 /// Half-life threshold (s) above which isotopes are "geologically long-lived".
 pub const LONG_HALFLIFE_THRESHOLD_S: f64 = 1e10;

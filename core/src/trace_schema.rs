@@ -62,12 +62,15 @@ pub fn stopping_fallback(projectile: &str, requested: &str, used: &str) {
     warn!(event = "stopping.fallback", projectile, requested, used);
 }
 
-/// The layer's isotope inventory dropped `n_dropped` entries as numerical
-/// dust (issue #533). The relative floor is `ACTIVITY_CUTOFF_FRACTION` of
-/// both the peak per-isotope activity across the time-series and the peak
-/// production rate — long-lived low-yield products above the rate floor are
-/// kept even when their activity trace sits under the activity floor. Emitted
-/// at `debug` (per-layer, bounded frequency); anchor for "never silent" (§533).
+/// The layer's isotope inventory dropped `n_dropped` entries as genuine
+/// numerical dust (issues #533, #567). Dust here is strictly numerical
+/// residue — subnormal / non-finite production rate AND subnormal /
+/// non-finite activity everywhere in the trace (see
+/// [`crate::constants::DUST_MAGNITUDE_THRESHOLD`]). Relevance filtering (e.g.
+/// "isotopes below 1 kBq") is the caller's job via the MCP
+/// `activity_floor_bq` argument, per the #130 contract; this event surfaces
+/// only what compute strips. Emitted at `debug` (per-layer, bounded
+/// frequency); anchor for "never silent" (§533 / §567).
 #[inline]
 pub fn layer_inventory_pruned(layer_index: usize, n_kept: usize, n_dropped: usize) {
     debug!(

@@ -179,33 +179,63 @@ pub fn eob_activity(iso: &IsotopeResult, t_irr: f64) -> f64 {
 }
 
 /// Sorted, de-duplicated list of every isotope produced anywhere in the stack,
-/// as `(z, a, state, name)`. Used by the (layer-independent) emission table.
-fn distinct_isotopes(result: &StackResult) -> Vec<(u32, u32, String, String)> {
-    let mut seen = std::collections::BTreeMap::new();
+/// as `(z, a, state, name, total_activity_bq)` — `total_activity_bq` is the
+/// end-of-cooling activity summed across every producing layer. Used by the
+/// (layer-independent) emission table and its `activity_floor_bq` filter (#567).
+fn distinct_isotopes(result: &StackResult) -> Vec<(u32, u32, String, String, f64)> {
+    let mut seen: std::collections::BTreeMap<(u32, u32, String), (String, f64)> =
+        std::collections::BTreeMap::new();
     for lr in &result.layer_results {
         for iso in lr.isotope_results.values() {
-            seen.entry((iso.z, iso.a, iso.state.clone()))
-                .or_insert_with(|| iso.name.clone());
+            let entry = seen
+                .entry((iso.z, iso.a, iso.state.clone()))
+                .or_insert_with(|| (iso.name.clone(), 0.0));
+            entry.1 += iso.activity_bq;
         }
     }
     seen.into_iter()
-        .map(|((z, a, st), name)| (z, a, st, name))
+        .map(|((z, a, st), (name, act))| (z, a, st, name, act))
         .collect()
 }
 
+/// Result of building a filtered table: the table itself plus how many rows
+/// were dropped by the reporting-layer `activity_floor_bq` filter (issue #567).
+/// The count is surfaced by every inventory-derived tool so filtering is never
+/// silent — same no-silent-loss contract as `pruned_negligible_count`.
+pub struct FilteredTable {
+    pub table: Table,
+    pub filtered_below_floor: usize,
+}
+
+/// Does this isotope pass the caller's absolute activity floor? Applied to
+/// the end-of-cooling activity `iso.activity_bq` (matches the GUI's `activity`
+/// threshold semantics from `display-thresholds.svelte.ts`). A floor of 0 is
+/// the sentinel "no filtering" — checked as a fast path first so the common
+/// case is one comparison, not a subtraction under a threshold.
+#[inline]
+pub fn passes_activity_floor(iso: &IsotopeResult, activity_floor_bq: f64) -> bool {
+    activity_floor_bq <= 0.0 || iso.activity_bq >= activity_floor_bq
+}
+
 /// Inventory table: one row per (isotope × layer × source).
+///
+/// `activity_floor_bq` is a REPORTING-layer filter (#567) — anything below it
+/// is omitted from the returned table, and the drop count is returned alongside
+/// so the caller can show it. Pass `0.0` for the pre-#567 behavior (no filter).
 pub fn build_inventory(
     db: &dyn DatabaseProtocol,
     result: &StackResult,
     layer_materials: &[String],
     sim_id: &str,
-) -> Table {
+    activity_floor_bq: f64,
+) -> FilteredTable {
     let t_irr = result.irradiation_time_s;
     let (mut sid, mut li, mut mat) = (vec![], vec![], vec![]);
     let (mut z, mut a, mut state, mut iso_name) = (vec![], vec![], vec![], vec![]);
     let (mut src, mut rate, mut sat) = (vec![], vec![], vec![]);
     let (mut eob, mut cool, mut hl) = (vec![], vec![], vec![]);
     let (mut bp, mut ec, mut bm, mut it) = (vec![], vec![], vec![], vec![]);
+    let mut filtered_below_floor = 0usize;
 
     for (idx, lr) in result.layer_results.iter().enumerate() {
         let mut isos: Vec<&IsotopeResult> = lr.isotope_results.values().collect();
@@ -216,6 +246,10 @@ pub fn build_inventory(
                 .then_with(|| x.name.cmp(&y.name))
         });
         for iso in isos {
+            if !passes_activity_floor(iso, activity_floor_bq) {
+                filtered_below_floor += 1;
+                continue;
+            }
             sid.push(sim_id.to_string());
             li.push((idx + 1) as i64);
             mat.push(layer_materials.get(idx).cloned().unwrap_or_default());
@@ -237,7 +271,7 @@ pub fn build_inventory(
         }
     }
 
-    Table {
+    let table = Table {
         name: "inventory",
         cols: vec![
             Col::Str("simulation_id", sid),
@@ -258,16 +292,27 @@ pub fn build_inventory(
             Col::F64("beta_minus_branching", bm),
             Col::F64("it_branching", it),
         ],
+    };
+    FilteredTable {
+        table,
+        filtered_below_floor,
     }
 }
 
 /// Cooling-tail table: activity [Bq] vs time for t ≥ irradiation time, one row
-/// per (isotope × layer × time point).
-pub fn build_cooling(result: &StackResult, sim_id: &str) -> Table {
+/// per (isotope × layer × time point). Rows whose owning isotope is below
+/// `activity_floor_bq` (per #567) are omitted, and the isotope-drop count is
+/// reported so the filter is never silent.
+pub fn build_cooling(result: &StackResult, sim_id: &str, activity_floor_bq: f64) -> FilteredTable {
     let t_irr = result.irradiation_time_s;
     let (mut sid, mut li, mut iso_name, mut t, mut act) = (vec![], vec![], vec![], vec![], vec![]);
+    let mut filtered_below_floor = 0usize;
     for (idx, lr) in result.layer_results.iter().enumerate() {
         for iso in lr.isotope_results.values() {
+            if !passes_activity_floor(iso, activity_floor_bq) {
+                filtered_below_floor += 1;
+                continue;
+            }
             for (&ts, &av) in iso.time_grid_s.iter().zip(iso.activity_vs_time_bq.iter()) {
                 if ts >= t_irr {
                     sid.push(sim_id.to_string());
@@ -279,7 +324,7 @@ pub fn build_cooling(result: &StackResult, sim_id: &str) -> Table {
             }
         }
     }
-    Table {
+    let table = Table {
         name: "cooling",
         cols: vec![
             Col::Str("simulation_id", sid),
@@ -288,18 +333,36 @@ pub fn build_cooling(result: &StackResult, sim_id: &str) -> Table {
             Col::F64("t_s", t),
             Col::F64("activity_bq", act),
         ],
+    };
+    FilteredTable {
+        table,
+        filtered_below_floor,
     }
 }
 
 /// Depth-profile table: local production rate [atoms/s/cm] along depth, one row
-/// per (isotope × layer × depth point).
-pub fn build_depth(result: &StackResult, sim_id: &str) -> Table {
+/// per (isotope × layer × depth point). Filtered by `activity_floor_bq` on the
+/// owning isotope (per #567) — a depth profile is the *shape* of that isotope's
+/// production; if the isotope itself is below the reporting floor its depth
+/// series is dropped too.
+pub fn build_depth(result: &StackResult, sim_id: &str, activity_floor_bq: f64) -> FilteredTable {
     let (mut sid, mut li, mut iso_name) = (vec![], vec![], vec![]);
     let (mut depth, mut energy, mut prate) = (vec![], vec![], vec![]);
+    let mut filtered_below_floor = 0usize;
     for (idx, lr) in result.layer_results.iter().enumerate() {
         for (name, rates) in &lr.depth_production_rates {
             if lr.depth_profile.len() != rates.len() {
                 continue; // sibling-array invariant broken — skip rather than zip-truncate
+            }
+            if activity_floor_bq > 0.0 {
+                match lr.isotope_results.get(name) {
+                    Some(iso) if !passes_activity_floor(iso, activity_floor_bq) => {
+                        filtered_below_floor += 1;
+                        continue;
+                    }
+                    None => continue, // orphan rate series — no owning isotope to filter against
+                    _ => {}
+                }
             }
             for (dp, &r) in lr.depth_profile.iter().zip(rates.iter()) {
                 sid.push(sim_id.to_string());
@@ -311,7 +374,7 @@ pub fn build_depth(result: &StackResult, sim_id: &str) -> Table {
             }
         }
     }
-    Table {
+    let table = Table {
         name: "depth",
         cols: vec![
             Col::Str("simulation_id", sid),
@@ -321,6 +384,10 @@ pub fn build_depth(result: &StackResult, sim_id: &str) -> Table {
             Col::F64("energy_mev", energy),
             Col::F64("production_rate_atoms_per_s_per_cm", prate),
         ],
+    };
+    FilteredTable {
+        table,
+        filtered_below_floor,
     }
 }
 
@@ -361,13 +428,21 @@ pub fn build_emission_curve(
     type_filter: Option<&str>,
     energy_filter: Option<f64>,
     energy_tol: f64,
-) -> Table {
+    activity_floor_bq: f64,
+) -> FilteredTable {
     let t_irr = result.irradiation_time_s;
     let (mut sid, mut iso_name, mut energy, mut etype, mut t, mut rate) =
         (vec![], vec![], vec![], vec![], vec![], vec![]);
+    let mut filtered_below_floor = 0usize;
 
-    for (z, a, state, name) in distinct_isotopes(result) {
+    for (z, a, state, name, total_activity_bq) in distinct_isotopes(result) {
         if iso_filter.is_some_and(|f| f != name) {
+            continue;
+        }
+        // Reporting-layer floor (#567) — filter distinct isotopes by their
+        // stack-summed EOC activity, matching the semantics of `compute_stack_dose`.
+        if activity_floor_bq > 0.0 && total_activity_bq < activity_floor_bq {
+            filtered_below_floor += 1;
             continue;
         }
         let lines: Vec<EmissionLine> = db
@@ -402,7 +477,7 @@ pub fn build_emission_curve(
         }
     }
 
-    Table {
+    let table = Table {
         name: "emission_curve",
         cols: vec![
             Col::Str("simulation_id", sid),
@@ -412,18 +487,34 @@ pub fn build_emission_curve(
             Col::F64("t_s", t),
             Col::F64("rate_per_s", rate),
         ],
+    };
+    FilteredTable {
+        table,
+        filtered_below_floor,
     }
 }
 
 /// Emission table: per-decay γ / X-ray / Auger / CE / β± / annihilation lines
 /// for every produced isotope (layer-independent), one row per (isotope × line).
-pub fn build_emissions(db: &dyn DatabaseProtocol, result: &StackResult, sim_id: &str) -> Table {
+/// `activity_floor_bq` filters distinct isotopes by their stack-summed EOC
+/// activity (#567); pass `0.0` for no filtering.
+pub fn build_emissions(
+    db: &dyn DatabaseProtocol,
+    result: &StackResult,
+    sim_id: &str,
+    activity_floor_bq: f64,
+) -> FilteredTable {
     let (mut sid, mut iso_name, mut z, mut a, mut state) = (vec![], vec![], vec![], vec![], vec![]);
     let (mut rad, mut energy, mut intensity) = (vec![], vec![], vec![]);
     let (mut dmode, mut dz, mut da, mut icc, mut subtype) =
         (vec![], vec![], vec![], vec![], vec![]);
+    let mut filtered_below_floor = 0usize;
 
-    for (iso_z, iso_a, iso_state, name) in distinct_isotopes(result) {
+    for (iso_z, iso_a, iso_state, name, total_activity_bq) in distinct_isotopes(result) {
+        if activity_floor_bq > 0.0 && total_activity_bq < activity_floor_bq {
+            filtered_below_floor += 1;
+            continue;
+        }
         for line in db.get_emissions(iso_z, iso_a, &iso_state) {
             sid.push(sim_id.to_string());
             iso_name.push(name.clone());
@@ -441,7 +532,7 @@ pub fn build_emissions(db: &dyn DatabaseProtocol, result: &StackResult, sim_id: 
         }
     }
 
-    Table {
+    let table = Table {
         name: "emissions",
         cols: vec![
             Col::Str("simulation_id", sid),
@@ -458,6 +549,10 @@ pub fn build_emissions(db: &dyn DatabaseProtocol, result: &StackResult, sim_id: 
             Col::OptF64("icc_total", icc),
             Col::OptStr("rad_subtype", subtype),
         ],
+    };
+    FilteredTable {
+        table,
+        filtered_below_floor,
     }
 }
 

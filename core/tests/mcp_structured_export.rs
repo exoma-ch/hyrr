@@ -247,6 +247,138 @@ fn issue_533_long_lived_minor_product_survives_inventory_and_list() {
     );
 }
 
+/// #567 — the reporting-layer `activity_floor_bq` argument, applied at the
+/// tool layer as an absolute-Bq filter (never inside compute). Verifies:
+///   (a) with floor 0 (default) every produced isotope shows up (piggy-backs
+///       on the same #533 scenario as the test above);
+///   (b) with a non-zero floor the row is omitted AND the omission count is
+///       surfaced in the response (no silent loss — #130 contract);
+///   (c) a follow-up call with floor 0 returns the row again (nothing was
+///       clamped inside compute — the cached StackResult still has it).
+#[test]
+fn issue_567_activity_floor_bq_filters_at_tool_layer_not_in_compute() {
+    let db = store();
+    let mut reg = MaterialRegistry::new();
+
+    let _def = call_tool(
+        &db,
+        &mut reg,
+        "define_material",
+        &json!({
+            "name": "almn_3e4",
+            "density_g_cm3": 2.7,
+            "composition": [
+                {"element": "Al", "fraction": 0.9997},
+                {"element": "Mn", "fraction": 0.0003}
+            ]
+        }),
+    )
+    .expect("define_material should succeed");
+
+    let base = json!({
+        "projectile": "p",
+        "energy_mev": 15.0,
+        "current_ma": 20.0,
+        "layers": [{"material": "almn_3e4", "thickness_cm": 0.05}],
+        "irradiation_time_s": 86400.0,
+        "cooling_time_s": 86400.0
+    });
+
+    // (a) Default: no filter, Fe-55 present (regression on top of #533 —
+    //     verified again here to lock the default in).
+    let unfiltered = call_tool(&db, &mut reg, "get_isotope_inventory", &base)
+        .expect("unfiltered inventory should succeed");
+    assert!(
+        unfiltered.text.contains("Fe-55"),
+        "default (activity_floor_bq: 0) must include Fe-55 (#567). Got:\n{}",
+        unfiltered.text
+    );
+    assert!(
+        !unfiltered.text.contains("Reporting filter"),
+        "no filter → no filter callout. Got:\n{}",
+        unfiltered.text
+    );
+
+    // (b) With a floor higher than Fe-55's EOC activity (~1.6e7 Bq for the
+    //     3e-4 AlMn scenario per #533), the row is omitted AND the omission
+    //     count is surfaced. 1e15 Bq is safely above every produced isotope.
+    let mut with_floor = base.clone();
+    with_floor
+        .as_object_mut()
+        .unwrap()
+        .insert("activity_floor_bq".to_string(), json!(1.0e15_f64));
+    let filtered = call_tool(&db, &mut reg, "get_isotope_inventory", &with_floor)
+        .expect("filtered inventory should succeed");
+    assert!(
+        !filtered.text.contains("Fe-55"),
+        "Fe-55 must be filtered when activity_floor_bq > its EOC activity. \
+         Got:\n{}",
+        filtered.text
+    );
+    assert!(
+        filtered.text.contains("Reporting filter") && filtered.text.contains("activity_floor_bq"),
+        "filter must surface the omission count (no silent loss — #130). \
+         Got:\n{}",
+        filtered.text
+    );
+
+    // (c) Round-trip: lower the floor back to 0 → Fe-55 reappears from the
+    //     cached StackResult (proof the backend didn't clamp).
+    let round_trip = call_tool(&db, &mut reg, "get_isotope_inventory", &base)
+        .expect("round-trip should succeed");
+    assert!(
+        round_trip.text.contains("Fe-55"),
+        "Fe-55 must reappear at floor 0 — compute output is the source of \
+         truth (#130). Got:\n{}",
+        round_trip.text
+    );
+
+    // Also verify the same dialect works on the other inventory-derived
+    // tools: list_producing_layers reports the filter, and get_emission_curve
+    // accepts the same argument (a non-zero floor drops distinct isotopes).
+    let mut lpl_args = with_floor.clone();
+    lpl_args
+        .as_object_mut()
+        .unwrap()
+        .insert("isotope".to_string(), json!("Fe-55"));
+    let lpl = call_tool(&db, &mut reg, "list_producing_layers", &lpl_args)
+        .expect("list_producing_layers should succeed");
+    // The filter is surfaced one of two ways depending on whether *any* row
+    // survives: either the "Reporting filter" footer (some kept, some dropped),
+    // or the "all below activity_floor_bq" callout (nothing left) — both cite
+    // the floor value so a caller can see what filtered.
+    assert!(
+        lpl.text.contains("activity_floor_bq"),
+        "list_producing_layers should surface the floor cite. Got:\n{}",
+        lpl.text
+    );
+}
+
+/// #567 — malformed floor arguments are rejected explicitly rather than
+/// silently coerced. A negative or non-finite floor could look like "no
+/// filter" (0.0) under permissive parsing — refuse it so a client can't
+/// accidentally silently drop rows.
+#[test]
+fn issue_567_activity_floor_bq_rejects_bad_values() {
+    let db = store();
+    let mut reg = MaterialRegistry::new();
+
+    let base = f18_args(json!({}));
+
+    for bad in [json!(-1.0), json!("not a number")] {
+        let mut args = base.clone();
+        args.as_object_mut()
+            .unwrap()
+            .insert("activity_floor_bq".to_string(), bad.clone());
+        let err = call_tool(&db, &mut reg, "get_isotope_inventory", &args)
+            .expect_err("bad activity_floor_bq must be rejected");
+        assert!(
+            err.contains("activity_floor_bq"),
+            "error should name the offending arg (got: {err})"
+        );
+    }
+}
+
 #[test]
 fn emission_curve_tool_f18_511_is_positive_and_parquet() {
     let db = store();
