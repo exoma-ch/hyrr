@@ -688,6 +688,15 @@ pub fn list_tools() -> Vec<Value> {
                 }
             }
         }),
+        // ─── #571 — update awareness (version + data + newer-release notice) ──
+        serde_json::json!({
+            "name": "get_version_info",
+            "description": "Report the running hyrr-mcp version, the compiled-in nucl-parquet DATA_VERSION, and — if the opt-out network check has populated the cache — whether a newer release is available on GitHub. Never blocks: the network check runs in the background; this tool only reads whatever is currently known. Also reports the compiled-in-data CalVer staleness (fires with NO network access when the pinned nuclear data is older than the threshold, so air-gapped installs still see the warning). Disable the network check with `HYRR_DISABLE_UPDATE_CHECK=1`; the staleness floor still fires. No arguments.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        }),
         serde_json::json!({
             "name": "get_activity_at",
             "description": format!("Exact-Bateman ACTIVITY at caller-chosen times [Bq] (#570). Re-solves the decay chain at each `at_s` using the cached production rates — no interpolation of the 200-point curve, so short/long-lived products in one run are both resolved analytically at any `t`. Cheap: the expensive production integral is served from the config-hashed cache (`at_s` is a VIEW parameter and is NEVER part of the cache key, so different time sets on the same config all reuse the cached simulation). `at_s` capped at {MAX_AT_S} entries — coarsen or split; a query outside the simulated window (irr + cool) is rejected rather than extrapolated. Scope aggregation happens AFTER the chain solve so ingrowth stays correct at layer/element/stack scope. Filters: `isotope` (exact name), `layer_index` (1-based), `element` (symbol or Z). {SCOPE_SUFFIX}", MAX_AT_S = crate::mcp::activity_at::MAX_AT_S_ENTRIES),
@@ -816,6 +825,10 @@ pub fn call_tool(
         "get_dose_rate" => tool_get_dose_rate(db, &*materials, arguments)?.into(),
         "get_activity_at" => tool_get_activity_at(db, &*materials, arguments)?,
         "get_dose_rate_at" => tool_get_dose_rate_at(db, &*materials, arguments)?,
+        // #571 — update-awareness. No `db` dependency; entry lives here
+        // so the whole tool surface stays routed from a single dispatch
+        // table.
+        "get_version_info" => tool_get_version_info()?.into(),
         _ => return Err(format!("Unknown tool: {}", name)),
     };
     response.text = format!("{}\n\n---\n*Library: {}*\n", response.text, db.library());
@@ -2929,6 +2942,90 @@ pub(crate) fn format_halflife(seconds: f64) -> String {
     }
 }
 
+/// `get_version_info` — #571 update-awareness surface.
+///
+/// Reports three facts, all fail-silent:
+///   - running crate version + compiled-in nucl-parquet DATA_VERSION;
+///   - CalVer-based staleness of the compiled-in data (no network — the
+///     air-gapped floor);
+///   - the last cached network check result if any (populated by the
+///     background thread in `transport::run_mcp_server_with_library`;
+///     absent when the check is disabled, the cache is cold, or the
+///     network was unreachable).
+///
+/// Never blocks on network I/O — this is a pure cache read of state
+/// populated (or not) by the startup background thread. Same policy as
+/// the `instructions` footer, exposed as a callable tool so an agent
+/// can re-query without redoing the whole `initialize` round-trip.
+fn tool_get_version_info() -> Result<String, String> {
+    use crate::update_check;
+    let mut out = String::new();
+    out.push_str("# HYRR Version Info\n\n");
+    out.push_str(&format!(
+        "- **Server version**: `hyrr-mcp {}`\n",
+        update_check::SERVER_VERSION,
+    ));
+    out.push_str(&format!(
+        "- **Nuclear data version**: `{}` (compiled in from the pinned nucl-parquet submodule)\n",
+        crate::data_fetch::data_version(),
+    ));
+    // Air-gapped staleness — no network.
+    match update_check::data_staleness_notice(update_check::DEFAULT_STALENESS_MONTHS) {
+        Some(notice) => {
+            out.push_str(&format!(
+                "- **Data staleness**: ⚠️ `{}` is {} month(s) old (threshold: {} months). \
+                 Consider `uvx hyrr-mcp@latest` — even offline, an old data pin means \
+                 old nuclear data.\n",
+                notice.data_version, notice.months_stale, notice.threshold_months,
+            ));
+        }
+        None => {
+            out.push_str(&format!(
+                "- **Data staleness**: OK (under {}-month threshold).\n",
+                update_check::DEFAULT_STALENESS_MONTHS,
+            ));
+        }
+    }
+    // Network check — opt-out via HYRR_DISABLE_UPDATE_CHECK; cache-only read.
+    if update_check::is_disabled_by_env() {
+        out.push_str(
+            "- **Update check**: disabled via `HYRR_DISABLE_UPDATE_CHECK`; staleness floor \
+             above still fires without any network access.\n",
+        );
+    } else {
+        match update_check::read_cached_check() {
+            Some(check) if check.newer_available => {
+                out.push_str(&format!(
+                    "- **Update check**: newer release `{}` is available (running `{}`). \
+                     Upgrade with `uvx hyrr-mcp@latest`.\n",
+                    check.latest, check.current,
+                ));
+            }
+            Some(check) => {
+                out.push_str(&format!(
+                    "- **Update check**: up to date (running `{}`, latest known `{}`).\n",
+                    check.current, check.latest,
+                ));
+            }
+            None => {
+                out.push_str(
+                    "- **Update check**: pending — the background thread has not yet written \
+                     the cache (cold start, network unreachable, or first run). Re-check on \
+                     the next server startup.\n",
+                );
+            }
+        }
+    }
+    out.push_str(&format!(
+        "\nRecommended MCP client config: leave `hyrr-mcp` unpinned in your MCP config so \
+         `uvx` picks up new releases; run `uvx --refresh hyrr-mcp` occasionally. Pinning \
+         `hyrr-mcp=={}` freezes this server forever — including any silent physics-altering \
+         fixes shipped upstream.\n",
+        update_check::SERVER_VERSION,
+    ));
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3070,5 +3167,41 @@ mod tests {
         // Same message regardless of whether a layer_index was supplied.
         let err = select_producing_layer(&s, "Sc-44", Some(1)).unwrap_err();
         assert!(err.contains("not produced in any layer"), "got: {err}");
+    }
+
+    // -- get_version_info (#571) --------------------------------------
+
+    #[test]
+    fn get_version_info_reports_running_and_data_versions() {
+        // Load-bearing: the tool must always name the running version
+        // and the compiled-in nucl-parquet DATA_VERSION, regardless of
+        // cache/env state. Doesn't hit the network.
+        let out = tool_get_version_info().expect("get_version_info must not fail");
+        assert!(
+            out.contains(crate::update_check::SERVER_VERSION),
+            "output must name SERVER_VERSION; got: {out}"
+        );
+        assert!(
+            out.contains(crate::data_fetch::data_version()),
+            "output must name DATA_VERSION; got: {out}"
+        );
+        // Must mention the recommended-config guidance so an agent
+        // relays "keep unpinned + uvx --refresh" to the user (#571 P1).
+        assert!(
+            out.contains("uvx"),
+            "output must mention uvx guidance; got: {out}"
+        );
+    }
+
+    #[test]
+    fn get_version_info_is_listed_in_tools() {
+        let names: Vec<String> = list_tools()
+            .iter()
+            .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+        assert!(
+            names.contains(&"get_version_info".to_string()),
+            "list_tools must advertise get_version_info; got: {names:?}"
+        );
     }
 }

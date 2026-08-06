@@ -219,15 +219,29 @@ fn print_help() {
              --help, -h         Print this help and exit\n\
          \n\
          ENVIRONMENT:\n    \
-             HYRR_DATA          Nucl-parquet data directory (if --data-dir not set)\n    \
-             NUCL_PARQUET_DATA  Nucl-parquet data directory (backward-compat alternative)\n    \
-             HYRR_LIBRARY       Nuclear data library (if --library not set)\n\
+             HYRR_DATA                   Nucl-parquet data directory (if --data-dir not set)\n    \
+             NUCL_PARQUET_DATA           Nucl-parquet data directory (backward-compat alternative)\n    \
+             HYRR_LIBRARY                Nuclear data library (if --library not set)\n    \
+             HYRR_DISABLE_UPDATE_CHECK   Opt-out (1/true/yes) of the once-per-24h network\n                                 update check (#571). The compiled-in CalVer\n                                 staleness warning still fires without any network.\n\
          \n\
          On first run (no local data, no --data-dir / HYRR_DATA), fetches the\n\
          nucl-parquet release matching the submodule-pinned data version\n\
          (~54 MB metadata + stopping tables plus the requested library subtree).\n\
          Cached in ~/.hyrr/nucl-parquet/v{{V}}/. A failed fetch is a hard exit\n\
          with a clear diagnostic — never a silent-empty data dir.\n\
+         \n\
+         Update awareness (#571):\n    \
+             The server surfaces its own version, the compiled-in nuclear-data\n    \
+             CalVer, and — when known — the latest release on GitHub via the\n    \
+             MCP `initialize` instructions and the `get_version_info` tool. The\n    \
+             network check runs in the background (5 s timeout, cached under\n    \
+             $XDG_CACHE_HOME/hyrr/ for 24 h, fail-silent). Air-gapped installs\n    \
+             see no network activity but still get the CalVer staleness warning.\n    \
+             Set HYRR_DISABLE_UPDATE_CHECK=1 to skip the network check entirely.\n    \
+             Recommended MCP-client config: leave `hyrr-mcp` unpinned in your MCP\n    \
+             registry and periodically run `uvx --refresh hyrr-mcp` — a pinned\n    \
+             `hyrr-mcp==X.Y.Z` freezes this server forever, including any silent\n    \
+             physics-altering fixes shipped upstream (see #533, #529, #488).\n\
          \n\
          Register with Claude Code:\n    \
              claude mcp add hyrr -- hyrr-mcp\n",
