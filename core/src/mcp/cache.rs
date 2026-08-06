@@ -99,7 +99,25 @@ fn cache() -> &'static Mutex<Lru> {
 /// `CARGO_PKG_VERSION`) changes in a load-affecting way. An old envelope
 /// with a different `format` is treated as a miss and deleted, same as a
 /// salt mismatch.
+///
+/// **Load-bearing invariant — read before changing `StackResult`.** Entries
+/// are gated by `CACHE_SALT` (= the crate version) and by this constant, and
+/// by nothing else. serde is permissive: `LayerResult` already carries
+/// `#[serde(default)]` fields, so an entry written before such a field
+/// existed still deserializes — silently defaulted. Released builds are safe
+/// because release-please bumps the crate version on any feat/fix, which
+/// changes the salt. The exposed case is the **same-version dev inner loop**:
+/// edit `StackResult`'s shape without bumping the version and stale entries
+/// come back wrong rather than missing. If you change that shape and the
+/// version is not moving, bump `DISK_ENVELOPE_FORMAT` (or wipe the cache dir).
+/// A silently wrong cached physics result is the worst outcome this module
+/// can produce; it is cheaper to bump than to debug.
 const DISK_ENVELOPE_FORMAT: u32 = 1;
+
+/// Age after which a leftover `.tmp` is considered orphaned by a crashed
+/// writer and reaped. Long enough that an in-flight write is never racing it.
+#[cfg(not(target_arch = "wasm32"))]
+const TMP_ORPHAN_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Default cap on cached entries on disk. A realistic StackResult
 /// (5 layers × ~40 isotopes × 200-point time series + 200-point depth
@@ -493,13 +511,32 @@ fn enforce_bounds(root: &Path) {
     };
     for dent in read_dir.flatten() {
         let path = dent.path();
-        // Ignore in-flight temp files. `.json.gz` is the sole final suffix.
-        if !path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.ends_with(".json.gz"))
-            .unwrap_or(false)
-        {
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Reap orphaned temp files. A process killed between `File::create`
+        // and `rename` leaves a `.tmp` behind; without this they accumulate
+        // forever AND are invisible to the byte cap below, which would make
+        // `HYRR_MCP_CACHE_MAX_BYTES` a lie in exactly that failure mode.
+        // The age gate keeps us from racing a write that is still in flight.
+        if name.ends_with(".tmp") {
+            let orphaned = dent
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|mt| mt.elapsed().ok())
+                .map(|age| age > TMP_ORPHAN_MAX_AGE)
+                .unwrap_or(false);
+            if orphaned {
+                let _ = std::fs::remove_file(&path);
+            }
+            continue;
+        }
+
+        // `.json.gz` is the sole final suffix.
+        if !name.ends_with(".json.gz") {
             continue;
         }
         let meta = match dent.metadata() {
@@ -781,6 +818,46 @@ mod tests {
         .unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1, "salt mismatch → miss");
         assert_eq!(out.irradiation_time_s, 42.0);
+    }
+
+    #[test]
+    /// A writer killed between `File::create` and `rename` leaves a `.tmp`
+    /// behind. Those were invisible to `enforce_bounds`, so they accumulated
+    /// forever and were not counted against the byte cap — making the cap a
+    /// lie in exactly the failure mode it exists for (#574 review).
+    #[test]
+    fn disk_orphaned_tmp_files_are_reaped_but_fresh_ones_survive() {
+        let _g = disk_test_guard();
+        let td = isolate_disk();
+
+        // Simulate a crashed write: a stale temp file, backdated past the age gate.
+        let orphan = td.path().join("deadbeef.999.123.0.tmp");
+        std::fs::write(&orphan, b"partial").unwrap();
+        let old = std::time::SystemTime::now()
+            - (TMP_ORPHAN_MAX_AGE + std::time::Duration::from_secs(60));
+        // std::fs::FileTimes — no extra dependency just to backdate a fixture.
+        let fh = std::fs::File::options().write(true).open(&orphan).unwrap();
+        fh.set_times(std::fs::FileTimes::new().set_modified(old))
+            .expect("backdate orphan");
+        drop(fh);
+
+        // And an in-flight write that must NOT be reaped.
+        let fresh = td.path().join("cafebabe.111.222.0.tmp");
+        std::fs::write(&fresh, b"in flight").unwrap();
+
+        // Any populate triggers enforce_bounds.
+        let args = json!({"projectile":"p","energy_mev":7.0,"current_ma":0.02,"layers":[]});
+        reset_mem_lru();
+        let _ = cached_stack(&args, "lib-tmp-reap", "", || Ok(sample_result(1.0))).unwrap();
+
+        assert!(
+            !orphan.exists(),
+            "stale .tmp from a crashed writer must be reaped"
+        );
+        assert!(
+            fresh.exists(),
+            "an in-flight .tmp must never be reaped out from under a live write"
+        );
     }
 
     #[test]
