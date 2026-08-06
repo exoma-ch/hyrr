@@ -23,6 +23,7 @@ pub mod mcp;
 pub mod neutron;
 pub mod production;
 pub mod projectile;
+pub mod provenance;
 pub mod release_notes;
 pub mod stopping;
 pub mod trace_schema;
