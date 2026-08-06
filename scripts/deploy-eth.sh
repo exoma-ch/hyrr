@@ -32,7 +32,10 @@
 #                        already on the ETH VPN can leave it unset (direct).
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# BASH_SOURCE, not $0: when this file is sourced (the HYRR_DEPLOY_ETH_LIB test
+# seam at the bottom) $0 is the *caller's* path, which would resolve REPO_ROOT
+# to the wrong directory and make every path-dependent helper silently wrong.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 SSH_OPTS=(-o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new)
@@ -59,6 +62,18 @@ validate_env() {
     ent | tst | prd) : ;;
     *) echo "ERROR: unknown environment '$1' (expected ent|tst|prd)" >&2; exit 2 ;;
   esac
+}
+
+# Extract a top-level string field from version.json, reading stdin.
+#
+# Hand-rolled rather than jq: this has to run on the ETH webhosting instances
+# and on a maintainer's Mac, and jq is guaranteed on neither. The input is a
+# file this repo generates itself (frontend/scripts/version-info.ts) with a
+# fixed shape and no spaces inside any value, so stripping whitespace first
+# makes the match robust against pretty-printing without risking a truncated
+# value.
+json_field() { # json_field <field>   (JSON on stdin)
+  tr -d '\n\r\t ' | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p"
 }
 
 remote() { # remote <env> <cmd...>
@@ -223,6 +238,66 @@ do_build() {
   write_gate frontend/dist
 }
 
+# ── post-deploy verification (server-side) ─────────────────────────
+# Read the deployment back over the SSH channel this script ALREADY holds.
+#
+# Until this existed the script rsynced and then echoed "=== Deployed … ===",
+# unconditionally — a green run proved only that rsync exited 0. Three separate
+# incidents were a green pipeline over a wrong reality (#529, #461, #565).
+#
+# Server-side is where verification starts because it needs no new credential
+# and no hole in the licensing gate: the deploy is already authenticated to the
+# instance. An unauthenticated HTTP check is a strictly weaker signal and lands
+# separately in scripts/verify-deploy.sh.
+#
+# Both assertions matter, and the second one more:
+#   1. version.json on disk matches the bundle just built  → the right bytes.
+#   2. .htaccess is present and still demands a session    → the licensing gate
+#      survived the --delete rsync. An accidentally un-gated instance publishes
+#      license-restricted nuclear data to the open internet, which is a worse
+#      failure than any stale version.
+verify_remote() { # verify_remote <env> <docroot>
+  local env="$1" docroot="$2" expected actual gate
+
+  if [ ! -f frontend/dist/version.json ]; then
+    echo "ERROR: frontend/dist/version.json is missing — cannot verify the deploy." >&2
+    echo "       A dist built before #401 has no version.json; rebuild without" >&2
+    echo "       HYRR_SKIP_BUILD=1 and redeploy." >&2
+    exit 7
+  fi
+  expected="$(json_field version < frontend/dist/version.json)"
+  if [ -z "$expected" ]; then
+    echo "ERROR: could not read 'version' out of frontend/dist/version.json." >&2
+    exit 7
+  fi
+
+  echo "=== Verifying deployment on $(env_host "$env") (server-side) ==="
+
+  # shellcheck disable=SC2029  # $docroot is expanded locally, on purpose.
+  actual="$(remote "$env" "cat '${docroot}/version.json' 2>/dev/null" | json_field version)"
+  if [ "$actual" != "$expected" ]; then
+    echo "ERROR: deployed version does not match the bundle just built." >&2
+    echo "       expected: ${expected}" >&2
+    echo "       on host:  ${actual:-<no readable version.json>}" >&2
+    echo "       The rsync reported success, so suspect the docroot: '${docroot}'." >&2
+    exit 7
+  fi
+  echo "    version.json = ${actual}  ✓"
+
+  # shellcheck disable=SC2029  # $docroot is expanded locally, on purpose.
+  gate="$(remote "$env" "cat '${docroot}/.htaccess' 2>/dev/null")"
+  case "$gate" in
+    *"ShibRequestSetting requireSession 1"*) ;;
+    *)
+      echo "ERROR: no Shibboleth gate found in '${docroot}/.htaccess' — the" >&2
+      echo "       instance may be serving license-restricted nuclear data" >&2
+      echo "       UNAUTHENTICATED. Investigate before doing anything else." >&2
+      exit 7
+      ;;
+  esac
+  echo "    .htaccess requires an AAI session  ✓"
+}
+
 # ── deploy ─────────────────────────────────────────────────────────
 do_deploy() { # do_deploy <env>
   local env="$1" host url docroot
@@ -245,6 +320,8 @@ do_deploy() { # do_deploy <env>
     -e "ssh ${SSH_OPTS[*]}" \
     frontend/dist/ "${target}:${docroot}/"
 
+  verify_remote "$env" "$docroot"
+
   echo "=== Deployed ${env} → ${url} ==="
 }
 
@@ -256,8 +333,14 @@ confirm_prd() {
 }
 
 # ── dispatch ───────────────────────────────────────────────────────
+# Test seam: `HYRR_DEPLOY_ETH_LIB=1 source scripts/deploy-eth.sh` loads the
+# helpers above without running a command, so scripts/tests can exercise them
+# (stubbing `remote` to avoid needing an ETH host). `return` is valid here only
+# because this branch is reachable only when sourced.
+if [ "${HYRR_DEPLOY_ETH_LIB:-}" = "1" ]; then return 0; fi
+
 CMD="${1:-}"
-[ -n "$CMD" ] || { grep -E '^#( |$)' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ -n "$CMD" ] || { grep -E '^#( |$)' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
 shift || true
 
 case "$CMD" in
