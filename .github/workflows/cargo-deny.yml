@@ -1,0 +1,109 @@
+name: cargo-deny
+
+# Dependency hygiene for the six standalone Rust crates (#580).
+#
+# Split deliberately into two classes with different failure semantics:
+#
+#   bans / licenses / sources  — pure lockfile analysis. Deterministic: the
+#     answer only changes when someone changes a dependency. Safe as a hard
+#     gate, and blocking on PRs.
+#
+#   advisories                 — depends on the RustSec database, which moves
+#     on its own. A new advisory can turn a previously-green PR red with zero
+#     code change, potentially stranding unrelated work behind a transitive
+#     vuln that has no upstream fix yet. So on pull requests it ANNOTATES but
+#     does not block; the daily scheduled run is the one that fails, and files
+#     an issue.
+#
+# This mirrors the rule already written into .pre-commit-config.yaml — the
+# `no-commented-code` hook is disabled there for being 13-false-positive /
+# 0-true-positive — and the existing `supplier-catalog-freshness` warn-only
+# job. A gate people reflexively bypass is worse than no gate.
+#
+# Deliberately NOT part of `nix flake check`: cargo-deny fetches the advisory
+# database over the network, which the crane sandbox has no business doing.
+
+on:
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "deny.toml"
+      - ".github/workflows/cargo-deny.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "deny.toml"
+  schedule:
+    # Daily advisory sweep. Offset off the hour so it isn't competing with
+    # every other project's midnight cron for the advisory-db mirror.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    name: ${{ matrix.crate }} — ${{ matrix.checks }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # No cargo workspace: each crate carries its own Cargo.lock, and
+        # cargo-deny takes exactly one --manifest-path (there is no recursive
+        # or multi-manifest mode). Keep in lockstep with
+        # scripts/check-lockfiles.sh, which walks the same six.
+        crate:
+          - core
+          - py
+          - py-mcp
+          - hyrr-mcp
+          - wasm
+          - desktop/src-tauri
+        checks:
+          - advisories
+          - bans licenses sources
+    # Advisories annotate rather than block on PRs and pushes; the scheduled
+    # run leaves this false so a new advisory becomes a tracked issue.
+    continue-on-error: ${{ matrix.checks == 'advisories' && github.event_name != 'schedule' }}
+    steps:
+      - uses: actions/checkout@v7
+      # core/py/py-mcp/hyrr-mcp/desktop path-depend on the nucl-parquet Rust
+      # client, so the manifest can't be resolved without it. Sparse + blobless
+      # keeps this to seconds rather than pulling ~650 MB of parquet.
+      - name: Init nucl-parquet submodule (sparse — Rust client only)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set clients/rs/nucl-parquet
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: ${{ matrix.crate }}/Cargo.toml
+          command: check ${{ matrix.checks }}
+          # The inclusion graph is enormous on the Tauri tree and buries the
+          # actual finding. The advisory/licence text is what's actionable.
+          arg: --hide-inclusion-graph
+
+  # Only fires on the scheduled sweep. On a PR the advisory legs are
+  # continue-on-error, so `needs` sees success and this is skipped.
+  file-advisory-issue:
+    name: file an issue for new advisories
+    needs: deny
+    if: ${{ failure() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          filename: .github/rustsec-advisory-issue.md
+          # One rolling issue rather than a new one every night until it's fixed.
+          update_existing: true
+          search_existing: open
