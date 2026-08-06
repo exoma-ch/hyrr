@@ -150,6 +150,23 @@ jobs:
           git diff --exit-code packages/compute/src/generated/ \
             || { echo "::error::Generated config-codec.ts is stale. Regenerate with \`REGEN_TS=1 cargo test --manifest-path core/Cargo.toml --lib --no-default-features --features ts ts_bindings_match_committed\` and commit."; exit 1; }
 
+  # ── Shell-script tests (bash) ──────────────────────────────────────────
+  # These cover the guards that protect releases and deploys: the #572
+  # release-notes gate, and the #401 deploy/release verification. They ran
+  # nowhere until now — neither CI nor prek — which made them documentation
+  # rather than guards.
+  #
+  # No network and no secrets: gh and curl are stubbed onto PATH, and the
+  # deploy checks are driven against a local http.server.
+  script-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Run scripts/tests
+        run: scripts/tests/run-all.sh
+
   # ── Supplier catalog freshness (warn-only, node) ───────────────────────
   supplier-catalog-freshness:
     runs-on: ubuntu-latest

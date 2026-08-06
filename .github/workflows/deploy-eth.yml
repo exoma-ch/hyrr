@@ -143,16 +143,13 @@ jobs:
       - name: Deploy ${{ env.TARGET_ENV }}
         run: scripts/deploy-eth.sh "$TARGET_ENV"
 
-      - name: Smoke check
-        run: |
-          case "$TARGET_ENV" in
-            prd) URL="https://hyrr.ethz.ch" ;;
-            *)   URL="https://hyrr${TARGET_ENV}.ethz.ch" ;;
-          esac
-          code=$(curl -4 -sS -m 20 -o /dev/null -w '%{http_code}' "$URL")
-          echo "$URL → HTTP $code"
-          # Gated instances 302 → wayf.switch.ch (AAI); both 200 and 302 are healthy.
-          case "$code" in
-            200 | 302) : ;;
-            *) echo "smoke failed"; exit 1 ;;
-          esac
+      # Replaces the old smoke check, which accepted HTTP 200 as healthy. For an
+      # UNAUTHENTICATED request a 200 means the Shibboleth gate is off — i.e. the
+      # check passed on precisely the worst outcome, license-restricted nuclear
+      # data served to the open internet. verify-deploy.sh asserts the deployed
+      # version AND that the gate still redirects to the AAI WAYF (#401).
+      #
+      # `deploy` above already ran this; repeated here because it is the step a
+      # reader looks for, and it re-checks after the deploy has settled.
+      - name: Verify deployment (version + gate active)
+        run: scripts/verify-deploy.sh "$TARGET_ENV"

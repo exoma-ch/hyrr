@@ -84,6 +84,23 @@ deploy-eth-ladder:
 elevate:
     scripts/deploy-eth.sh prd
 
+# Plain HTTPS (unlike the deploys above), so this DOES work from vm-dev and CI.
+# Pass --gate-only to assert just the licensing gate, with no version compare.
+# Check a deployed instance from outside: version + AAI gate still active
+[group('deploy')]
+verify-deploy env *args:
+    scripts/verify-deploy.sh {{env}} {{args}}
+
+# Check a published release: tags, latest.json, PyPI wheel set, release notes
+[group('deploy')]
+verify-release version *args:
+    scripts/verify-release.sh {{version}} {{args}}
+
+# Run the shell-script tests (release gate + deploy/release verification)
+[group('test')]
+test-scripts:
+    scripts/tests/run-all.sh
+
 # Run frontend unit tests
 [group('test')]
 test-frontend:
