@@ -18,8 +18,14 @@
     # a *fixed input* (a hermetic check can't `git submodule update`). This is
     # the same tree the `nucl-parquet` submodule points at; bump both in
     # lockstep. flake=false → consumed as a plain source path.
+    # NOTE: this rev MUST equal the `nucl-parquet` submodule's. They had
+    # silently drifted (input at f4b241d = data 2026.7.2, submodule at
+    # 440b610 = data 2026.8.1), so every hermetic check was building against
+    # different nuclear data than the repo pins — undetected because nothing
+    # compared them. The #577 build-time pin guard now does, and fails the
+    # build on mismatch, so this can't drift unnoticed again.
     nucl-parquet = {
-      url = "github:exoma-ch/nucl-parquet/f4b241d4af7bc2c084845e570da0b7fb7758f507";
+      url = "github:exoma-ch/nucl-parquet/440b6103c971181fccbe5682ad804a88e78aaae5";
       flake = false;
     };
   };
