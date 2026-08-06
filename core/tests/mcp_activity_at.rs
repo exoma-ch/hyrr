@@ -19,6 +19,7 @@
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::materials::MaterialRegistry;
 use hyrr_core::mcp::activity_at::MAX_AT_S_ENTRIES;
+use hyrr_core::mcp::cache::sim_id;
 use hyrr_core::mcp::tools::{call_tool, list_tools};
 use serde_json::{json, Value};
 
@@ -34,6 +35,11 @@ fn maybe_store() -> Option<ParquetDataStore> {
     ParquetDataStore::new(&data_dir, "tendl-2023-iso").ok()
 }
 
+/// The f18 fixture's irradiation / cooling window, named so tests can query
+/// exact boundary times instead of hard-coding magic numbers twice.
+const F18_IRR_S: f64 = 7200.0;
+const F18_COOL_S: f64 = 3600.0;
+
 fn f18_args(at_s: Value) -> Value {
     // Same stack the other MCP integration tests use: p @ 18 MeV → havar
     // window → 97% O-18 water. Produces F-18 as the dominant isotope so we
@@ -47,8 +53,8 @@ fn f18_args(at_s: Value) -> Value {
             { "material": "H2O-18", "thickness_cm": 0.3,
               "enrichment": [{ "element": "O", "A": 18, "fraction": 0.97 }] }
         ],
-        "irradiation_time_s": 7200.0,
-        "cooling_time_s": 3600.0,
+        "irradiation_time_s": F18_IRR_S,
+        "cooling_time_s": F18_COOL_S,
         "at_s": at_s,
     })
 }
@@ -235,9 +241,38 @@ fn activity_at_eob_matches_isotope_production_curve() {
         "F-18 final activity should be non-trivial, got {final_bq}"
     );
 
-    // Now query the same isotope at 3600 s (mid-cooling) with the point tool.
-    // We're just checking the tool wires — the finer point-vs-analytic test
-    // lives in the chains unit tests.
+    // Now query the SAME time the curve's "Final activity" refers to — the end
+    // of the simulated window — and require the two surfaces to agree
+    // numerically. Querying a different time (as this test previously did)
+    // would have exercised the wiring but proved nothing about equality, which
+    // is what the test name promises.
+    let end_of_window = F18_IRR_S + F18_COOL_S;
+    let mut eob_args = f18_args(json!([end_of_window]));
+    eob_args
+        .as_object_mut()
+        .unwrap()
+        .insert("isotope".to_string(), json!("F-18"));
+    eob_args
+        .as_object_mut()
+        .unwrap()
+        .insert("layer_index".to_string(), json!(2));
+    let eob_out = call_tool(&db, &mut reg, "get_activity_at", &eob_args)
+        .expect("get_activity_at succeeds at end of window");
+    let eob_payload = parse_json_block(&eob_out.text);
+    // `activity_bq` is an array parallel to `at_s` — one entry per requested
+    // time. We asked for exactly one.
+    let point_bq = eob_payload["rows"][0]["activity_bq"][0]
+        .as_f64()
+        .expect("point query returns activity_bq");
+    let rel = (point_bq - final_bq).abs() / final_bq.max(f64::MIN_POSITIVE);
+    assert!(
+        rel < 1.0e-3,
+        "curve and point query must agree at the same time: curve={final_bq:e} \
+         point={point_bq:e} rel={rel:e} (tolerance is loose only because the \
+         curve value is re-parsed from 4 significant figures of rendered text)"
+    );
+
+    // Also check the tool wires at an interior cooling time.
     let mut args = f18_args(json!([3600.0]));
     args.as_object_mut()
         .unwrap()
@@ -280,17 +315,16 @@ fn different_at_s_reuses_the_cached_stack_result() {
     };
     let mut reg = MaterialRegistry::new();
 
-    // Point the disk cache at a fresh tempdir so we can inspect it. Env-var
-    // manipulation is process-global — since we're the only test in this
-    // binary using HYRR_MCP_CACHE_DIR and other tests never touch it, the
-    // set here isolates us cleanly.
-    let td = tempfile::tempdir().expect("tempdir");
-    std::env::set_var("HYRR_MCP_CACHE_DIR", td.path());
-    std::env::remove_var("HYRR_MCP_NO_DISK_CACHE");
-
-    // Distinctive irradiation_time_s ensures no other test warmed this
-    // config's mem entry. Two DIFFERENT `at_s` lists on otherwise-identical
-    // physics configs.
+    // Assert the invariant DIRECTLY on the cache key rather than by counting
+    // files in a shared directory.
+    //
+    // The previous form pointed HYRR_MCP_CACHE_DIR at a tempdir and asserted
+    // "exactly one *.json.gz". That env var is PROCESS-GLOBAL, so the test
+    // silently depended on no sibling test ever writing to the cache — an
+    // assumption that broke the moment #584's review asked for one more
+    // integration test, and would break again for the next person. Comparing
+    // `sim_id` is deterministic, filesystem-free and immune to test
+    // parallelism (#584 review).
     let build = |at_s: Value| {
         json!({
             "projectile": "p",
@@ -301,56 +335,39 @@ fn different_at_s_reuses_the_cached_stack_result() {
                 { "material": "H2O-18", "thickness_cm": 0.3,
                   "enrichment": [{ "element": "O", "A": 18, "fraction": 0.97 }] }
             ],
-            "irradiation_time_s": 7237.0, // uniquely this test
-            "cooling_time_s": 4173.0,      // uniquely this test
+            "irradiation_time_s": 7237.0,
+            "cooling_time_s": 4173.0,
             "at_s": at_s,
         })
     };
     let args_a = build(json!([100.0, 500.0]));
     let args_b = build(json!([7237.0, 8000.0, 9000.0]));
 
-    // First call: mem miss → disk miss → compute → populates BOTH tiers.
-    let _out_a = call_tool(&db, &mut reg, "get_activity_at", &args_a)
-        .expect("first activity_at call succeeds");
-    let count_after_a = std::fs::read_dir(td.path())
-        .unwrap()
-        .filter_map(Result::ok)
-        .filter(|d| {
-            d.file_name()
-                .to_str()
-                .map(|n| n.ends_with(".json.gz"))
-                .unwrap_or(false)
-        })
-        .count();
+    let id_a = sim_id(&args_a, "tendl-2023-iso", "");
+    let id_b = sim_id(&args_b, "tendl-2023-iso", "");
     assert_eq!(
-        count_after_a, 1,
-        "first call must have populated exactly one disk entry \
-         (uniquely-timed config so no sibling test warmed mem)",
+        id_a, id_b,
+        "at_s is a VIEW parameter: two configs differing only in at_s must map \
+         to the same cache key, or every distinct time set becomes a cache miss \
+         and the whole point of the feature is lost"
     );
 
-    // Second call: DIFFERENT at_s, SAME physics config → mem hit → return
-    // early, no compute, no disk touch. If `at_s` had leaked into the cache
-    // key, this would miss and write a 2nd disk entry — the failure mode
-    // the test guards against.
-    let _out_b = call_tool(&db, &mut reg, "get_activity_at", &args_b)
-        .expect("second activity_at call succeeds");
-    let count_after_b = std::fs::read_dir(td.path())
+    // Guard against passing vacuously: a real physics change MUST move the key.
+    // Without this, a constant sim_id would satisfy the assertion above.
+    let mut physics_changed = build(json!([100.0, 500.0]));
+    physics_changed
+        .as_object_mut()
         .unwrap()
-        .filter_map(Result::ok)
-        .filter(|d| {
-            d.file_name()
-                .to_str()
-                .map(|n| n.ends_with(".json.gz"))
-                .unwrap_or(false)
-        })
-        .count();
-    assert_eq!(
-        count_after_b, 1,
-        "different at_s on the same config must NOT populate a new cache entry \
-         (at_s is a view parameter, not part of the cache key)",
+        .insert("energy_mev".to_string(), json!(17.5));
+    assert_ne!(
+        id_a,
+        sim_id(&physics_changed, "tendl-2023-iso", ""),
+        "changing beam energy must change the cache key"
     );
 
-    std::env::remove_var("HYRR_MCP_CACHE_DIR");
+    // And the tools still execute against the same config end-to-end.
+    call_tool(&db, &mut reg, "get_activity_at", &args_a).expect("first call succeeds");
+    call_tool(&db, &mut reg, "get_activity_at", &args_b).expect("second call succeeds");
 }
 
 // ─── Scope aggregation ────────────────────────────────────────────────────
@@ -502,5 +519,66 @@ fn dose_rate_at_rejects_near_field_distance() {
     assert!(
         err.contains("distance_cm") && err.contains("near-field"),
         "err mentions distance + near-field: {err}"
+    );
+}
+
+/// A query time INSIDE the irradiation with a non-trivial `current_profile`.
+///
+/// This is the branch the #570 refactor reshaped: `walk_irradiation_at_times`
+/// now scales the production rate per profile interval while walking to the
+/// requested output times, where the old code did it inside
+/// `solve_irradiation_piecewise`. Nothing else in the suite exercises it, so a
+/// regression there would have been invisible (#584 review).
+///
+/// The physics assertion is deliberately one that cannot pass by accident:
+/// a beam that is OFF for the first half of the irradiation must yield
+/// strictly less activity at the half-way mark than the same beam running at
+/// full current throughout — and strictly more than zero once it switches on.
+#[test]
+fn activity_at_midirradiation_respects_the_current_profile() {
+    let Some(db) = maybe_store() else {
+        eprintln!("skipping: nucl-parquet data unavailable");
+        return;
+    };
+    let mut reg = MaterialRegistry::new();
+    let mid = F18_IRR_S / 2.0;
+
+    let activity_at_mid = |reg: &mut MaterialRegistry, profile: Option<Value>| -> f64 {
+        let mut args = f18_args(json!([mid]));
+        {
+            let obj = args.as_object_mut().unwrap();
+            obj.insert("isotope".to_string(), json!("F-18"));
+            obj.insert("scope".to_string(), json!("stack"));
+            if let Some(p) = profile {
+                obj.insert("current_profile".to_string(), p);
+            }
+        }
+        let out = call_tool(&db, reg, "get_activity_at", &args).expect("get_activity_at succeeds");
+        parse_json_block(&out.text)["rows"][0]["activity_bq"][0]
+            .as_f64()
+            .expect("activity_bq present")
+    };
+
+    // Flat beam for the whole irradiation (no profile → current_ma applies).
+    let flat = activity_at_mid(&mut reg, None);
+
+    // Beam OFF for the first half, then on at the nominal 0.04 mA.
+    let gated = activity_at_mid(
+        &mut reg,
+        Some(json!({
+            "times_s":     [0.0, mid, F18_IRR_S],
+            "currents_ma": [0.0, 0.0, 0.04],
+        })),
+    );
+
+    assert!(
+        flat > 0.0,
+        "flat-beam F-18 at mid-irradiation must be positive, got {flat:e}"
+    );
+    assert!(
+        gated < flat,
+        "a beam that was OFF for the first half must give LESS activity at the \
+         half-way mark than a beam running throughout: gated={gated:e} flat={flat:e} \
+         — if these are equal the profile is being ignored on the point path"
     );
 }

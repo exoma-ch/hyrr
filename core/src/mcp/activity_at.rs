@@ -458,6 +458,12 @@ pub fn resolve_all_layers(
     out
 }
 
+/// NOTE ON SEMANTICS: the peak is taken across the REQUESTED `at_s` only, not
+/// across the full simulated window. Asking for a single early time with a
+/// positive floor can therefore filter rows that would survive a wider query.
+/// The filtered count is always surfaced, so nothing is lost silently — but a
+/// caller reasoning about "why did this disappear" needs to know the peak is
+/// window-relative (#584 review).
 /// Filter per-isotope entries by the caller's `activity_floor_bq` — applied
 /// to each entry's peak activity across `at_s` so a long-lived low-yield
 /// isotope reporting a spike above the floor is retained. Returns the kept
