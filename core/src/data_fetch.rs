@@ -1680,7 +1680,10 @@ mod integrity_tests {
     fn tampered_bytes_are_rejected() {
         let actual = sha256_hex(b"not the data you were looking for");
         match verify_sha256_against(EMPTY_SHA256, &actual) {
-            Err(FetchError::ChecksumMismatch { expected, actual: got }) => {
+            Err(FetchError::ChecksumMismatch {
+                expected,
+                actual: got,
+            }) => {
                 assert_eq!(expected, EMPTY_SHA256);
                 assert_eq!(got, actual);
             }
