@@ -361,7 +361,21 @@ mod native {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let tmp = path.with_extension("json.tmp");
+        // Per-process temp name. A shared `update-check.json.tmp` lets two
+        // concurrent hyrr-mcp processes interleave writes and corrupt each
+        // other's file — the same hazard the disk cache fixed in #574, and
+        // the reason its temp names carry pid + nanos. A corrupt file only
+        // degrades to "no notice this round" (the reader treats it as a
+        // miss), but the write should not be the thing that causes it.
+        let unique = format!(
+            "{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        );
+        let tmp = path.with_extension(format!("json.{unique}.tmp"));
         {
             let mut f = fs::File::create(&tmp)?;
             let bytes = serde_json::to_vec_pretty(check)
@@ -481,20 +495,34 @@ mod native {
             return;
         }
         let current = current_version.to_string();
-        std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("hyrr-update-check".to_string())
             .spawn(move || {
-                let Some(check) = check_with_fetcher(&current, default_fetcher) else {
-                    return;
-                };
-                let Some(path) = cache_path() else {
-                    return;
-                };
-                // Ignore the write result — a failed cache write just
-                // means we'll retry on the next startup. No stderr.
-                let _ = write_cache_to(&path, &check);
+                // The air-gap contract promises no giveaway that a fetch was
+                // even attempted. Every fallible step below already uses
+                // `.ok()?`, but an unexpected panic would reach the default
+                // hook and print to stderr — which would break that promise
+                // on precisely the surface (stdio JSON-RPC) where stray
+                // output is most unwelcome. `catch_unwind` makes it absolute.
+                let _ = std::panic::catch_unwind(|| {
+                    let Some(check) = check_with_fetcher(&current, default_fetcher) else {
+                        return;
+                    };
+                    let Some(path) = cache_path() else {
+                        return;
+                    };
+                    // Ignore the write result — a failed cache write just
+                    // means we'll retry on the next startup. No stderr.
+                    let _ = write_cache_to(&path, &check);
+                });
             })
-            .ok();
+            .is_ok();
+        if !spawned {
+            // Thread creation failed (resource exhaustion). Release the latch
+            // so a later startup can retry, rather than locking this process
+            // out of update checks for its whole lifetime.
+            SPAWNED.store(false, AtomicOrdering::SeqCst);
+        }
     }
 }
 
@@ -521,6 +549,36 @@ mod tests {
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {
         static SERIAL: Mutex<()> = Mutex::new(());
         SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// RAII restore for a process-global env var.
+    ///
+    /// The mutex above stops env-touching tests from *interleaving*, but it
+    /// does not stop them *leaking*: a manual `remove_var` at the end of a
+    /// test is skipped when an earlier assert panics, and the next test in
+    /// the same process then inherits it. Process-global env in tests is a
+    /// parallelism hazard we already got bitten by in #584 — restore on drop
+    /// so a failing assertion can only fail its own test.
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let prev = std::env::var(key).ok();
+            unsafe { std::env::set_var(key, value) };
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
     }
 
     // -- parse_version ------------------------------------------------
@@ -827,10 +885,11 @@ mod tests {
         // with a live fetcher would have written one.
         let _guard = env_guard();
         let tmp = tempfile::tempdir().unwrap();
-        unsafe {
-            std::env::set_var(DISABLE_ENV_VAR, "1");
-            std::env::set_var("XDG_CACHE_HOME", tmp.path());
-        }
+        // RAII: restored even if the assertion below panics, so a failure
+        // here cannot leak the opt-out into any sibling test.
+        let _disable = EnvVarGuard::set(DISABLE_ENV_VAR, "1");
+        let _xdg = EnvVarGuard::set("XDG_CACHE_HOME", tmp.path());
+
         spawn_background_check_if_stale("0.18.0");
         // Give a hypothetical thread ~250 ms to prove it isn't there.
         std::thread::sleep(Duration::from_millis(250));
@@ -838,10 +897,6 @@ mod tests {
             read_cached_check().is_none(),
             "opt-out env must prevent any cache write"
         );
-        unsafe {
-            std::env::remove_var(DISABLE_ENV_VAR);
-            std::env::remove_var("XDG_CACHE_HOME");
-        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
