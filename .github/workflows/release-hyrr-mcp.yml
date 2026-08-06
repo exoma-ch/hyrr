@@ -1,15 +1,23 @@
 name: Release hyrr-mcp
 
-# Builds ABI3 wheels for hyrr-mcp on a 5-target matrix and publishes to PyPI
-# via OIDC trusted publishing. Triggered by tags matching `hyrr-mcp-v*`.
+# Builds ABI3 wheels for hyrr-mcp on a 4-target matrix (linux x86_64/aarch64,
+# macOS arm64, Windows x86_64), plus an sdist, and publishes to PyPI via OIDC
+# trusted publishing. Triggered by tags matching `hyrr-mcp-v*`.
 #
 # To cut a release:
-#   1. Bump py-mcp/Cargo.toml + py-mcp/pyproject.toml version (must match).
+#   1. Bump py-mcp/pyproject.toml — that is what maturin stamps onto the
+#      wheel. release-please does this via `extra-files`. py-mcp/Cargo.toml's
+#      own version is inert (it sits at 0.1.0) and is deliberately NOT kept in
+#      lockstep; nothing reads it.
 #   2. Tag: git tag hyrr-mcp-v0.1.0 && git push --tags
 #   3. This workflow builds the matrix and publishes via OIDC. No tokens.
 #
 # PyPI trusted publisher must be pre-configured under the project `hyrr-mcp`
 # with workflow `release-hyrr-mcp.yml` and environment `pypi`.
+#
+# Release integrity: `publish` gates on the full artifact set, not on
+# "whatever built". See the `verify-artifacts` job and the note above the
+# build matrix for why (#461, #573).
 
 on:
   push:
