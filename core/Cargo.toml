@@ -59,9 +59,30 @@ base64 = { version = "0.22", optional = true }
 ts-rs = { version = "12", features = ["serde-json-impl"], optional = true }
 
 # Native-only deps for the lazy data-fetch path (#52). Gated so wasm32
-# consumers don't pull reqwest/tar/zstd into their dependency graph.
+# consumers don't pull the HTTP client / tar / zstd into their graph.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+# HTTP client for the ONE blocking GET that is the product's entire network
+# surface (#578, #579). `ureq` rather than `reqwest`: the whole requirement is
+# a single synchronous streamed download, and reqwest::blocking spins up a
+# Tokio runtime to service it — ~70 crates of review surface for a call that
+# is synchronous by construction. ureq does it in ~36 with no async runtime.
+#
+# Feature choice is load-bearing, so spell it out:
+#   rustls            -> pulls `rustls-no-provider` + `_ring` + `rustls-webpki-roots`.
+#                        `_ring` is what keeps ADR 0005's ring decision: ureq
+#                        installs `rustls::crypto::ring` when no process-wide
+#                        provider is set, so aws-lc-rs (and cmake, and a
+#                        broken aarch64 wheel cross-build) never enter the
+#                        graph. Keeping `rustls-webpki-roots` also avoids the
+#                        `panic!("WebPki is disabled…")` arm in ureq's
+#                        tls/rustls.rs.
+#   platform-verifier -> `rustls-platform-verifier`, i.e. the OS trust store.
+#                        REQUIRED: selecting `RootCerts::PlatformVerifier`
+#                        without it is a *runtime panic*, not a compile error
+#                        (ureq tls/rustls.rs:183). `tls::assert_feature_wiring`
+#                        pins this so a careless feature edit fails a test
+#                        rather than a user's first run.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "gzip"] }
 tar = "0.4"
 zstd = "0.13"
 fs2 = "0.4"
