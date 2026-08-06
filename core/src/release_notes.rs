@@ -123,8 +123,11 @@ pub struct Release {
     pub entries: Vec<Entry>,
 }
 
-/// Top-level artifact shape. `#[serde(default)]` on unrecognised fields keeps
-/// forward-compat with `$schema` / `_note` / future annotations.
+/// Top-level artifact shape. serde ignores unknown fields by default, which
+/// keeps `$schema` / `_note` / future annotations forward-compatible. Note
+/// that `Entry::impact` deliberately has NO `#[serde(default)]`: a missing
+/// classification must fail to parse rather than silently become `internal`,
+/// since defaulting it would be exactly the runtime inference #572 forbids.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseNotes {
     /// Releases, newest-first. Ordering is checked at release time by

@@ -19,7 +19,9 @@
             "get_dose_rate"
           ],
           "guidance": "Inventories from earlier versions may be missing long-lived trace products whose end-of-bombardment activity was orders of magnitude below the saturated matrix peak (e.g. Fe-55 from Mn in Al alloys). Waste-inventory, delayed-activity and dose-at-late-cooling numbers were the primary victims. Re-run affected simulations; the fixed prune reports `pruned_negligible_count` so callers can audit what was hidden.",
-          "refs": [533]
+          "refs": [
+            533
+          ]
         },
         {
           "summary": "High-Z targets stored as p_Z{Z}.parquet (Tc, Pm, Po, Rn, Ra, Ac, Pa, Np, Pu, Am, Cm, Bk, Cf, Es, Fm, Md, Db) now resolve; previously they silently produced zero isotopes (#488).",
@@ -35,7 +37,9 @@
             "get_dose_rate"
           ],
           "guidance": "Any prior simulation with a target layer of Tc, Pm, Po, Rn, Ra, Ac, Pa, Np, Pu, Am, Cm, Bk, Cf, Es, Fm, Md, or Db returned zero yield for that element with no warning — blocking clinical routes like 226Ra(p,2n)225Ac. Re-run those stacks; the fixed lookup now emits a data.xs.missing trace event when a target truly has no cross-section data.",
-          "refs": [488]
+          "refs": [
+            488
+          ]
         },
         {
           "summary": "hyrr-mcp auto-fetch of nuclear data now uses the CalVer DATA_VERSION; previous versions constructed a SemVer release URL that 404'd, then wrote an empty cache dir and reported the misleading 'projectile p not in bundled set' at simulate time (#529).",
@@ -52,7 +56,9 @@
             "get_dose_rate"
           ],
           "guidance": "If you ran hyrr-mcp 0.18.0 without a pre-populated data cache (--data-dir or HYRR_DATA), the fetch silently landed an empty partial cache and downstream calls either errored with a misleading projectile message or silently returned garbage for whatever tables happened to be missing. Re-run any simulation whose data-cache provenance you cannot verify.",
-          "refs": [529]
+          "refs": [
+            529
+          ]
         },
         {
           "summary": "activity_floor_bq is now an absolute reporting filter at the MCP tool layer; the old ~1e-6 × peak relative clamp inside compute is gone (#575, follows #533).",
@@ -66,23 +72,40 @@
             "get_dose_rate"
           ],
           "guidance": "Callers that relied on the implicit backend clamp now see every isotope surviving numerical-dust suppression. Set activity_floor_bq explicitly to filter (units: Bq, per-layer for inventory tables, stack-summed for emission/dose).",
-          "refs": [575, 567, 130]
+          "refs": [
+            575,
+            567,
+            130
+          ]
         },
         {
           "summary": "StackResult cache now persists across MCP process restarts (disk-backed).",
           "impact": "ux",
           "silent": false,
-          "affected": ["simulate", "compare_simulations"],
+          "affected": [
+            "simulate",
+            "compare_simulations"
+          ],
           "guidance": "Repeat queries on the same config are served from disk on cold start; no numerical change.",
-          "refs": [574]
+          "refs": [
+            574
+          ]
         },
         {
           "summary": "MCP tool descriptions carry the primary-charged-particle / no-secondary-neutron scope caveat, and the initialize `instructions` document what HYRR does NOT model (#528). Adds `get_nuclide_data`, `get_dose_constant`, `get_dose_rate` (#459, #440, #441).",
           "impact": "api_change",
           "silent": false,
-          "affected": ["*"],
+          "affected": [
+            "*"
+          ],
           "guidance": "New tools available. Existing tool descriptions gained the SCOPE suffix — behaviour unchanged.",
-          "refs": [562, 528, 459, 440, 441]
+          "refs": [
+            562,
+            528,
+            459,
+            440,
+            441
+          ]
         },
         {
           "summary": "MCP protocol version is now negotiated (2024-11-05 / 2025-03-26 / 2025-06-18) and notifications are no longer replied to.",
@@ -90,7 +113,10 @@
           "silent": false,
           "affected": [],
           "guidance": "Clients on any of the three revisions get echoed back; unknown versions fall back to 2025-06-18.",
-          "refs": [561, 535]
+          "refs": [
+            561,
+            535
+          ]
         },
         {
           "summary": "Config codec unified in Rust (WASM for browser, native for MCP); share URLs now round-trip full state including custom material composition.",
@@ -98,15 +124,82 @@
           "silent": false,
           "affected": [],
           "guidance": "Frontend URL share links from prior versions still decode; new links carry more state.",
-          "refs": [539, 550, 547]
+          "refs": [
+            539,
+            550,
+            547
+          ]
         },
         {
           "summary": "Data update: nucl-parquet bumped to data-2026.7.2 with the neutron thermal-grid fix.",
           "impact": "data_update",
           "silent": false,
-          "affected": ["simulate"],
+          "affected": [
+            "simulate"
+          ],
           "guidance": "Neutron thermal-region cross-section interpolation grid corrected. Charged-particle results unchanged.",
-          "refs": [548]
+          "refs": [
+            548
+          ]
+        },
+        {
+          "summary": "Cross-section files stored under the Z-named form are now resolved in the BROWSER/TS data layer too, not just the Rust core (#557).",
+          "impact": "physics_affecting",
+          "silent": true,
+          "affected": [
+            "browser app",
+            "desktop app",
+            "@hyrr/compute"
+          ],
+          "guidance": "Same defect class as #488 but on the TS surface: in the browser, high-Z targets stored as p_Z{Z}.parquet (Ra, Ac, Pa, Np-Md, Db, Tc, Pm, Po, Rn) resolved to NOTHING and the stack reported zero isotopes with no error. Any browser or desktop result for those elements — notably Ra-226(p,x) for Ac-225 — was silently empty and must be re-run. MCP/CLI users were fixed separately by #488.",
+          "refs": [
+            557,
+            488
+          ]
+        },
+        {
+          "summary": "Dataset exports are now self-describing: every column carries unit, description and evaluation point, and each Parquet carries dataset-level provenance (#582).",
+          "impact": "api_change",
+          "silent": false,
+          "affected": [
+            "get_simulation_dataset",
+            "get_isotope_inventory",
+            "get_emission_curve"
+          ],
+          "guidance": "The tool response gained a `schema` block per table and the embedded Parquet gained Arrow field metadata plus file-level key/value provenance (library + data version, core version, config, time grid). Existing consumers keep working — the additions are additive — but a consumer that previously guessed a column's unit or evaluation point should now read it instead of inferring. `top_n`/`sort_by` bound the inline JSON only; the Parquet resource is always complete.",
+          "refs": [
+            582,
+            569
+          ]
+        },
+        {
+          "summary": "New point-query tools: get_activity_at and get_dose_rate_at evaluate the decay chain exactly at caller-chosen times (#584).",
+          "impact": "api_change",
+          "silent": false,
+          "affected": [
+            "get_activity_at",
+            "get_dose_rate_at"
+          ],
+          "guidance": "Previously the only way to get an activity at a specific instant was to fetch a 200-point curve and interpolate. These tools re-solve the Bateman chain at the exact requested times over the cached simulation, so the value is analytic rather than interpolated, and a caller can supply its own time grid (clearance dates, shipping windows). Curve tools are unchanged and now share the same solver.",
+          "refs": [
+            584,
+            570
+          ]
+        },
+        {
+          "summary": "A stack in which the beam fully stops inside a layer no longer aborts the whole simulation (#553).",
+          "impact": "ux",
+          "silent": false,
+          "affected": [
+            "simulate",
+            "get_simulation_dataset",
+            "browser app",
+            "desktop app"
+          ],
+          "guidance": "Configurations where the beam ranges out mid-stack (E_out = 0, e.g. a thick Nb layer) previously failed the entire run with an out-of-range stopping-power error rather than returning results. The failure was loud, so no earlier result is wrong — such runs simply produced nothing. Re-run any configuration you previously had to work around.",
+          "refs": [
+            553
+          ]
         }
       ]
     },
@@ -118,26 +211,46 @@
         {
           "summary": "Neutron activation — Phase 1 (primary neutron source) and Phase 2 (secondary (x,n) → activation) added; charged-run downstream layers now optionally get secondary-neutron activation via `secondary_neutron: true`.",
           "impact": "physics_affecting",
-          "silent": false,
-          "affected": ["simulate", "get_isotope_inventory", "list_producing_layers"],
+          "silent": true,
+          "affected": [
+            "simulate",
+            "get_isotope_inventory",
+            "list_producing_layers"
+          ],
           "guidance": "Previously, downstream layers behind a fully-stopped beam reported ~0 activation, silently missing the secondary-neutron field. Opt in with `secondary_neutron: true` on charged runs, or drive a pure neutron source with `projectile: \"n\"`. The default charged-particle path is unchanged.",
-          "refs": [508, 509, 524, 517, 518, 507]
+          "refs": [
+            508,
+            509,
+            524,
+            517,
+            518,
+            507
+          ]
         },
         {
           "summary": "Data update: nucl-parquet with thermal (n,γ) resonance reconstruction (LRF=7 for Cu/V/W/Fe).",
           "impact": "data_update",
           "silent": false,
-          "affected": ["simulate"],
+          "affected": [
+            "simulate"
+          ],
           "guidance": "Thermal-neutron capture on these elements now has proper reconstructed cross-section data; earlier results relying on missing LRF=7 data were undercounting thermal capture.",
-          "refs": [518, 517]
+          "refs": [
+            518,
+            517
+          ]
         },
         {
           "summary": "Neutron (n,γ) channel filter now excludes elastic contamination.",
           "impact": "physics_affecting",
           "silent": true,
-          "affected": ["simulate"],
+          "affected": [
+            "simulate"
+          ],
           "guidance": "Neutron-capture simulations from earlier versions could have double-counted elastic-scattering channels as capture in certain isotopes. Re-run neutron-driven work.",
-          "refs": [521]
+          "refs": [
+            521
+          ]
         }
       ]
     }
