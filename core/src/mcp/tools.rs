@@ -198,10 +198,32 @@ fn build_dataset_meta(
     library: &str,
     sim_id: &str,
 ) -> DatasetMeta {
+    // The result already carries the provenance stamped at compute time from
+    // the live store (#593), which is more authoritative than anything we can
+    // reconstruct here — it knows whether the data came from the *verified*
+    // cache or from a `--data-dir` the user pointed at.
+    //
+    // One exception: the MCP disk cache persists `StackResult`, so an entry
+    // written before #593 restores with `Unknown` provenance and an empty
+    // library. Emitting that would regress the long-standing
+    // `hyrr.core_version` / `hyrr.library` keys to empty strings. Fill those
+    // two from what we know here, but leave `data_source: Unknown` — the
+    // nuclear data behind a pre-#593 cache entry genuinely cannot be
+    // attributed, and inventing a version would be exactly the false
+    // attribution this feature exists to prevent.
+    let provenance = if result.provenance.is_attributable() {
+        result.provenance.clone()
+    } else {
+        crate::provenance::Provenance {
+            hyrr_version: env!("CARGO_PKG_VERSION").to_string(),
+            library: library.to_string(),
+            ..crate::provenance::Provenance::unknown()
+        }
+    };
+
     DatasetMeta {
         simulation_id: sim_id.to_string(),
-        core_version: env!("CARGO_PKG_VERSION"),
-        library: library.to_string(),
+        provenance,
         config_json: serde_json::to_string(args).unwrap_or_else(|_| "null".to_string()),
         time_grid_s: dataset::shared_time_grid(result),
         irradiation_time_s: result.irradiation_time_s,
@@ -3170,6 +3192,7 @@ mod tests {
             layer_results: layers,
             irradiation_time_s: 3600.0,
             cooling_time_s: 0.0,
+            provenance: crate::provenance::Provenance::unknown(),
         }
     }
 

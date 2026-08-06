@@ -248,10 +248,13 @@ impl Col {
 pub struct DatasetMeta {
     /// Config-hashed simulation id (same value as the `hyrr://sim/<id>/…` URI).
     pub simulation_id: String,
-    /// `hyrr-core` version at emit time (from `CARGO_PKG_VERSION`).
-    pub core_version: &'static str,
-    /// Loaded nuclear data library id (e.g. `tendl-2023-iso`).
-    pub library: String,
+    /// Which nuclear data produced the result (#593): `hyrr-core` version,
+    /// data version, library, and the verified tarball hash where one applies.
+    ///
+    /// Carries the `core_version` and `library` facts this struct used to hold
+    /// as separate fields — the Parquet KV keys (`hyrr.core_version`,
+    /// `hyrr.library`) are unchanged, so existing readers are unaffected.
+    pub provenance: crate::provenance::Provenance,
     /// The full simulation config as canonical JSON — the exact `args` the
     /// tool was called with. Consumers can round-trip it to reproduce.
     pub config_json: String,
@@ -277,8 +280,15 @@ impl DatasetMeta {
             .unwrap_or_else(|_| Value::String(self.config_json.clone()));
         serde_json::json!({
             "simulation_id": self.simulation_id,
-            "hyrr_core_version": self.core_version,
-            "library": self.library,
+            "hyrr_core_version": self.provenance.hyrr_version,
+            "library": self.provenance.library,
+            // #593. `data_tarball_sha256` is emitted even when null so a
+            // consumer can read the key and find `data_source` next to it
+            // explaining why — "no hash because browser" and "no hash because
+            // this predates provenance" demand opposite reactions.
+            "data_version": self.provenance.data_version,
+            "data_tarball_sha256": self.provenance.data_tarball_sha256,
+            "data_source": self.provenance.data_source,
             "irradiation_time_s": self.irradiation_time_s,
             "cooling_time_s": self.cooling_time_s,
             "time_grid_s": self.time_grid_s,
@@ -292,8 +302,27 @@ impl DatasetMeta {
     fn to_parquet_kv(&self) -> Vec<(String, String)> {
         let mut kv = vec![
             ("hyrr.simulation_id".into(), self.simulation_id.clone()),
-            ("hyrr.core_version".into(), self.core_version.to_string()),
-            ("hyrr.library".into(), self.library.clone()),
+            (
+                "hyrr.core_version".into(),
+                self.provenance.hyrr_version.clone(),
+            ),
+            ("hyrr.library".into(), self.provenance.library.clone()),
+            // #593 — identify the nuclear data, not just the code. Parquet KV
+            // is string-only, so `hyrr.data_tarball_sha256` is OMITTED rather
+            // than written empty when there is no hash, matching the
+            // `table_name` rule below. `hyrr.data_source` is always present
+            // and says why, so the omission is never ambiguous.
+            (
+                "hyrr.data_version".into(),
+                self.provenance.data_version.clone(),
+            ),
+            (
+                "hyrr.data_source".into(),
+                serde_json::to_value(self.provenance.data_source)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_else(|| "unknown".into()),
+            ),
             (
                 "hyrr.irradiation_time_s".into(),
                 self.irradiation_time_s.to_string(),
@@ -315,6 +344,10 @@ impl DatasetMeta {
         // this metadata exists to prevent (#569 review).
         if !self.table_name.is_empty() {
             kv.push(("hyrr.table_name".into(), self.table_name.clone()));
+        }
+        // Same rule: only claim a tarball hash when one was actually verified.
+        if let Some(sha) = &self.provenance.data_tarball_sha256 {
+            kv.push(("hyrr.data_tarball_sha256".into(), sha.clone()));
         }
         kv
     }
@@ -480,8 +513,15 @@ impl Table {
         schema_meta.insert("hyrr.table_name".to_string(), self.name.to_string());
         if let Some(m) = meta {
             schema_meta.insert("hyrr.simulation_id".to_string(), m.simulation_id.clone());
-            schema_meta.insert("hyrr.core_version".to_string(), m.core_version.to_string());
-            schema_meta.insert("hyrr.library".to_string(), m.library.clone());
+            schema_meta.insert(
+                "hyrr.core_version".to_string(),
+                m.provenance.hyrr_version.clone(),
+            );
+            schema_meta.insert("hyrr.library".to_string(), m.provenance.library.clone());
+            schema_meta.insert(
+                "hyrr.data_version".to_string(),
+                m.provenance.data_version.clone(),
+            );
         }
         let schema = Arc::new(Schema::new_with_metadata(fields, schema_meta));
         let batch = RecordBatch::try_new(Arc::clone(&schema), arrays).map_err(|e| e.to_string())?;
@@ -1232,6 +1272,74 @@ mod tests {
         assert_eq!(t.schema_json().as_array().unwrap().len(), 1);
     }
 
+    fn meta_with(p: crate::provenance::Provenance) -> DatasetMeta {
+        DatasetMeta {
+            simulation_id: "sim-x".into(),
+            provenance: p,
+            config_json: "{}".into(),
+            time_grid_s: vec![],
+            irradiation_time_s: 1.0,
+            cooling_time_s: 0.0,
+            table_name: "t".into(),
+        }
+    }
+
+    /// Parquet KV is string-only, so an inapplicable hash is OMITTED rather
+    /// than written empty — same rule as `table_name`. `hyrr.data_source` is
+    /// always present, so the omission is never ambiguous (#593).
+    #[test]
+    fn kv_omits_the_hash_but_always_explains_why() {
+        use crate::provenance::{DataSource, Provenance};
+        for (src, tag) in [
+            (DataSource::BrowserHttp, "browser-http"),
+            (DataSource::LocalDirectory, "local-directory"),
+        ] {
+            let m = meta_with(Provenance::new("tendl-2023-iso", src));
+            let kv = m.to_parquet_kv();
+            let keys: Vec<&str> = kv.iter().map(|(k, _)| k.as_str()).collect();
+            assert!(
+                !keys.contains(&"hyrr.data_tarball_sha256"),
+                "{src:?} must not write a hash key it cannot justify"
+            );
+            let get = |k: &str| kv.iter().find(|(kk, _)| kk == k).map(|(_, v)| v.clone());
+            assert_eq!(get("hyrr.data_source").as_deref(), Some(tag));
+            // The data is still identified even without a tarball.
+            assert!(!get("hyrr.data_version").unwrap_or_default().is_empty());
+        }
+    }
+
+    /// In JSON (unlike Parquet KV) the key is present with an explicit null,
+    /// so a consumer reads `data_tarball_sha256: null` alongside a
+    /// `data_source` that explains it (#593 pitfall).
+    #[test]
+    fn json_keeps_an_explicit_null_hash_next_to_its_reason() {
+        use crate::provenance::{DataSource, Provenance};
+        let m = meta_with(Provenance::new("tendl-2023-iso", DataSource::BrowserHttp));
+        let j = m.to_json();
+        assert!(j.get("data_tarball_sha256").is_some(), "key must exist");
+        assert!(j["data_tarball_sha256"].is_null());
+        assert_eq!(j["data_source"], "browser-http");
+        assert_eq!(j["library"], "tendl-2023-iso");
+        assert!(!j["data_version"].as_str().unwrap().is_empty());
+    }
+
+    /// The long-standing #569 keys must keep their exact names and values now
+    /// that they are sourced from the nested provenance block.
+    #[test]
+    fn issue_569_keys_are_unchanged_by_the_provenance_refactor() {
+        use crate::provenance::{DataSource, Provenance};
+        let mut p = Provenance::new("jendl-5", DataSource::LocalDirectory);
+        p.hyrr_version = "1.2.3".into();
+        let m = meta_with(p);
+        let kv = m.to_parquet_kv();
+        let get = |k: &str| kv.iter().find(|(kk, _)| kk == k).map(|(_, v)| v.clone());
+        assert_eq!(get("hyrr.core_version").as_deref(), Some("1.2.3"));
+        assert_eq!(get("hyrr.library").as_deref(), Some("jendl-5"));
+        let j = m.to_json();
+        assert_eq!(j["hyrr_core_version"], "1.2.3");
+        assert_eq!(j["library"], "jendl-5");
+    }
+
     #[test]
     fn parquet_round_trips_through_a_reader_with_field_and_file_metadata() {
         use arrow::array::{Array, Float64Array, Int64Array, StringArray};
@@ -1240,8 +1348,13 @@ mod tests {
 
         let meta = DatasetMeta {
             simulation_id: "sim-abc".into(),
-            core_version: "9.9.9",
-            library: "tendl-2023-iso".into(),
+            provenance: crate::provenance::Provenance {
+                hyrr_version: "9.9.9".into(),
+                data_version: "2026.8.1".into(),
+                library: "tendl-2023-iso".into(),
+                data_tarball_sha256: Some("a".repeat(64)),
+                data_source: crate::provenance::DataSource::VerifiedTarball,
+            },
             config_json: r#"{"projectile":"p","energy_mev":18.0}"#.into(),
             time_grid_s: vec![0.0, 3600.0, 7200.0],
             irradiation_time_s: 3600.0,
@@ -1273,6 +1386,10 @@ mod tests {
         assert_eq!(get("hyrr.core_version"), "9.9.9");
         assert_eq!(get("hyrr.library"), "tendl-2023-iso");
         assert_eq!(get("hyrr.table_name"), "t");
+        // #593 — the data, not just the code, is now identified in the KV.
+        assert_eq!(get("hyrr.data_version"), "2026.8.1");
+        assert_eq!(get("hyrr.data_source"), "verified-tarball");
+        assert_eq!(get("hyrr.data_tarball_sha256"), "a".repeat(64));
         assert_eq!(get("hyrr.irradiation_time_s"), "3600");
         assert!(get("hyrr.config_json").contains("\"projectile\":\"p\""));
         // Time grid JSON-encoded, decodes back cleanly.
