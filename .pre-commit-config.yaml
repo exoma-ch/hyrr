@@ -91,6 +91,14 @@ repos:
       - id: pymarkdown
         name: pymarkdown
         args:
+          # Front-matter is off by default, so pymarkdown reads a YAML header
+          # as body text and then trips on the closing `---` as a setext
+          # heading (MD003/MD022). GitHub issue templates and the
+          # create-an-issue action both require front matter
+          # (.github/rustsec-advisory-issue.md), so parse it properly rather
+          # than excluding those files from linting entirely.
+          - "--set"
+          - "extensions.front-matter.enabled=$!True"
           - "-d"
           - "MD013,MD024,MD004,MD012,MD041,MD029"
           - "scan"
