@@ -103,6 +103,17 @@ pub trait DatabaseProtocol: Send + Sync {
     /// Nuclear data library identifier (e.g. "tendl-2025"). Used so MCP
     /// tool responses can echo which library fed the calculation.
     fn library(&self) -> &str;
+
+    /// Where this store's data came from, for the provenance block stamped
+    /// into results (#593).
+    ///
+    /// Defaults to [`DataSource::for_target`] — on native that is the
+    /// conservative `LocalDirectory`. A store only reports
+    /// `VerifiedTarball` by overriding this and *proving* it read the managed
+    /// cache; claiming a verified hash is opt-in, never inherited.
+    fn data_origin(&self) -> crate::provenance::DataSource {
+        crate::provenance::DataSource::for_target()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -625,6 +636,43 @@ mod np_store {
 
         fn library(&self) -> &str {
             &self.library
+        }
+
+        /// Report [`VerifiedTarball`] only when this store is actually reading
+        /// the managed cache — i.e. the directory that
+        /// `data_fetch::install_tarball_atomic` populates after the download
+        /// has been checked against the pinned SHA-256 (#577).
+        ///
+        /// Everything else (`--data-dir`, `HYRR_DATA`, the `nucl-parquet`
+        /// submodule, a sibling checkout) is `LocalDirectory`: real data, but
+        /// not data this process verified, so no hash may be claimed for it.
+        ///
+        /// [`VerifiedTarball`]: crate::provenance::DataSource::VerifiedTarball
+        fn data_origin(&self) -> crate::provenance::DataSource {
+            use crate::provenance::DataSource;
+
+            // wasm32 never compiles the parquet store, so `data_fetch` is
+            // always available here.
+            let Ok(cache) = crate::data_fetch::cache_dir() else {
+                return DataSource::LocalDirectory;
+            };
+
+            // Compare canonicalised paths: the cache lives under `~/.hyrr`,
+            // which is frequently a symlink, and a textual prefix test would
+            // then miss a store that *is* reading the verified cache.
+            // Canonicalisation needs both paths to exist; if either lookup
+            // fails, fall back to the conservative answer rather than
+            // guessing upward.
+            let (Ok(root), Ok(cache)) = (self.data_root.canonicalize(), cache.canonicalize())
+            else {
+                return DataSource::LocalDirectory;
+            };
+
+            if root.starts_with(&cache) {
+                DataSource::VerifiedTarball
+            } else {
+                DataSource::LocalDirectory
+            }
         }
     }
 } // mod np_store

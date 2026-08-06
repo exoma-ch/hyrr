@@ -351,6 +351,15 @@ pub struct StackResult {
     pub layer_results: Vec<LayerResult>,
     pub irradiation_time_s: f64,
     pub cooling_time_s: f64,
+    /// Which nuclear data produced this result (#593) — version, library, and
+    /// the verified tarball hash where one applies.
+    ///
+    /// `#[serde(default)]` so results written before #593 still deserialize;
+    /// they land on [`Provenance::unknown`], which reports
+    /// [`DataSource::Unknown`](crate::provenance::DataSource::Unknown) rather
+    /// than inheriting the running build's identity.
+    #[serde(default)]
+    pub provenance: crate::provenance::Provenance,
 }
 
 /// A single radiation emission line for a decaying nuclide (#427).

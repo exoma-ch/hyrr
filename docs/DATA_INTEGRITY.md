@@ -166,6 +166,59 @@ extraction, because upstream signs the archive rather than its contents, so
 there is nothing authenticated left to compare an extracted file against. That
 is the same gap #296 closes.
 
+## What a result records about its data (#593)
+
+The pin above protects *one download*. It says nothing to someone reading a
+paper three years from now who needs to know which nuclear data produced the
+numbers. So every simulation result carries a `provenance` block:
+
+```json
+"provenance": {
+  "hyrr_version": "0.18.0",
+  "data_version": "2026.8.1",
+  "library": "tendl-2023-iso",
+  "data_tarball_sha256": "a5ce01b8…",
+  "data_source": "verified-tarball"
+}
+```
+
+`data_source` is the field that makes the others readable. A missing
+`data_tarball_sha256` is not one fact but four different ones, and they call
+for opposite reactions:
+
+| `data_source` | Means | Hash? |
+|---|---|---|
+| `verified-tarball` | Native, read from the managed cache — data installed from the pinned tarball after the SHA-256 check above | yes |
+| `local-directory` | Native, but `--data-dir` / `HYRR_DATA` / the submodule / a sibling checkout. Real data, not data *this* process verified | no — inapplicable |
+| `browser-http` | Browser (WASM): Parquet fetched per file via hyparquet. A tarball never exists on this path | no — impossible |
+| `unknown` | The result predates this feature | no — unattributable |
+
+Two deliberate choices:
+
+- **The hash is recorded only for `verified-tarball`.** On any other origin
+  the compiled-in pin describes a tarball the run did not read, so emitting
+  it would assert something untrue.
+- **A pre-existing result is *not* back-filled** from the running build's
+  constants. Those describe the current binary, not the one that produced the
+  file; stamping them on would manufacture exactly the false attribution this
+  feature exists to prevent. It reads `unknown` instead.
+
+In JSON the key is always present, with an explicit `null` next to the
+`data_source` that explains it. Parquet key-value metadata is string-only, so
+there the `hyrr.data_tarball_sha256` key is *omitted* rather than written
+empty — but `hyrr.data_source` is always present, so the absence is never
+ambiguous.
+
+**This is provenance, not proof.** A self-reported hash inside a result is a
+record, not an attestation — whoever holds the file can edit it. It exists so
+an honest reconstruction is possible without re-running anything, and it
+survives cache eviction, a re-cut release, and submodule drift. Tamper-evidence
+would need a signature, which is the follow-up below.
+
+The browser's inability to report a hash is a genuine limitation of that
+surface, stated in the schema rather than hidden: `data_version` is the
+strongest identifier a browser run can offer.
+
 ## Failure modes you may see
 
 | Error | Meaning | What to do |
