@@ -195,6 +195,37 @@ check_whitelist_fresh() {
   exit 6
 }
 
+# Apache matches <Files> by BASENAME at any depth, so the version.json
+# exception below opens EVERY file with that name in the deployed tree — not
+# just the one at the root. Today there is exactly one (emitted by the vite
+# build); the nuclear-data assets under data/parquet/ contain none. But a future
+# data drop shipping its own version.json would be silently un-gated by a gate
+# nobody re-read.
+#
+# So assert the invariant the exception depends on, and fail closed. This is
+# the cheap half of a licensing incident.
+assert_single_version_file() { # assert_single_version_file <dir>
+  local dir="$1" found n
+  # -name, not -iname: Apache's <Files> is case-sensitive, so a Version.json
+  # would NOT be exposed and must not be reported as a problem.
+  found="$(find "$dir" -type f -name "$VERSION_FILE")"
+  # `|| n=0`: under `set -euo pipefail` a grep that matches nothing exits 1 and
+  # would abort the whole script with a bare exit 1, pre-empting the actual
+  # error message below — which is the case that matters most, since "no
+  # version.json at all" is exactly when the operator needs to be told why.
+  n="$(printf '%s\n' "$found" | grep -c .)" || n=0
+  if [ "$n" -ne 1 ] || [ ! -f "${dir}/${VERSION_FILE}" ]; then
+    echo "ERROR: expected exactly one '${VERSION_FILE}' at the root of '${dir}'," >&2
+    echo "       found ${n}:" >&2
+    printf '%s\n' "$found" | sed 's/^/         /' >&2
+    echo "" >&2
+    echo "       The gate exposes <Files \"${VERSION_FILE}\">, which Apache" >&2
+    echo "       matches by basename at ANY depth — so every one of those would" >&2
+    echo "       be served WITHOUT an AAI session. Refusing to deploy." >&2
+    exit 5
+  fi
+}
+
 write_gate() { # write_gate <dir>
   if [ ! -f "$WHITELIST_FILE" ]; then
     echo "ERROR: whitelist '$WHITELIST_FILE' not found — refusing to deploy ungated" >&2
@@ -203,6 +234,7 @@ write_gate() { # write_gate <dir>
     exit 5
   fi
   check_whitelist_fresh
+  assert_single_version_file "$1"
   local ids
   ids=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$WHITELIST_FILE" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
   [ -n "$ids" ] || { echo "ERROR: whitelist '$WHITELIST_FILE' is empty" >&2; exit 5; }

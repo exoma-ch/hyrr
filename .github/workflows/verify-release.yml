@@ -121,5 +121,5 @@ jobs:
           # NOTE: hyrr_mcp.__version__ is deliberately NOT asserted here. It
           # comes from py-mcp/Cargo.toml, which release-please does not bump, so
           # the published package reports 0.1.0 from `--version` while its
-          # distribution metadata is correct. Tracked separately; tighten this
+          # distribution metadata is correct. Tracked in #599; tighten this
           # step to assert both once that is fixed.

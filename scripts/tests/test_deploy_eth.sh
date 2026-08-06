@@ -177,6 +177,7 @@ rm -rf "$gate_root"
 mkdir -p "$gate_root/scripts" "$gate_dir"
 cp "$DEPLOY" "$gate_root/scripts/"
 printf '# a comment\n\nsomeone@ethz.ch\nother@ethz.ch\n' > "$work/whitelist.txt"
+printf '{"version":"0.19.0"}' > "$gate_dir/version.json"
 (
   # shellcheck source=/dev/null  # path is built at runtime
   HYRR_ETH_WHITELIST="$work/whitelist.txt" HYRR_DEPLOY_ETH_LIB=1 source "$gate_root/scripts/deploy-eth.sh"
@@ -212,6 +213,51 @@ fi
 # halves of this feature disagree and every real deploy fails.
 run_case "$good_json" "$good_json" "$gate_out"
 expect_ok "verify_remote accepts the .htaccess that write_gate actually produces"
+
+# ── assert_single_version_file ─────────────────────────────────────
+# The <Files "version.json"> exception is matched by BASENAME at any depth, so
+# a second version.json anywhere in the tree would also be served un-gated.
+run_gate() { # run_gate  → GATE_RC / GATE_MSG, against $gate_dir as it stands
+  GATE_MSG="$(
+    # shellcheck source=/dev/null  # path is built at runtime
+    HYRR_ETH_WHITELIST="$work/whitelist.txt" HYRR_DEPLOY_ETH_LIB=1 \
+      source "$gate_root/scripts/deploy-eth.sh"
+    write_gate "$gate_dir" 2>&1
+  )"
+  GATE_RC=$?
+}
+
+expect_gate_refusal() { # expect_gate_refusal <name> <fragment>
+  if [ "$GATE_RC" -eq 5 ] && [ "${GATE_MSG#*"$2"}" != "$GATE_MSG" ]; then
+    report "$1" pass
+  else
+    report "$1 (rc=$GATE_RC, wanted '$2', out: $GATE_MSG)" fail
+  fi
+}
+
+mkdir -p "$gate_dir/data/parquet"
+printf '{"version":"x"}' > "$gate_dir/data/parquet/version.json"
+run_gate
+expect_gate_refusal "write_gate refuses when a second version.json is nested in the tree" \
+  "matches by basename at ANY depth"
+rm -f "$gate_dir/data/parquet/version.json"
+
+rm -f "$gate_dir/version.json"
+run_gate
+expect_gate_refusal "write_gate refuses when the root version.json is absent" \
+  "expected exactly one"
+printf '{"version":"0.19.0"}' > "$gate_dir/version.json"
+
+# A differently-cased file is NOT matched by Apache's case-sensitive <Files>,
+# so it must not trigger a refusal.
+printf '{}' > "$gate_dir/Version.json"
+run_gate
+if [ "$GATE_RC" -eq 0 ]; then
+  report "write_gate tolerates a differently-cased Version.json" pass
+else
+  report "write_gate tolerates a differently-cased Version.json (rc=$GATE_RC)" fail
+fi
+rm -f "$gate_dir/Version.json"
 
 if [ "$failed" -eq 0 ]; then
   echo "All deploy-eth verification tests passed."
