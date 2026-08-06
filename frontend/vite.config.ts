@@ -62,10 +62,20 @@ function versionPlugin(): Plugin {
   return {
     name: "hyrr-version",
     generateBundle() {
+      const info = buildVersionInfo(pkg.version);
+      // A released bundle whose provenance says "unknown" is close to useless
+      // for tracing a deploy back to a commit. Never fatal — a tarball build
+      // legitimately has no repository — but it should not pass unremarked.
+      if (info.commit === "unknown") {
+        this.warn(
+          "version.json: could not determine the build commit " +
+            "(no git, no repository, and neither VITE_BUILD_COMMIT nor GITHUB_SHA set)",
+        );
+      }
       this.emitFile({
         type: "asset",
         fileName: "version.json",
-        source: `${JSON.stringify(buildVersionInfo(pkg.version), null, 2)}\n`,
+        source: `${JSON.stringify(info, null, 2)}\n`,
       });
     },
   };

@@ -58,13 +58,30 @@ run_case() {
     # "unreachable" suppressions (which code is reported varies by version).
     # shellcheck disable=SC2317,SC2329
     remote() {
-      local cmd="$2"
+      local cmd="$2" body
       case "$cmd" in
-        *version.json*)
-          [ "$(cat "$dst/remote_version.json")" = "__ABSENT__" ] || cat "$dst/remote_version.json" ;;
-        *.htaccess*)
-          [ "$(cat "$dst/remote_htaccess")" = "__ABSENT__" ] || cat "$dst/remote_htaccess" ;;
+        *version.json*) body="$(cat "$dst/remote_version.json")" ;;
+        *.htaccess*)    body="$(cat "$dst/remote_htaccess")" ;;
+        *)              return 0 ;;
       esac
+      # "__ABSENT__" models a real missing file. The stub emulates the REMOTE
+      # SHELL, not just ssh: `cat missing` exits 1 and ssh relays that, unless
+      # the sent command ends in `|| true`, in which case the remote shell
+      # swallows it and ssh exits 0 with empty output.
+      #
+      # That distinction is the whole point. The first version of this stub
+      # always returned 0, so it could not reproduce the `set -euo pipefail`
+      # abort a genuine missing file caused — verify_remote died at the
+      # assignment before reaching its own diagnostic, and every absence test
+      # passed for the wrong reason. Modelling it this way means deleting the
+      # `|| true` from deploy-eth.sh makes these tests go red.
+      if [ "$body" = "__ABSENT__" ]; then
+        case "$cmd" in
+          *"|| true"*) return 0 ;;
+          *) return 1 ;;
+        esac
+      fi
+      printf '%s' "$body"
     }
     verify_remote tst /docroot 2>&1
   )"
@@ -162,6 +179,14 @@ expect_refusal "verify_remote refuses when the local version.json has no version
 run_case '{"version":""}' "" "$good_ht"
 expect_refusal "verify_remote fails closed on an empty expected version" \
   "could not read 'version'"
+
+# A remote read that fails must still produce the exit-7 diagnostic, not a
+# bare abort. Guards the `|| true` on the remote side of verify_remote.
+run_case "$good_json" "__ABSENT__" "$good_ht"
+expect_refusal "a failing remote read still explains itself" "no readable version.json"
+
+run_case "$good_json" "$good_json" "__ABSENT__"
+expect_refusal "a failing remote .htaccess read still explains itself" "no Shibboleth gate found"
 
 # ── write_gate ─────────────────────────────────────────────────────
 # The generated .htaccess is the licensing gate. Assert both halves: the site

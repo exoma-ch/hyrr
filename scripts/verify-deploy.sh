@@ -127,23 +127,41 @@ fi
 # hyrrprd.ethz.ch first), and it fails correctly when the site is un-gated,
 # because the effective URL then stays on the instance itself.
 #
-# Matched as a host prefix, not a substring: `*wayf.switch.ch*` would also
-# accept a URL that merely contains that text in its path.
+# Matched as a host PREFIX against an explicit allowlist, not as a substring:
+# `*wayf.switch.ch*` would also accept a URL that merely contains that text in
+# its path, and `https://wayf.switch.ch.example.com/` would slip past a match
+# that did not require the trailing slash.
+#
+# Two hosts because SWITCH is migrating AAI to edu-ID. Listing both means the
+# check survives the cutover; if ETH moves to an IdP that is on neither, this
+# fails LOUD rather than silently accepting something new, which is the right
+# direction for an access-control assertion. Update the list, do not loosen it.
+AAI_LOGIN_HOSTS=(
+  "https://wayf.switch.ch/"
+  "https://login.eduid.ch/"
+)
+
 effective="$("${CURL[@]}" -L -o /dev/null -w '%{url_effective}' "${URL}/" || echo "")"
-case "$effective" in
-  https://wayf.switch.ch/*)
-    echo "    unauthenticated / → AAI WAYF  ✓"
-    ;;
-  *)
-    echo "ERROR: ${URL}/ did NOT redirect to the SWITCH AAI WAYF." >&2
-    echo "       Ended at: ${effective:-<no response>}" >&2
-    echo "" >&2
-    echo "       The instance may be serving license-restricted nuclear data" >&2
-    echo "       UNAUTHENTICATED. Treat this as an incident, not a flaky test:" >&2
-    echo "       check the deployed .htaccess before anything else." >&2
-    exit 9
-    ;;
-esac
+gated=0
+for host in "${AAI_LOGIN_HOSTS[@]}"; do
+  case "$effective" in "${host}"*) gated=1; break ;; esac
+done
+
+if [ "$gated" = "1" ]; then
+  echo "    unauthenticated / → AAI login  ✓"
+else
+  echo "ERROR: ${URL}/ did NOT redirect to a known SWITCH AAI login host." >&2
+  echo "       Ended at: ${effective:-<no response>}" >&2
+  echo "       Expected one of: ${AAI_LOGIN_HOSTS[*]}" >&2
+  echo "" >&2
+  echo "       The instance may be serving license-restricted nuclear data" >&2
+  echo "       UNAUTHENTICATED. Treat this as an incident, not a flaky test:" >&2
+  echo "       check the deployed .htaccess before anything else." >&2
+  echo "" >&2
+  echo "       (If ETH has migrated its IdP, the fix is to ADD the new host to" >&2
+  echo "        AAI_LOGIN_HOSTS in this script — not to relax the match.)" >&2
+  exit 9
+fi
 
 if [ "$GATE_ONLY" = "1" ]; then
   echo "=== ${URL} verified: gate active ==="

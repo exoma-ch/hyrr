@@ -7,7 +7,7 @@
 # the production script, and the HTTP path is genuinely exercised.
 #
 # What cannot be tested locally is the success path of the gate assertion: it
-# requires the effective URL to be on https://wayf.switch.ch/, deliberately
+# requires the effective URL to be on a real SWITCH AAI login host, deliberately
 # matched as a host prefix so a local fake cannot satisfy it. Precision in
 # production beats local testability there; the happy path was verified by
 # hand against ent, tst and prd.
@@ -95,7 +95,7 @@ expect_rc "rejects a version that does not match" 8 "did not report version 0.18
 # fail on the gate — proving the version check passed against a real HTTP GET.
 run_verify tst 0.19.0
 expect_rc "accepts the served version, then fails on the absent gate" 9 \
-  "did NOT redirect to the SWITCH AAI WAYF"
+  "did NOT redirect to a known SWITCH AAI login host"
 
 if [ "${OUT#*"version.json = 0.19.0"}" != "$OUT" ]; then
   report "reports the version it actually read over HTTP" pass
@@ -115,7 +115,7 @@ expect_rc "an un-gated instance is refused with its own exit code" 9 \
 rm -f "$serve_dir/version.json"
 run_verify tst --gate-only
 expect_rc "--gate-only still asserts the gate with no version.json present" 9 \
-  "did NOT redirect to the SWITCH AAI WAYF"
+  "did NOT redirect to a known SWITCH AAI login host"
 
 # ── falls back to frontend/dist/version.json ───────────────────────
 printf '{"version":"9.9.9","commit":"abc","built_at":"x"}\n' > "$root/frontend/dist/version.json"
