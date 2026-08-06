@@ -820,7 +820,6 @@ mod tests {
         assert_eq!(out.irradiation_time_s, 42.0);
     }
 
-    #[test]
     /// A writer killed between `File::create` and `rename` leaves a `.tmp`
     /// behind. Those were invisible to `enforce_bounds`, so they accumulated
     /// forever and were not counted against the byte cap — making the cap a
