@@ -200,6 +200,33 @@
           "refs": [
             553
           ]
+        },
+        {
+          "summary": "The MCP server now reports its own version and warns when it is stale (#571).",
+          "impact": "api_change",
+          "silent": false,
+          "affected": [
+            "initialize",
+            "get_version_info"
+          ],
+          "guidance": "Until now hyrr-mcp was the one surface with no way to notice it was out of date — the web app is always latest and the desktop GUI has an update popup, but an agent querying a stale MCP server got answers from an old engine AND old nuclear data (DATA_VERSION is compiled in per release) with no indication. The `initialize` handshake now appends the running version and data version to `instructions`, plus a staleness warning derived from the compiled-in CalVer with NO network access, and an optional notice when a newer release is known. Set HYRR_DISABLE_UPDATE_CHECK=1 to disable the network check entirely; the offline staleness floor still applies. Leave `hyrr-mcp` unpinned in your MCP config so `uvx` picks up releases.",
+          "refs": [
+            571,
+            585
+          ]
+        },
+        {
+          "summary": "New get_changelog tool exposes these impact-classified release notes so an agent can judge whether an upgrade changes its answers (#572).",
+          "impact": "api_change",
+          "silent": false,
+          "affected": [
+            "get_changelog"
+          ],
+          "guidance": "A commit-derived changelog cannot answer the question that matters for a scientific tool — 'would my previous answer have been wrong?'. Each entry now carries an impact class and a `silent` flag, so an agent can distinguish a cosmetic change from one that silently altered physics. Call `get_changelog(since_version)` with the version you last used; entries marked physics_affecting + silent are the ones worth re-running results for. The artifact is compiled into the binary, so it works offline.",
+          "refs": [
+            572,
+            586
+          ]
         }
       ]
     },
