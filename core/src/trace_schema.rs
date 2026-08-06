@@ -158,6 +158,28 @@ mod native {
         error!(event = "data.fetch.error", stage, message);
     }
 
+    /// MCP StackResult cache — in-memory tier hit (#568). Per-tool-invocation
+    /// frequency, but that's user-driven (one per MCP call), not compute-inner
+    /// → `debug`. `tier` distinguishes mem vs disk so a subscriber can tally
+    /// separately without regexing the event name.
+    #[inline]
+    pub fn mcp_cache_hit_mem() {
+        debug!(event = "mcp.cache.hit", tier = "mem");
+    }
+
+    /// MCP StackResult cache — on-disk tier hit. Same shape as `mcp_cache_hit_mem`.
+    #[inline]
+    pub fn mcp_cache_hit_disk() {
+        debug!(event = "mcp.cache.hit", tier = "disk");
+    }
+
+    /// MCP StackResult cache — miss (both tiers). The next event on this key
+    /// will be a full `compute.stack.start`.
+    #[inline]
+    pub fn mcp_cache_miss() {
+        debug!(event = "mcp.cache.miss");
+    }
+
     /// Initialize native tracing for a binary entrypoint (#159).
     ///
     /// Human-readable logs go to stderr (level from `RUST_LOG`, default `info`).
@@ -214,5 +236,8 @@ mod tests {
         fetch_start("metadata", "https://example.com/x.parquet");
         extract_done(Path::new("/home/u/.hyrr/data"), 10, 1234);
         fetch_error("extract", "failed at ~/.hyrr/x");
+        mcp_cache_hit_mem();
+        mcp_cache_hit_disk();
+        mcp_cache_miss();
     }
 }
