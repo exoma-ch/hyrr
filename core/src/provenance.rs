@@ -89,6 +89,42 @@ impl DataSource {
             DataSource::LocalDirectory
         }
     }
+
+    /// Decide a native store's origin from where it is reading.
+    ///
+    /// Split out as a pure function so the load-bearing honesty rule is
+    /// testable without a real Parquet tree — `NpDataStore::new` opens actual
+    /// data files, so the decision could otherwise only be exercised against
+    /// a populated cache.
+    ///
+    /// Returns [`VerifiedTarball`] only when **all three** hold:
+    ///
+    /// 1. the managed cache resolved at all (`cache_root` is `Some`),
+    /// 2. the cache is *complete* — `data_fetch::is_cache_complete()`, i.e.
+    ///    the sentinel written after a verified install is present. Path
+    ///    containment alone is not enough: a half-populated cache directory
+    ///    that happens to open successfully was never blessed by the
+    ///    download-time SHA-256 check, so claiming a hash for it would be
+    ///    exactly the false attribution this type exists to prevent,
+    /// 3. `data_root` is inside `cache_root`.
+    ///
+    /// Both paths must already be canonicalised by the caller — `~/.hyrr` is
+    /// frequently a symlink, and comparing uncanonicalised paths would miss a
+    /// store that really is reading the verified cache.
+    ///
+    /// [`VerifiedTarball`]: DataSource::VerifiedTarball
+    pub fn for_data_root(
+        data_root: &std::path::Path,
+        cache_root: Option<&std::path::Path>,
+        cache_complete: bool,
+    ) -> Self {
+        match cache_root {
+            // `Path::starts_with` compares whole components, so a sibling
+            // like `…/v1.2.3-old` does not match `…/v1.2.3`.
+            Some(cache) if cache_complete && data_root.starts_with(cache) => Self::VerifiedTarball,
+            _ => Self::LocalDirectory,
+        }
+    }
 }
 
 /// Identifies the exact nuclear data that produced a result.
@@ -268,6 +304,95 @@ mod tests {
         let s = serde_json::to_string(&p).unwrap();
         let back: Provenance = serde_json::from_str(&s).unwrap();
         assert_eq!(p, back);
+    }
+
+    // -----------------------------------------------------------------
+    // `for_data_root` — the single decision the whole "hash only when
+    // verified" claim rests on. Pure, so every branch is reachable without a
+    // populated cache or a real Parquet tree.
+    // -----------------------------------------------------------------
+
+    use std::path::Path;
+
+    #[test]
+    fn data_root_inside_a_complete_cache_is_verified() {
+        let cache = Path::new("/home/u/.hyrr/nucl-parquet/v2026.8.1");
+        let root = Path::new("/home/u/.hyrr/nucl-parquet/v2026.8.1/data");
+        assert_eq!(
+            DataSource::for_data_root(root, Some(cache), true),
+            DataSource::VerifiedTarball
+        );
+    }
+
+    /// The nit this test exists for: living *inside* the cache directory is
+    /// not the same as the cache having been verified. A half-populated cache
+    /// (sentinel absent) must not yield a hash.
+    #[test]
+    fn incomplete_cache_never_claims_verification() {
+        let cache = Path::new("/home/u/.hyrr/nucl-parquet/v2026.8.1");
+        let root = Path::new("/home/u/.hyrr/nucl-parquet/v2026.8.1/data");
+        assert_eq!(
+            DataSource::for_data_root(root, Some(cache), false),
+            DataSource::LocalDirectory,
+            "a cache without its completion sentinel was never blessed by the \
+             download-time checksum, so no hash may be claimed for it"
+        );
+    }
+
+    /// `Path::starts_with` is component-wise, so a sibling directory whose
+    /// name merely *begins* with the cache's name must not match. A textual
+    /// prefix test would get this wrong.
+    #[test]
+    fn sibling_directory_sharing_a_name_prefix_is_not_the_cache() {
+        let cache = Path::new("/home/u/.hyrr/nucl-parquet/v2026.8.1");
+        for root in [
+            "/home/u/.hyrr/nucl-parquet/v2026.8.1-old/data",
+            "/home/u/.hyrr/nucl-parquet/v2026.8.10/data",
+        ] {
+            assert_eq!(
+                DataSource::for_data_root(Path::new(root), Some(cache), true),
+                DataSource::LocalDirectory,
+                "{root} is a sibling of the cache, not inside it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_user_supplied_data_dir_is_a_local_directory() {
+        let cache = Path::new("/home/u/.hyrr/nucl-parquet/v2026.8.1");
+        assert_eq!(
+            DataSource::for_data_root(Path::new("/srv/nucl-parquet/data"), Some(cache), true),
+            DataSource::LocalDirectory
+        );
+    }
+
+    /// An unresolvable cache (no HOME, unwritable, etc.) must degrade to the
+    /// conservative answer rather than guessing.
+    #[test]
+    fn unresolvable_cache_degrades_to_local_directory() {
+        assert_eq!(
+            DataSource::for_data_root(Path::new("/anything/data"), None, true),
+            DataSource::LocalDirectory
+        );
+    }
+
+    /// End-to-end over the pure decision: only the verified branch produces a
+    /// hash in the resulting block.
+    #[test]
+    fn only_the_verified_branch_yields_a_hash_end_to_end() {
+        let cache = Path::new("/home/u/.hyrr/nucl-parquet/v2026.8.1");
+        let inside = Path::new("/home/u/.hyrr/nucl-parquet/v2026.8.1/data");
+        let outside = Path::new("/srv/nucl-parquet/data");
+
+        let verified = Provenance::new("l", DataSource::for_data_root(inside, Some(cache), true));
+        let local = Provenance::new("l", DataSource::for_data_root(outside, Some(cache), true));
+
+        assert_eq!(local.data_tarball_sha256, None);
+        if DATA_TARBALL_PIN.is_empty() {
+            assert_eq!(verified.data_tarball_sha256, None);
+        } else {
+            assert!(verified.data_tarball_sha256.is_some());
+        }
     }
 
     #[test]
