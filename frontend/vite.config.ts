@@ -3,6 +3,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { svelteTesting } from "@testing-library/svelte/vite";
 import pkg from "./package.json" with { type: "json" };
 import hyrrConfig from "../hyrr.json" with { type: "json" };
+import { buildVersionInfo } from "./scripts/version-info";
 
 // Web base path resolution:
 //   - Tauri bundle  → "./"               (relative; bundled webview)
@@ -46,6 +47,30 @@ function manifestPlugin(): Plugin {
   };
 }
 
+// Emit `version.json` at the dist ROOT (not under `base`) so every deployment
+// target exposes it at a predictable path: `/version.json` on the ETH instances
+// and `<base>version.json` on Pages. `scripts/verify-deploy.sh` reads it to
+// assert the deployed bundle is the one that was just built (#401).
+//
+// Overrides: VITE_BUILD_COMMIT / VITE_BUILD_TIMESTAMP (both opt-in).
+//
+// Deliberately metadata-only — version, commit, build time. All three are
+// already public on the Releases page, so this file is safe to serve
+// unauthenticated, which is what lets the deploy be verified from outside the
+// Shibboleth gate (see the <Files> block in scripts/deploy-eth.sh).
+function versionPlugin(): Plugin {
+  return {
+    name: "hyrr-version",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "version.json",
+        source: `${JSON.stringify(buildVersionInfo(pkg.version), null, 2)}\n`,
+      });
+    },
+  };
+}
+
 // SEO meta substitution for index.html. The deployed app lives at several
 // origins (GitHub Pages /hyrr/, and the ETH instances hyrr.ethz.ch /
 // hyrrtst.ethz.ch / hyrrent.ethz.ch). To avoid duplicate-content competition,
@@ -70,7 +95,7 @@ export default defineConfig({
   // afterEach hook. Without it, `render()` blows up with
   // `mount(...) is not available on the server` because Vite would
   // serve svelte's SSR build to tests.
-  plugins: [svelte(), svelteTesting(), manifestPlugin(), seoMetaPlugin()],
+  plugins: [svelte(), svelteTesting(), manifestPlugin(), seoMetaPlugin(), versionPlugin()],
   base: resolvedBase,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
@@ -117,7 +142,9 @@ export default defineConfig({
         test: {
           name: "node",
           environment: "node",
-          include: ["src/**/*.test.ts"],
+          // `scripts/**` covers build-time helpers (version-info.ts): they run
+          // in node, never touch the DOM, and belong on the fast path.
+          include: ["src/**/*.test.ts", "scripts/**/*.test.ts"],
           exclude: [
             "src/lib/components/**/*.svelte.test.ts",
             "e2e/**",
