@@ -29,7 +29,12 @@ pub const MIN_PEAK_XS_MB: f64 = 1e-6;
 /// `activity_floor_bq` (issue #567). `f64::MIN_POSITIVE` (~2.2e-308) is the
 /// smallest normal positive f64; smaller values are subnormal and cannot
 /// meaningfully accumulate in downstream arithmetic.
-pub const DUST_RATE_THRESHOLD: f64 = f64::MIN_POSITIVE;
+///
+/// Deliberately **unit-agnostic**: the prune applies it to a production rate
+/// (atoms/s) *and* to activity samples (Bq). It is a floating-point-magnitude
+/// floor, not a physical quantity, so one constant is honest for both — naming
+/// it after either unit would not be.
+pub const DUST_MAGNITUDE_THRESHOLD: f64 = f64::MIN_POSITIVE;
 
 /// Half-life threshold (s) above which isotopes are "geologically long-lived".
 pub const LONG_HALFLIFE_THRESHOLD_S: f64 = 1e10;

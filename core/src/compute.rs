@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::bateman::bateman_activity;
 use crate::chains::{discover_chains, solve_chain, split_components};
 use crate::constants::{
-    AVOGADRO, DUST_RATE_THRESHOLD, LN2, MAX_CHAIN_SIZE, MIN_TRACKED_ENERGY_MEV,
+    AVOGADRO, DUST_MAGNITUDE_THRESHOLD, LN2, MAX_CHAIN_SIZE, MIN_TRACKED_ENERGY_MEV,
 };
 use crate::db::DatabaseProtocol;
 use crate::interpolation::{linspace, trapezoid};
@@ -899,7 +899,7 @@ fn integrate_heat(profile: &[DepthPoint], area_cm2: f64) -> f64 {
 ///
 /// An isotope is dropped iff **both**:
 ///
-/// 1. its production rate is subnormal (below [`DUST_RATE_THRESHOLD`] =
+/// 1. its production rate is subnormal (below [`DUST_MAGNITUDE_THRESHOLD`] =
 ///    `f64::MIN_POSITIVE`) or non-finite / non-positive, **and**
 /// 2. every sample in its activity time-series is subnormal / non-finite /
 ///    non-positive.
@@ -940,14 +940,14 @@ fn prune_negligible_isotopes(isotope_results: &mut HashMap<String, IsotopeResult
         // exact zeros before insertion; anything above the subnormal floor
         // that survives here is not our concern to filter.
         let rate_real =
-            iso.production_rate.is_finite() && iso.production_rate >= DUST_RATE_THRESHOLD;
+            iso.production_rate.is_finite() && iso.production_rate >= DUST_MAGNITUDE_THRESHOLD;
         // Likewise, a single normal-range positive activity anywhere in the
         // trace means the isotope has meaningful inventory (e.g. built up
         // by a chain solver from a decaying parent whose direct rate is 0).
         let activity_real = iso
             .activity_vs_time_bq
             .iter()
-            .any(|&a| a.is_finite() && a >= DUST_RATE_THRESHOLD);
+            .any(|&a| a.is_finite() && a >= DUST_MAGNITUDE_THRESHOLD);
         rate_real || activity_real
     });
     before - isotope_results.len()

@@ -44,7 +44,10 @@ end-of-cooling activity strictly below this value are omitted from the response,
 number of omissions is reported. Applied as a REPORTING filter at the tool layer only — \
 compute output stays complete, so a follow-up call with a lower floor returns the hidden \
 rows without recomputing (#130 contract). Default 0 = no filtering (report everything \
-surviving numerical-dust suppression).";
+surviving numerical-dust suppression). Note the comparison dimension differs by table: \
+PER-LAYER activity for the inventory-derived tables (inventory, cooling, depth, simulate, \
+list_producing_layers), STACK-SUMMED activity for the emission and dose tables — so the \
+same floor can hide a row in one view and keep it in another.";
 
 /// JSON-schema fragment for the `activity_floor_bq` argument, shared across
 /// every inventory-derived tool so the dialect stays uniform.
@@ -1891,6 +1894,20 @@ fn tool_list_producing_layers(
             activity_floor_bq,
         ));
         return Ok(output);
+    }
+
+    // If the biggest producer is itself below the floor, the "← peak" marker
+    // would simply not appear on any row — a silent omission, and the reader
+    // would reasonably assume the top row shown IS the peak. Say so instead.
+    if let Some(pi) = peak_idx {
+        if !above_floor.iter().any(|(i, _)| *i == pi) {
+            output.push_str(&format!(
+                "> ℹ️ The peak producing layer (layer {}) is below `activity_floor_bq` \
+                 = {:.3e} Bq and is not shown — no row below is marked `← peak`.\n\n",
+                pi + 1,
+                activity_floor_bq,
+            ));
+        }
     }
 
     output.push_str("| Layer | E_in → E_out [MeV] | Half-life | EOB activity [Bq] | Source | |\n");

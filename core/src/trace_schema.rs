@@ -66,7 +66,7 @@ pub fn stopping_fallback(projectile: &str, requested: &str, used: &str) {
 /// numerical dust (issues #533, #567). Dust here is strictly numerical
 /// residue — subnormal / non-finite production rate AND subnormal /
 /// non-finite activity everywhere in the trace (see
-/// [`crate::constants::DUST_RATE_THRESHOLD`]). Relevance filtering (e.g.
+/// [`crate::constants::DUST_MAGNITUDE_THRESHOLD`]). Relevance filtering (e.g.
 /// "isotopes below 1 kBq") is the caller's job via the MCP
 /// `activity_floor_bq` argument, per the #130 contract; this event surfaces
 /// only what compute strips. Emitted at `debug` (per-layer, bounded
