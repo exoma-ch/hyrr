@@ -109,13 +109,17 @@
         # Cargo.toml/lock at the source root — the layout cargo + vendored git
         # deps expect. core/build.rs reads two siblings of core/:
         # `../nucl-parquet/data/catalog.json` (→ HYRR_DATA_VERSION) and
-        # `../hyrr.json` (→ default library). We materialise those in the build
-        # sandbox's parent dir (`..` of sourceRoot) — nucl-parquet (~650 MB) as
-        # a symlink (referenced store path, never copied), hyrr.json copied in.
+        # `../hyrr.json` (→ default library). `core/src/release_notes.rs` also
+        # `include_str!`s `../../release-notes.json` (#572) — a COMPILE-time
+        # read, so its absence breaks the build outright, not just a test.
+        # We materialise all three in the build sandbox's parent dir (`..` of
+        # sourceRoot) — nucl-parquet (~650 MB) as a symlink (referenced store
+        # path, never copied), the two small JSONs copied in.
         nuclData = "${nucl-parquet}/data";
         provisionSiblings = ''
           ln -sfn ${nucl-parquet} ../nucl-parquet
           install -m644 ${./hyrr.json} ../hyrr.json
+          install -m644 ${./release-notes.json} ../release-notes.json
         '';
         # py path-deps ../core, which itself path-deps ../nucl-parquet and reads
         # ../hyrr.json — so the py build sandbox needs all three siblings.

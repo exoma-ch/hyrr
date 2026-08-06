@@ -3048,6 +3048,8 @@ fn tool_get_version_info() -> Result<String, String> {
         update_check::SERVER_VERSION,
     ));
     Ok(out)
+}
+
 /// Return the impact-classified release notes (#572).
 ///
 /// Optional `since_version` filters to releases strictly newer than that
