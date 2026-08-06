@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::bateman::bateman_activity;
 use crate::chains::{discover_chains, solve_chain, split_components};
 use crate::constants::{
-    ACTIVITY_CUTOFF_FRACTION, AVOGADRO, LN2, MAX_CHAIN_SIZE, MIN_TRACKED_ENERGY_MEV,
+    AVOGADRO, DUST_RATE_THRESHOLD, LN2, MAX_CHAIN_SIZE, MIN_TRACKED_ENERGY_MEV,
 };
 use crate::db::DatabaseProtocol;
 use crate::interpolation::{linspace, trapezoid};
@@ -884,61 +884,71 @@ fn integrate_heat(profile: &[DepthPoint], area_cm2: f64) -> f64 {
     power_w * 1e-3 // W -> kW
 }
 
-/// Drop isotopes that are numerical dust — but keep long-lived low-yield
-/// products (issue #533).
+/// Drop isotopes that are genuine numerical dust — nothing more (issue #567).
 ///
-/// The original filter compared each isotope's peak activity in the time
-/// series against `peak_activity_all * ACTIVITY_CUTOFF_FRACTION`. That is a
-/// safe floor for short-lived matrix products (which saturate near `R`), but
-/// it silently drops long-lived species whose EOB activity is suppressed by
-/// `(λ · t_irr)`: e.g. Fe-55 (t½ = 2.7 y) from trace Mn in Al vanishes
-/// under the Si-27 matrix peak even though its atom inventory is exactly
-/// the number waste-disposal work needs. Reported in #533.
+/// # Contract (issue #130)
 ///
-/// The fix is peak-relative in BOTH activity and production rate: keep an
-/// isotope if its activity trace exceeds the activity floor **or** its
-/// production rate exceeds the rate floor. Production rate is a
-/// half-life-independent proxy for the atom inventory the isotope will
-/// eventually contribute; for saturated short-lived species `activity ≈ R`
-/// and the two conditions agree, so the noise floor is unchanged there.
+/// Compute output is the source of truth. Never clamp physically-real values
+/// inside compute — the caller decides what "too small to care about" means
+/// via a reporting-layer floor (`activity_floor_bq`). This helper exists ONLY
+/// to strip numerical residue that has no physical meaning: subnormal
+/// underflow accumulations, or the odd non-finite that would poison
+/// downstream arithmetic.
 ///
-/// Returns the count of dropped isotopes so `LayerResult` can surface the
-/// drop (`pruned_negligible_count`) — the filter is never silent.
+/// # What is "dust" here
+///
+/// An isotope is dropped iff **both**:
+///
+/// 1. its production rate is subnormal (below [`DUST_RATE_THRESHOLD`] =
+///    `f64::MIN_POSITIVE`) or non-finite / non-positive, **and**
+/// 2. every sample in its activity time-series is subnormal / non-finite /
+///    non-positive.
+///
+/// The AND is deliberate. If a rate is subnormal but the chain solver later
+/// grew a real activity from a parent decay, we mustn't drop it; and if a
+/// rate is real, activity noise is irrelevant. In practice the upstream
+/// `scaled_rate <= 0.0 { continue; }` guard in `compute_layer` already stops
+/// exact zeros entering the map, so this helper is a defensive floor plus a
+/// visibility hook — [`LayerResult::pruned_negligible_count`] and the
+/// `compute.layer.inventory_pruned` trace event stay populated so a future
+/// path that bypasses the upstream guard is never silent.
+///
+/// # What is NOT dust (previous behavior, now the caller's job)
+///
+/// The pre-#567 prune compared every isotope's peak activity and production
+/// rate against `1e-6 × peak_of_whole_stack`. That is a **relevance** filter,
+/// not a numerical filter: it silently dropped physically-real, long-lived,
+/// low-yield minor-component products (Fe-55 from trace Mn in Al; Zn-65
+/// from Cu; Co-60 from steel — all the isotopes waste-classification work
+/// actually cares about — reported in issue #533). The fix layered a peak-
+/// relative *rate* arm on top, which patched #533 but kept a hidden clamp
+/// in compute. Per #130 that clamp does not belong here at all: activity /
+/// dose / fraction relevance filters live in the caller (frontend display
+/// thresholds, MCP `activity_floor_bq`), not the backend. This function
+/// therefore no longer knows the concept of "peak" or "relative".
+///
+/// Returns the number of dropped isotopes so the caller can surface it
+/// (never silent — same contract as before).
 fn prune_negligible_isotopes(isotope_results: &mut HashMap<String, IsotopeResult>) -> usize {
     if isotope_results.is_empty() {
         return 0;
     }
-
-    let peak_activity: f64 = isotope_results
-        .values()
-        .flat_map(|iso| iso.activity_vs_time_bq.iter())
-        .cloned()
-        .fold(0.0_f64, f64::max);
-    let peak_rate: f64 = isotope_results
-        .values()
-        .map(|iso| iso.production_rate)
-        .fold(0.0_f64, f64::max);
-
-    let activity_cutoff = peak_activity * ACTIVITY_CUTOFF_FRACTION;
-    let rate_cutoff = peak_rate * ACTIVITY_CUTOFF_FRACTION;
-    if activity_cutoff <= 0.0 && rate_cutoff <= 0.0 {
-        return 0;
-    }
-
     let before = isotope_results.len();
     isotope_results.retain(|_, iso| {
-        // Keep short-lived matrix products whose activity trace punches
-        // through the activity floor …
-        let above_activity =
-            activity_cutoff > 0.0 && iso.activity_vs_time_bq.iter().any(|&a| a > activity_cutoff);
-        // … and long-lived low-yield products whose activity is suppressed
-        // by (λ · t_irr) but whose atom inventory is material later. Rate
-        // is the invariant here — activity of a T½ ≫ t_irr species tracks
-        // (λ · t_irr) below R and can sit orders of magnitude under the
-        // matrix peak while its production rate is still radiologically
-        // interesting (#533).
-        let above_rate = rate_cutoff > 0.0 && iso.production_rate > rate_cutoff;
-        above_activity || above_rate
+        // A finite, at-least-subnormal-positive production rate counts as
+        // physically real (see the doc comment). The upstream guard rejects
+        // exact zeros before insertion; anything above the subnormal floor
+        // that survives here is not our concern to filter.
+        let rate_real =
+            iso.production_rate.is_finite() && iso.production_rate >= DUST_RATE_THRESHOLD;
+        // Likewise, a single normal-range positive activity anywhere in the
+        // trace means the isotope has meaningful inventory (e.g. built up
+        // by a chain solver from a decaying parent whose direct rate is 0).
+        let activity_real = iso
+            .activity_vs_time_bq
+            .iter()
+            .any(|&a| a.is_finite() && a >= DUST_RATE_THRESHOLD);
+        rate_real || activity_real
     });
     before - isotope_results.len()
 }
@@ -1735,67 +1745,110 @@ mod tests {
         );
     }
 
-    /// Regression test for issue #533.
+    /// Regression test for issues #533 and #567.
     ///
     /// A long-lived, low-yield minor-component product (Fe-55, t½ = 2.7 y, in
     /// dilute Mn-in-Al) has EOB activity suppressed by (λ · t_irr) — for a
     /// 1-day irradiation, that's ~7×10⁻⁴ of its saturation. Riding under a
-    /// saturated short-lived matrix peak (Si-27), its activity ratio can drop
-    /// well below the 1e-6 relative floor even though the atom inventory is
-    /// exactly the number waste-classification work needs.
+    /// saturated short-lived matrix peak (Si-27), its activity ratio drops
+    /// many orders of magnitude below the peak even though the atom
+    /// inventory is exactly the number waste-classification work needs.
     ///
-    /// The old prune (peak-relative on activity only) silently dropped it.
-    /// The new prune keeps it via the peak-relative production-rate criterion,
-    /// and `pruned_negligible_count` reports any drops that DO happen.
+    /// Per #567, the internal prune no longer looks at "peak" at all —
+    /// relative filtering is a caller concern (MCP `activity_floor_bq` /
+    /// GUI display thresholds, per the #130 contract). Compute keeps
+    /// everything physically real; only genuine numerical dust (subnormal
+    /// rate AND subnormal activity trace) is dropped, and the count is
+    /// still surfaced via `pruned_negligible_count`.
     #[test]
-    fn prune_keeps_long_lived_low_yield_products_and_reports_drops() {
+    fn prune_keeps_everything_physically_real_regardless_of_peak() {
         // Peak: short-lived matrix product (Si-27-like), fully saturated.
-        // R = 1e10 atoms/s, t½ = 4.16 s → activity saturates ≈ R.
-        let peak_r = 1.0e10_f64;
-        let peak_activity = 1.0e10_f64;
-        let peak = iso_with("Si-27", 4.16, peak_r, vec![peak_activity; 5]);
+        let peak = iso_with("Si-27", 4.16, 1.0e10, vec![1.0e10; 5]);
 
-        // The isotope of interest: Fe-55-like, produced at 1e5 atoms/s
-        // (rate/peak_rate = 1e-5, safely above the 1e-6 rate floor), but its
-        // EOB activity is 5e3 Bq — activity/peak_activity = 5e-7, well BELOW
-        // the 1e-6 activity floor. Old prune dropped this. New prune keeps it.
-        let long_lived_rate = 1.0e5_f64;
-        let long_lived_activity = 5.0e3_f64;
-        let long_lived_hl = 2.7 * 365.25 * 86400.0; // Fe-55: 2.7 years
-        let long_lived = iso_with(
-            "Fe-55",
-            long_lived_hl,
-            long_lived_rate,
-            vec![long_lived_activity; 5],
-        );
+        // Long-lived low-yield product (Fe-55-like). Activity/peak ≈ 5e-7,
+        // rate/peak_rate = 1e-5 — the old peak-relative activity arm would
+        // have dropped it; the peak-relative rate arm rescued it (#533).
+        let long_lived_hl = 2.7 * 365.25 * 86400.0;
+        let long_lived = iso_with("Fe-55", long_lived_hl, 1.0e5, vec![5.0e3; 5]);
 
-        // Genuine dust: production rate AND activity both under the 1e-6
-        // relative floor. Must be dropped.
-        let dust = iso_with("Cr-51", 2.4e6, 1.0, vec![1.0; 5]);
+        // The isotope #567 was written to protect: a real but truly
+        // low-yield product (rate 1.0 atoms/s, activity 1.0 Bq) — anything
+        // above subnormal. Old prune (1e-6 of peak) dropped it. New prune
+        // keeps it — it is physically real, and thresholding it is the
+        // caller's job.
+        let low_yield = iso_with("Cr-51", 2.4e6, 1.0, vec![1.0; 5]);
 
         let mut results = HashMap::new();
         results.insert("Si-27".to_string(), peak);
         results.insert("Fe-55".to_string(), long_lived);
-        results.insert("Cr-51".to_string(), dust);
+        results.insert("Cr-51".to_string(), low_yield);
 
         let dropped = prune_negligible_isotopes(&mut results);
 
-        // Load-bearing: the long-lived low-yield product survives.
+        assert!(results.contains_key("Si-27"), "matrix peak stays");
         assert!(
             results.contains_key("Fe-55"),
-            "long-lived low-yield product must not be silently dropped (#533); \
-             surviving keys: {:?}",
-            results.keys().collect::<Vec<_>>()
+            "long-lived low-yield product stays (#533)"
         );
-        // The matrix peak stays.
-        assert!(results.contains_key("Si-27"));
-        // Genuine dust is dropped.
-        assert!(!results.contains_key("Cr-51"));
-        // Never silent: the drop count is surfaced on `LayerResult`.
-        assert_eq!(dropped, 1, "must report the one true-dust drop");
+        assert!(
+            results.contains_key("Cr-51"),
+            "physically-real low-yield product stays — thresholding is the \
+             caller's job now (#567)"
+        );
+        assert_eq!(
+            dropped, 0,
+            "no dust here — everything is physically real; prune must be a no-op"
+        );
     }
 
-    /// Empty input: helper is a no-op, reports zero drops (no NaN cutoffs).
+    /// Drops only genuine numerical dust — an isotope whose production rate
+    /// is exactly zero and whose activity trace is all zero. The upstream
+    /// `scaled_rate <= 0.0 { continue; }` guard in `compute_layer` normally
+    /// prevents this from ever entering the map; we exercise the prune's
+    /// defensive floor directly (#567).
+    #[test]
+    fn prune_drops_only_genuine_dust() {
+        let real = iso_with("Fe-55", 1.0e8, 1.0e5, vec![5.0e3; 5]);
+        // Zero rate + zero activity — the only kind of thing the new prune
+        // removes. `activity_bq` is a scalar snapshot; the trace-array
+        // is what the prune inspects.
+        let dust = iso_with("Xx-1", 3600.0, 0.0, vec![0.0; 5]);
+
+        let mut results = HashMap::new();
+        results.insert("Fe-55".to_string(), real);
+        results.insert("Xx-1".to_string(), dust);
+
+        let dropped = prune_negligible_isotopes(&mut results);
+
+        assert!(results.contains_key("Fe-55"));
+        assert!(!results.contains_key("Xx-1"), "true dust must be dropped");
+        assert_eq!(dropped, 1, "dust drop is surfaced (never silent)");
+    }
+
+    /// A rate that is real but activity that is a subnormal underflow
+    /// residue is still real — kept, because `rate_real` alone qualifies.
+    #[test]
+    fn prune_keeps_real_rate_even_with_subnormal_activity() {
+        let iso = iso_with("Yy-1", 1.0, 1.0e-20, vec![f64::MIN_POSITIVE / 2.0; 3]);
+        let mut results = HashMap::new();
+        results.insert("Yy-1".to_string(), iso);
+        assert_eq!(prune_negligible_isotopes(&mut results), 0);
+        assert!(results.contains_key("Yy-1"));
+    }
+
+    /// A zero direct rate but a real activity elsewhere in the trace (e.g.
+    /// grown by the chain solver from a decaying parent) must survive —
+    /// rate alone is not what makes an isotope real.
+    #[test]
+    fn prune_keeps_zero_rate_with_real_activity() {
+        let iso = iso_with("Daughter", 60.0, 0.0, vec![0.0, 0.0, 1.0e6, 5.0e5]);
+        let mut results = HashMap::new();
+        results.insert("Daughter".to_string(), iso);
+        assert_eq!(prune_negligible_isotopes(&mut results), 0);
+        assert!(results.contains_key("Daughter"));
+    }
+
+    /// Empty input: helper is a no-op, reports zero drops.
     #[test]
     fn prune_negligible_isotopes_handles_empty_input() {
         let mut results: HashMap<String, IsotopeResult> = HashMap::new();

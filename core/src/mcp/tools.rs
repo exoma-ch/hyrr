@@ -32,6 +32,49 @@ active library ships a neutron sublibrary — the default `tendl-2023-iso` does 
 not. Units: activity [Bq], half-life [s], energy [MeV], cross-section [mb], \
 dose constant k [µSv·m²·MBq⁻¹·h⁻¹].";
 
+/// Description block for the `activity_floor_bq` argument (#567 / #130).
+///
+/// Applied at the tool layer as a reporting filter — never inside compute.
+/// Default 0 = report every isotope surviving numerical-dust suppression.
+/// Rows filtered by the floor are counted and surfaced in the tool's output
+/// so the caller can see what was hidden (same no-silent-loss contract as
+/// `pruned_negligible_count`).
+const ACTIVITY_FLOOR_DESC: &str = "Absolute reporting floor in Bq (#567). Isotopes with \
+end-of-cooling activity strictly below this value are omitted from the response, and the \
+number of omissions is reported. Applied as a REPORTING filter at the tool layer only — \
+compute output stays complete, so a follow-up call with a lower floor returns the hidden \
+rows without recomputing (#130 contract). Default 0 = no filtering (report everything \
+surviving numerical-dust suppression).";
+
+/// JSON-schema fragment for the `activity_floor_bq` argument, shared across
+/// every inventory-derived tool so the dialect stays uniform.
+fn activity_floor_schema() -> Value {
+    serde_json::json!({
+        "type": "number",
+        "description": ACTIVITY_FLOOR_DESC,
+        "minimum": 0.0,
+        "default": 0.0
+    })
+}
+
+/// Parse the caller's requested activity floor. Rejects negatives and NaN so
+/// a nonsense floor can never look like "no filter" via wrapping arithmetic.
+fn parse_activity_floor(args: &Value) -> Result<f64, String> {
+    let Some(v) = args.get("activity_floor_bq") else {
+        return Ok(0.0);
+    };
+    if v.is_null() {
+        return Ok(0.0);
+    }
+    let n = v
+        .as_f64()
+        .ok_or("'activity_floor_bq' must be a number in Bq (>= 0)")?;
+    if !n.is_finite() || n < 0.0 {
+        return Err("'activity_floor_bq' must be a finite non-negative number (Bq)".to_string());
+    }
+    Ok(n)
+}
+
 /// Server-level `instructions` (#528) — the paragraph the MCP `initialize`
 /// result hands to a fresh client so it can self-discover HYRR's scope and
 /// limits without reading the source.
@@ -323,7 +366,8 @@ pub fn list_tools() -> Vec<Value> {
                             }
                         },
                         "required": ["times_s", "currents_ma"]
-                    }
+                    },
+                    "activity_floor_bq": activity_floor_schema()
                 },
                 "required": ["projectile", "layers"]
             }
@@ -459,7 +503,8 @@ pub fn list_tools() -> Vec<Value> {
                     },
                     "irradiation_time_s": { "type": "number" },
                     "cooling_time_s": { "type": "number" },
-                    "isotope": { "type": "string", "description": "Isotope name, e.g. 'Sc-44' or 'Cu-64'" }
+                    "isotope": { "type": "string", "description": "Isotope name, e.g. 'Sc-44' or 'Cu-64'" },
+                    "activity_floor_bq": activity_floor_schema()
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers", "isotope"]
             }
@@ -519,7 +564,8 @@ pub fn list_tools() -> Vec<Value> {
                     "cooling_time_s": { "type": "number" },
                     "cooling": { "type": "boolean", "description": "Include the cooling-tail table (activity [Bq] vs time, t ≥ irradiation). Default false." },
                     "depth": { "type": "boolean", "description": "Include the depth-profile table (production rate [atoms/s/cm] vs depth). Default false." },
-                    "emissions": { "type": "boolean", "description": "Include the emission table (per γ/x-ray/Auger/β±/annihilation line with intensity_per_decay). Default false." }
+                    "emissions": { "type": "boolean", "description": "Include the emission table (per γ/x-ray/Auger/β±/annihilation line with intensity_per_decay). Default false." },
+                    "activity_floor_bq": activity_floor_schema()
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
@@ -535,7 +581,8 @@ pub fn list_tools() -> Vec<Value> {
                     "current_ma": { "type": "number" },
                     "layers": { "type": "array", "items": layer_schema(false) },
                     "irradiation_time_s": { "type": "number" },
-                    "cooling_time_s": { "type": "number" }
+                    "cooling_time_s": { "type": "number" },
+                    "activity_floor_bq": activity_floor_schema()
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
@@ -556,7 +603,8 @@ pub fn list_tools() -> Vec<Value> {
                     "emission_type": { "type": "string", "description": "Restrict to one radiation type: gamma | xray | auger | ce | beta- | beta+ | annihilation." },
                     "energy_kev": { "type": "number", "description": "Restrict to lines within ± energy_tolerance_kev of this energy (e.g. 511)." },
                     "energy_tolerance_kev": { "type": "number", "description": "Tolerance for energy_kev matching [keV]. Default 1.0." },
-                    "vs": { "type": "string", "enum": ["time", "cooling"], "description": "'time' = full irradiation + cooling timeline; 'cooling' = cooling tail only. Default 'time'." }
+                    "vs": { "type": "string", "enum": ["time", "cooling"], "description": "'time' = full irradiation + cooling timeline; 'cooling' = cooling tail only. Default 'time'." },
+                    "activity_floor_bq": activity_floor_schema()
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
@@ -608,7 +656,8 @@ pub fn list_tools() -> Vec<Value> {
                     "layers": { "type": "array", "items": layer_schema(false) },
                     "irradiation_time_s": { "type": "number" },
                     "cooling_time_s": { "type": "number", "description": "Cooling time in seconds — dose is computed at the end of this window (default 86400). Pass 0 for end-of-bombardment dose." },
-                    "distance_cm": { "type": "number", "description": "Point-source distance in cm (default 100 = 1 m). Refuses distances below ~1 cm as the near-field approximation is invalid there." }
+                    "distance_cm": { "type": "number", "description": "Point-source distance in cm (default 100 = 1 m). Refuses distances below ~1 cm as the near-field approximation is invalid there." },
+                    "activity_floor_bq": activity_floor_schema()
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
@@ -1032,6 +1081,7 @@ fn tool_simulate(
     // Populate the result cache so follow-up dataset / inventory / emission
     // queries on the same config are lazy views instead of re-runs (#427).
     let result = cached_sim(db, registry, args)?;
+    let activity_floor_bq = parse_activity_floor(args)?;
     let (projectile_str, energy_mev, current_ma) = beam_args(args);
     let irr_time = result.irradiation_time_s;
     let cool_time = result.cooling_time_s;
@@ -1078,6 +1128,7 @@ fn tool_simulate(
     }
     output.push('\n');
 
+    let mut filtered_below_floor = 0usize;
     for (li, lr) in result.layer_results.iter().enumerate() {
         output.push_str(&format!(
             "## Layer {} — E: {:.2} → {:.2} MeV (ΔE = {:.2} MeV)\n\n",
@@ -1092,13 +1143,6 @@ fn tool_simulate(
             continue;
         }
 
-        output.push_str(
-            "| Isotope | Half-life | Rate [/s] | Sat. Yield [Bq/µA] | Activity [Bq] | Source |\n",
-        );
-        output.push_str(
-            "|---------|-----------|-----------|---------------------|---------------|--------|\n",
-        );
-
         let mut sorted: Vec<_> = lr.isotope_results.values().collect();
         sorted.sort_by(|a, b| {
             b.activity_bq
@@ -1106,8 +1150,36 @@ fn tool_simulate(
                 .unwrap()
                 .then_with(|| a.name.cmp(&b.name))
         });
+        // Reporting-layer filter (#567): applied at the tool, never in compute.
+        let above_floor: Vec<_> = sorted
+            .iter()
+            .filter(|iso| {
+                if crate::mcp::dataset::passes_activity_floor(iso, activity_floor_bq) {
+                    true
+                } else {
+                    filtered_below_floor += 1;
+                    false
+                }
+            })
+            .collect();
 
-        for iso in sorted.iter().take(20) {
+        if above_floor.is_empty() {
+            output.push_str(&format!(
+                "All {} produced isotopes are below the requested `activity_floor_bq` = {:.3e} Bq.\n\n",
+                sorted.len(),
+                activity_floor_bq,
+            ));
+            continue;
+        }
+
+        output.push_str(
+            "| Isotope | Half-life | Rate [/s] | Sat. Yield [Bq/µA] | Activity [Bq] | Source |\n",
+        );
+        output.push_str(
+            "|---------|-----------|-----------|---------------------|---------------|--------|\n",
+        );
+
+        for iso in above_floor.iter().take(20) {
             let hl = match iso.half_life_s {
                 Some(t) if t > 0.0 => format_halflife(t),
                 _ => "stable".to_string(),
@@ -1123,6 +1195,32 @@ fn tool_simulate(
             ));
         }
         output.push('\n');
+    }
+
+    // Never silent: surface the number of isotopes hidden by activity_floor_bq
+    // alongside the pre-existing per-layer `pruned_negligible_count` (both are
+    // no-silent-loss counters, per the #130 contract).
+    if filtered_below_floor > 0 {
+        output.push_str(&format!(
+            "\n> ℹ️ **Reporting filter**: {} isotope row(s) omitted with \
+             end-of-cooling activity < `activity_floor_bq` = {:.3e} Bq. Pass \
+             `activity_floor_bq: 0` to see everything.\n",
+            filtered_below_floor, activity_floor_bq,
+        ));
+    }
+
+    let total_pruned: usize = result
+        .layer_results
+        .iter()
+        .map(|lr| lr.pruned_negligible_count)
+        .sum();
+    if total_pruned > 0 {
+        output.push_str(&format!(
+            "\n> ℹ️ **Numerical-dust prune** (issue #567): {} entry(ies) dropped \
+             in compute as subnormal/non-finite residue (not a relevance filter — \
+             see the tool description).\n",
+            total_pruned,
+        ));
     }
 
     Ok(output)
@@ -1735,6 +1833,7 @@ fn tool_list_producing_layers(
         .and_then(|v| v.as_str())
         .ok_or("Missing 'isotope'")?
         .to_string();
+    let activity_floor_bq = parse_activity_floor(args)?;
 
     let result = cached_sim(db, registry, args)?;
 
@@ -1746,8 +1845,25 @@ fn tool_list_producing_layers(
         ));
     }
 
-    // Beam order is already the iteration order; flag the peak-activity layer
-    // so the consumer knows where production actually concentrates.
+    // Reporting-layer filter (#567) — never in compute; producing_layers still
+    // reports the full set, and the count of dropped layers is surfaced below.
+    let mut filtered_below_floor = 0usize;
+    let above_floor: Vec<_> = producers
+        .iter()
+        .copied()
+        .filter(|(_, iso)| {
+            if crate::mcp::dataset::passes_activity_floor(iso, activity_floor_bq) {
+                true
+            } else {
+                filtered_below_floor += 1;
+                false
+            }
+        })
+        .collect();
+
+    // Peak stays the peak whether it's above or below the floor — pointing at
+    // "the biggest producer" is useful even if it's below what the caller
+    // asked to report on.
     let peak_idx = producers
         .iter()
         .max_by(|(_, a), (_, b)| {
@@ -1766,10 +1882,21 @@ fn tool_list_producing_layers(
         result.layer_results.len(),
         isotope,
     ));
+
+    if above_floor.is_empty() {
+        output.push_str(&format!(
+            "> ℹ️ All {} producing layer(s) have EOC activity < `activity_floor_bq` = {:.3e} Bq. \
+             Lower the floor to see them.\n",
+            producers.len(),
+            activity_floor_bq,
+        ));
+        return Ok(output);
+    }
+
     output.push_str("| Layer | E_in → E_out [MeV] | Half-life | EOB activity [Bq] | Source | |\n");
     output
         .push_str("|-------|--------------------|-----------|--------------------|--------|--|\n");
-    for (i, iso) in &producers {
+    for (i, iso) in &above_floor {
         let lr = &result.layer_results[*i];
         let hl = match iso.half_life_s {
             Some(t) if t > 0.0 => format_halflife(t),
@@ -1785,6 +1912,14 @@ fn tool_list_producing_layers(
             iso.activity_bq,
             iso.source,
             peak_marker,
+        ));
+    }
+
+    if filtered_below_floor > 0 {
+        output.push_str(&format!(
+            "\n> ℹ️ **Reporting filter**: {} producing layer(s) omitted with \
+             activity < `activity_floor_bq` = {:.3e} Bq.\n",
+            filtered_below_floor, activity_floor_bq,
         ));
     }
 
@@ -1830,21 +1965,34 @@ fn tool_get_simulation_dataset(
         .get("emissions")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let activity_floor_bq = parse_activity_floor(args)?;
 
     let result = cached_sim(db, registry, args)?;
     let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
     let mats = layer_materials(args);
     let (proj, energy, current) = beam_args(args);
 
-    let mut tables: Vec<Table> = vec![dataset::build_inventory(db, &result, &mats, &sim_id)];
+    // Each builder returns `(table, filtered_below_floor)` — sum the drops
+    // across every table so the caller sees a single, honest count.
+    let mut tables: Vec<Table> = Vec::new();
+    let mut total_filtered = 0usize;
+    let inv = dataset::build_inventory(db, &result, &mats, &sim_id, activity_floor_bq);
+    total_filtered += inv.filtered_below_floor;
+    tables.push(inv.table);
     if want_cooling {
-        tables.push(dataset::build_cooling(&result, &sim_id));
+        let c = dataset::build_cooling(&result, &sim_id, activity_floor_bq);
+        total_filtered += c.filtered_below_floor;
+        tables.push(c.table);
     }
     if want_depth {
-        tables.push(dataset::build_depth(&result, &sim_id));
+        let d = dataset::build_depth(&result, &sim_id, activity_floor_bq);
+        total_filtered += d.filtered_below_floor;
+        tables.push(d.table);
     }
     if want_emissions {
-        tables.push(dataset::build_emissions(db, &result, &sim_id));
+        let e = dataset::build_emissions(db, &result, &sim_id, activity_floor_bq);
+        total_filtered += e.filtered_below_floor;
+        tables.push(e.table);
     }
 
     let mut text = format!("# Simulation dataset `{sim_id}`\n\n");
@@ -1865,6 +2013,14 @@ fn tool_get_simulation_dataset(
             .join(", "),
     );
     text.push('\n');
+    if total_filtered > 0 {
+        text.push_str(&format!(
+            "\n> ℹ️ **Reporting filter**: {} row(s) omitted across all tables with \
+             activity < `activity_floor_bq` = {:.3e} Bq (per-layer / per-distinct-isotope \
+             counts sum across tables; a follow-up call with a lower floor returns them).\n\n",
+            total_filtered, activity_floor_bq,
+        ));
+    }
 
     let mut resources = Vec::new();
     for table in &tables {
@@ -1885,22 +2041,35 @@ fn tool_get_isotope_inventory(
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
+    let activity_floor_bq = parse_activity_floor(args)?;
     let result = cached_sim(db, registry, args)?;
     let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
     let mats = layer_materials(args);
-    let table = dataset::build_inventory(db, &result, &mats, &sim_id);
+    let filtered = dataset::build_inventory(db, &result, &mats, &sim_id, activity_floor_bq);
+    let table = &filtered.table;
 
     let mut text = format!(
         "# Isotope inventory `{sim_id}` ({} rows)\n\n\
          One row per isotope × layer × source. Full table also attached as a Parquet resource.\n\n",
         table.nrows()
     );
+    if filtered.filtered_below_floor > 0 {
+        text.push_str(&format!(
+            "> ℹ️ **Reporting filter**: {} isotope row(s) omitted with EOC \
+             activity < `activity_floor_bq` = {:.3e} Bq. Pass \
+             `activity_floor_bq: 0` (default) to see everything the backend \
+             computed (#567 / #130 contract).\n\n",
+            filtered.filtered_below_floor, activity_floor_bq,
+        ));
+    }
     let resources = if table.is_empty() {
-        text.push_str("No isotopes produced.\n");
+        if filtered.filtered_below_floor == 0 {
+            text.push_str("No isotopes produced.\n");
+        }
         Vec::new()
     } else {
-        text.push_str(&render_table_section(&table)?);
-        vec![parquet_resource(&sim_id, &table)?]
+        text.push_str(&render_table_section(table)?);
+        vec![parquet_resource(&sim_id, table)?]
     };
     Ok(ToolResponse { text, resources })
 }
@@ -1921,11 +2090,12 @@ fn tool_get_emission_curve(
         .get("energy_tolerance_kev")
         .and_then(|v| v.as_f64())
         .unwrap_or(1.0);
+    let activity_floor_bq = parse_activity_floor(args)?;
 
     let result = cached_sim(db, registry, args)?;
     let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
 
-    let table = dataset::build_emission_curve(
+    let filtered = dataset::build_emission_curve(
         db,
         &result,
         &sim_id,
@@ -1934,7 +2104,9 @@ fn tool_get_emission_curve(
         type_filter,
         energy_filter,
         energy_tol,
+        activity_floor_bq,
     );
+    let table = &filtered.table;
 
     let mut text = format!(
         "# Emission-rate curve `{sim_id}` ({}) — {} rows\n\n\
@@ -1953,14 +2125,22 @@ fn tool_get_emission_curve(
         text.push_str(&format!("Filter: energy = {f} ± {energy_tol} keV. "));
     }
     text.push('\n');
+    if filtered.filtered_below_floor > 0 {
+        text.push_str(&format!(
+            "\n> ℹ️ **Reporting filter**: {} distinct isotope(s) omitted with \
+             stack-summed EOC activity < `activity_floor_bq` = {:.3e} Bq. Pass \
+             `activity_floor_bq: 0` (default) to include them.\n",
+            filtered.filtered_below_floor, activity_floor_bq,
+        ));
+    }
 
     let resources = if table.is_empty() {
         text.push_str("\nNo emission lines match (no produced isotope emits a matching line).\n");
         Vec::new()
     } else {
         text.push('\n');
-        text.push_str(&render_table_section(&table)?);
-        vec![parquet_resource(&sim_id, &table)?]
+        text.push_str(&render_table_section(table)?);
+        vec![parquet_resource(&sim_id, table)?]
     };
     Ok(ToolResponse { text, resources })
 }
@@ -2089,9 +2269,13 @@ fn tool_get_dose_rate(
     if distance_cm <= 0.0 {
         return Err("'distance_cm' must be positive".to_string());
     }
+    // `activity_floor_bq` is the same absolute-Bq dialect used by the
+    // inventory-derived tools (#567). Reuses `compute_stack_dose`'s existing
+    // parameter — the only dialect for filtering across the MCP surface.
+    let activity_floor_bq = parse_activity_floor(args)?;
 
     let result = cached_sim(db, registry, args)?;
-    let dose = compute_stack_dose(db, &result, distance_cm, 0.0);
+    let dose = compute_stack_dose(db, &result, distance_cm, activity_floor_bq);
     let (projectile_str, energy_mev, current_ma) = beam_args(args);
 
     let mut output = String::new();
