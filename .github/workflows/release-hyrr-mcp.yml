@@ -1,15 +1,23 @@
 name: Release hyrr-mcp
 
-# Builds ABI3 wheels for hyrr-mcp on a 5-target matrix and publishes to PyPI
-# via OIDC trusted publishing. Triggered by tags matching `hyrr-mcp-v*`.
+# Builds ABI3 wheels for hyrr-mcp on a 4-target matrix (linux x86_64/aarch64,
+# macOS arm64, Windows x86_64), plus an sdist, and publishes to PyPI via OIDC
+# trusted publishing. Triggered by tags matching `hyrr-mcp-v*`.
 #
 # To cut a release:
-#   1. Bump py-mcp/Cargo.toml + py-mcp/pyproject.toml version (must match).
+#   1. Bump py-mcp/pyproject.toml — that is what maturin stamps onto the
+#      wheel. release-please does this via `extra-files`. py-mcp/Cargo.toml's
+#      own version is inert (it sits at 0.1.0) and is deliberately NOT kept in
+#      lockstep; nothing reads it.
 #   2. Tag: git tag hyrr-mcp-v0.1.0 && git push --tags
 #   3. This workflow builds the matrix and publishes via OIDC. No tokens.
 #
 # PyPI trusted publisher must be pre-configured under the project `hyrr-mcp`
 # with workflow `release-hyrr-mcp.yml` and environment `pypi`.
+#
+# Release integrity: `publish` gates on the full artifact set, not on
+# "whatever built". See the `verify-artifacts` job and the note above the
+# build matrix for why (#461, #573).
 
 on:
   push:
@@ -29,20 +37,46 @@ jobs:
   build:
     name: build (${{ matrix.target.name }})
     runs-on: ${{ matrix.target.runner }}
-    # linux-aarch64 cross-compiles ring via QEMU/manylinux and is fragile
-    # (ring's ARM asm needs __ARM_ARCH from the cross-compiler). Don't let
-    # it block parity-test + publish for the other 3 targets.
-    continue-on-error: ${{ matrix.target.name == 'linux-aarch64' }}
+    # NO `continue-on-error` here — deliberately. It used to be set on the
+    # linux-aarch64 leg, and it did not do what it looks like it does: a
+    # `continue-on-error` matrix leg is reported to downstream `needs:` as a
+    # SUCCESS. So `parity-test` and `publish` ran happily while that leg was
+    # dead, and hyrr-mcp 0.16.3 / 0.17.0 / 0.18.0 all published to PyPI with
+    # no aarch64 Linux wheel and a green checkmark (#461, #573). A leg that
+    # quietly does not ship is worse than a red build. If a wheel can't be
+    # built, the release must fail — and `verify-artifacts` below is the
+    # second line of defence for the same failure class.
     strategy:
       fail-fast: false
       matrix:
         target:
-          - { name: linux-x86_64,  runner: ubuntu-latest,  rust-target: x86_64-unknown-linux-gnu,    maturin-target: x86_64,  manylinux: "auto" }
-          - { name: linux-aarch64, runner: ubuntu-latest,  rust-target: aarch64-unknown-linux-gnu,   maturin-target: aarch64, manylinux: "auto" }
+          # `manylinux` is pinned to "2014" rather than "auto" on both Linux
+          # legs: "auto" lets the resolved container silently set the glibc
+          # floor, so a container swap could change wheel compatibility
+          # without any workflow diff. 2014 == glibc 2.17 (PEP 599), which is
+          # also the lowest floor that supports aarch64 at all.
+          #
+          # `wheel-glob` is the platform tag this leg MUST produce. It is
+          # asserted right after the build, so a leg that silently emits a
+          # differently-tagged (or no) wheel fails here rather than shipping.
+          - { name: linux-x86_64,  runner: ubuntu-latest,  rust-target: x86_64-unknown-linux-gnu,    maturin-target: x86_64,  manylinux: "2014", wheel-glob: "*-manylinux_2_17_x86_64*.whl" }
+          # NATIVE arm64 runner, not a cross-compile. This is the fix for #461.
+          # maturin-action picks its build container from the *host* arch: on an
+          # x86_64 host it used `ghcr.io/rust-cross/manylinux2014-cross:aarch64`,
+          # whose crosstool-ng gcc does not predefine `__ARM_ARCH`, so ring's
+          # pregenerated ARMv8 .S files failed with
+          #   asm_base.h:73:2: error: "ARM assembler must define __ARM_ARCH"
+          # (ring#1728, ring#1789). On an arm64 host the same input resolves to
+          # the official PyPA `quay.io/pypa/manylinux2014_aarch64` image with a
+          # native compiler, deleting the failure class instead of pinning
+          # around it. aarch64 was never the problem — macos-14/aarch64-apple-darwin
+          # below has always built ring fine, because it too is native.
+          # `ubuntu-24.04-arm` is GA and free/unlimited on public repos.
+          - { name: linux-aarch64, runner: ubuntu-24.04-arm, rust-target: aarch64-unknown-linux-gnu, maturin-target: aarch64, manylinux: "2014", wheel-glob: "*-manylinux_2_17_aarch64*.whl" }
           # macos-x86_64 dropped: Intel-mac runners on the free GitHub plan have
           # multi-hour queues. Intel macs build from sdist instead.
-          - { name: macos-arm64,   runner: macos-14,       rust-target: aarch64-apple-darwin,        maturin-target: aarch64, manylinux: "" }
-          - { name: windows-x86_64, runner: windows-latest, rust-target: x86_64-pc-windows-msvc,     maturin-target: x64,     manylinux: "" }
+          - { name: macos-arm64,   runner: macos-14,       rust-target: aarch64-apple-darwin,        maturin-target: aarch64, manylinux: "", wheel-glob: "*-macosx_*_arm64.whl" }
+          - { name: windows-x86_64, runner: windows-latest, rust-target: x86_64-pc-windows-msvc,     maturin-target: x64,     manylinux: "", wheel-glob: "*-win_amd64.whl" }
     steps:
       - uses: actions/checkout@v7
       - name: Init nucl-parquet submodule (Rust client for core path dep)
@@ -76,14 +110,46 @@ jobs:
           target: ${{ matrix.target.maturin-target }}
           args: --release --out dist
 
-      - name: Inspect wheel
+      # Assert this leg produced exactly one wheel, carrying exactly the
+      # platform tag it was supposed to. Without this, a leg can "succeed"
+      # while emitting a wheel nobody can install — e.g. an aarch64 leg that
+      # quietly fell back to an x86_64 container, or a manylinux floor that
+      # drifted because the resolved image changed. `if-no-files-found: error`
+      # on the upload below only catches the empty case; this catches the
+      # wrong-tag case too.
+      - name: Verify wheel tag
         shell: bash
         run: |
+          set -euo pipefail
           ls -la py-mcp/dist
-          for w in py-mcp/dist/*.whl; do
-            echo "== $w =="
-            python -m zipfile -l "$w" | head -25
-          done
+
+          shopt -s nullglob
+          matched=(py-mcp/dist/${{ matrix.target.wheel-glob }})
+          all=(py-mcp/dist/*.whl)
+
+          if [ ${#matched[@]} -ne 1 ]; then
+            echo "::error::expected exactly 1 wheel matching '${{ matrix.target.wheel-glob }}' for ${{ matrix.target.name }}, found ${#matched[@]}"
+            # Expanded via an explicit emptiness test rather than
+            # "${all[@]:-<none>}": macos-14's system bash is 3.2, where that
+            # fallback form still trips `set -u` on an empty array. This
+            # branch only runs when the leg is already failing, so losing the
+            # diagnostic to an unbound-variable error would be exactly the
+            # wrong time for it.
+            if [ ${#all[@]} -eq 0 ]; then
+              echo "  built: <none>"
+            else
+              printf '  built: %s\n' "${all[@]}"
+            fi
+            exit 1
+          fi
+          if [ ${#all[@]} -ne 1 ]; then
+            echo "::error::expected exactly 1 wheel total for ${{ matrix.target.name }}, found ${#all[@]}"
+            printf '  built: %s\n' "${all[@]}"
+            exit 1
+          fi
+
+          echo "OK: ${matched[0]}"
+          python -m zipfile -l "${matched[0]}" | head -25
 
       - uses: actions/upload-artifact@v7
         with:
@@ -171,9 +237,128 @@ jobs:
           HYRR_MCP_PYTHON: ${{ github.workspace }}/.venv/bin/python
         run: scripts/mcp_parity_test.sh
 
+  # The full parity test above is x86_64-only (it builds the Tauri desktop
+  # binary, which needs the whole webkit2gtk toolchain). That is fine as the
+  # deep cross-entry-point check, but it means nothing ever *executed* the
+  # aarch64 wheel — which is how a broken aarch64 wheel could have shipped
+  # unnoticed even after the build was fixed. This is the cheap complement:
+  # install the real artifact on a real arm64 machine and run it.
+  smoke-test-aarch64:
+    name: smoke (linux-aarch64)
+    needs: [build]
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v8
+        with:
+          name: wheels-linux-aarch64
+          path: dist
+      - name: Install and run the aarch64 wheel
+        run: |
+          set -euo pipefail
+          ls -la dist
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install --upgrade pip
+          pip install dist/*.whl
+          which hyrr-mcp
+          hyrr-mcp --version
+      # What this proves, precisely: the compiled `_native` extension module
+      # loads and executes on aarch64, and a real call crosses the FFI
+      # boundary into Rust and returns. That is the failure mode this job
+      # exists for — a wheel that is mis-tagged, built for the wrong arch, or
+      # linked against the wrong libc installs fine and dies here.
+      #
+      # It deliberately does NOT drive the JSON-RPC loop. `run_mcp_server*`
+      # constructs the ParquetDataStore *before* reading stdin, so even an
+      # `initialize` request needs nuclear data present — which on a bare
+      # runner means `ensure_data()` firing a live ~54 MB fetch from GitHub
+      # Releases. That would make every hyrr-mcp release depend on the
+      # matching nucl-parquet data release already being published, and would
+      # put a network fetch on the critical path of the release pipeline.
+      # Bad trade for a smoke test. Deep functional coverage is the x86_64
+      # `parity (linux)` job's business — it checks out the data to do it.
+      - name: Exercise the native extension
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+
+          # __version__ comes from the compiled module, so this already
+          # requires a successful native import.
+          hyrr-mcp --version
+
+          # --help calls _native.default_library(), i.e. a real FFI round trip
+          # into Rust returning a value — not just a module import.
+          hyrr-mcp --help | tee help.txt
+          grep -q 'Stdio MCP server' help.txt
+
+          python -c 'import hyrr_mcp; print("native import OK on aarch64:", hyrr_mcp.__version__)'
+
+  # Last line of defence against a partial release (#461, #573).
+  #
+  # `publish` downloads artifacts with no `name:` filter, which succeeds with
+  # *whatever exists* — so if a build leg were skipped, cancelled, or (as
+  # before) marked continue-on-error, publish would cheerfully upload an
+  # incomplete set and go green. This job pins the expected artifact set
+  # explicitly, so "one platform silently missing from PyPI" becomes a red
+  # build instead of a discovery months later.
+  verify-artifacts:
+    name: verify artifact set
+    needs: [build, sdist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+      - name: Assert the full artifact set is present
+        run: |
+          set -euo pipefail
+          find dist -type f \( -name '*.whl' -o -name '*.tar.gz' \) | sort
+
+          # One glob per matrix leg, plus the sdist. Keep in lockstep with the
+          # `build` matrix — adding a target means adding a line here.
+          expected=(
+            '*-manylinux_2_17_x86_64*.whl'
+            '*-manylinux_2_17_aarch64*.whl'
+            '*-macosx_*_arm64.whl'
+            '*-win_amd64.whl'
+          )
+
+          rc=0
+          for glob in "${expected[@]}"; do
+            n=$(find dist -type f -name "$glob" | wc -l)
+            if [ "$n" -ne 1 ]; then
+              echo "::error::expected exactly 1 artifact matching '$glob', found $n"
+              rc=1
+            else
+              echo "OK  $glob"
+            fi
+          done
+
+          n_sdist=$(find dist -type f -name '*.tar.gz' | wc -l)
+          if [ "$n_sdist" -ne 1 ]; then
+            echo "::error::expected exactly 1 sdist, found $n_sdist"
+            rc=1
+          else
+            echo "OK  sdist"
+          fi
+
+          n_whl=$(find dist -type f -name '*.whl' | wc -l)
+          if [ "$n_whl" -ne "${#expected[@]}" ]; then
+            echo "::error::expected ${#expected[@]} wheels, found $n_whl (an unexpected extra wheel is as wrong as a missing one)"
+            rc=1
+          fi
+
+          exit "$rc"
+
   publish:
     name: publish to PyPI
-    needs: [build, sdist, parity-test]
+    needs: [build, sdist, parity-test, smoke-test-aarch64, verify-artifacts]
     if: startsWith(github.ref, 'refs/tags/hyrr-mcp-v')
     runs-on: ubuntu-latest
     environment: pypi

@@ -1,6 +1,11 @@
 /target
 /.venv
-Cargo.lock
+# Cargo.lock IS committed. This crate is not a library — it is the artifact
+# published to PyPI as the `hyrr-mcp` wheel, so its dependency graph must be
+# reproducible: without a lockfile every release resolved fresh against
+# crates.io, and a compromised or broken transitive bump would land in a
+# published wheel silently. The sibling crates (core, py, hyrr-mcp, wasm,
+# desktop) all commit theirs; this one was ignored by oversight. See #573.
 *.so
 __pycache__/
 *.egg-info/

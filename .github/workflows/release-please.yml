@@ -119,6 +119,12 @@ jobs:
           cargo update --manifest-path core/Cargo.toml -p hyrr-core
           cargo update --manifest-path hyrr-mcp/Cargo.toml -p hyrr-core -p hyrr-mcp
           cargo update --manifest-path py/Cargo.toml -p hyrr-core
+          # py-mcp path-depends on ../core, so a core bump staleness-breaks its
+          # lock exactly like the others. It joined the committed-lockfile set
+          # in #576 (it is the crate published to PyPI, so its graph must be
+          # reproducible); without this line the `lockfile-sync` gate would go
+          # red on every release PR from that point on.
+          cargo update --manifest-path py-mcp/Cargo.toml -p hyrr-core
           cargo update --manifest-path wasm/Cargo.toml -p hyrr-core -p hyrr-wasm
           cargo update --manifest-path desktop/src-tauri/Cargo.toml -p hyrr-core -p hyrr-desktop
           # release-please bumps frontend/package.json via `extra-files` but does
@@ -130,7 +136,7 @@ jobs:
         run: bash scripts/check-lockfiles.sh
       - name: Commit & push if changed
         run: |
-          LOCKS=(uv.lock core/Cargo.lock hyrr-mcp/Cargo.lock py/Cargo.lock wasm/Cargo.lock desktop/src-tauri/Cargo.lock package-lock.json)
+          LOCKS=(uv.lock core/Cargo.lock hyrr-mcp/Cargo.lock py/Cargo.lock py-mcp/Cargo.lock wasm/Cargo.lock desktop/src-tauri/Cargo.lock package-lock.json)
           if git diff --quiet -- "${LOCKS[@]}"; then
             echo "Lockfiles already in sync — nothing to push."
             exit 0

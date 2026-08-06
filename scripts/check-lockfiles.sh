@@ -24,20 +24,26 @@ else
 fi
 
 # --- Cargo.lock (every standalone crate) ---
-# There's no workspace: core, hyrr-mcp, py, wasm, and desktop each carry their own
-# Cargo.lock, and the hermetic nix-check builds each with --locked. Verify them all
-# here so a stale lock (e.g. an unsynced release version bump) is caught before
-# nix-check does. `cargo metadata --locked` resolves the graph and fails on a stale
-# lock without a full compile, so this stays fast.
+# There's no workspace: core, hyrr-mcp, py, py-mcp, wasm, and desktop each carry
+# their own Cargo.lock, and the hermetic nix-check builds each with --locked. Verify
+# them all here so a stale lock (e.g. an unsynced release version bump) is caught
+# before nix-check does. `cargo metadata --locked` resolves the graph and fails on a
+# stale lock without a full compile, so this stays fast.
 #
-# core/hyrr-mcp/py/desktop path-depend on the nucl-parquet Rust client (default
-# features pull parquet-store; wasm doesn't). Without the submodule those resolve
-# to a missing path and `cargo metadata` fails for the wrong reason — so skip them
-# unless the client is checked out. The dedicated `lockfile-sync` CI job checks
-# the submodule out and runs the full set.
+# py-mcp joined this list in #573. It had no committed lockfile at all, which
+# mattered more than the others: it is the crate published to PyPI as the
+# `hyrr-mcp` wheel, so every release re-resolved its whole graph against
+# crates.io. Its lock was seeded from core's, so the shared subgraph pins
+# exactly what the other crates (and therefore CI) build against.
+#
+# core/hyrr-mcp/py/py-mcp/desktop path-depend on the nucl-parquet Rust client
+# (default features pull parquet-store; wasm doesn't). Without the submodule those
+# resolve to a missing path and `cargo metadata` fails for the wrong reason — so
+# skip them unless the client is checked out. The dedicated `lockfile-sync` CI job
+# checks the submodule out and runs the full set.
 if command -v cargo &>/dev/null; then
   if [ -f nucl-parquet/clients/rs/nucl-parquet/Cargo.toml ]; then
-    manifests=(core/Cargo.toml hyrr-mcp/Cargo.toml py/Cargo.toml wasm/Cargo.toml desktop/src-tauri/Cargo.toml)
+    manifests=(core/Cargo.toml hyrr-mcp/Cargo.toml py/Cargo.toml py-mcp/Cargo.toml wasm/Cargo.toml desktop/src-tauri/Cargo.toml)
   else
     manifests=(wasm/Cargo.toml)
     echo "::warning::nucl-parquet submodule not initialized — checking only wasm/Cargo.lock (init the submodule for the full set)"
