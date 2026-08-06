@@ -2184,9 +2184,17 @@ fn tool_get_simulation_dataset(
                     .join("; ")
             ));
         }
-        // Trigger the numeric-vs-string validation on the first matching
-        // table so a bogus type errors before we render.
-        let _ = hits[0].inline_row_order(Some(k))?;
+        // Reject a non-numeric sort key before rendering. O(1) via
+        // `Col::is_numeric` — previously this ran a full `inline_row_order`
+        // sort purely to discover the column type (#569 review).
+        if let Some(col) = hits[0].cols.iter().find(|c| c.name() == k) {
+            if !col.is_numeric() {
+                return Err(format!(
+                    "sort_by: column '{k}' is not numeric (only F64 / OptF64 / I64 / \
+                     OptI64 columns support sort_by)"
+                ));
+            }
+        }
     }
 
     let mut resources = Vec::new();

@@ -173,6 +173,16 @@ pub enum Col {
 }
 
 impl Col {
+    /// Whether this column can be sorted numerically. Lets a caller validate a
+    /// `sort_by` key in O(1) instead of running a full sort just to find out
+    /// (#569 review).
+    pub fn is_numeric(&self) -> bool {
+        matches!(
+            self,
+            Col::F64(_, _) | Col::OptF64(_, _) | Col::I64(_, _) | Col::OptI64(_, _)
+        )
+    }
+
     pub fn spec(&self) -> &ColSpec {
         match self {
             Col::I64(s, _)
@@ -280,11 +290,10 @@ impl DatasetMeta {
     /// One key per fact — arrays / structured values are JSON-encoded so any
     /// reader can pick them up as raw strings and re-parse if needed.
     fn to_parquet_kv(&self) -> Vec<(String, String)> {
-        vec![
+        let mut kv = vec![
             ("hyrr.simulation_id".into(), self.simulation_id.clone()),
             ("hyrr.core_version".into(), self.core_version.to_string()),
             ("hyrr.library".into(), self.library.clone()),
-            ("hyrr.table_name".into(), self.table_name.clone()),
             (
                 "hyrr.irradiation_time_s".into(),
                 self.irradiation_time_s.to_string(),
@@ -298,7 +307,16 @@ impl DatasetMeta {
                 serde_json::to_string(&self.time_grid_s).unwrap_or_else(|_| "[]".into()),
             ),
             ("hyrr.config_json".into(), self.config_json.clone()),
-        ]
+        ];
+        // `table_name` is filled in per-table by `parquet_resource`. If a caller
+        // emits a Parquet from a raw `DatasetMeta` it is still unset — OMIT the
+        // key rather than writing `""`. An absent key is honestly "unknown"; an
+        // empty one is a self-description that lies, which is precisely what
+        // this metadata exists to prevent (#569 review).
+        if !self.table_name.is_empty() {
+            kv.push(("hyrr.table_name".into(), self.table_name.clone()));
+        }
+        kv
     }
 }
 
@@ -362,10 +380,7 @@ impl Table {
             )
         })?;
         // Refuse a non-numeric sort key — silent no-op would recreate #533.
-        if !matches!(
-            col,
-            Col::F64(_, _) | Col::OptF64(_, _) | Col::I64(_, _) | Col::OptI64(_, _)
-        ) {
+        if !col.is_numeric() {
             return Err(format!(
                 "sort_by: column '{key}' is not numeric (only F64 / OptF64 / I64 / OptI64 \
                  columns support sort_by)"
