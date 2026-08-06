@@ -74,9 +74,95 @@ fn main() {
     // an edit to the classified changelog does not silently ship stale bytes.
     println!("cargo:rerun-if-changed=../release-notes.json");
 
+    // --- DATA_TARBALL_SHA256 from hyrr.json (#577) ---
+    emit_data_tarball_pin(&version);
+
     // --- Embed nuclear data as a tar (#274) ---
     #[cfg(feature = "embed-data")]
     pack_data_tar(&default_library);
+}
+
+/// Sentinel emitted by the `DATA_VERSION` resolution above when the
+/// submodule isn't checked out. The integrity pin must fail *with* it,
+/// never independently — see [`emit_data_tarball_pin`].
+const UNKNOWN_VERSION: &str = "0.0.0-unknown";
+
+/// Export the pinned SHA-256 of the data release tarball as
+/// `HYRR_DATA_TARBALL_SHA256`, and refuse to build if the pin has
+/// drifted from the submodule.
+///
+/// Two failure modes, deliberately treated differently:
+///
+/// 1. **Submodule absent** (`data_version` == [`UNKNOWN_VERSION`]).
+///    Emit an empty pin and say nothing. This build already cannot
+///    resolve a real release URL, so it was never going to fetch
+///    anything; wasm, `nix flake check`, Dependabot and submodule-less
+///    `cargo test` all land here and must keep compiling. `data_fetch`
+///    treats an empty pin as *refuse to install*, so the two sentinels
+///    fail together and there is no window where a build has a usable
+///    URL but no pin.
+///
+/// 2. **Submodule present but the pin disagrees with it.** Hard build
+///    failure. This is the drift that bit us as #117 (default library)
+///    and it is far nastier here: a stale pin against a freshly-bumped
+///    submodule surfaces at runtime as a checksum mismatch, which is
+///    indistinguishable from a tampered download. Turning it into a
+///    compile error means a contributor who bumps the submodule and
+///    forgets to re-pin finds out in seconds, not from a user's bug
+///    report about a suspected attack.
+fn emit_data_tarball_pin(data_version: &str) {
+    let hyrr_json = Path::new("../hyrr.json");
+    let content = std::fs::read_to_string(hyrr_json).unwrap_or_default();
+
+    let pinned_version = extract_json_string(&content, "data_tarball_version");
+    let pinned_sha = extract_json_string(&content, "data_tarball_sha256");
+
+    if data_version == UNKNOWN_VERSION {
+        // Case 1 — nothing to check against, and nothing will be fetched.
+        println!("cargo:rustc-env=HYRR_DATA_TARBALL_SHA256=");
+        return;
+    }
+
+    let (Some(pinned_version), Some(pinned_sha)) = (pinned_version, pinned_sha) else {
+        panic!(
+            "core/build.rs: the nucl-parquet submodule pins data_version {data_version}, but \
+             hyrr.json has no `data_tarball_version` / `data_tarball_sha256` (#577).\n\
+             \n\
+             The data tarball would be installed with no integrity check at all.\n\
+             Fix: re-pin with `just repin-data`."
+        );
+    };
+
+    if pinned_version != data_version {
+        panic!(
+            "core/build.rs: data-tarball pin is stale (#577).\n\
+             \n\
+               nucl-parquet submodule : data_version {data_version}\n\
+               hyrr.json              : data_tarball_version {pinned_version}\n\
+             \n\
+             The submodule was bumped without re-pinning the tarball hash. Left alone this \
+             would ship a binary that downloads {data_version} and checks it against \
+             {pinned_version}'s hash — a runtime failure that looks exactly like a tampered \
+             download.\n\
+             \n\
+             Fix: re-pin with `just repin-data`."
+        );
+    }
+
+    // Shape check. A truncated or placeholder value would otherwise fail
+    // far away from here, at first fetch, on a user's machine.
+    let valid = pinned_sha.len() == 64 && pinned_sha.bytes().all(|b| b.is_ascii_hexdigit());
+    if !valid {
+        panic!(
+            "core/build.rs: `data_tarball_sha256` in hyrr.json is not a 64-char hex SHA-256 \
+             (got {} chars) (#577).\n\
+             \n\
+             Fix: re-pin with `just repin-data`.",
+            pinned_sha.len()
+        );
+    }
+
+    println!("cargo:rustc-env=HYRR_DATA_TARBALL_SHA256={pinned_sha}");
 }
 
 /// Pack the required nucl-parquet files into an uncompressed tar in OUT_DIR.

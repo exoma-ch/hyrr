@@ -1,5 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "HYRR project-wide configuration — SSoT for values shared across Rust, TypeScript, Python, CI.",
-  "default_library": "tendl-2023-iso"
+  "default_library": "tendl-2023-iso",
+  "data_tarball_doc": "Integrity pin for the nuclear-data release tarball (#577). See docs/DATA_INTEGRITY.md. Must match the pinned submodule's catalog data version; core/build.rs fails the build otherwise. Re-pin with: just repin-data",
+  "data_tarball_version": "2026.8.1",
+  "data_tarball_sha256": "a5ce01b8f64fdcf45d4ee345979e7e1d6f353ab076010ab1a3b32814cfb5363b"
 }

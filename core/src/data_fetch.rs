@@ -53,6 +53,26 @@ use serde::Serialize;
 /// at fetch time rather than serving stale data).
 pub const DATA_VERSION: &str = env!("HYRR_DATA_VERSION");
 
+/// SHA-256 of the release tarball for [`DATA_VERSION`], pinned in
+/// `hyrr.json` and validated against the submodule at build time
+/// (`core/build.rs::emit_data_tarball_pin`).
+///
+/// Empty iff the submodule wasn't checked out, in which case
+/// [`DATA_VERSION`] is the `0.0.0-unknown` sentinel too and no real
+/// release URL exists. [`verify_tarball_sha256`] treats empty as
+/// *refuse*, never as *skip*.
+///
+/// **What this does and does not buy.** The archive is zstd with the
+/// content-checksum flag set, so the decoder already rejects truncation
+/// and corruption on its own — this pin is not a corruption check. It
+/// is an *authenticity* check: it binds this build to exactly the bytes
+/// it was tested against, so a substituted payload is refused even when
+/// the transport is trusted. That case is not hypothetical: honouring
+/// an institution's TLS-inspecting proxy (#578) means deliberately
+/// trusting a middlebox to hand us ~800 MB of nuclear data, and this is
+/// what makes that trust decision safe.
+pub const DATA_TARBALL_SHA256: &str = env!("HYRR_DATA_TARBALL_SHA256");
+
 /// GitHub Releases base URL for nucl-parquet data tarballs.
 ///
 /// This is the SSoT for the release host. All other call sites (Tauri
@@ -361,6 +381,23 @@ pub enum FetchErrorPayload {
     NoHome {
         message: String,
     },
+    /// Integrity failure (#577). `url` is carried so the recovery card
+    /// can name what was being fetched; the two digests are included so
+    /// a bug report is actionable without asking the user to re-run
+    /// anything. Neither is sensitive — the expected value is a public
+    /// constant in this repo.
+    ChecksumMismatch {
+        expected: String,
+        actual: String,
+        url: String,
+        cache_dir: String,
+        message: String,
+    },
+    NoChecksumPin {
+        url: String,
+        cache_dir: String,
+        message: String,
+    },
 }
 
 impl FetchErrorPayload {
@@ -467,6 +504,20 @@ impl From<&FetchError> for FetchErrorPayload {
                 message,
             },
             FetchError::NoHome => FetchErrorPayload::NoHome { message },
+            FetchError::ChecksumMismatch { expected, actual } => {
+                FetchErrorPayload::ChecksumMismatch {
+                    expected: expected.clone(),
+                    actual: actual.clone(),
+                    url,
+                    cache_dir: cache_dir_str,
+                    message,
+                }
+            }
+            FetchError::NoChecksumPin => FetchErrorPayload::NoChecksumPin {
+                url,
+                cache_dir: cache_dir_str,
+                message,
+            },
         }
     }
 }
@@ -494,6 +545,28 @@ pub enum FetchError {
     UnsafeTarballEntry { kind: String, path: PathBuf },
     #[error("HOME environment variable not set")]
     NoHome,
+    /// The downloaded tarball did not match the SHA-256 pinned for this
+    /// build ([`DATA_TARBALL_SHA256`]). Nothing is extracted and the
+    /// partial download is removed — a mismatch is never recoverable by
+    /// continuing, because the whole point is that we cannot tell a
+    /// benign cause from a substituted payload.
+    #[error(
+        "data tarball failed its integrity check: expected SHA-256 {expected}, got {actual}. \
+         Nothing was installed."
+    )]
+    ChecksumMismatch { expected: String, actual: String },
+    /// No pin was compiled in, so the download cannot be authenticated.
+    /// Refusing is deliberate: treating an absent pin as "skip
+    /// verification" would silently reinstate exactly the gap #577
+    /// closes, and would do so precisely on the builds most likely to
+    /// be unofficial.
+    #[error(
+        "this build has no pinned data-tarball checksum, so the download cannot be verified \
+         (the nucl-parquet submodule was missing when it was compiled). Refusing to install. \
+         Rebuild with `git submodule update --init --recursive`, or point HYRR_DATA at an \
+         existing data directory."
+    )]
+    NoChecksumPin,
 }
 
 pub type Result<T> = std::result::Result<T, FetchError>;
@@ -648,17 +721,75 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
     let mut reader = io::BufReader::new(resp);
     let mut buf = vec![0u8; 64 * 1024];
     let mut bytes_done: u64 = 0;
+    // Hash as the bytes stream past. Doing it here rather than in a
+    // second pass avoids re-reading ~800 MB from disk, and means the
+    // digest covers exactly what was written rather than what we can
+    // read back afterwards.
+    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
     loop {
         let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
         }
         io::Write::write_all(&mut file, &buf[..n])?;
+        sha2::Digest::update(&mut hasher, &buf[..n]);
         bytes_done += n as u64;
         progress(FetchProgress {
             stage: FetchStage::Downloading,
             bytes_done,
             bytes_total,
+        });
+    }
+
+    // Flush before verifying: the caller installs from `out`, so the
+    // digest must describe the file that actually landed.
+    io::Write::flush(&mut file)?;
+    drop(file);
+
+    progress(FetchProgress {
+        stage: FetchStage::Verifying,
+        bytes_done,
+        bytes_total,
+    });
+    let digest = sha2::Digest::finalize(hasher);
+    verify_tarball_sha256(&hex_lower(&digest))
+}
+
+/// Lowercase hex, without pulling a crate for four lines.
+fn hex_lower(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        // Infallible: writing to a String never fails.
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
+/// Compare a computed digest against the compile-time pin.
+fn verify_tarball_sha256(actual: &str) -> Result<()> {
+    verify_sha256_against(DATA_TARBALL_SHA256, actual)
+}
+
+/// Pin-comparison logic, with the pin injected.
+///
+/// Split out from [`verify_tarball_sha256`] purely so the absent-pin and
+/// mismatch branches are reachable from tests: [`DATA_TARBALL_SHA256`] is
+/// a compile-time constant, so a test binary can never observe it empty.
+/// The refuse-on-absent-pin rule is the whole point of #577 and would
+/// otherwise be the one branch nothing covers.
+///
+/// An absent pin is an error, not a bypass. Comparison is
+/// case-insensitive because the pin is hand-edited in `hyrr.json`;
+/// `actual` is always lowercase from [`hex_lower`].
+fn verify_sha256_against(pin: &str, actual: &str) -> Result<()> {
+    if pin.is_empty() {
+        return Err(FetchError::NoChecksumPin);
+    }
+    if !pin.eq_ignore_ascii_case(actual) {
+        return Err(FetchError::ChecksumMismatch {
+            expected: pin.to_string(),
+            actual: actual.to_string(),
         });
     }
     Ok(())
@@ -1498,6 +1629,147 @@ pub(crate) mod test_hooks {
         fs::copy(src, out)?;
         FETCH_COUNT.fetch_add(1, Ordering::SeqCst);
         Ok(Some(()))
+    }
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+
+    /// SHA-256 of the empty input — a known-answer test for the hex
+    /// formatting and the digest wiring together. If `hex_lower` ever
+    /// grows a leading-zero bug this catches it, which a round-trip
+    /// against our own output would not.
+    const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        let mut h = <sha2::Sha256 as sha2::Digest>::new();
+        sha2::Digest::update(&mut h, bytes);
+        hex_lower(&sha2::Digest::finalize(h))
+    }
+
+    #[test]
+    fn hex_lower_pads_leading_zeros() {
+        assert_eq!(hex_lower(&[0x00, 0x0f, 0xff]), "000fff");
+        assert_eq!(hex_lower(&[]), "");
+    }
+
+    #[test]
+    fn digest_matches_known_answer() {
+        assert_eq!(sha256_hex(b""), EMPTY_SHA256);
+        // `abc` — the FIPS 180-4 worked example.
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn matching_digest_is_accepted() {
+        assert!(verify_sha256_against(EMPTY_SHA256, EMPTY_SHA256).is_ok());
+    }
+
+    /// The pin is hand-edited in hyrr.json, so a maintainer pasting an
+    /// uppercase digest must not brick every install.
+    #[test]
+    fn pin_comparison_is_case_insensitive() {
+        assert!(verify_sha256_against(&EMPTY_SHA256.to_uppercase(), EMPTY_SHA256).is_ok());
+    }
+
+    #[test]
+    fn tampered_bytes_are_rejected() {
+        let actual = sha256_hex(b"not the data you were looking for");
+        match verify_sha256_against(EMPTY_SHA256, &actual) {
+            Err(FetchError::ChecksumMismatch {
+                expected,
+                actual: got,
+            }) => {
+                assert_eq!(expected, EMPTY_SHA256);
+                assert_eq!(got, actual);
+            }
+            other => panic!("expected ChecksumMismatch, got {other:?}"),
+        }
+    }
+
+    /// A one-byte truncation must not slip through. zstd's own frame
+    /// checksum would also catch this, but the pin must not rely on that.
+    #[test]
+    fn truncated_payload_is_rejected() {
+        let full = b"nuclear data payload";
+        let pin = sha256_hex(full);
+        let truncated = sha256_hex(&full[..full.len() - 1]);
+        assert!(matches!(
+            verify_sha256_against(&pin, &truncated),
+            Err(FetchError::ChecksumMismatch { .. })
+        ));
+    }
+
+    /// The load-bearing rule of #577: no pin means refuse, never skip.
+    /// Failing open here would silently reinstate the gap, and would do
+    /// so precisely on unofficial builds.
+    #[test]
+    fn absent_pin_refuses_rather_than_skipping() {
+        assert!(matches!(
+            verify_sha256_against("", EMPTY_SHA256),
+            Err(FetchError::NoChecksumPin)
+        ));
+    }
+
+    /// Both new variants must survive the Tauri/IPC boundary — the
+    /// desktop recovery card renders from this wire shape, and a variant
+    /// that serialises to the wrong discriminator shows the user a blank
+    /// card instead of an actionable error.
+    #[test]
+    fn integrity_errors_have_a_wire_shape() {
+        for err in [
+            FetchError::ChecksumMismatch {
+                expected: "aa".into(),
+                actual: "bb".into(),
+            },
+            FetchError::NoChecksumPin,
+        ] {
+            let json = FetchErrorPayload::from(&err).to_json_string();
+            assert!(json.contains("\"kind\":\"FetchError\""), "{json}");
+            let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+            let variant = v["variant"].as_str().expect("variant present");
+            assert!(
+                variant == "ChecksumMismatch" || variant == "NoChecksumPin",
+                "unexpected variant {variant}"
+            );
+            // The message is what the user actually reads; an empty one
+            // would render an empty recovery card.
+            assert!(!v["message"].as_str().unwrap_or("").is_empty(), "{json}");
+        }
+    }
+
+    /// The mismatch payload must carry both digests, or a bug report is
+    /// unactionable without asking the user to re-run the download.
+    #[test]
+    fn mismatch_payload_carries_both_digests() {
+        let err = FetchError::ChecksumMismatch {
+            expected: "e".repeat(64),
+            actual: "a".repeat(64),
+        };
+        let json = FetchErrorPayload::from(&err).to_json_string();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["expected"].as_str().unwrap(), "e".repeat(64));
+        assert_eq!(v["actual"].as_str().unwrap(), "a".repeat(64));
+    }
+
+    /// The pin compiled into *this* build must be well-formed. Guards
+    /// against a hand-edit landing a truncated or whitespace-padded value
+    /// in hyrr.json that build.rs's validation somehow let through.
+    #[test]
+    fn compiled_in_pin_is_well_formed_or_absent() {
+        if DATA_TARBALL_SHA256.is_empty() {
+            // Submodule-less build; DATA_VERSION must be the sentinel too,
+            // so the two fail together and there's no usable-URL-without-pin
+            // window.
+            assert_eq!(DATA_VERSION, "0.0.0-unknown");
+            return;
+        }
+        assert_eq!(DATA_TARBALL_SHA256.len(), 64);
+        assert!(DATA_TARBALL_SHA256.bytes().all(|b| b.is_ascii_hexdigit()));
     }
 }
 
