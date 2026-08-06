@@ -24,6 +24,9 @@
 #   HYRR_SKIP_BUILD=1    deploy the existing frontend/dist as-is (promote the
 #                        exact artifact verified on the previous rung)
 #   HYRR_ASSUME_YES=1    skip the prd confirmation prompt (for non-interactive CI)
+#   HYRR_SKIP_PUBLIC_VERIFY=1
+#                        skip the post-deploy HTTPS check (scripts/verify-deploy.sh).
+#                        The server-side check is NOT skippable.
 #   HYRR_ETH_SSH_PREFIX  use ssh_config aliases "<prefix><env>" instead of
 #                        connecting directly. ETH SSH (:22) is reachable only
 #                        from the ETH network, so off-network hosts (vm-dev, CI)
@@ -346,6 +349,16 @@ do_deploy() { # do_deploy <env>
     frontend/dist/ "${target}:${docroot}/"
 
   verify_remote "$env" "$docroot"
+
+  # Then from the outside, over plain HTTPS: proves Apache actually serves the
+  # new bundle and that the licensing gate is still up. Skippable because it
+  # depends on reaching the public internet, unlike verify_remote — which runs
+  # over the connection the deploy just used and must never be skippable.
+  if [ "${HYRR_SKIP_PUBLIC_VERIFY:-}" = "1" ]; then
+    echo "=== Skipping public verification (HYRR_SKIP_PUBLIC_VERIFY=1) ==="
+  else
+    scripts/verify-deploy.sh "$env"
+  fi
 
   echo "=== Deployed ${env} → ${url} ==="
 }
