@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::cache;
-use super::dataset::{self, Table};
+use super::dataset::{self, DatasetMeta, Table};
 use super::dose::compute_stack_dose;
 use super::nuclide;
 
@@ -164,13 +164,48 @@ fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// Attach a table as a Parquet resource under a stable `hyrr://` URI.
-fn parquet_resource(sim_id: &str, table: &Table) -> Result<ToolResource, String> {
+/// Attach a table as a Parquet resource under a stable `hyrr://` URI. The
+/// per-column metadata (unit / description / eval_point / null_meaning) is
+/// baked in by `Table::to_parquet_bytes`; `meta` layers the dataset-level
+/// provenance on top so a Parquet detached from the response stays
+/// self-describing (#569 P0).
+fn parquet_resource(
+    sim_id: &str,
+    table: &Table,
+    meta: &DatasetMeta,
+) -> Result<ToolResource, String> {
+    // Each table gets its own DatasetMeta with the right table_name — otherwise
+    // a Parquet's file KV would identify itself as a peer table's name.
+    let mut per_table = meta.clone();
+    per_table.table_name = table.name.to_string();
     Ok(ToolResource {
         uri: format!("hyrr://sim/{sim_id}/{}.parquet", table.name),
         mime_type: "application/vnd.apache.parquet".to_string(),
-        blob_base64: b64(&table.to_parquet_bytes()?),
+        blob_base64: b64(&table.to_parquet_bytes(Some(&per_table))?),
     })
+}
+
+/// Build the dataset-level provenance envelope for a simulation. Shared by
+/// every tool that emits a Parquet resource so the metadata surface stays
+/// uniform: same keys, same population, same source-of-truth (#569 P0).
+fn build_dataset_meta(
+    args: &Value,
+    result: &StackResult,
+    library: &str,
+    sim_id: &str,
+) -> DatasetMeta {
+    DatasetMeta {
+        simulation_id: sim_id.to_string(),
+        core_version: env!("CARGO_PKG_VERSION"),
+        library: library.to_string(),
+        config_json: serde_json::to_string(args).unwrap_or_else(|_| "null".to_string()),
+        time_grid_s: dataset::shared_time_grid(result),
+        irradiation_time_s: result.irradiation_time_s,
+        cooling_time_s: result.cooling_time_s,
+        // Overwritten per-table in `parquet_resource` — this field only matters
+        // when a caller consumes `DatasetMeta` directly (e.g. from tests).
+        table_name: String::new(),
+    }
 }
 
 /// Fingerprint of session-defined materials so the result cache can't return a
@@ -555,7 +590,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_simulation_dataset",
-            "description": format!("Full structured export of a simulation as long-format tables — both inline JSON (for direct reasoning) and attached Parquet resources (for polars/pandas). Always returns the inventory table (one row per isotope × layer × source, with production rate, saturation yield, end-of-bombardment + end-of-cooling activity, half-life, and β+/EC/β−/IT branching). Set `cooling`, `depth`, and/or `emissions` to also include the cooling-tail (activity vs time), depth-profile (production rate vs depth), and per-decay emission-line tables. Cheap: backed by a config-hashed cache, so repeat queries on the same config don't recompute.{SCOPE_SUFFIX}"),
+            "description": format!("Full structured export of a simulation as **self-describing** long-format tables (#569) — inline JSON (for direct reasoning) and attached **complete** Parquet resources (for polars / DuckDB / pandas). Every column carries UNIT + one-line DESCRIPTION + EVALUATION POINT (`end_of_bombardment` / `end_of_cooling` / `per_time_grid_row` / `per_depth_row` / `static`) both in the inline schema block AND baked into the Parquet's Arrow field metadata; dataset-level PROVENANCE (config, library id, hyrr-core version, time grid) lives in the Parquet file's `key_value_metadata` so a downloaded file stays self-contained. Always returns the inventory table (one row per isotope × layer × source, with production rate, saturation yield, end-of-bombardment + end-of-cooling activity, half-life, β+/EC/β−/IT branching). Set `cooling`, `depth`, `emissions` to also include cooling-tail (activity vs time), depth-profile (production rate vs depth), and per-decay emission-line tables. Query the Parquet with polars: `pl.read_parquet('inventory.parquet').filter(pl.col('activity_at_cooling_bq') > 1e6)` — or DuckDB: `SELECT * FROM 'inventory.parquet' WHERE activity_at_cooling_bq > 1e6`. Cheap: backed by a config-hashed cache, so repeat queries on the same config don't recompute.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -568,6 +603,8 @@ pub fn list_tools() -> Vec<Value> {
                     "cooling": { "type": "boolean", "description": "Include the cooling-tail table (activity [Bq] vs time, t ≥ irradiation). Default false." },
                     "depth": { "type": "boolean", "description": "Include the depth-profile table (production rate [atoms/s/cm] vs depth). Default false." },
                     "emissions": { "type": "boolean", "description": "Include the emission table (per γ/x-ray/Auger/β±/annihilation line with intensity_per_decay). Default false." },
+                    "top_n": { "type": "integer", "minimum": 0, "description": "Bound the number of rows shown INLINE in the JSON view (per table). The attached Parquet resource is ALWAYS complete — this only trims the token cost of the inline view, never the exported data. When omitted, defaults to a built-in cap; when set, the smaller of the two applies. Truncation is stated explicitly in the response." },
+                    "sort_by": { "type": "string", "description": "Column name to sort the INLINE JSON view by (descending). Applies only to tables that carry that column; the Parquet remains in insertion order regardless. Must be a numeric column (F64/I64) — unknown or non-numeric keys are rejected rather than silently ignored." },
                     "activity_floor_bq": activity_floor_schema()
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
@@ -575,7 +612,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_isotope_inventory",
-            "description": format!("Cheap 'what's in the can' query: just the inventory table (one row per isotope × layer × source — production rate, saturation yield, EOB + cooling activity, half-life, branching). No time series, no depth. Inline JSON plus a Parquet resource. Same stack arguments as `simulate`.{SCOPE_SUFFIX}"),
+            "description": format!("Cheap 'what's in the can' query: just the self-describing inventory table (one row per isotope × layer × source — production rate, saturation yield, EOB + cooling activity, half-life, branching). No time series, no depth. Inline JSON (per-column UNIT / DESCRIPTION / EVALUATION POINT / null semantics attached) plus a **complete** Parquet resource with the same metadata + dataset-level provenance in `key_value_metadata` (#569). Query it with polars / DuckDB one-liners; see `get_simulation_dataset` for examples. Same stack arguments as `simulate`.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -585,6 +622,8 @@ pub fn list_tools() -> Vec<Value> {
                     "layers": { "type": "array", "items": layer_schema(false) },
                     "irradiation_time_s": { "type": "number" },
                     "cooling_time_s": { "type": "number" },
+                    "top_n": { "type": "integer", "minimum": 0, "description": "Bound INLINE JSON rows; the Parquet is always complete." },
+                    "sort_by": { "type": "string", "description": "Numeric column to sort the INLINE JSON by (descending); Parquet order is unaffected." },
                     "activity_floor_bq": activity_floor_schema()
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
@@ -592,7 +631,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_emission_curve",
-            "description": format!("Per-isotope / per-line photon (or particle) emission-rate time series: rate_per_s(t) = total stack activity × intensity_per_decay, summed across layers. Long-format {{t_s, isotope, energy_kev, emission_type, rate_per_s}}, inline JSON + Parquet resource. The load-bearing surface for 511 keV purity windows, HPGe spectrum prediction, and dose-rate envelopes. Optional filters narrow the output: `isotope`, `emission_type` (gamma/xray/auger/ce/beta-/beta+/annihilation), `energy_kev` (± `energy_tolerance_kev`).{SCOPE_SUFFIX}"),
+            "description": format!("Per-isotope / per-line photon (or particle) emission-rate time series: rate_per_s(t) = total stack activity × intensity_per_decay, summed across layers. Self-describing long-format {{t_s, isotope, energy_kev, emission_type, rate_per_s}}, inline JSON + **complete** Parquet resource (per-column metadata + dataset provenance, #569). The load-bearing surface for 511 keV purity windows, HPGe spectrum prediction, and dose-rate envelopes. Optional filters narrow the output: `isotope`, `emission_type` (gamma/xray/auger/ce/beta-/beta+/annihilation), `energy_kev` (± `energy_tolerance_kev`).{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -607,6 +646,8 @@ pub fn list_tools() -> Vec<Value> {
                     "energy_kev": { "type": "number", "description": "Restrict to lines within ± energy_tolerance_kev of this energy (e.g. 511)." },
                     "energy_tolerance_kev": { "type": "number", "description": "Tolerance for energy_kev matching [keV]. Default 1.0." },
                     "vs": { "type": "string", "enum": ["time", "cooling"], "description": "'time' = full irradiation + cooling timeline; 'cooling' = cooling tail only. Default 'time'." },
+                    "top_n": { "type": "integer", "minimum": 0, "description": "Bound INLINE JSON rows; the Parquet is always complete." },
+                    "sort_by": { "type": "string", "description": "Numeric column to sort the INLINE JSON by (descending); Parquet order is unaffected." },
                     "activity_floor_bq": activity_floor_schema()
                 },
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
@@ -1943,29 +1984,84 @@ fn tool_list_producing_layers(
     Ok(output)
 }
 
-/// Max table rows inlined as JSON in a tool response. The full table always
-/// ships in the Parquet resource; inlining is capped so a large cooling/depth
-/// series can't blow up the LLM context (truncation is stated, not silent).
+/// Default cap on rows inlined as JSON in a tool response. The full table
+/// always ships in the Parquet resource; inlining is capped so a large
+/// cooling/depth series can't blow up the LLM context (truncation is stated,
+/// not silent). Callers can lower it via `top_n`; they cannot raise it (a
+/// runaway inline block is exactly the token-cost failure mode this bounds).
 const INLINE_ROW_CAP: usize = 200;
 
-/// Render a table as a `## name` section: a JSON code block (row-capped) noting
-/// any truncation. Shared by the dataset and inventory tools.
-fn render_table_section(table: &Table) -> Result<String, String> {
-    let rows = table.to_json_rows();
-    let shown = rows.len().min(INLINE_ROW_CAP);
-    let json = serde_json::to_string(&rows[..shown]).map_err(|e| e.to_string())?;
-    let note = if rows.len() > shown {
-        format!(
-            " — showing {shown} of {} rows (full table in the Parquet resource)",
-            rows.len()
-        )
-    } else {
-        String::new()
+/// Render a table as a `## name` section with:
+///   * a `schema` sub-block (one row per column: name / unit / description /
+///     eval_point / nullable / null_meaning) — the JSON mirror of the Parquet
+///     field-level metadata (#569 P0), and
+///   * a `rows` sub-block bounded by `top_n` (default [`INLINE_ROW_CAP`]) and
+///     ordered by `sort_by` desc when supplied. Truncation is stated
+///     explicitly; the Parquet resource is unaffected (#569 P1 truncation
+///     contract).
+///
+/// `sort_by` is validated by [`Table::inline_row_order`] — unknown or
+/// non-numeric keys surface as tool errors, never silently ignored.
+fn render_table_section(
+    table: &Table,
+    top_n: Option<usize>,
+    sort_by: Option<&str>,
+) -> Result<String, String> {
+    // Cap top_n at INLINE_ROW_CAP so a caller can't raise it above the token
+    // budget; None still yields INLINE_ROW_CAP as the effective ceiling.
+    let effective_cap = top_n
+        .map(|n| n.min(INLINE_ROW_CAP))
+        .unwrap_or(INLINE_ROW_CAP);
+    let (rows, truncated) = table.inline_json_rows(Some(effective_cap), sort_by)?;
+    let schema_json = serde_json::to_string(&table.schema_json()).map_err(|e| e.to_string())?;
+    let rows_json = serde_json::to_string(&rows).map_err(|e| e.to_string())?;
+
+    let mut out = format!("## {}\n\n", table.name);
+    out.push_str(
+        "*Per-column metadata (unit / description / evaluation point / null semantics) \
+         is inlined below AND baked into the Parquet resource's Arrow field metadata; \
+         dataset-level provenance (config, library, hyrr-core version, time grid) is in \
+         the Parquet file's `key_value_metadata`.*\n\n",
+    );
+    out.push_str("### schema\n\n```json\n");
+    out.push_str(&schema_json);
+    out.push_str("\n```\n\n");
+
+    // Inline rows note — truncation is always stated (Parquet is complete).
+    let mut note = format!("### rows ({} shown", rows.len());
+    if let Some(total) = truncated {
+        note.push_str(&format!(
+            " of {total} — inline JSON view only; the Parquet resource is complete"
+        ));
+    }
+    if let Some(k) = sort_by {
+        note.push_str(&format!(", sorted by {k} desc"));
+    }
+    note.push(')');
+    out.push_str(&note);
+    out.push_str("\n\n```json\n");
+    out.push_str(&rows_json);
+    out.push_str("\n```\n");
+    Ok(out)
+}
+
+/// Parse and validate the shared `top_n` / `sort_by` arguments.
+/// `top_n` bounds the INLINE JSON only — the Parquet resource stays complete.
+/// Negatives / non-integers on `top_n` are rejected explicitly rather than
+/// silently coerced (silent-loss regression avoidance, #569).
+fn parse_inline_view(args: &Value) -> Result<(Option<usize>, Option<&str>), String> {
+    let top_n = match args.get("top_n") {
+        Some(v) if !v.is_null() => {
+            let n = v.as_i64().ok_or("'top_n' must be a non-negative integer")?;
+            if n < 0 {
+                return Err("'top_n' must be a non-negative integer".to_string());
+            }
+            Some(n as usize)
+        }
+        _ => None,
     };
-    Ok(format!(
-        "## {}{}\n\n```json\n{}\n```\n",
-        table.name, note, json
-    ))
+    let sort_by = args.get("sort_by").and_then(|v| v.as_str());
+    Ok((top_n, sort_by))
 }
 
 fn tool_get_simulation_dataset(
@@ -1983,11 +2079,13 @@ fn tool_get_simulation_dataset(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let activity_floor_bq = parse_activity_floor(args)?;
+    let (top_n, sort_by) = parse_inline_view(args)?;
 
     let result = cached_sim(db, registry, args)?;
     let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
     let mats = layer_materials(args);
     let (proj, energy, current) = beam_args(args);
+    let meta = build_dataset_meta(args, &result, db.library(), &sim_id);
 
     // Each builder returns `(table, filtered_below_floor)` — sum the drops
     // across every table so the caller sees a single, honest count.
@@ -2018,9 +2116,25 @@ fn tool_get_simulation_dataset(
         result.irradiation_time_s, result.cooling_time_s
     ));
     text.push_str(
-        "Each table is inlined as JSON below and attached as a Parquet resource \
-         (`hyrr://sim/<id>/<table>.parquet`). Long-format, one row per record.\n\n",
+        "Each table is inlined as JSON below (bounded — see `top_n` / `sort_by`) and \
+         attached as a **complete** Parquet resource (`hyrr://sim/<id>/<table>.parquet`) \
+         with per-column metadata (unit / description / evaluation point / null meaning) \
+         in Arrow field metadata AND dataset-level provenance in the Parquet file's \
+         `key_value_metadata`. Long-format, one row per record.\n\n\
+         *How to query* (Parquet, one-liner): \
+         `polars.read_parquet('inventory.parquet').filter(pl.col('activity_at_cooling_bq') > 1e6)` \
+         or DuckDB \
+         `SELECT * FROM 'inventory.parquet' WHERE activity_at_cooling_bq > 1e6`.\n\n",
     );
+
+    // Mirror the Parquet file KV into the inline response so a consumer using
+    // only the JSON path still has the provenance.
+    let provenance_json =
+        serde_json::to_string_pretty(&meta.to_json()).map_err(|e| e.to_string())?;
+    text.push_str("## dataset\n\n```json\n");
+    text.push_str(&provenance_json);
+    text.push_str("\n```\n\n");
+
     text.push_str("**Tables:** ");
     text.push_str(
         &tables
@@ -2039,15 +2153,58 @@ fn tool_get_simulation_dataset(
         ));
     }
 
+    // Validate `sort_by` up front: it must resolve against at least one of
+    // the emitted tables (and to a numeric column there). Otherwise the
+    // per-table `effective_sort` filter would silently drop it — which is
+    // exactly the silent-loss failure mode we're closing (#569 rationale).
+    if let Some(k) = sort_by {
+        let hits: Vec<&Table> = tables
+            .iter()
+            .filter(|t| t.cols.iter().any(|c| c.name() == k))
+            .collect();
+        if hits.is_empty() {
+            return Err(format!(
+                "sort_by: unknown column '{k}' in this dataset. Emitted tables: [{}]. \
+                 Available columns per table: {}",
+                tables.iter().map(|t| t.name).collect::<Vec<_>>().join(", "),
+                tables
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{}: [{}]",
+                            t.name,
+                            t.cols
+                                .iter()
+                                .map(|c| c.name())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+        // Trigger the numeric-vs-string validation on the first matching
+        // table so a bogus type errors before we render.
+        let _ = hits[0].inline_row_order(Some(k))?;
+    }
+
     let mut resources = Vec::new();
     for table in &tables {
         if table.is_empty() {
-            text.push_str(&format!("\n## {} — (no rows)\n", table.name));
+            // Empty tables still get a schema block — a downstream consumer
+            // can plan a query against the shape without waiting for rows.
+            text.push('\n');
+            text.push_str(&render_table_section(table, top_n, None)?);
             continue;
         }
+        // `sort_by` was validated above; skip only when a particular table
+        // doesn't carry the column (e.g. sort by activity on the depth table
+        // is a no-op there, not an error).
+        let effective_sort = sort_by.filter(|k| table.cols.iter().any(|c| c.name() == *k));
         text.push('\n');
-        text.push_str(&render_table_section(table)?);
-        resources.push(parquet_resource(&sim_id, table)?);
+        text.push_str(&render_table_section(table, top_n, effective_sort)?);
+        resources.push(parquet_resource(&sim_id, table, &meta)?);
     }
 
     Ok(ToolResponse { text, resources })
@@ -2059,15 +2216,21 @@ fn tool_get_isotope_inventory(
     args: &Value,
 ) -> Result<ToolResponse, String> {
     let activity_floor_bq = parse_activity_floor(args)?;
+    let (top_n, sort_by) = parse_inline_view(args)?;
     let result = cached_sim(db, registry, args)?;
     let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
     let mats = layer_materials(args);
+    let meta = build_dataset_meta(args, &result, db.library(), &sim_id);
     let filtered = dataset::build_inventory(db, &result, &mats, &sim_id, activity_floor_bq);
     let table = &filtered.table;
 
     let mut text = format!(
         "# Isotope inventory `{sim_id}` ({} rows)\n\n\
-         One row per isotope × layer × source. Full table also attached as a Parquet resource.\n\n",
+         One row per isotope × layer × source. Full table also attached as a **complete** \
+         Parquet resource with per-column metadata + dataset provenance (#569).\n\n\
+         *How to query*: \
+         `polars.read_parquet('inventory.parquet').sort('activity_at_cooling_bq', descending=True)` \
+         or DuckDB `SELECT * FROM 'inventory.parquet' ORDER BY activity_at_cooling_bq DESC`.\n\n",
         table.nrows()
     );
     if filtered.filtered_below_floor > 0 {
@@ -2080,13 +2243,17 @@ fn tool_get_isotope_inventory(
         ));
     }
     let resources = if table.is_empty() {
+        // Still emit the schema block so a consumer can plan a query even
+        // against an empty result.
+        text.push_str(&render_table_section(table, top_n, None)?);
         if filtered.filtered_below_floor == 0 {
-            text.push_str("No isotopes produced.\n");
+            text.push_str("\nNo isotopes produced.\n");
         }
         Vec::new()
     } else {
-        text.push_str(&render_table_section(table)?);
-        vec![parquet_resource(&sim_id, table)?]
+        let effective_sort = sort_by.filter(|k| table.cols.iter().any(|c| c.name() == *k));
+        text.push_str(&render_table_section(table, top_n, effective_sort)?);
+        vec![parquet_resource(&sim_id, table, &meta)?]
     };
     Ok(ToolResponse { text, resources })
 }
@@ -2108,9 +2275,11 @@ fn tool_get_emission_curve(
         .and_then(|v| v.as_f64())
         .unwrap_or(1.0);
     let activity_floor_bq = parse_activity_floor(args)?;
+    let (top_n, sort_by) = parse_inline_view(args)?;
 
     let result = cached_sim(db, registry, args)?;
     let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+    let meta = build_dataset_meta(args, &result, db.library(), &sim_id);
 
     let filtered = dataset::build_emission_curve(
         db,
@@ -2128,7 +2297,10 @@ fn tool_get_emission_curve(
     let mut text = format!(
         "# Emission-rate curve `{sim_id}` ({}) — {} rows\n\n\
          `rate_per_s` = total stack activity × intensity_per_decay, summed over layers, \
-         per (isotope × line × time). Full table attached as a Parquet resource.\n\n",
+         per (isotope × line × time). Full **complete** Parquet resource attached, with \
+         per-column metadata + dataset provenance (#569).\n\n\
+         *How to query*: \
+         `polars.read_parquet('emission_curve.parquet').filter((pl.col('energy_kev').is_between(510, 512)) & (pl.col('t_s') > 3600))`.\n\n",
         vs,
         table.nrows()
     );
@@ -2152,12 +2324,16 @@ fn tool_get_emission_curve(
     }
 
     let resources = if table.is_empty() {
+        // Still emit the schema so a consumer can plan against the shape.
+        text.push('\n');
+        text.push_str(&render_table_section(table, top_n, None)?);
         text.push_str("\nNo emission lines match (no produced isotope emits a matching line).\n");
         Vec::new()
     } else {
+        let effective_sort = sort_by.filter(|k| table.cols.iter().any(|c| c.name() == *k));
         text.push('\n');
-        text.push_str(&render_table_section(table)?);
-        vec![parquet_resource(&sim_id, table)?]
+        text.push_str(&render_table_section(table, top_n, effective_sort)?);
+        vec![parquet_resource(&sim_id, table, &meta)?]
     };
     Ok(ToolResponse { text, resources })
 }

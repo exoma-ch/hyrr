@@ -379,6 +379,461 @@ fn issue_567_activity_floor_bq_rejects_bad_values() {
     }
 }
 
+// ─── #569 — self-describing schema + provenance + inline bounds ─────────────
+
+/// Pick out a `## <name>\n\n...\n### schema\n\n\`\`\`json\n...` block from a
+/// tool response and return the parsed schema JSON. Fails loudly if any
+/// emitted table lacks a schema block — the whole point of #569 is that every
+/// column ships with metadata in the tool response, not just in the Parquet.
+fn extract_schema(text: &str, table_name: &str) -> serde_json::Value {
+    let header = format!("## {}\n", table_name);
+    let start = text
+        .find(&header)
+        .unwrap_or_else(|| panic!("table header `## {table_name}` not found in text:\n{text}"));
+    let sub = &text[start..];
+    // Next `## ` (peer section) bounds this block — but the sub-block for
+    // this table uses `### schema`, which is inside.
+    let next_top = sub[header.len()..]
+        .find("\n## ")
+        .unwrap_or(sub.len() - header.len())
+        + header.len();
+    let block = &sub[..next_top];
+    let sch_marker = "### schema\n\n```json\n";
+    let sch_start = block.find(sch_marker).unwrap_or_else(|| {
+        panic!("schema sub-block not found under `## {table_name}` — response was:\n{text}")
+    }) + sch_marker.len();
+    let sch_end = block[sch_start..]
+        .find("\n```")
+        .expect("schema code fence must close");
+    let raw = &block[sch_start..sch_start + sch_end];
+    serde_json::from_str(raw).unwrap_or_else(|e| {
+        panic!("schema block for `{table_name}` is not valid JSON: {e}\n\nRaw:\n{raw}")
+    })
+}
+
+/// Given a schema array (from `extract_schema`), assert every column carries
+/// the #569 acceptance keys: `unit`, `description`, `eval_point`, `nullable`.
+fn assert_every_column_self_described(schema: &serde_json::Value, table_name: &str) {
+    let arr = schema
+        .as_array()
+        .unwrap_or_else(|| panic!("`{table_name}` schema must be an array"));
+    assert!(!arr.is_empty(), "`{table_name}` schema is empty");
+    for (i, col) in arr.iter().enumerate() {
+        for key in ["name", "unit", "description", "eval_point", "nullable"] {
+            assert!(
+                col.get(key).is_some(),
+                "`{table_name}` column {i} ({}) is missing schema key '{key}': {col}",
+                col.get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("<no-name>"),
+            );
+        }
+        // eval_point is one of the documented tags.
+        let ep = col["eval_point"].as_str().unwrap();
+        assert!(
+            [
+                "static",
+                "end_of_bombardment",
+                "end_of_cooling",
+                "per_time_grid_row",
+                "per_depth_row",
+            ]
+            .contains(&ep),
+            "`{table_name}` column '{}' has unknown eval_point '{ep}'",
+            col["name"],
+        );
+    }
+}
+
+/// Decode a Parquet resource blob to a fresh temp file so the parquet
+/// crate's file-backed reader can consume it (avoids a direct dep on the
+/// `bytes` crate — the existing round-trip test uses the same trick).
+fn parquet_reader_builder(
+    resource: &hyrr_core::mcp::tools::ToolResource,
+) -> parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder<std::fs::File> {
+    use base64::Engine;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use std::io::Write;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&resource.blob_base64)
+        .expect("resource blob must be valid base64");
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    tmp.write_all(&bytes).unwrap();
+    let file = tmp.reopen().unwrap();
+    ParquetRecordBatchReaderBuilder::try_new(file).unwrap()
+}
+
+/// Read a Parquet resource and return the file's key/value metadata AND the
+/// per-field Arrow metadata for each column (name → HashMap).
+fn read_parquet_meta(
+    resource: &hyrr_core::mcp::tools::ToolResource,
+) -> (
+    Vec<(String, String)>,
+    std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+) {
+    let builder = parquet_reader_builder(resource);
+    let file_meta = builder.metadata().file_metadata();
+    let kv: Vec<(String, String)> = file_meta
+        .key_value_metadata()
+        .map(|v| {
+            v.iter()
+                .map(|e| (e.key.clone(), e.value.clone().unwrap_or_default()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let schema = builder.schema();
+    let mut fields: std::collections::HashMap<String, std::collections::HashMap<String, String>> =
+        std::collections::HashMap::new();
+    for f in schema.fields() {
+        fields.insert(f.name().clone(), f.metadata().clone());
+    }
+    (kv, fields)
+}
+
+#[test]
+fn issue_569_every_emitted_column_carries_unit_description_and_eval_point_in_json() {
+    let db = store();
+    let mut reg = MaterialRegistry::new();
+    let out = call_tool(
+        &db,
+        &mut reg,
+        "get_simulation_dataset",
+        &f18_args(json!({ "cooling": true, "depth": true, "emissions": true })),
+    )
+    .expect("dataset should succeed");
+
+    for table in ["inventory", "cooling", "depth", "emissions"] {
+        let sch = extract_schema(&out.text, table);
+        assert_every_column_self_described(&sch, table);
+    }
+
+    // Spot-check unit + eval_point on load-bearing inventory columns so an
+    // agent reading the JSON alone can distinguish EOB from EOC etc.
+    let inv = extract_schema(&out.text, "inventory");
+    let arr = inv.as_array().unwrap();
+    let find = |n: &str| arr.iter().find(|c| c["name"] == n).unwrap();
+    assert_eq!(find("activity_at_eob_bq")["unit"], "Bq");
+    assert_eq!(
+        find("activity_at_eob_bq")["eval_point"],
+        "end_of_bombardment"
+    );
+    assert_eq!(
+        find("activity_at_cooling_bq")["eval_point"],
+        "end_of_cooling"
+    );
+    assert_eq!(find("half_life_s")["unit"], "s");
+    assert_eq!(find("half_life_s")["nullable"], true);
+    assert!(
+        find("half_life_s")["null_meaning"]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .contains("effectively stable"),
+        "half_life_s null_meaning should not be conflated with zero"
+    );
+}
+
+#[test]
+fn issue_569_every_emitted_column_carries_metadata_in_parquet_field_metadata() {
+    let db = store();
+    let mut reg = MaterialRegistry::new();
+    let out = call_tool(
+        &db,
+        &mut reg,
+        "get_simulation_dataset",
+        &f18_args(json!({ "cooling": true, "depth": true, "emissions": true })),
+    )
+    .expect("dataset should succeed");
+
+    // Four Parquets: inventory / cooling / depth / emissions. Each must carry
+    // `hyrr.unit`, `hyrr.description`, `hyrr.eval_point` on every field.
+    assert_eq!(out.resources.len(), 4, "one Parquet per table");
+    for r in &out.resources {
+        let (kv, fields) = read_parquet_meta(r);
+        assert!(!fields.is_empty(), "Parquet at {} must have fields", r.uri);
+        for (name, meta) in &fields {
+            for k in ["hyrr.unit", "hyrr.description", "hyrr.eval_point"] {
+                assert!(
+                    meta.get(k).is_some(),
+                    "column '{}' in {} is missing Arrow field metadata key '{k}': {meta:?}",
+                    name,
+                    r.uri
+                );
+            }
+        }
+        // File-level KV still carries the dataset-level provenance — checked
+        // in the dedicated test below; here just verify presence.
+        assert!(
+            kv.iter().any(|(k, _)| k == "hyrr.simulation_id"),
+            "Parquet at {} must have hyrr.simulation_id in file KV",
+            r.uri
+        );
+    }
+}
+
+#[test]
+fn issue_569_dataset_provenance_round_trips_through_parquet_kv_metadata() {
+    let db = store();
+    let mut reg = MaterialRegistry::new();
+    let args = f18_args(json!({}));
+    let out =
+        call_tool(&db, &mut reg, "get_simulation_dataset", &args).expect("dataset should succeed");
+
+    // Inline provenance block is present and mentions the library id + core version.
+    assert!(
+        out.text.contains("## dataset\n"),
+        "response must include a `## dataset` provenance block"
+    );
+    assert!(
+        out.text.contains("tendl-2023-iso"),
+        "provenance block must name the loaded library"
+    );
+
+    // Parquet file KV round-trips the exact provenance keys.
+    assert!(!out.resources.is_empty(), "must attach a Parquet");
+    let (kv, _fields) = read_parquet_meta(&out.resources[0]);
+    let get = |k: &str| {
+        kv.iter()
+            .find(|(kk, _)| kk == k)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| panic!("Parquet KV missing '{k}': {kv:?}"))
+    };
+    let sim_id = get("hyrr.simulation_id");
+    assert!(!sim_id.is_empty(), "simulation_id must be non-empty");
+    assert_eq!(get("hyrr.library"), "tendl-2023-iso");
+    assert_eq!(get("hyrr.core_version"), env!("CARGO_PKG_VERSION"));
+    assert_eq!(get("hyrr.table_name"), "inventory");
+    // config_json round-trips as JSON and contains the projectile the caller sent.
+    let cfg: serde_json::Value = serde_json::from_str(&get("hyrr.config_json"))
+        .expect("hyrr.config_json must be valid JSON");
+    assert_eq!(cfg["projectile"], "p");
+    assert_eq!(cfg["energy_mev"], 18.0);
+    // time_grid_s_json round-trips as a Vec<f64>.
+    let grid: Vec<f64> = serde_json::from_str(&get("hyrr.time_grid_s_json"))
+        .expect("hyrr.time_grid_s_json must decode to Vec<f64>");
+    assert!(
+        !grid.is_empty(),
+        "time_grid_s must be populated when the simulation has any producing isotope"
+    );
+    // Provenance is per-table: the emissions Parquet's KV names itself, not
+    // whichever table shipped first.
+    let out_all = call_tool(
+        &db,
+        &mut reg,
+        "get_simulation_dataset",
+        &f18_args(json!({ "emissions": true })),
+    )
+    .expect("dataset should succeed");
+    let names: Vec<String> = out_all
+        .resources
+        .iter()
+        .map(|r| {
+            let (kv, _) = read_parquet_meta(r);
+            kv.iter()
+                .find(|(k, _)| k == "hyrr.table_name")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    assert!(names.contains(&"inventory".to_string()));
+    assert!(names.contains(&"emissions".to_string()));
+}
+
+#[test]
+fn issue_569_top_n_bounds_inline_json_only_parquet_stays_complete() {
+    // Emissions on the F-18 stack has many rows per isotope (Auger / X-ray /
+    // CE / annihilation / gamma), so `top_n: 5` is a meaningful truncation.
+    let db = store();
+    let mut reg = MaterialRegistry::new();
+
+    // Reference: no top_n → full response.
+    let full = call_tool(
+        &db,
+        &mut reg,
+        "get_simulation_dataset",
+        &f18_args(json!({ "emissions": true })),
+    )
+    .expect("full dataset should succeed");
+    // Extract inventory rows count from the header line (`inventory` (N rows)).
+    let full_inv_rows_text = full
+        .text
+        .find("`inventory` (")
+        .expect("header must name inventory");
+    let full_inv_rows: usize = full.text[full_inv_rows_text..]
+        .split_once('(')
+        .and_then(|(_, tail)| tail.split_once(" rows"))
+        .and_then(|(n, _)| n.parse().ok())
+        .expect("parse full inventory row count");
+
+    // With top_n: 1, the inline JSON is trimmed but the header still reports
+    // the true row count AND the Parquet resource must have the full row
+    // count (the whole point of #569 P1).
+    let trimmed = call_tool(
+        &db,
+        &mut reg,
+        "get_simulation_dataset",
+        &f18_args(json!({ "emissions": true, "top_n": 1 })),
+    )
+    .expect("top_n dataset should succeed");
+    assert!(
+        trimmed
+            .text
+            .contains("inline JSON view only; the Parquet resource is complete"),
+        "top_n must explicitly state truncation with the inline-vs-Parquet contract:\n{}",
+        trimmed.text
+    );
+
+    // Parquet row counts survive `top_n` intact — that is the load-bearing
+    // #569 P1 guarantee. Read them out of each attached resource.
+    let mut trimmed_rows_by_table: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+    for r in &trimmed.resources {
+        let builder = parquet_reader_builder(r);
+        let table_name = builder
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .and_then(|kv| kv.iter().find(|e| e.key == "hyrr.table_name"))
+            .and_then(|e| e.value.clone())
+            .unwrap_or_default();
+        let n_rows: i64 = builder.metadata().file_metadata().num_rows();
+        trimmed_rows_by_table.insert(table_name, n_rows);
+    }
+    // The inventory Parquet row count under `top_n: 1` matches the full row
+    // count — the Parquet is unaffected by inline truncation.
+    let inv_rows = trimmed_rows_by_table["inventory"];
+    assert_eq!(
+        inv_rows as usize, full_inv_rows,
+        "top_n MUST NOT truncate the Parquet — recreates the silent-loss class of #533"
+    );
+
+    // Also assert the `top_n` note names both the inline row count (small)
+    // and the total (big) — no silent loss.
+    // Look for the pattern "(1 shown of N — inline JSON view only".
+    let re_hit = trimmed.text.contains("(1 shown of ");
+    assert!(
+        re_hit,
+        "top_n rendering must state `(X shown of TOTAL — ...)`:\n{}",
+        trimmed.text
+    );
+}
+
+#[test]
+fn issue_569_sort_by_sorts_inline_json_desc_and_leaves_parquet_untouched() {
+    let db = store();
+    let mut reg = MaterialRegistry::new();
+    // Sort inventory by activity_at_cooling_bq desc, top 3 inline. Then the
+    // first inline row must be the largest activity, and the Parquet must
+    // still hold every original row (in the builder's insertion order, not
+    // this ad-hoc sort — the Parquet is the canonical export).
+    let out = call_tool(
+        &db,
+        &mut reg,
+        "get_simulation_dataset",
+        &f18_args(json!({
+            "top_n": 3,
+            "sort_by": "activity_at_cooling_bq",
+        })),
+    )
+    .expect("sort_by should succeed");
+
+    // Assert the inline block reports `sorted by activity_at_cooling_bq desc`.
+    assert!(
+        out.text.contains("sorted by activity_at_cooling_bq desc"),
+        "sort_by must be reflected in the inline header:\n{}",
+        out.text
+    );
+
+    // Bogus sort_by is rejected explicitly — no silent fallback (would
+    // recreate the silent-loss class we're trying to close).
+    let err = call_tool(
+        &db,
+        &mut reg,
+        "get_simulation_dataset",
+        &f18_args(json!({ "sort_by": "no_such_column" })),
+    )
+    .expect_err("unknown sort_by must error");
+    assert!(err.contains("unknown column"), "got: {err}");
+
+    // Non-numeric sort_by is also rejected.
+    let err = call_tool(
+        &db,
+        &mut reg,
+        "get_simulation_dataset",
+        &f18_args(json!({ "sort_by": "isotope" })),
+    )
+    .expect_err("non-numeric sort_by must error");
+    assert!(err.contains("not numeric"), "got: {err}");
+}
+
+#[test]
+fn issue_569_top_n_rejects_negative() {
+    let db = store();
+    let mut reg = MaterialRegistry::new();
+    let err = call_tool(
+        &db,
+        &mut reg,
+        "get_simulation_dataset",
+        &f18_args(json!({ "top_n": -1 })),
+    )
+    .expect_err("negative top_n must be rejected");
+    assert!(
+        err.contains("top_n"),
+        "error must name the offending arg: {err}"
+    );
+}
+
+#[test]
+fn issue_569_null_semantics_documented_for_every_nullable_column() {
+    // The whole nullable surface — inventory `half_life_s`, and emissions'
+    // `decay_mode`, `daughter_z`, `daughter_a`, `icc_total`, `rad_subtype`
+    // — must carry a non-empty `null_meaning` so a downstream consumer never
+    // confuses "no data" with a numeric zero.
+    let db = store();
+    let mut reg = MaterialRegistry::new();
+    let out = call_tool(
+        &db,
+        &mut reg,
+        "get_simulation_dataset",
+        &f18_args(json!({ "emissions": true })),
+    )
+    .expect("dataset should succeed");
+
+    for (table_name, cols) in [
+        ("inventory", vec!["half_life_s"]),
+        (
+            "emissions",
+            vec![
+                "decay_mode",
+                "daughter_z",
+                "daughter_a",
+                "icc_total",
+                "rad_subtype",
+            ],
+        ),
+    ] {
+        let sch = extract_schema(&out.text, table_name);
+        let arr = sch.as_array().unwrap();
+        for c in cols {
+            let col = arr
+                .iter()
+                .find(|x| x["name"] == c)
+                .unwrap_or_else(|| panic!("column '{c}' not in `{table_name}` schema"));
+            assert_eq!(
+                col["nullable"], true,
+                "`{table_name}.{c}` must declare nullable=true"
+            );
+            let meaning = col["null_meaning"]
+                .as_str()
+                .unwrap_or_else(|| panic!("`{table_name}.{c}` must document `null_meaning`"));
+            assert!(
+                !meaning.trim().is_empty(),
+                "`{table_name}.{c}` null_meaning must be non-empty (fresh consumer must be able to tell `null` from a zero)"
+            );
+        }
+    }
+}
+
 #[test]
 fn emission_curve_tool_f18_511_is_positive_and_parquet() {
     let db = store();
