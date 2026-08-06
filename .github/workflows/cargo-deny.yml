@@ -66,9 +66,6 @@ jobs:
         checks:
           - advisories
           - bans licenses sources
-    # Advisories annotate rather than block on PRs and pushes; the scheduled
-    # run leaves this false so a new advisory becomes a tracked issue.
-    continue-on-error: ${{ matrix.checks == 'advisories' && github.event_name != 'schedule' }}
     steps:
       - uses: actions/checkout@v7
       # core/py/py-mcp/hyrr-mcp/desktop path-depend on the nucl-parquet Rust
@@ -80,12 +77,39 @@ jobs:
           cd nucl-parquet
           git sparse-checkout set clients/rs/nucl-parquet
       - uses: EmbarkStudios/cargo-deny-action@v2
+        id: deny
+        # STEP-level, not job-level. `continue-on-error` on the *job* still
+        # reports the check to GitHub as FAILURE — it only stops the workflow
+        # run from failing. That would put a red X on every PR touching a
+        # lockfile for a pre-existing advisory, which is the exact "red checks
+        # that don't matter, so people stop reading red checks" failure this
+        # workflow is built to avoid. At the step level the job goes green
+        # while the finding still shows in the log and annotations.
+        #
+        # On the scheduled sweep this evaluates false, so the step fails, the
+        # job fails, and `file-advisory-issue` below fires.
+        continue-on-error: ${{ matrix.checks == 'advisories' && github.event_name != 'schedule' }}
         with:
           manifest-path: ${{ matrix.crate }}/Cargo.toml
           command: check ${{ matrix.checks }}
           # The inclusion graph is enormous on the Tauri tree and buries the
           # actual finding. The advisory/licence text is what's actionable.
           arg: --hide-inclusion-graph
+
+      # A green check nobody opens is no better than a red one nobody reads,
+      # so put the outcome somewhere visible without failing anything.
+      - name: Note advisory findings in the run summary
+        if: ${{ matrix.checks == 'advisories' && steps.deny.outcome == 'failure' }}
+        run: |
+          {
+            echo "### ⚠️ advisories: \`${{ matrix.crate }}\`"
+            echo
+            echo "cargo-deny reported advisories for this crate. **This does not block the PR** —"
+            echo "advisories are tracked by the nightly sweep, which files an issue."
+            echo
+            echo "Open the \`${{ matrix.crate }} — advisories\` job log for the detail."
+            echo "If your change *introduced* this, fix it here rather than leaving it to the sweep."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Only fires on the scheduled sweep. On a PR the advisory legs are
   # continue-on-error, so `needs` sees success and this is skipped.
