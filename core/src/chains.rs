@@ -196,6 +196,12 @@ fn scale_flat(m: &[f64], t: f64, _n: usize) -> Vec<f64> {
 }
 
 /// Solve coupled decay chain equations using matrix exponential.
+///
+/// Wrapper for [`solve_chain_at_times`] that builds the classic linspace grid
+/// (half the points across irradiation, half across cooling). The point-query
+/// path (`get_activity_at`, #570) calls `solve_chain_at_times` directly with a
+/// caller-supplied time set, so both surfaces run through the same solver and
+/// a query at a grid time equals the curve value there by construction.
 pub fn solve_chain(
     chain: &[ChainIsotope],
     irradiation_time_s: f64,
@@ -205,11 +211,77 @@ pub fn solve_chain(
     current_profile: Option<&CurrentProfile>,
     nominal_current_ma: f64,
 ) -> ChainSolution {
-    let n = chain.len();
-    if n == 0 {
+    if chain.is_empty() {
         return ChainSolution {
             isotopes: Vec::new(),
             time_grid_s: Vec::new(),
+            abundances: Vec::new(),
+            activities: Vec::new(),
+            activities_direct: Vec::new(),
+            activities_ingrowth: Vec::new(),
+            parent_info: Vec::new(),
+        };
+    }
+
+    // Build the classic split-linspace grid: n_irr points from 0 → irr, then
+    // n_cool points strictly after irr → irr+cool. Identical to the pre-#570
+    // layout; the last irradiation-phase sample is exactly `irradiation_time_s`.
+    // linspace(0, irr, n) can overshoot the endpoint by 1 ULP; snap the last
+    // irradiation sample to exactly `irradiation_time_s` so the new
+    // time-based split rule in solve_chain_at_times lands it in the
+    // irradiation phase (matches the old index-based bucketing).
+    let n_irr = n_time_points / 2;
+    let n_cool = n_time_points - n_irr;
+    let mut t_irr = linspace(0.0, irradiation_time_s, n_irr);
+    if let Some(last) = t_irr.last_mut() {
+        *last = irradiation_time_s;
+    }
+    let t_cool_full = linspace(
+        irradiation_time_s,
+        irradiation_time_s + cooling_time_s,
+        n_cool + 1,
+    );
+    let t_cool: Vec<f64> = t_cool_full[1..].to_vec();
+
+    let mut all_times = Vec::with_capacity(n_irr + n_cool);
+    all_times.extend_from_slice(&t_irr);
+    all_times.extend_from_slice(&t_cool);
+
+    solve_chain_at_times(
+        chain,
+        irradiation_time_s,
+        &all_times,
+        current_profile,
+        nominal_current_ma,
+    )
+}
+
+/// Solve the coupled decay chain at caller-specified output times (#570).
+///
+/// This is the general form — [`solve_chain`] delegates here after building a
+/// linspace grid. A point query on the same chain returns the exact Bateman
+/// value at each requested `t`, matching the curve's value at grid times to
+/// f64 round-off; a query between grid points is the *analytic* value, not an
+/// interpolation of the coarse grid.
+///
+/// `output_times_s` may contain any non-negative times (irradiation OR cooling),
+/// in any order, with duplicates allowed. The returned per-isotope arrays are
+/// aligned index-for-index to `output_times_s`. Times inside irradiation are
+/// solved through the piecewise current-profile walker; times after are decayed
+/// from the end-of-irradiation state via `exp(A · Δt)`.
+pub fn solve_chain_at_times(
+    chain: &[ChainIsotope],
+    irradiation_time_s: f64,
+    output_times_s: &[f64],
+    current_profile: Option<&CurrentProfile>,
+    nominal_current_ma: f64,
+) -> ChainSolution {
+    let n = chain.len();
+    let n_t = output_times_s.len();
+    if n == 0 {
+        return ChainSolution {
+            isotopes: Vec::new(),
+            time_grid_s: output_times_s.to_vec(),
             abundances: Vec::new(),
             activities: Vec::new(),
             activities_direct: Vec::new(),
@@ -301,92 +373,56 @@ pub fn solve_chain(
         }
     }
 
-    // Time grid
-    let n_irr = n_time_points / 2;
-    let n_cool = n_time_points - n_irr;
-    let t_irr = linspace(0.0, irradiation_time_s, n_irr);
-    let t_cool_full = linspace(
-        irradiation_time_s,
-        irradiation_time_s + cooling_time_s,
-        n_cool + 1,
-    );
-    let t_cool: Vec<f64> = t_cool_full[1..].to_vec();
-
-    let mut time_grid = Vec::with_capacity(n_irr + n_cool);
-    time_grid.extend_from_slice(&t_irr);
-    time_grid.extend_from_slice(&t_cool);
-    let n_t = time_grid.len();
+    // Split output times into irradiation and cooling phases. `t == irr` goes
+    // in the irradiation bucket to match solve_chain's pre-#570 semantics
+    // (linspace(0, irr, n_irr) puts the last sample exactly at irr).
+    let mut irr_out_times: Vec<f64> = Vec::new();
+    let mut irr_out_slots: Vec<usize> = Vec::new();
+    let mut cool_out_slots: Vec<(usize, f64)> = Vec::new();
+    for (i, &t) in output_times_s.iter().enumerate() {
+        if t <= irradiation_time_s {
+            irr_out_times.push(t);
+            irr_out_slots.push(i);
+        } else {
+            cool_out_slots.push((i, t));
+        }
+    }
 
     let mut abundances: Vec<Vec<f64>> = (0..n).map(|_| vec![0.0; n_t]).collect();
     let mut activities: Vec<Vec<f64>> = (0..n).map(|_| vec![0.0; n_t]).collect();
 
     // --- Irradiation phase ---
-    let n_eoi = if current_profile.is_some() {
-        solve_irradiation_piecewise(
-            &a_mat,
-            &r_nominal,
-            &t_irr,
-            n,
-            &mut abundances,
-            current_profile.unwrap(),
-            nominal_current_ma,
-            irradiation_time_s,
-        )
-    } else {
-        let mut n_state = vec![0.0; n];
-        for ti in 0..n_irr {
-            if ti == 0 {
-                // already zero
-            } else {
-                let dt = t_irr[ti] - t_irr[ti - 1];
-                n_state = step_irradiation(&a_mat, &r_nominal, &n_state, dt, n);
-                for i in 0..n {
-                    if n_state[i] < 0.0 {
-                        n_state[i] = 0.0;
-                    }
-                    abundances[i][ti] = n_state[i];
-                }
-            }
+    let (n_eoi, irr_abund) = walk_irradiation_at_times(
+        &a_mat,
+        &r_nominal,
+        n,
+        irradiation_time_s,
+        &irr_out_times,
+        current_profile,
+        nominal_current_ma,
+    );
+    for (k, &out_idx) in irr_out_slots.iter().enumerate() {
+        for i in 0..n {
+            abundances[i][out_idx] = irr_abund[i][k];
         }
+    }
 
-        // Step to exact EOI
-        let last_irr_t = t_irr[n_irr - 1];
-        if last_irr_t < irradiation_time_s {
-            let dt_final = irradiation_time_s - last_irr_t;
-            n_state = step_irradiation(&a_mat, &r_nominal, &n_state, dt_final, n);
+    // --- Cooling phase --- decay each requested time independently from n_eoi.
+    // No production term, so state at t is `exp(A · (t - t_irr)) · n_eoi`;
+    // computing per-request keeps the code obvious and lets the caller ask
+    // for out-of-order or duplicate cooling times without extra machinery.
+    for &(out_idx, t) in &cool_out_slots {
+        let dt = t - irradiation_time_s;
+        if dt <= 0.0 {
             for i in 0..n {
-                if n_state[i] < 0.0 {
-                    n_state[i] = 0.0;
-                }
+                abundances[i][out_idx] = n_eoi[i].max(0.0);
             }
-        }
-        n_state
-    };
-
-    // --- Cooling phase ---
-    {
-        let mut n_state = n_eoi.clone();
-        for ti in 0..n_cool {
-            let t_prev = if ti == 0 {
-                irradiation_time_s
-            } else {
-                t_cool[ti - 1]
-            };
-            let dt = t_cool[ti] - t_prev;
-            if dt <= 0.0 {
-                for i in 0..n {
-                    abundances[i][n_irr + ti] = n_state[i];
-                }
-            } else {
-                let a_dt = scale_flat(&a_mat, dt, n);
-                let ea = matrix_exp(&a_dt, n);
-                n_state = mat_vec_mul(&ea, &n_state, n);
-                for i in 0..n {
-                    if n_state[i] < 0.0 {
-                        n_state[i] = 0.0;
-                    }
-                    abundances[i][n_irr + ti] = n_state[i];
-                }
+        } else {
+            let a_dt = scale_flat(&a_mat, dt, n);
+            let ea = matrix_exp(&a_dt, n);
+            let n_state = mat_vec_mul(&ea, &n_eoi, n);
+            for i in 0..n {
+                abundances[i][out_idx] = n_state[i].max(0.0);
             }
         }
     }
@@ -410,20 +446,18 @@ pub fn solve_chain(
             // stays at its analytical equilibrium value R/λ — which is
             // negligible for any nuclear-prompt species but mathematically
             // consistent so downstream code doesn't see a NaN/zero
-            // surprise.
+            // surprise. Compare against irradiation_time_s directly on the
+            // caller's own time — no linspace-slop indexing.
             let r_orig = r_original_for_instant[i];
             let lam = iso.lambda();
             let n_eq = if lam > 0.0 { r_orig / lam } else { 0.0 };
-            // Use index, not time-value comparison: linspace can produce
-            // 7200.0000000001 for the EOI sample, which would fail a
-            // <= irradiation_time_s test and incorrectly mark EOI as cooling.
-            for t in 0..n_t {
-                if t < n_irr {
-                    abundances[i][t] = n_eq;
-                    activities[i][t] = r_orig;
+            for (k, &t) in output_times_s.iter().enumerate() {
+                if t <= irradiation_time_s {
+                    abundances[i][k] = n_eq;
+                    activities[i][k] = r_orig;
                 } else {
-                    abundances[i][t] = 0.0;
-                    activities[i][t] = 0.0;
+                    abundances[i][k] = 0.0;
+                    activities[i][k] = 0.0;
                 }
             }
             continue;
@@ -435,9 +469,9 @@ pub fn solve_chain(
     }
 
     // --- Direct component ---
-    let activities_direct = compute_direct_component(
+    let activities_direct = compute_direct_component_at_times(
         chain,
-        &time_grid,
+        output_times_s,
         irradiation_time_s,
         current_profile,
         nominal_current_ma,
@@ -473,7 +507,7 @@ pub fn solve_chain(
 
     ChainSolution {
         isotopes: chain.to_vec(),
-        time_grid_s: time_grid,
+        time_grid_s: output_times_s.to_vec(),
         abundances,
         activities,
         activities_direct,
@@ -482,41 +516,55 @@ pub fn solve_chain(
     }
 }
 
-fn solve_irradiation_piecewise(
+/// Walk the irradiation phase to caller-specified output times, always stepping
+/// fully to `irradiation_time_s` so `n_eoi` is exact. Merges intervals from the
+/// (optional) current profile with output times so the piecewise-constant
+/// production stays honest across the whole window; a `None` profile is treated
+/// as a single interval at nominal current (scale=1 everywhere).
+///
+/// Returns `(n_eoi, abundances[iso][output_slot])`, where `abundances[i][k]` is
+/// the concentration of isotope `i` at `times_in_irr[k]`.
+fn walk_irradiation_at_times(
     a: &[f64],
     r_nominal: &[f64],
-    t_irr: &[f64],
     n: usize,
-    abundances: &mut [Vec<f64>],
-    current_profile: &CurrentProfile,
-    nominal_current_ma: f64,
     irradiation_time_s: f64,
-) -> Vec<f64> {
-    let intervals = current_profile.intervals(irradiation_time_s);
+    times_in_irr: &[f64],
+    current_profile: Option<&CurrentProfile>,
+    nominal_current_ma: f64,
+) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let n_out = times_in_irr.len();
+    let mut abundances: Vec<Vec<f64>> = (0..n).map(|_| vec![0.0; n_out]).collect();
 
-    // Build output index map
+    // Map requested time → output slot(s) via bit-key so equal f64s collide.
     let mut output_idx: HashMap<u64, Vec<usize>> = HashMap::new();
-    for (ti, &t) in t_irr.iter().enumerate() {
-        let key = t.to_bits();
-        output_idx.entry(key).or_default().push(ti);
+    for (ti, &t) in times_in_irr.iter().enumerate() {
+        output_idx.entry(t.to_bits()).or_default().push(ti);
     }
 
-    // Merge boundaries + output times
+    let intervals = current_profile.map(|cp| cp.intervals(irradiation_time_s));
+
+    // Boundary set: 0, irr_time, profile boundaries, and every requested
+    // time in [0, irr_time]. Sorted + deduplicated via BTreeSet<u64>.
     let mut boundary_set: BTreeSet<u64> = BTreeSet::new();
     boundary_set.insert(0.0_f64.to_bits());
     boundary_set.insert(irradiation_time_s.to_bits());
-    for &(s, e, _) in &intervals {
-        boundary_set.insert(s.to_bits());
-        boundary_set.insert(e.to_bits());
+    if let Some(iv) = &intervals {
+        for &(s, e, _) in iv {
+            boundary_set.insert(s.to_bits());
+            boundary_set.insert(e.to_bits());
+        }
     }
-    for &t in t_irr {
-        boundary_set.insert(t.to_bits());
+    for &t in times_in_irr {
+        if t >= 0.0 && t <= irradiation_time_s {
+            boundary_set.insert(t.to_bits());
+        }
     }
     let all_times: Vec<f64> = boundary_set.iter().map(|&b| f64::from_bits(b)).collect();
 
     let mut n_state = vec![0.0; n];
 
-    // Record t=0
+    // Record t=0 for any output slot requesting it (n_state is zero here).
     if let Some(indices) = output_idx.get(&0.0_f64.to_bits()) {
         for &ti in indices {
             for i in 0..n {
@@ -538,14 +586,18 @@ fn solve_irradiation_piecewise(
             continue;
         }
 
-        while iv_idx < intervals.len() - 1 && intervals[iv_idx].1 <= prev_t {
-            iv_idx += 1;
-        }
-        let i_current = intervals[iv_idx].2;
-        let scale = if nominal_current_ma > 0.0 {
-            i_current / nominal_current_ma
-        } else {
-            0.0
+        let scale = match &intervals {
+            Some(iv) => {
+                while iv_idx < iv.len() - 1 && iv[iv_idx].1 <= prev_t {
+                    iv_idx += 1;
+                }
+                if nominal_current_ma > 0.0 {
+                    iv[iv_idx].2 / nominal_current_ma
+                } else {
+                    0.0
+                }
+            }
+            None => 1.0,
         };
 
         let r_scaled: Vec<f64> = r_nominal.iter().map(|&r| r * scale).collect();
@@ -554,7 +606,7 @@ fn solve_irradiation_piecewise(
         if let Some(indices) = output_idx.get(&t_next.to_bits()) {
             for &ti in indices {
                 for i in 0..n {
-                    abundances[i][ti] = n_state[i];
+                    abundances[i][ti] = n_state[i].max(0.0);
                 }
             }
         }
@@ -562,23 +614,31 @@ fn solve_irradiation_piecewise(
         prev_t = t_next;
     }
 
-    // Ensure EOI stored
-    for i in 0..n {
-        abundances[i][t_irr.len() - 1] = n_state[i];
-    }
-
-    n_state
+    (n_state, abundances)
 }
 
-fn compute_direct_component(
+/// Direct component (no chain coupling) at caller-specified output times.
+///
+/// For each isotope with a non-zero production rate, computes what its
+/// activity would be if it were the *only* isotope in the chain — i.e.
+/// production against its own decay, no daughters/parents. Then
+/// `activities_ingrowth = activities - activities_direct` splits chain-fed
+/// contributions cleanly.
+///
+/// Constant-current (None profile) uses the closed-form Bateman formula
+/// evaluated pointwise at each requested `t`. The profile branch walks the
+/// per-isotope ODE `dN/dt = R(t) - λN` across (profile boundaries ∪ requested
+/// irradiation times), recording direct activity at each requested time; the
+/// cooling phase decays analytically from `A(t_irr)`.
+fn compute_direct_component_at_times(
     chain: &[ChainIsotope],
-    time_grid: &[f64],
+    output_times_s: &[f64],
     irradiation_time_s: f64,
     current_profile: Option<&CurrentProfile>,
     nominal_current_ma: f64,
 ) -> Vec<Vec<f64>> {
     let n = chain.len();
-    let n_t = time_grid.len();
+    let n_t = output_times_s.len();
     let mut activities_direct: Vec<Vec<f64>> = (0..n).map(|_| vec![0.0; n_t]).collect();
 
     for (i, iso) in chain.iter().enumerate() {
@@ -588,9 +648,10 @@ fn compute_direct_component(
         let lam = iso.lambda();
 
         if current_profile.is_none() {
-            // Analytical Bateman (constant current)
+            // Analytical Bateman (constant current) — evaluated directly at each
+            // requested `t`, no grid interpolation.
             let a_eoi = iso.production_rate * (1.0 - (-lam * irradiation_time_s).exp());
-            for (t_idx, &t) in time_grid.iter().enumerate() {
+            for (t_idx, &t) in output_times_s.iter().enumerate() {
                 if t <= irradiation_time_s {
                     activities_direct[i][t_idx] = iso.production_rate * (1.0 - (-lam * t).exp());
                 } else {
@@ -602,19 +663,17 @@ fn compute_direct_component(
             let profile = current_profile.unwrap();
             let intervals = profile.intervals(irradiation_time_s);
 
-            let mut n_val = 0.0_f64;
-            let mut t_now = 0.0;
-            let mut iv_idx = 0usize;
-
-            // Collect irradiation output times
-            let irr_outputs: Vec<(f64, usize)> = time_grid
+            // Per-request slots for this isotope's irradiation-phase output.
+            // Sorted by time so we can walk boundaries once.
+            let mut irr_outputs: Vec<(f64, usize)> = output_times_s
                 .iter()
                 .enumerate()
                 .filter(|(_, &t)| t <= irradiation_time_s)
                 .map(|(idx, &t)| (t, idx))
                 .collect();
+            irr_outputs.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
 
-            // Merge boundaries
+            // Merge boundaries: 0, irr_time, profile boundaries, requested times.
             let mut boundary_set: BTreeSet<u64> = BTreeSet::new();
             boundary_set.insert(0.0_f64.to_bits());
             boundary_set.insert(irradiation_time_s.to_bits());
@@ -631,6 +690,10 @@ fn compute_direct_component(
             for &(t, ti) in &irr_outputs {
                 out_map.entry(t.to_bits()).or_default().push(ti);
             }
+
+            let mut n_val = 0.0_f64;
+            let mut t_now = 0.0;
+            let mut iv_idx = 0usize;
 
             for &t_next in &all_times {
                 if t_next <= t_now {
@@ -662,9 +725,9 @@ fn compute_direct_component(
                 }
             }
 
-            // Cooling phase
+            // Cooling phase — analytical decay from EOI direct activity.
             let a_eoi = lam * n_val;
-            for (t_idx, &t) in time_grid.iter().enumerate() {
+            for (t_idx, &t) in output_times_s.iter().enumerate() {
                 if t > irradiation_time_s {
                     let dt_cool = t - irradiation_time_s;
                     activities_direct[i][t_idx] = a_eoi * (-lam * dt_cool).exp();
@@ -735,4 +798,211 @@ pub fn split_components(chain: &[ChainIsotope]) -> Vec<Vec<ChainIsotope>> {
     }
 
     components
+}
+
+#[cfg(test)]
+mod tests_at_times {
+    //! Tests for `solve_chain_at_times` (#570). Data-free — synthetic chains
+    //! and analytic Bateman as the ground truth.
+
+    use super::*;
+    use crate::types::DecayMode;
+
+    /// A one-isotope "chain": production against its own decay. Analytic
+    /// Bateman is the ground truth so we can hand-check every requested time.
+    fn one_iso_chain(rate_per_s: f64, half_life_s: f64) -> Vec<ChainIsotope> {
+        vec![ChainIsotope {
+            z: 26, // Fe (label only; the solver never looks it up)
+            a: 55,
+            state: String::new(),
+            half_life_s: Some(half_life_s),
+            production_rate: rate_per_s,
+            decay_modes: Vec::new(), // stable end
+        }]
+    }
+
+    fn bateman_analytic(rate: f64, half_life: f64, irr: f64, t: f64) -> f64 {
+        let lam = std::f64::consts::LN_2 / half_life;
+        if t <= irr {
+            rate * (1.0 - (-lam * t).exp())
+        } else {
+            let a_eoi = rate * (1.0 - (-lam * irr).exp());
+            a_eoi * (-lam * (t - irr)).exp()
+        }
+    }
+
+    #[test]
+    fn point_query_matches_curve_at_grid_times() {
+        // solve_chain builds a linspace grid; solve_chain_at_times evaluated
+        // at that exact grid must agree elementwise (the whole "exactness"
+        // guarantee — the curve and the point query share one solver).
+        let chain = one_iso_chain(1.0e6, 3600.0);
+        let irr = 7200.0;
+        let cool = 3600.0;
+        let curve = solve_chain(&chain, irr, cool, 0.0, 200, None, 1.0);
+        let point = solve_chain_at_times(&chain, irr, &curve.time_grid_s, None, 1.0);
+        for i in 0..curve.time_grid_s.len() {
+            let a = curve.activities[0][i];
+            let b = point.activities[0][i];
+            let rel = if a.max(b) > 0.0 {
+                (a - b).abs() / a.max(b)
+            } else {
+                0.0
+            };
+            assert!(
+                rel < 1e-12,
+                "grid time {i}: curve={a:.6e} point={b:.6e} rel={rel:.3e}",
+            );
+        }
+    }
+
+    #[test]
+    fn point_query_returns_exact_analytic_bateman_between_grid_points() {
+        // The whole point of the tool: reading a value between grid
+        // points from an interpolated curve is only as good as the grid. The
+        // point query evaluates Bateman analytically at any `t`.
+        //
+        // Fe-55 half-life ≈ 2.744 years — chosen so 200-grid interpolation
+        // would clearly lose precision on a between-point query.
+        let rate = 5.0e8;
+        let hl = 2.744 * 365.25 * 86400.0;
+        let chain = one_iso_chain(rate, hl);
+        let irr = 86400.0 * 30.0; // 30 d irradiation
+        let _cool = 86400.0 * 365.0; // 1 year cooling (kept for readability)
+
+        // A gnarly non-grid time — 137.42 days into cooling.
+        let t_probe = irr + 86400.0 * 137.42;
+        let ref_activity = bateman_analytic(rate, hl, irr, t_probe);
+
+        let sol = solve_chain_at_times(&chain, irr, &[t_probe], None, 1.0);
+        let a = sol.activities[0][0];
+        let rel = (a - ref_activity).abs() / ref_activity.max(1.0);
+        assert!(
+            rel < 1e-10,
+            "arbitrary-time query must be analytic: got {a:.6e}, want {ref_activity:.6e} (rel {rel:.3e})",
+        );
+
+        // Sanity: for a one-isotope chain with no ingrowth path, direct and
+        // total agree. Tolerance is generous — the matrix-exp uses scale-and-
+        // square, the analytical formula uses one `expm1`, and the two paths
+        // can differ by a handful of ULPs.
+        let direct = sol.activities_direct[0][0];
+        let rel_dt = (direct - a).abs() / a.max(direct).max(1.0);
+        assert!(
+            rel_dt < 1e-8,
+            "one-isotope chain: direct ({direct:.6e}) vs total ({a:.6e}) rel {rel_dt:.3e}",
+        );
+        // Ingrowth for a one-isotope chain is definitionally zero (bounded by
+        // (total - direct).max(0) = 0 to ~ULP of `a`).
+        assert!(
+            sol.activities_ingrowth[0][0] / a < 1e-8,
+            "one-isotope chain: no ingrowth path — got {} (rel {})",
+            sol.activities_ingrowth[0][0],
+            sol.activities_ingrowth[0][0] / a,
+        );
+    }
+
+    #[test]
+    fn out_of_order_and_duplicate_times_are_honoured() {
+        // The caller must be free to pass unsorted times with duplicates;
+        // output stays aligned index-for-index to input.
+        let chain = one_iso_chain(1.0e6, 1800.0);
+        let irr = 3600.0;
+        let times = vec![7200.0, 0.0, 3600.0, 7200.0, 1800.0];
+        let sol = solve_chain_at_times(&chain, irr, &times, None, 1.0);
+        // At t=0 activity is exactly 0; the two t=7200 samples must agree
+        // (deterministic pure-decay evaluation).
+        assert_eq!(sol.activities[0][1], 0.0);
+        assert!(
+            (sol.activities[0][0] - sol.activities[0][3]).abs() < 1e-12,
+            "duplicate cooling times must produce identical activities",
+        );
+    }
+
+    #[test]
+    fn eob_query_at_exact_irradiation_time_gives_saturation_bateman() {
+        // t == irradiation_time_s must count as EOB (not decayed) — matches
+        // the split rule (`t <= irr` → irradiation phase). Regression for
+        // the linspace-overshoot bug we fixed by snapping the last t_irr
+        // sample; the point-query API doesn't have linspace so it just needs
+        // the `<=` boundary to include equality.
+        let rate = 2.0e6;
+        let hl = 1000.0;
+        let irr = 4000.0;
+        let chain = one_iso_chain(rate, hl);
+        let sol = solve_chain_at_times(&chain, irr, &[irr], None, 1.0);
+        let want = bateman_analytic(rate, hl, irr, irr);
+        let got = sol.activities[0][0];
+        assert!(
+            (got - want).abs() / want < 1e-10,
+            "at-EOB: got {got:.6e}, want {want:.6e}",
+        );
+    }
+
+    #[test]
+    fn empty_output_times_returns_empty_series() {
+        let chain = one_iso_chain(1.0e6, 3600.0);
+        let sol = solve_chain_at_times(&chain, 3600.0, &[], None, 1.0);
+        assert_eq!(sol.time_grid_s.len(), 0);
+        assert_eq!(sol.activities[0].len(), 0);
+    }
+
+    #[test]
+    fn empty_chain_returns_empty_series() {
+        let sol = solve_chain_at_times(&[], 3600.0, &[0.0, 100.0], None, 1.0);
+        assert_eq!(sol.isotopes.len(), 0);
+        assert_eq!(sol.activities.len(), 0);
+        // time_grid_s is echoed back so a downstream consumer can zip its
+        // own bookkeeping without recomputing indexes.
+        assert_eq!(sol.time_grid_s, vec![0.0, 100.0]);
+    }
+
+    #[test]
+    fn chain_feeds_daughter_ingrowth_at_arbitrary_times() {
+        // Parent (t½ = 60 s) → Daughter (t½ = 600 s), branching = 1.0. Only
+        // the parent is directly produced; the daughter grows in via decay.
+        // At an arbitrary cooling time we must see nonzero daughter activity
+        // AND it must be reported as `activities_ingrowth`, not direct.
+        let irr = 300.0;
+        let chain = vec![
+            ChainIsotope {
+                z: 1,
+                a: 1,
+                state: String::new(),
+                half_life_s: Some(60.0),
+                production_rate: 1.0e6,
+                decay_modes: vec![DecayMode {
+                    mode: "beta-".into(),
+                    daughter_z: Some(1),
+                    daughter_a: Some(2),
+                    daughter_state: String::new(),
+                    branching: 1.0,
+                }],
+            },
+            ChainIsotope {
+                z: 1,
+                a: 2,
+                state: String::new(),
+                half_life_s: Some(600.0),
+                production_rate: 0.0,
+                decay_modes: Vec::new(),
+            },
+        ];
+        // Probe well into cooling so the parent is dead and the daughter
+        // has non-trivial residual activity.
+        let t = irr + 1800.0;
+        let sol = solve_chain_at_times(&chain, irr, &[t], None, 1.0);
+        let daughter_activity = sol.activities[1][0];
+        let daughter_ingrowth = sol.activities_ingrowth[1][0];
+        let daughter_direct = sol.activities_direct[1][0];
+        assert!(daughter_activity > 0.0, "daughter must have activity");
+        assert_eq!(
+            daughter_direct, 0.0,
+            "daughter has no direct production (production_rate = 0)",
+        );
+        assert!(
+            (daughter_ingrowth - daughter_activity).abs() < 1e-12,
+            "daughter activity must be reported as ingrowth (all of it)",
+        );
+    }
 }

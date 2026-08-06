@@ -689,6 +689,77 @@ pub fn list_tools() -> Vec<Value> {
             }
         }),
         serde_json::json!({
+            "name": "get_activity_at",
+            "description": format!("Exact-Bateman ACTIVITY at caller-chosen times [Bq] (#570). Re-solves the decay chain at each `at_s` using the cached production rates — no interpolation of the 200-point curve, so short/long-lived products in one run are both resolved analytically at any `t`. Cheap: the expensive production integral is served from the config-hashed cache (`at_s` is a VIEW parameter and is NEVER part of the cache key, so different time sets on the same config all reuse the cached simulation). `at_s` capped at {MAX_AT_S} entries — coarsen or split; a query outside the simulated window (irr + cool) is rejected rather than extrapolated. Scope aggregation happens AFTER the chain solve so ingrowth stays correct at layer/element/stack scope. Filters: `isotope` (exact name), `layer_index` (1-based), `element` (symbol or Z). {SCOPE_SUFFIX}", MAX_AT_S = crate::mcp::activity_at::MAX_AT_S_ENTRIES),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
+                    "energy_mev": { "type": "number" },
+                    "current_ma": { "type": "number" },
+                    "layers": { "type": "array", "items": layer_schema(false) },
+                    "irradiation_time_s": { "type": "number" },
+                    "cooling_time_s": { "type": "number", "description": "Cooling time in seconds — every `at_s` entry must lie inside (irr + cool). Widen this to query further out." },
+                    "current_profile": {
+                        "type": "object",
+                        "description": "Optional piecewise-constant current profile (same shape as `simulate`).",
+                        "properties": {
+                            "times_s": { "type": "array", "items": { "type": "number" } },
+                            "currents_ma": { "type": "array", "items": { "type": "number" } }
+                        },
+                        "required": ["times_s", "currents_ma"]
+                    },
+                    "at_s": {
+                        "type": "array",
+                        "items": { "type": "number", "minimum": 0 },
+                        "description": "List of query times [seconds since start of irradiation]. Each t must be finite and within the simulated window (irr + cool). Callers supply their own grid (log-spaced decay points, clearance dates, shipping windows)."
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["isotope", "layer", "element", "stack"],
+                        "default": "isotope",
+                        "description": "Aggregation level. 'isotope' (default): one row per (isotope × layer). 'layer': sum across all isotopes in each layer. 'element': sum across all isotopes of each Z across the whole stack. 'stack': one total row summed across everything. Aggregation is AFTER the chain solve so ingrowth stays correct."
+                    },
+                    "isotope": { "type": "string", "description": "Optional exact-name filter (e.g. 'F-18', 'Sc-44m'). Combines with `layer_index` and `element`." },
+                    "layer_index": { "type": "integer", "description": "Optional 1-based layer filter (matches `simulate` numbering)." },
+                    "element": { "type": "string", "description": "Optional element filter — symbol ('Cu') or atomic number (as a string, e.g. '29')." },
+                    "activity_floor_bq": activity_floor_schema()
+                },
+                "required": ["projectile", "energy_mev", "current_ma", "layers", "at_s"]
+            }
+        }),
+        serde_json::json!({
+            "name": "get_dose_rate_at",
+            "description": format!("Exact gamma DOSE RATE [µSv/h] at caller-chosen times (#570). Same machinery as `get_activity_at`: re-solves the chain at each `at_s`, then applies Γ · A_i(t) / d² per isotope using the ENSDF-derived dose constants (`get_dose_constant`). Bare-source, inverse-square, no shielding. Reports per-time total plus a peak-time per-isotope breakdown and — critically — any produced isotope with no dose constant loaded (surfaced in `missing_dose_constant`, contribution = 0, never silently omitted). `at_s` cap {MAX_AT_S}. `distance_cm` refuses < 1 cm (near-field). {SCOPE_SUFFIX}", MAX_AT_S = crate::mcp::activity_at::MAX_AT_S_ENTRIES),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
+                    "energy_mev": { "type": "number" },
+                    "current_ma": { "type": "number" },
+                    "layers": { "type": "array", "items": layer_schema(false) },
+                    "irradiation_time_s": { "type": "number" },
+                    "cooling_time_s": { "type": "number" },
+                    "current_profile": {
+                        "type": "object",
+                        "properties": {
+                            "times_s": { "type": "array", "items": { "type": "number" } },
+                            "currents_ma": { "type": "array", "items": { "type": "number" } }
+                        },
+                        "required": ["times_s", "currents_ma"]
+                    },
+                    "at_s": {
+                        "type": "array",
+                        "items": { "type": "number", "minimum": 0 },
+                        "description": "List of query times [seconds since start of irradiation]."
+                    },
+                    "distance_cm": { "type": "number", "description": "Point-source distance in cm (default 100 = 1 m). Refuses distances below ~1 cm as the near-field approximation is invalid there." },
+                    "activity_floor_bq": activity_floor_schema()
+                },
+                "required": ["projectile", "energy_mev", "current_ma", "layers", "at_s"]
+            }
+        }),
+        serde_json::json!({
             "name": "get_dose_rate",
             "description": format!("Gamma dose rate [µSv/h] at `distance_cm` from a point-source stack (bare, no shielding). Runs the simulation (via the config-hashed cache — cheap on repeat), sums k_i · (A_i / 1e6) / r² across every produced isotope in every layer at the end-of-cooling time. Reports the total, a per-isotope breakdown (activity, k, dose contribution, fraction), and — critically — any produced isotope with non-negligible activity but NO dose constant in the library (surfaced in `missing_dose_constant`, dose set to 0, never silently omitted). Same stack arguments as `simulate`, plus `distance_cm` (default 100.0 = 1 m). No photon shielding.{SCOPE_SUFFIX}"),
             "inputSchema": {
@@ -743,6 +814,8 @@ pub fn call_tool(
         "get_nuclide_data" => tool_get_nuclide_data(db, arguments)?.into(),
         "get_dose_constant" => tool_get_dose_constant(db, arguments)?.into(),
         "get_dose_rate" => tool_get_dose_rate(db, &*materials, arguments)?.into(),
+        "get_activity_at" => tool_get_activity_at(db, &*materials, arguments)?,
+        "get_dose_rate_at" => tool_get_dose_rate_at(db, &*materials, arguments)?,
         _ => return Err(format!("Unknown tool: {}", name)),
     };
     response.text = format!("{}\n\n---\n*Library: {}*\n", response.text, db.library());
@@ -2540,6 +2613,306 @@ and contribute **0** to the total: {}. The reported total is a LOWER BOUND.\n\n"
     }
 
     Ok(output)
+}
+
+// ─── #570: exact-Bateman point queries ─────────────────────────────────────
+
+/// `get_activity_at` — exact Bateman activity at caller-chosen times.
+///
+/// Reuses the cached `StackResult` (which is keyed on the physics config only —
+/// `at_s` is a view parameter and is NEVER in the cache key, so different time
+/// sets on the same config all hit the same cached simulation). Re-solves the
+/// decay chain per layer at the requested times through the same
+/// `solve_chain_at_times` the curve tools go through, so a point query at a
+/// grid time matches the curve exactly and a query between grid points is the
+/// analytic value, not an interpolation of a coarse grid.
+fn tool_get_activity_at(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<ToolResponse, String> {
+    use crate::mcp::activity_at::{
+        aggregate, apply_activity_floor, parse_at_s, parse_current_profile_from_args,
+        resolve_all_layers, to_json_rows, Scope,
+    };
+
+    // Cache reuse: `cached_sim` keys on the simulation config only. `at_s`
+    // (and every other point-query view parameter) is deliberately NOT in
+    // the cache key — the same cached StackResult serves every distinct
+    // `at_s` on the same config, which is the whole point of the feature.
+    let result = cached_sim(db, registry, args)?;
+    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+    let sim_end_s = result.irradiation_time_s + result.cooling_time_s;
+
+    let at_s = parse_at_s(args, sim_end_s)?;
+    let scope_str = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("isotope");
+    let scope = Scope::parse(scope_str)?;
+    let iso_filter = args
+        .get("isotope")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let layer_filter = match args.get("layer_index") {
+        Some(v) if !v.is_null() => {
+            let n = v
+                .as_i64()
+                .ok_or("'layer_index' must be a positive 1-based integer")?;
+            if n < 1 {
+                return Err("'layer_index' must be a positive 1-based integer".to_string());
+            }
+            Some(n as usize)
+        }
+        _ => None,
+    };
+    let element_filter_z = parse_element_filter(db, args)?;
+    let activity_floor_bq = parse_activity_floor(args)?;
+
+    let current_profile = parse_current_profile_from_args(args)?;
+    let nominal_current_ma = args
+        .get("current_ma")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    // Solve every layer's chain at the requested times, then apply the
+    // reporting-floor filter (#567) before aggregation so filtered isotopes
+    // never enter any scope's sum. Nothing physically real is dropped
+    // upstream — the same no-silent-loss contract.
+    let per_layer = resolve_all_layers(
+        db,
+        &result,
+        &at_s,
+        current_profile.as_ref(),
+        nominal_current_ma,
+    );
+    let n_produced_isos = per_layer.len();
+    let (per_layer, filtered_below_floor) = apply_activity_floor(per_layer, activity_floor_bq);
+
+    let aggregated = aggregate(
+        &per_layer,
+        scope,
+        at_s.len(),
+        iso_filter.as_deref(),
+        layer_filter,
+        element_filter_z,
+        db,
+    );
+
+    let (proj, energy, current) = beam_args(args);
+    let mut text = String::new();
+    text.push_str(&format!(
+        "# Activity at {} time-point(s) — `{sim_id}`\n\n",
+        at_s.len()
+    ));
+    text.push_str(&format!(
+        "**Beam:** {proj} at {energy:.2} MeV, {current:.3} mA | **Irradiation:** {:.0}s | **Cooling:** {:.0}s\n",
+        result.irradiation_time_s, result.cooling_time_s
+    ));
+    text.push_str(&format!(
+        "**Scope:** `{scope_str}` — {} row(s) reported (from {} produced isotope × layer entries).\n",
+        aggregated.len(),
+        n_produced_isos,
+    ));
+    text.push_str(
+        "\nExact Bateman evaluation at each `at_s[i]` (no interpolation). The chain re-solve \
+         reuses the cached production integral; `at_s` is not part of the cache key, so \
+         follow-up calls with a different time set on the same config reuse the same \
+         cached simulation.\n\n",
+    );
+    if filtered_below_floor > 0 {
+        text.push_str(&format!(
+            "> ℹ️ **Reporting filter**: {filtered_below_floor} isotope × layer entry(ies) omitted \
+             — peak activity across `at_s` below `activity_floor_bq` = {activity_floor_bq:.3e} Bq. \
+             Pass `activity_floor_bq: 0` (default) to see everything the backend computed.\n\n",
+        ));
+    }
+
+    let payload = to_json_rows(&aggregated, &at_s);
+    let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    text.push_str("```json\n");
+    text.push_str(&json);
+    text.push_str("\n```\n");
+
+    Ok(ToolResponse {
+        text,
+        resources: Vec::new(),
+    })
+}
+
+/// Parse the `element` filter — accepts either a symbol ("Cu") or a stringified
+/// atomic number ("29"). Returns `None` when no filter is set.
+fn parse_element_filter(db: &dyn DatabaseProtocol, args: &Value) -> Result<Option<u32>, String> {
+    let Some(v) = args.get("element") else {
+        return Ok(None);
+    };
+    if v.is_null() {
+        return Ok(None);
+    }
+    let s = v
+        .as_str()
+        .ok_or("'element' must be a string (symbol like 'Cu' or a stringified Z like '29')")?;
+    if let Ok(z) = s.parse::<u32>() {
+        return Ok(Some(z));
+    }
+    let z = db.get_element_z(s);
+    if z == 0 {
+        return Err(format!("Unknown element symbol '{s}' for 'element' filter"));
+    }
+    Ok(Some(z))
+}
+
+/// `get_dose_rate_at` — gamma dose rate at caller-chosen times.
+///
+/// Runs `get_activity_at`'s per-layer chain re-solve, then applies k · A / r²
+/// per isotope at each time. Uses stack-summed activity per (z, a, state)
+/// (photons leave the whole stack, not one layer) — same convention as
+/// `compute_stack_dose` (`get_dose_rate`), just evaluated at a list of times
+/// instead of end-of-cooling.
+fn tool_get_dose_rate_at(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    args: &Value,
+) -> Result<ToolResponse, String> {
+    use crate::mcp::activity_at::{
+        apply_activity_floor, parse_at_s, parse_current_profile_from_args, resolve_all_layers,
+    };
+    use crate::mcp::dose::{dose_rate_at, MIN_DISTANCE_M};
+
+    let result = cached_sim(db, registry, args)?;
+    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+    let sim_end_s = result.irradiation_time_s + result.cooling_time_s;
+
+    let at_s = parse_at_s(args, sim_end_s)?;
+    let distance_cm = args
+        .get("distance_cm")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(100.0);
+    if !distance_cm.is_finite() || distance_cm <= 0.0 {
+        return Err("'distance_cm' must be a positive number".to_string());
+    }
+    if distance_cm / 100.0 < MIN_DISTANCE_M {
+        return Err(format!(
+            "'distance_cm' must be >= {} cm — the near-field approximation of \
+             a point source is invalid below that.",
+            MIN_DISTANCE_M * 100.0
+        ));
+    }
+    let activity_floor_bq = parse_activity_floor(args)?;
+
+    let current_profile = parse_current_profile_from_args(args)?;
+    let nominal_current_ma = args
+        .get("current_ma")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+
+    let per_layer = resolve_all_layers(
+        db,
+        &result,
+        &at_s,
+        current_profile.as_ref(),
+        nominal_current_ma,
+    );
+    let (per_layer, filtered_below_floor) = apply_activity_floor(per_layer, activity_floor_bq);
+
+    // Sum activity across layers per (z, a, state) at every requested time —
+    // same convention as `compute_stack_dose` (photons leave the whole stack).
+    use std::collections::BTreeMap;
+    let mut per_isotope: BTreeMap<(u32, u32, String), (String, Vec<f64>)> = BTreeMap::new();
+    for iso in &per_layer {
+        let entry = per_isotope
+            .entry((iso.z, iso.a, iso.state.clone()))
+            .or_insert_with(|| (iso.name.clone(), vec![0.0; at_s.len()]));
+        for (dst, &src) in entry.1.iter_mut().zip(iso.activity_bq.iter()) {
+            *dst += src;
+        }
+    }
+
+    // Compute dose per isotope per time. Missing k → contribution 0 and
+    // surfaced in `missing_k` so a total is never silently under-reported.
+    let mut per_iso_json: Vec<Value> = Vec::new();
+    let mut total_dose = vec![0.0_f64; at_s.len()];
+    let mut missing_k: Vec<String> = Vec::new();
+    for ((z, a, state), (name, activity)) in per_isotope {
+        let (k, source) = match db.get_dose_constant(z, a, &state) {
+            Some((k, src)) => (Some(k), Some(src)),
+            None => {
+                // Only surface as "missing" if there's real activity at any
+                // time — a stable-with-zero-activity chain intermediate isn't
+                // a data gap.
+                let has_activity = activity.iter().any(|&x| x > 0.0);
+                if has_activity {
+                    missing_k.push(name.clone());
+                }
+                (None, None)
+            }
+        };
+        let dose_series: Vec<f64> = activity
+            .iter()
+            .map(|&act| k.map(|k| dose_rate_at(k, act, distance_cm)).unwrap_or(0.0))
+            .collect();
+        for (dst, &src) in total_dose.iter_mut().zip(dose_series.iter()) {
+            *dst += src;
+        }
+        per_iso_json.push(serde_json::json!({
+            "isotope": name,
+            "z": z, "a": a, "state": state,
+            "k_usv_m2_per_mbq_h": k,
+            "k_source": source,
+            "activity_bq": activity,
+            "dose_rate_usv_h": dose_series,
+        }));
+    }
+    missing_k.sort();
+    missing_k.dedup();
+
+    let (proj, energy, current) = beam_args(args);
+    let mut text = String::new();
+    text.push_str(&format!(
+        "# Dose rate at {} time-point(s) — `{sim_id}` @ {distance_cm:.2} cm\n\n",
+        at_s.len()
+    ));
+    text.push_str(&format!(
+        "**Beam:** {proj} at {energy:.2} MeV, {current:.3} mA | **Irradiation:** {:.0}s | **Cooling:** {:.0}s\n",
+        result.irradiation_time_s, result.cooling_time_s
+    ));
+    text.push_str(
+        "\nExact Bateman activity at each `at_s[i]`, then Γ · A / d² per isotope. \
+         Bare source (inverse-square, no shielding). Activity `at_s` is not part of \
+         the cache key so follow-up calls with different times reuse the same \
+         cached simulation.\n\n",
+    );
+    if !missing_k.is_empty() {
+        text.push_str(&format!(
+            "> ⚠️ {} produced isotope(s) had no dose constant in the active library and \
+             contribute 0 to the total: {}. Reported total is a LOWER BOUND.\n\n",
+            missing_k.len(),
+            missing_k.join(", ")
+        ));
+    }
+    if filtered_below_floor > 0 {
+        text.push_str(&format!(
+            "> ℹ️ **Reporting filter**: {filtered_below_floor} isotope × layer entry(ies) omitted \
+             — peak activity across `at_s` below `activity_floor_bq` = {activity_floor_bq:.3e} Bq.\n\n",
+        ));
+    }
+
+    let payload = serde_json::json!({
+        "at_s": at_s,
+        "distance_cm": distance_cm,
+        "total_dose_rate_usv_h": total_dose,
+        "per_isotope": per_iso_json,
+        "missing_dose_constant": missing_k,
+    });
+    let json = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    text.push_str("```json\n");
+    text.push_str(&json);
+    text.push_str("\n```\n");
+
+    Ok(ToolResponse {
+        text,
+        resources: Vec::new(),
+    })
 }
 
 pub(crate) fn format_halflife(seconds: f64) -> String {
