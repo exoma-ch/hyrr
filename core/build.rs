@@ -69,6 +69,11 @@ fn main() {
     };
     println!("cargo:rustc-env=HYRR_DEFAULT_LIBRARY={default_library}");
 
+    // --- release-notes.json is compiled in via include_str! in
+    // release_notes.rs (#572). Rebuild the crate when the artifact changes so
+    // an edit to the classified changelog does not silently ship stale bytes.
+    println!("cargo:rerun-if-changed=../release-notes.json");
+
     // --- Embed nuclear data as a tar (#274) ---
     #[cfg(feature = "embed-data")]
     pack_data_tar(&default_library);

@@ -134,6 +134,16 @@ jobs:
           npm install --package-lock-only --ignore-scripts
       - name: Verify the gate now passes
         run: bash scripts/check-lockfiles.sh
+      # #572 — the impact-classified release-notes artifact must carry an
+      # entry for the version being cut. Fails the release PR if the reviewer
+      # bumped versions but forgot to write the classified notes. Deliberately
+      # strict on the release branch (unlike the local pre-commit run, which
+      # only warns) — a release without classified notes defeats the whole
+      # point: an agent asking "would my previous answer have been wrong?"
+      # gets silence, which is the failure mode the artifact exists to
+      # prevent.
+      - name: Verify release-notes.json has an entry for the release version
+        run: bash scripts/check-release-notes.sh --strict-gate
       - name: Commit & push if changed
         run: |
           LOCKS=(uv.lock core/Cargo.lock hyrr-mcp/Cargo.lock py/Cargo.lock py-mcp/Cargo.lock wasm/Cargo.lock desktop/src-tauri/Cargo.lock package-lock.json)

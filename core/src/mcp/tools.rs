@@ -127,6 +127,10 @@ SCOPE — what HYRR does NOT model by default:\n\
 Discovery tools: `list_materials`, `list_reaction_channels`, \
 `list_producing_layers`, `get_nuclide_data` (raw per-nuclide data lookup — \
 half-life / decay modes / γ-lines / dose constant / natural abundance).\n\n\
+Version-awareness (#572): `get_changelog(since_version?)` returns \
+impact-classified release notes with `impact`+`silent`+`affected`+`guidance` \
+per entry — use it to decide whether earlier results need to be re-run, not \
+just what changed in the commit log.\n\n\
 Every tool response is suffixed with the active library id."
     )
 }
@@ -786,6 +790,25 @@ pub fn list_tools() -> Vec<Value> {
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
         }),
+        // #572 — impact-classified release notes. Compiled into the binary
+        // via `include_str!`; no network, no runtime classification, always
+        // available offline. Load-bearing distinction from `CHANGELOG.md`:
+        // each entry carries `impact` + `silent` + `affected` + `guidance`
+        // so an agent can answer "would my previous answer have been wrong?"
+        // — a commit-derived changelog cannot.
+        serde_json::json!({
+            "name": "get_changelog",
+            "description": "Impact-classified release notes (#572). Per-release entries carry `impact` (physics_affecting, silent_failure_fixed, data_update, api_change, ux, internal), `silent` (was the earlier version silently wrong?), `affected` MCP tools, `guidance` (what to re-run) and `refs` (GitHub issues). Machine-readable companion to CHANGELOG.md, hand-reviewed at release time — never generated at runtime. Filter with `since_version` to get only what is newer than what you last saw; omit to get every release. Include `data_version` in the response so you can tell a data-only change apart from a code change. Air-gapped: the artifact for the running version is compiled in.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "since_version": {
+                        "type": "string",
+                        "description": "Return only releases strictly newer than this version (e.g. \"0.18.0\"). Load-bearing — the full artifact grows unbounded, so a client that already knows what version it saw last should always pass it. Omit or pass null for every release."
+                    }
+                }
+            }
+        }),
     ]
 }
 
@@ -829,6 +852,7 @@ pub fn call_tool(
         // so the whole tool surface stays routed from a single dispatch
         // table.
         "get_version_info" => tool_get_version_info()?.into(),
+        "get_changelog" => tool_get_changelog(arguments)?.into(),
         _ => return Err(format!("Unknown tool: {}", name)),
     };
     response.text = format!("{}\n\n---\n*Library: {}*\n", response.text, db.library());
@@ -3024,6 +3048,72 @@ fn tool_get_version_info() -> Result<String, String> {
         update_check::SERVER_VERSION,
     ));
     Ok(out)
+}
+
+/// Return the impact-classified release notes (#572).
+///
+/// Optional `since_version` filters to releases strictly newer than that
+/// version — load-bearing, because the full artifact grows unbounded and a
+/// client that already knows what it saw last should always pass it.
+///
+/// Response shape is a JSON envelope with a small `header` (running version +
+/// active library, so an agent can cite what it read) and the filtered
+/// `releases` array in the exact shape of `release-notes.json`. If any entry
+/// in the filtered set is `physics_affecting`, `physics_affecting_summary`
+/// promotes it — this is the case worth interrupting for.
+///
+/// Deliberately does NOT touch the database or the network. The artifact is
+/// baked into the binary via `include_str!`; a corrupt artifact surfaces here
+/// as a JSON-RPC error rather than a panic-at-load.
+fn tool_get_changelog(args: &Value) -> Result<String, String> {
+    let since = match args.get("since_version") {
+        Some(v) if !v.is_null() => Some(
+            v.as_str()
+                .ok_or("'since_version' must be a string (e.g. \"0.18.0\")")?
+                .trim()
+                .to_string(),
+        ),
+        _ => None,
+    };
+    let since_ref = since.as_deref().filter(|s| !s.is_empty());
+
+    let notes = crate::release_notes::load()
+        .map_err(|e| format!("release-notes.json is malformed (build-time bug): {e}"))?;
+    let releases: Vec<&crate::release_notes::Release> = notes.since(since_ref);
+
+    let physics_affecting_summary: Vec<Value> = releases
+        .iter()
+        .flat_map(|r| {
+            r.entries
+                .iter()
+                .filter(|e| e.impact == crate::release_notes::Impact::PhysicsAffecting)
+                .map(move |e| {
+                    serde_json::json!({
+                        "version": r.version,
+                        "date": r.date,
+                        "silent": e.silent,
+                        "summary": e.summary,
+                        "affected": e.affected,
+                        "guidance": e.guidance,
+                        "refs": e.refs,
+                    })
+                })
+        })
+        .collect();
+
+    let envelope = serde_json::json!({
+        "header": {
+            "running_version": env!("CARGO_PKG_VERSION"),
+            "since_version": since_ref,
+            "release_count": releases.len(),
+            "physics_affecting_count": physics_affecting_summary.len(),
+            "note": "Human-reviewed classified changelog (#572). `impact`+`silent` are load-bearing. Air-gapped: this artifact is compiled in; only cross-version comparison with a newer release needs the network (see #571).",
+        },
+        "physics_affecting_summary": physics_affecting_summary,
+        "releases": releases,
+    });
+
+    Ok(serde_json::to_string_pretty(&envelope).unwrap_or_else(|_| "{}".to_string()))
 }
 
 #[cfg(test)]

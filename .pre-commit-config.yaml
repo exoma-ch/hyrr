@@ -115,6 +115,21 @@ repos:
         files: (pyproject\.toml|uv\.lock|wasm/Cargo\.(toml|lock))$
         pass_filenames: false
 
+  # #572 — impact-classified release-notes structural check. Runs whenever the
+  # artifact or the release-please manifest changes. Non-strict locally: a
+  # manifest ahead of the artifact only warns, because on `main` we're often
+  # between releases. The release PR's CI runs `--strict-gate` (see
+  # `.github/workflows/release-please.yml`) so a missing entry blocks the
+  # merge, not the local commit.
+  - repo: local
+    hooks:
+      - id: check-release-notes
+        name: release-notes.json structural check (#572)
+        entry: scripts/check-release-notes.sh
+        language: system
+        files: (release-notes\.json|\.release-please-manifest\.json)$
+        pass_filenames: false
+
   # Typo Linting — flake's typos (downloaded binary doesn't run on NixOS)
   - repo: local
     hooks:

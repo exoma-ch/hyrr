@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/exoma-ch/hyrr/release-notes.schema.json",
+  "title": "HYRR impact-classified release notes",
+  "description": "Human-reviewed, machine-readable release notes derived from CHANGELOG.md at release time. Answers `would my previous answer have been wrong?` for a scientific-tool user. See #572.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["releases"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "_note": { "type": "string" },
+    "releases": {
+      "type": "array",
+      "description": "Releases in newest-first order. Ordering is checked at release time.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "date", "data_version", "entries"],
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "SemVer (matches release-please tag minus the leading v).",
+            "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9.-]+)?$"
+          },
+          "date": {
+            "type": "string",
+            "description": "ISO date (YYYY-MM-DD) matching CHANGELOG.md.",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "data_version": {
+            "type": "string",
+            "description": "nucl-parquet DATA_VERSION shipped in this release (CalVer YYYY.M.MICRO). A data-only bump can change results with zero code change, invisible in a commit-derived changelog."
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["summary", "impact", "silent", "affected", "guidance", "refs"],
+              "properties": {
+                "summary": {
+                  "type": "string",
+                  "description": "User-facing one-liner. NOT a commit subject — should answer 'what would I compute differently now?'."
+                },
+                "impact": {
+                  "type": "string",
+                  "description": "Class of change. `physics_affecting` MUST be conservative — when unsure, mark it affecting. `silent_failure_fixed` = the fix removes a wrong-answer-without-warning; `data_update` = nuclear data bump; `api_change` = tool signature / behaviour visible to callers; `ux` = client-visible convenience with no numerical impact; `internal` = plumbing.",
+                  "enum": [
+                    "physics_affecting",
+                    "silent_failure_fixed",
+                    "data_update",
+                    "api_change",
+                    "ux",
+                    "internal"
+                  ]
+                },
+                "silent": {
+                  "type": "boolean",
+                  "description": "true = a user running the earlier version would have gotten a wrong answer with NO error, warning or log line. This is the load-bearing distinction — a visible error is a stopped experiment; a silent wrong number is bad science published."
+                },
+                "affected": {
+                  "type": "array",
+                  "description": "MCP tool names whose output could differ. `[\"*\"]` = all tools. Empty array = no user-visible surface changed (internal/CI/etc.).",
+                  "items": { "type": "string" }
+                },
+                "guidance": {
+                  "type": "string",
+                  "description": "Actionable one-paragraph guidance an agent can relay verbatim — what to re-run, what was silently wrong, what to check."
+                },
+                "refs": {
+                  "type": "array",
+                  "description": "Related GitHub issue / PR numbers.",
+                  "items": { "type": "integer", "minimum": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
