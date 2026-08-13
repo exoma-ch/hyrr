@@ -6,12 +6,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "npm run build:viewer && vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:suppliers-fresh": "node scripts/check-suppliers-fresh.mjs"
+    "check:suppliers-fresh": "node scripts/check-suppliers-fresh.mjs",
+    "build:viewer": "vite build --config vite.viewer.config.ts && node scripts/stage-viewer-template.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

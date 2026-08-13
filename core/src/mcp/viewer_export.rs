@@ -23,8 +23,8 @@ use serde_json::Value;
 use crate::db::DatabaseProtocol;
 use crate::materials::MaterialRegistry;
 use crate::viewer::{
-    build_snapshot, emission_to_json, nuclide_key, produced_nuclides, render_html,
-    DoseConstantEntry, EmissionLineJson, EvaluatedData, SnapshotTier,
+    build_snapshot, convert_stack_result, emission_to_json, nuclide_key, produced_nuclides,
+    render_html, DoseConstantEntry, EmissionLineJson, EvaluatedData, SnapshotTier,
 };
 
 use super::tools::{b64, ToolResource, ToolResponse};
@@ -177,8 +177,7 @@ pub fn tool_export_result_html(
     let n_doses = evaluated.dose_constants.len();
 
     let snapshot = build_snapshot(
-        frontend_config(args),
-        result,
+        convert_stack_result(frontend_config(args), result, 0),
         tier,
         env!("CARGO_PKG_VERSION"),
         None,
