@@ -54,6 +54,13 @@ test-integration *args:
 data:
     scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet tendl-2023-iso
 
+# Re-pin the data-tarball integrity hash after a nucl-parquet submodule bump (#577).
+# Pass --verify-download to hash the asset yourself instead of trusting GitHub's
+# published digest. Commit hyrr.json alongside the submodule bump.
+[group('dev')]
+repin-data *args:
+    scripts/repin-data.sh {{args}}
+
 # Manual deploy to GitHub Pages tst/
 [group('deploy')]
 deploy-tst:

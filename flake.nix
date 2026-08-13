@@ -22,7 +22,7 @@
     # testing data_version 2026.7.2 while everything else shipped 2026.8.1.
     # flake=false → consumed as a plain source path.
     nucl-parquet = {
-      url = "github:exoma-ch/nucl-parquet/440b6103c971181fccbe5682ad804a88e78aaae5";
+      url = "github:exoma-ch/nucl-parquet/a1b84f8cd5328ff42b2b62691696ce5bd19e90dd";
       flake = false;
     };
   };
@@ -311,10 +311,23 @@
           # serially (data_fetch lock-contention tests need --test-threads=1)
           # and `--include-ignored` to pick up the projectile-matrix tier-1 set.
           # Subsumes ci.yml's rust-projectile-matrix + data-fetch-integration.
+          #
+          # `--skip live_` because `#[ignore]` means two different things here
+          # and --include-ignored cannot tell them apart:
+          #
+          #   * "requires bundled nucl-parquet data" (core/tests/projectile_matrix.rs)
+          #     — offline, and this derivation supplies exactly that via HYRR_DATA.
+          #     These are the tests --include-ignored exists to run.
+          #   * "requires network" (data_fetch's live signature check) — the nix
+          #     sandbox has NO network, so these can only ever fail here.
+          #
+          # Convention: a test needing the network is named `live_*`. Run them
+          # deliberately, outside the sandbox:
+          #   cargo test --manifest-path core/Cargo.toml -- --ignored live_
           rust-test = craneLib.cargoTest (commonRustArgs // {
             inherit cargoArtifacts;
             HYRR_DATA = nuclData;
-            cargoTestExtraArgs = "-- --include-ignored --test-threads=1";
+            cargoTestExtraArgs = "-- --include-ignored --test-threads=1 --skip live_";
           });
 
           # MCP tool surface (feature `mcp` isn't in the default set) — runs the
