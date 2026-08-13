@@ -121,6 +121,18 @@ repos:
   # between releases. The release PR's CI runs `--strict-gate` (see
   # `.github/workflows/release-please.yml`) so a missing entry blocks the
   # merge, not the local commit.
+  # One version identity across the MCP surface (#603). "Inert" shim crate
+  # versions are only safe while nothing reads them — #599 is what happens
+  # when something does.
+  - repo: local
+    hooks:
+      - id: check-version-identity
+        name: no shim crate reads its own CARGO_PKG_VERSION (#603)
+        entry: scripts/check-version-identity.sh
+        language: system
+        files: \.rs$
+        pass_filenames: true
+
   - repo: local
     hooks:
       - id: check-release-notes
