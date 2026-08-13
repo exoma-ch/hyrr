@@ -72,6 +72,40 @@
           "refs": [
             617
           ]
+        },
+        {
+          "summary": "HTTPS now uses the OS trust store, so an institutional TLS-inspecting proxy can be trusted by installing its CA the normal way (#578).",
+          "impact": "api_change",
+          "silent": true,
+          "affected": [],
+          "guidance": "If a data download previously failed behind a corporate or campus proxy, it should now succeed once your CA is in the system trust store — that remedy did nothing before, because the binary carried its own compiled-in root list and never consulted the OS. HYRR_CACERT or SSL_CERT_FILE override it explicitly. An override that exists but yields no usable certificate is a hard error, never a silent fall-back to the bundled roots.",
+          "refs": [
+            578,
+            579
+          ]
+        },
+        {
+          "summary": "Simulation results now carry a provenance block (hyrr version, nuclear-data library and version) so a result can be traced back to what produced it (#601).",
+          "impact": "api_change",
+          "silent": false,
+          "affected": [
+            "simulate",
+            "get_isotope_inventory"
+          ],
+          "guidance": "Additive. Results gain a `provenance` field; the previously separate `core_version` and `library` fields on dataset metadata are folded into it. Anything reading those two names directly needs updating; anything reading the payload as a whole is unaffected.",
+          "refs": [
+            601
+          ]
+        },
+        {
+          "summary": "New: export a simulation result as a single self-contained HTML file that opens in any browser with no install, no server and no data fetch (#616).",
+          "impact": "ux",
+          "silent": false,
+          "affected": [],
+          "guidance": "Additive — nothing existing changes. Intended for sharing a result with a colleague who does not have HYRR: the plots, tables and the run's provenance travel inside the file itself.",
+          "refs": [
+            616
+          ]
         }
       ]
     },
