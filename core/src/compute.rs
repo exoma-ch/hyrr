@@ -122,6 +122,7 @@ pub fn compute_stack(
         layer_results,
         irradiation_time_s: irr_time,
         cooling_time_s: cool_time,
+        provenance: crate::provenance::Provenance::new(db.library(), db.data_origin()),
     })
 }
 
@@ -750,6 +751,7 @@ pub fn compute_stack_stopping_only(
         layer_results,
         irradiation_time_s: stack.irradiation_time_s,
         cooling_time_s: stack.cooling_time_s,
+        provenance: crate::provenance::Provenance::new(db.library(), db.data_origin()),
     })
 }
 
@@ -1074,6 +1076,7 @@ pub fn compute_neutron_stack(
         layer_results,
         irradiation_time_s,
         cooling_time_s,
+        provenance: crate::provenance::Provenance::new(db.library(), db.data_origin()),
     }
 }
 

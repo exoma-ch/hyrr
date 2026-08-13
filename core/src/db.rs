@@ -103,6 +103,17 @@ pub trait DatabaseProtocol: Send + Sync {
     /// Nuclear data library identifier (e.g. "tendl-2025"). Used so MCP
     /// tool responses can echo which library fed the calculation.
     fn library(&self) -> &str;
+
+    /// Where this store's data came from, for the provenance block stamped
+    /// into results (#593).
+    ///
+    /// Defaults to [`DataSource::for_target`] — on native that is the
+    /// conservative `LocalDirectory`. A store only reports
+    /// `VerifiedTarball` by overriding this and *proving* it read the managed
+    /// cache; claiming a verified hash is opt-in, never inherited.
+    fn data_origin(&self) -> crate::provenance::DataSource {
+        crate::provenance::DataSource::for_target()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -625,6 +636,44 @@ mod np_store {
 
         fn library(&self) -> &str {
             &self.library
+        }
+
+        /// Report [`VerifiedTarball`] only when this store is actually reading
+        /// the managed cache — i.e. the directory that
+        /// `data_fetch::install_tarball_atomic` populates after the download
+        /// has been checked against the pinned SHA-256 (#577).
+        ///
+        /// Everything else (`--data-dir`, `HYRR_DATA`, the `nucl-parquet`
+        /// submodule, a sibling checkout) is `LocalDirectory`: real data, but
+        /// not data this process verified, so no hash may be claimed for it.
+        ///
+        /// [`VerifiedTarball`]: crate::provenance::DataSource::VerifiedTarball
+        fn data_origin(&self) -> crate::provenance::DataSource {
+            use crate::provenance::DataSource;
+
+            // wasm32 never compiles the parquet store, so `data_fetch` is
+            // always available here.
+            //
+            // Canonicalise both sides before comparing: the cache lives under
+            // `~/.hyrr`, which is frequently a symlink, and an uncanonicalised
+            // prefix test would miss a store that *is* reading the verified
+            // cache. Canonicalisation needs the path to exist; a failed lookup
+            // falls through to the conservative answer rather than guessing.
+            let Ok(root) = self.data_root.canonicalize() else {
+                return DataSource::LocalDirectory;
+            };
+            let cache = crate::data_fetch::cache_dir()
+                .ok()
+                .and_then(|c| c.canonicalize().ok());
+
+            // The sentinel check is what makes this match its own contract:
+            // being *inside* the cache directory is not the same as the cache
+            // having been verified. See `DataSource::for_data_root`.
+            DataSource::for_data_root(
+                &root,
+                cache.as_deref(),
+                crate::data_fetch::is_cache_complete(),
+            )
         }
     }
 } // mod np_store
