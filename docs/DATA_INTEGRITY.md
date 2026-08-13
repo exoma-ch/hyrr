@@ -137,11 +137,37 @@ similar) are standard at regulated sites. They open an archive in transit, scan
 each entry and **repack** it. The nuclear data arrives intact; the signature
 does not verify, because the bytes are no longer the bytes that were signed.
 
-If that is your environment, the install will refuse a bundle that is in fact
-fine. Surviving it needs a per-file digest list signed by the nuclear-data team,
-which is tracked upstream as
-[exoma-ch/nucl-parquet#296](https://github.com/exoma-ch/nucl-parquet/issues/296).
-Until that lands, transfer the bundle by a route that preserves bytes.
+HYRR handles this with a **second verification route**. If a signed content
+manifest (`<bundle>.manifest.json` + `.minisig`) is carried alongside the
+archive, and the byte-signature fails, the archive is extracted to a staging
+directory and every file is checked against the manifest before anything is
+promoted. That authenticates *contents* rather than framing, so it survives a
+repack.
+
+Copy all four files if your route may repack: the archive, its `.minisig`, the
+manifest, and the manifest's `.minisig`.
+
+Three rules make this a real control rather than a comforting one:
+
+- **The byte-signature is tried first.** It covers framing as well as contents,
+  so falling straight to the manifest would be strictly weaker — a tampered
+  `.tar.zst` that happens to extract to the right files would pass.
+- **Verification runs in both directions.** Every listed file must be present
+  and match, *and* every present file must be listed. A one-directional check
+  (`sha256sum -c`) passes a tree with a planted extra file — upstream found
+  exactly that inside their own implementation before release, and the threat
+  model here is a gateway that can write into the tree.
+- **An unsigned manifest is refused.** Whoever can rewrite the files can
+  rewrite an unsigned manifest describing them.
+
+Manifests are published from data version **2026.8.3** onward. Earlier releases
+have none, and absence is treated as "no second route available", not as a
+failure — so a bundle predating them still installs on the byte-signature path.
+
+A CDR appliance that rewrites file *contents* — re-encoding a format it thinks
+it understands — fails the manifest check too, correctly. This turns
+"unverifiable" into "verifiably modified", which is the right outcome but not
+the same as "works everywhere".
 
 ### Mirroring an existing cache
 

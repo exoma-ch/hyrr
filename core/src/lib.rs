@@ -12,6 +12,8 @@ pub mod constants;
 pub mod data_dir;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod data_fetch;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod data_manifest;
 pub mod db;
 pub mod formula;
 pub mod interpolation;
