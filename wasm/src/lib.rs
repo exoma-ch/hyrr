@@ -639,6 +639,86 @@ pub fn decode_config(hash: &str) -> Result<JsValue, JsValue> {
 }
 
 // ---------------------------------------------------------------------------
+// Shareable results viewer (ADR 0008)
+// ---------------------------------------------------------------------------
+
+/// Stamp a result snapshot into the built viewer template.
+///
+/// The browser already holds the *converted* result (it came back from
+/// `run_stack`), so this takes the wire JSON rather than a `StackResult` and
+/// hands it straight to the core-owned builder — the same one the MCP surface
+/// uses, so the tier gate cannot diverge between them.
+///
+/// `evaluated_json` carries `{ emissions, doseConstants }` gathered by the
+/// caller from its own data source (hyparquet in the browser). It is an
+/// argument rather than a lookup because only the native Parquet store can
+/// answer `get_emissions` — a builder that fetched for itself would silently
+/// emit Tier A here.
+///
+/// Throws a JS `Error` rather than returning a half-artifact.
+#[wasm_bindgen(js_name = buildViewerHtml)]
+pub fn build_viewer_html(
+    result_json: &str,
+    evaluated_json: &str,
+    tier: &str,
+    hyrr_version: &str,
+    generated_at: Option<String>,
+    template: &str,
+) -> Result<String, JsValue> {
+    use hyrr_core::viewer::{
+        build_snapshot, render_html, EvaluatedData, SimulationResultJson, SnapshotTier,
+    };
+
+    let tier = match tier {
+        "A" => SnapshotTier::A,
+        "B" => SnapshotTier::B,
+        other => {
+            return Err(JsValue::from_str(&format!(
+                "unknown viewer tier {other:?} — expected \"A\" or \"B\""
+            )))
+        }
+    };
+
+    let wire: SimulationResultJson = serde_json::from_str(result_json)
+        .map_err(|e| JsValue::from_str(&format!("result is not a valid simulation result: {e}")))?;
+
+    let evaluated: EvaluatedData = if evaluated_json.trim().is_empty() {
+        EvaluatedData::default()
+    } else {
+        let parsed: EvaluatedDataJson = serde_json::from_str(evaluated_json)
+            .map_err(|e| JsValue::from_str(&format!("evaluated data is not valid: {e}")))?;
+        EvaluatedData {
+            emissions: parsed.emissions,
+            dose_constants: parsed.dose_constants,
+        }
+    };
+
+    // Refuse rather than mislabel: a Tier B artifact with no spectra looks
+    // identical to Tier A but claims otherwise in its own payload.
+    if tier == SnapshotTier::B && evaluated.emissions.is_empty() {
+        return Err(JsValue::from_str(
+            "Tier B requested but no emission data was supplied — load emission data first, \
+             or export tier \"A\".",
+        ));
+    }
+
+    let snapshot = build_snapshot(wire, tier, hyrr_version, generated_at, evaluated);
+    render_html(template, &snapshot).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Wire form of [`hyrr_core::viewer::EvaluatedData`] — the JS side sends the
+/// same key names the viewer reads back out.
+#[derive(serde::Deserialize)]
+struct EvaluatedDataJson {
+    #[serde(default)]
+    emissions:
+        std::collections::BTreeMap<String, Vec<hyrr_core::viewer::EmissionLineJson>>,
+    #[serde(default, rename = "doseConstants")]
+    dose_constants:
+        std::collections::BTreeMap<String, hyrr_core::viewer::DoseConstantEntry>,
+}
+
+// ---------------------------------------------------------------------------
 // Internal JSON serde types for data loading
 // ---------------------------------------------------------------------------
 

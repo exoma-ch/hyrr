@@ -34,7 +34,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::types::{EmissionLine, StackResult};
 
@@ -79,7 +79,7 @@ impl SnapshotTier {
 }
 
 /// A dose constant as the viewer consumes it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoseConstantEntry {
     /// µSv·m²/(MBq·h).
     pub k: f64,
@@ -88,7 +88,7 @@ pub struct DoseConstantEntry {
 }
 
 /// Emission line in the frontend's field naming.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmissionLineJson {
     #[serde(rename = "radType")]
     pub rad_type: String,
@@ -105,7 +105,7 @@ pub struct EmissionLineJson {
 // Previously duplicated in wasm/src/lib.rs and desktop/src-tauri/src/commands.rs.
 // The JSON shape is the contract in packages/compute/src/config-bridge.ts.
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepthPointJson {
     pub depth_mm: f64,
     #[serde(rename = "energy_MeV")]
@@ -116,7 +116,7 @@ pub struct DepthPointJson {
     pub heat_w_cm3: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IsotopeResultJson {
     pub name: String,
     #[serde(rename = "Z")]
@@ -145,7 +145,7 @@ pub struct IsotopeResultJson {
     pub decay_notations: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerResultJson {
     pub layer_index: usize,
     pub energy_in: f64,
@@ -163,7 +163,7 @@ pub struct LayerResultJson {
     pub pruned_negligible_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationResultJson {
     pub config: serde_json::Value,
     pub layers: Vec<LayerResultJson>,
@@ -360,14 +360,12 @@ pub struct EvaluatedData {
 /// stated by the caller and recorded in the artifact, not derived from whatever
 /// data a store happened to have loaded.
 pub fn build_snapshot(
-    config: serde_json::Value,
-    result: &StackResult,
+    mut wire: SimulationResultJson,
     tier: SnapshotTier,
     hyrr_version: &str,
     generated_at: Option<String>,
     evaluated: EvaluatedData,
 ) -> ViewerSnapshot {
-    let mut wire = convert_stack_result(config, result, 0);
 
     // Round first, then hoist: rounding is the size lever, hoisting only helps
     // the raw payload (gzip already finds the repeated grids).
@@ -563,8 +561,7 @@ mod tests {
             },
         );
         let snap = build_snapshot(
-            serde_json::json!({}),
-            &stack(0),
+            convert_stack_result(serde_json::json!({}), &stack(0), 0),
             SnapshotTier::A,
             "0.0.0",
             None,
@@ -588,8 +585,7 @@ mod tests {
             },
         );
         let snap = build_snapshot(
-            serde_json::json!({}),
-            &stack(0),
+            convert_stack_result(serde_json::json!({}), &stack(0), 0),
             SnapshotTier::B,
             "0.0.0",
             None,
@@ -603,8 +599,7 @@ mod tests {
     #[test]
     fn shared_time_grid_is_hoisted_once() {
         let snap = build_snapshot(
-            serde_json::json!({}),
-            &stack(0),
+            convert_stack_result(serde_json::json!({}), &stack(0), 0),
             SnapshotTier::A,
             "0.0.0",
             None,
@@ -627,8 +622,7 @@ mod tests {
             .unwrap()
             .time_grid_s = vec![0.0, 5.0, 9.0];
         let snap = build_snapshot(
-            serde_json::json!({}),
-            &s,
+            convert_stack_result(serde_json::json!({}), &s, 0),
             SnapshotTier::A,
             "0.0.0",
             None,
@@ -672,8 +666,7 @@ mod tests {
     #[test]
     fn render_requires_the_placeholder() {
         let snap = build_snapshot(
-            serde_json::json!({}),
-            &stack(0),
+            convert_stack_result(serde_json::json!({}), &stack(0), 0),
             SnapshotTier::A,
             "0.0.0",
             None,
@@ -715,8 +708,7 @@ mod tests {
             },
         );
         let snap = build_snapshot(
-            serde_json::json!({}),
-            &stack(0),
+            convert_stack_result(serde_json::json!({}), &stack(0), 0),
             SnapshotTier::B,
             "0.0.0",
             None,
@@ -747,8 +739,7 @@ mod tests {
             }],
         );
         let snap = build_snapshot(
-            serde_json::json!({"beam": {"projectile": "p"}}),
-            &stack(3),
+            convert_stack_result(serde_json::json!({"beam": {"projectile": "p"}}), &stack(3), 0),
             SnapshotTier::B,
             "9.9.9",
             Some("2026-01-01T00:00:00Z".into()),

@@ -9,6 +9,7 @@
   import { cycleTheme, getThemeMode, getResolvedTheme } from "../stores/theme.svelte";
   import { getResult, setResult } from "../stores/results.svelte";
   import { buildSessionFile, downloadSessionFile, pickSessionFile } from "../session-io";
+  import { exportViewerHtml, canExportTierB, ExportError, type ExportTier } from "../viewer/export";
   import { collectCustomMaterials, hydrateSharedCustomMaterial } from "../config-codec-map";
   import { SHARE_BASE } from "../config-codec.svelte";
   import { getDisplayThresholds, setDisplayThresholds } from "../stores/display-thresholds.svelte";
@@ -79,6 +80,38 @@
     const customMaterials = collectCustomMaterials(cfg);
     const file = buildSessionFile(cfg, res, undefined, getDisplayThresholds(), customMaterials);
     downloadSessionFile(file);
+  }
+
+  // ── Shareable HTML export (ADR 0008) ──────────────────────────────────
+  // For recipients who cannot reach the gated app at all. View-only: the
+  // artifact carries no engine, so it cannot be re-run or re-tuned.
+  let exporting = $state(false);
+  let exportNotice = $state("");
+  let hasResult = $derived(Boolean(getResult()));
+  // Emission lines load lazily after a run, so a Tier B export can be
+  // legitimately unavailable for a moment — say so rather than fail on click.
+  let tierBReady = $derived(canExportTierB(getResult()));
+
+  async function exportShareable(tier: ExportTier) {
+    if (exporting) return;
+    saveMenuOpen = false;
+    exportNotice = "";
+    const res = getResult();
+    if (!res) {
+      exportNotice = "Run a simulation first.";
+      return;
+    }
+    exporting = true;
+    try {
+      const where = await exportViewerHtml(res, tier);
+      // null = the desktop save dialog was dismissed; not an error.
+      exportNotice = where ? `Saved ${where}` : "";
+    } catch (e) {
+      exportNotice =
+        e instanceof ExportError ? e.message : `Export failed: ${String((e as Error)?.message ?? e)}`;
+    } finally {
+      exporting = false;
+    }
   }
 
   async function importSession() {
@@ -238,12 +271,48 @@
             Export config <span class="menu-hint">(re-computes on load)</span>
           </button>
           <div class="menu-sep"></div>
+          <button
+            class="menu-item"
+            role="menuitem"
+            disabled={!hasResult || !tierBReady || exporting}
+            onclick={() => exportShareable("B")}
+            title={!hasResult
+              ? "Run a simulation first"
+              : !tierBReady
+                ? "Emission data is still loading"
+                : "Single HTML file with spectra — opens anywhere, cannot be re-run"}
+          >
+            Share result…
+            <span class="menu-hint">
+              {exporting ? "(building…)" : "(self-contained HTML)"}
+            </span>
+          </button>
+          <button
+            class="menu-item"
+            role="menuitem"
+            disabled={!hasResult || exporting}
+            onclick={() => exportShareable("A")}
+            title="Same, without emission spectra — embeds no evaluated nuclear data"
+          >
+            Share result, no spectra
+            <span class="menu-hint">(results only)</span>
+          </button>
+          <div class="menu-sep"></div>
           <button class="menu-item" role="menuitem" onclick={importSession}>
             Import session or config…
           </button>
         </div>
       {/if}
     </div>
+
+    {#if exportNotice}
+      <!-- Outside the dropdown on purpose: exporting closes the menu, so a
+           notice rendered inside it would never be seen — including errors. -->
+      <p class="export-toast" role="status">
+        {exportNotice}
+        <button class="toast-x" onclick={() => (exportNotice = "")} aria-label="Dismiss">×</button>
+      </p>
+    {/if}
 
     <button class="icon-btn" onclick={() => helpOpen = true} title="Help">
       <CircleHelp size={16} aria-hidden="true" />
@@ -356,6 +425,30 @@
     font-size: 0.7rem;
     color: var(--c-red, #c00);
   }
+  .export-toast {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    color: var(--c-text-muted);
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    max-width: 22rem;
+  }
+
+  .toast-x {
+    background: none;
+    border: none;
+    color: var(--c-text-muted);
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+    padding: 0 0.15rem;
+  }
+
   .load-notice {
     margin: 4px 0 0;
     font-size: 0.7rem;
