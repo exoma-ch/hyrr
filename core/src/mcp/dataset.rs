@@ -468,7 +468,10 @@ impl Table {
         use arrow::datatypes::{DataType, Field, Schema};
         use arrow::record_batch::RecordBatch;
         use parquet::arrow::ArrowWriter;
-        use parquet::format::KeyValue;
+        // parquet 59 removed the thrift-generated `parquet::format` module;
+        // KeyValue now lives with the rest of the file metadata types. The
+        // constructor is unchanged.
+        use parquet::file::metadata::KeyValue;
         use std::sync::Arc;
 
         let mut fields = Vec::with_capacity(self.cols.len());
