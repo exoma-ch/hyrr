@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * Standalone results viewer (ADR 0006 spike).
+   * Standalone results viewer (ADR 0008 spike).
    *
    * Renders the *same* result components the live app uses, against a snapshot
    * baked into the HTML. No compute engine, no Parquet, no network — the

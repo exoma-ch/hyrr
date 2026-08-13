@@ -1,5 +1,5 @@
 /**
- * Viewer replacement for `stores/depth-preview.svelte` (ADR 0006).
+ * Viewer replacement for `stores/depth-preview.svelte` (ADR 0008).
  *
  * The real store is populated by a Rust backend call on every config change.
  * The viewer has no backend, but it does not need one: everything the results

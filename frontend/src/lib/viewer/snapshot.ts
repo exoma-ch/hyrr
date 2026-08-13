@@ -1,12 +1,12 @@
 /**
- * Snapshot payload for the standalone results viewer (ADR 0006).
+ * Snapshot payload for the standalone results viewer (ADR 0008).
  *
  * The viewer is a second Vite entry that renders the existing results
  * components against data baked into the HTML file, with no compute engine
  * and no Parquet DataStore. This module is the single place that knows the
  * embedded payload's shape.
  *
- * Tier (ADR 0006 § "The licensing boundary") is recorded *in* the payload so
+ * Tier (ADR 0008 § "The licensing boundary") is recorded *in* the payload so
  * an artifact's contents are auditable from the file itself:
  *   - "A" — derived results only; nothing from the evaluated libraries.
  *   - "B" — additionally carries ENSDF emission lines and dose constants for

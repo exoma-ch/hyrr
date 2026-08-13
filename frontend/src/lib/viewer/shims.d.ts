@@ -1,5 +1,5 @@
 /**
- * Ambient declarations for the viewer build (ADR 0006).
+ * Ambient declarations for the viewer build (ADR 0008).
  *
  * `tsconfig.json` pins `types` to an explicit list, which suppresses the
  * ambient declarations a bundler would normally contribute — so the two module

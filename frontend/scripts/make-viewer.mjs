@@ -1,5 +1,5 @@
 /**
- * Stamp a result snapshot into the built viewer template (ADR 0006 spike).
+ * Stamp a result snapshot into the built viewer template (ADR 0008 spike).
  *
  *   node scripts/make-viewer.mjs <result.json> <out.html> [emissions.json]
  *

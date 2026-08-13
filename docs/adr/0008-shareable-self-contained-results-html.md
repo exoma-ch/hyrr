@@ -1,4 +1,4 @@
-# ADR 0006 — Shareable self-contained results HTML
+# ADR 0008 — Shareable self-contained results HTML
 
 - **Status**: proposed (2026-08-13) — Tier A + Tier B in scope; Tier C
   rejected. See "The licensing boundary" for why Tier B does not wait on #421.

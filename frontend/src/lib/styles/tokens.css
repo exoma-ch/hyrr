@@ -1,6 +1,6 @@
 /*
  * Theme tokens + document base styles, shared by the app entry (main.ts) and
- * the standalone results viewer (viewer.ts, ADR 0006).
+ * the standalone results viewer (viewer.ts, ADR 0008).
  *
  * Extracted verbatim from App.svelte's <style> block: the viewer renders the
  * same result components without mounting App, so the tokens they resolve

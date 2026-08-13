@@ -1,5 +1,5 @@
 /**
- * Viewer replacement for `scheduler/sim-scheduler.svelte` (ADR 0006).
+ * Viewer replacement for `scheduler/sim-scheduler.svelte` (ADR 0008).
  *
  * Aliased in at build time by `vite.viewer.config.ts`, so the shared results
  * components import this instead of the real scheduler — which would drag in

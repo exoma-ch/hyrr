@@ -1,5 +1,5 @@
 /**
- * Plotly entry for the viewer build (ADR 0006).
+ * Plotly entry for the viewer build (ADR 0008).
  *
  * Two jobs:
  *

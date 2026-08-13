@@ -1,5 +1,5 @@
 /**
- * Build config for the standalone results viewer (ADR 0006 spike).
+ * Build config for the standalone results viewer (ADR 0008 spike).
  *
  * Produces ONE self-contained `viewer.html` — every script and stylesheet
  * inlined, no external request of any kind — which the generator then stamps
