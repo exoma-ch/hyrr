@@ -666,7 +666,7 @@ pub fn build_viewer_html(
     template: &str,
 ) -> Result<String, JsValue> {
     use hyrr_core::viewer::{
-        build_snapshot, render_html, EvaluatedData, SimulationResultJson, SnapshotTier,
+        EvaluatedData, SimulationResultJson, SnapshotTier, build_snapshot, render_html,
     };
 
     let tier = match tier {
@@ -675,7 +675,7 @@ pub fn build_viewer_html(
         other => {
             return Err(JsValue::from_str(&format!(
                 "unknown viewer tier {other:?} — expected \"A\" or \"B\""
-            )))
+            )));
         }
     };
 
@@ -711,11 +711,9 @@ pub fn build_viewer_html(
 #[derive(serde::Deserialize)]
 struct EvaluatedDataJson {
     #[serde(default)]
-    emissions:
-        std::collections::BTreeMap<String, Vec<hyrr_core::viewer::EmissionLineJson>>,
+    emissions: std::collections::BTreeMap<String, Vec<hyrr_core::viewer::EmissionLineJson>>,
     #[serde(default, rename = "doseConstants")]
-    dose_constants:
-        std::collections::BTreeMap<String, hyrr_core::viewer::DoseConstantEntry>,
+    dose_constants: std::collections::BTreeMap<String, hyrr_core::viewer::DoseConstantEntry>,
 }
 
 // ---------------------------------------------------------------------------

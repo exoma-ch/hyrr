@@ -366,7 +366,6 @@ pub fn build_snapshot(
     generated_at: Option<String>,
     evaluated: EvaluatedData,
 ) -> ViewerSnapshot {
-
     // Round first, then hoist: rounding is the size lever, hoisting only helps
     // the raw payload (gzip already finds the repeated grids).
     for layer in &mut wire.layers {
@@ -739,7 +738,11 @@ mod tests {
             }],
         );
         let snap = build_snapshot(
-            convert_stack_result(serde_json::json!({"beam": {"projectile": "p"}}), &stack(3), 0),
+            convert_stack_result(
+                serde_json::json!({"beam": {"projectile": "p"}}),
+                &stack(3),
+                0,
+            ),
             SnapshotTier::B,
             "9.9.9",
             Some("2026-01-01T00:00:00Z".into()),
