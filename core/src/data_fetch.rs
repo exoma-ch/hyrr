@@ -4428,12 +4428,50 @@ mod tls_trust_tests {
     /// half of the hazard that *is* reachable offline.
     #[test]
     fn platform_verifier_is_the_selected_arm_and_agents_construct() {
+        // `tls_root_certs_from(env_of(&[]))` is hermetic, but `build_*_agent()`
+        // read the REAL process env — and the nix build sandbox sets
+        // SSL_CERT_FILE to a nonexistent path on purpose, to catch code that
+        // silently trusts ambient system certs. This crate correctly FAILS
+        // CLOSED on an unreadable bundle (see "Fail closed" in ADR 0006), so
+        // inheriting that env makes the test assert the sandbox's policy
+        // rather than ours. Clear the overrides for the duration instead.
+        let _g = tests::SERIAL.lock().unwrap();
+        let _env = ClearedCacertEnv::new();
+
         assert!(matches!(
             tls_root_certs_from(env_of(&[])).unwrap(),
             RootCerts::PlatformVerifier
         ));
         build_http_client().expect("data-fetch agent must construct");
         build_update_check_agent().expect("update-check agent must construct");
+    }
+
+    /// Restores the CA-cert override variables on drop, so a panicking
+    /// assertion above cannot leak a cleared env into the next test.
+    struct ClearedCacertEnv(Vec<(&'static str, Option<OsString>)>);
+
+    impl ClearedCacertEnv {
+        fn new() -> Self {
+            let saved: Vec<_> = CACERT_ENV_VARS
+                .iter()
+                .map(|k| (*k, std::env::var_os(k)))
+                .collect();
+            for (k, _) in &saved {
+                std::env::remove_var(k);
+            }
+            Self(saved)
+        }
+    }
+
+    impl Drop for ClearedCacertEnv {
+        fn drop(&mut self) {
+            for (k, v) in self.0.drain(..) {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
     }
 
     /// Live end-to-end check that a real TLS handshake succeeds against the
