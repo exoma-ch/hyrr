@@ -452,6 +452,12 @@ pub enum FetchErrorPayload {
         cache_dir: String,
         message: String,
     },
+    ManifestMismatch {
+        problems: Vec<String>,
+        total: usize,
+        cache_dir: String,
+        message: String,
+    },
     NoChecksumPin {
         url: String,
         cache_dir: String,
@@ -597,6 +603,14 @@ impl From<&FetchError> for FetchErrorPayload {
                 cache_dir: cache_dir_str,
                 message,
             },
+            FetchError::ManifestMismatch { problems, total } => {
+                FetchErrorPayload::ManifestMismatch {
+                    problems: problems.clone(),
+                    total: *total,
+                    cache_dir: cache_dir_str,
+                    message,
+                }
+            }
             FetchError::ChecksumMismatch { expected, actual } => {
                 FetchErrorPayload::ChecksumMismatch {
                     expected: expected.clone(),
@@ -707,6 +721,13 @@ pub enum FetchError {
     /// failure to retry.
     #[error("TLS trust store error: {0}")]
     TlsTrustStore(String),
+    /// The extracted tree disagreed with the signed content manifest (#621).
+    /// Nothing is promoted; the staging directory is removed.
+    #[error(
+        "the data failed verification against its signed manifest ({total} problem(s)): {}. Nothing was installed.",
+        problems.join("; ")
+    )]
+    ManifestMismatch { problems: Vec<String>, total: usize },
 }
 
 pub type Result<T> = std::result::Result<T, FetchError>;
@@ -1694,6 +1715,26 @@ fn install_tarball_atomic_from_file(
     prefixes: &[&str],
     progress: ProgressFn<'_>,
 ) -> Result<()> {
+    install_tarball_atomic_verified(archive, prefixes, None, progress)
+}
+
+/// [`install_tarball_atomic_from_file`], optionally checking the extracted
+/// tree against a signed content manifest before promoting it (#621).
+///
+/// This is the route that survives a content-scanning gateway. Such
+/// appliances unpack and repack archives in transit, so the byte-signature
+/// fails on data that is perfectly intact; a manifest authenticates
+/// *contents* rather than framing, and so still applies.
+///
+/// The check runs against the staging directory, before the atomic promotion,
+/// so a tree that fails verification is deleted rather than merged into a
+/// working cache.
+fn install_tarball_atomic_verified(
+    archive: fs::File,
+    prefixes: &[&str],
+    manifest: Option<&crate::data_manifest::ContentManifest>,
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     let cache = cache_dir()?;
     let root = cache_root()?;
     let pid = std::process::id();
@@ -1718,6 +1759,35 @@ fn install_tarball_atomic_from_file(
     }
 
     extract_tarball_from_file(archive, &partial, prefixes, progress)?;
+
+    if let Some(manifest) = manifest {
+        progress(FetchProgress {
+            stage: FetchStage::Verifying,
+            bytes_done: 0,
+            bytes_total: None,
+        });
+        // The tarball is extracted under a `data/` prefix, but the manifest's
+        // paths are relative to the data root itself.
+        let tree = partial.join("data");
+        // A prefix filter means a legitimate partial extraction, so missing
+        // entries are expected; a modified or *unlisted* file never is.
+        let completeness = if prefixes.is_empty() || prefixes == ["data"] {
+            crate::data_manifest::Completeness::Complete
+        } else {
+            crate::data_manifest::Completeness::AllowSubset
+        };
+        let problems = manifest.verify_tree(&tree, completeness);
+        if !problems.is_empty() {
+            // `partial` is removed by the guard below, so nothing reaches the
+            // cache. Report a bounded sample: an operator on an isolated
+            // network needs enough to act on, not 6000 lines.
+            let shown: Vec<String> = problems.iter().take(10).map(|p| p.to_string()).collect();
+            return Err(FetchError::ManifestMismatch {
+                problems: shown,
+                total: problems.len(),
+            });
+        }
+    }
 
     // Test-only seam: between partial-dir build and the
     // atomic-rename promotion, give tests a chance to simulate a
@@ -2206,13 +2276,104 @@ pub fn install_from_tarball_with_signature(
     // write access to the media swap the file after it passed verification —
     // the flock serialises HYRR against itself, not against them.
     let mut file = fs::File::open(archive)?;
-    verify_local_tarball(&mut file, &sig, Some(DATA_TARBALL_SHA256), progress)?;
+    let byte_signature = verify_local_tarball(&mut file, &sig, Some(DATA_TARBALL_SHA256), progress);
     io::Seek::rewind(&mut file)?;
 
+    // The byte signature is the stronger check and is tried first: it covers
+    // the archive's framing as well as its contents. Only when it fails do we
+    // ask the weaker question — "are the *files* the ones that were signed?".
+    // Falling through in the other order would let a tampered `.tar.zst` that
+    // happens to extract to the right files pass.
+    let manifest = match &byte_signature {
+        Ok(_) => None,
+        Err(byte_err) => {
+            // A content-scanning gateway repacks archives in transit: the data
+            // is intact, the bytes are not the signed bytes. That is
+            // indistinguishable from tampering *unless* a signed manifest is
+            // available to authenticate the contents directly.
+            match load_sibling_manifest(archive)? {
+                Some(m) => Some(m),
+                // No manifest to fall back on — report the original failure,
+                // which is the one the user needs to see.
+                None => return Err(clone_fetch_error(byte_err)),
+            }
+        }
+    };
+
     let _lock = acquire_lock()?;
-    install_tarball_atomic_from_file(file, &["data"], progress)?;
+    install_tarball_atomic_verified(file, &["data"], manifest.as_ref(), progress)?;
     mark_cache_verified()?;
     Ok(())
+}
+
+/// Load and authenticate `<archive>.manifest.json` if present (#621).
+///
+/// Returns `Ok(None)` when there simply is no manifest — releases before
+/// upstream's `FIRST_MANIFEST_VERSION` (2026.8.3) have none, so absence is
+/// normal and must not be confused with failure. A manifest that is present
+/// but does not authenticate is an error, never a shrug.
+fn load_sibling_manifest(archive: &Path) -> Result<Option<crate::data_manifest::ContentManifest>> {
+    let mut base = archive.as_os_str().to_os_string();
+    base.push(".manifest.json");
+    let manifest_path = PathBuf::from(base);
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+    let mut sig_name = manifest_path.as_os_str().to_os_string();
+    sig_name.push(".minisig");
+    let sig_path = PathBuf::from(sig_name);
+    if !sig_path.exists() {
+        return Err(FetchError::SignatureUnavailable {
+            detail: format!(
+                "found {} but no signature beside it. An unsigned manifest authenticates nothing — anyone who can rewrite the files can rewrite it too — so it is refused rather than used",
+                manifest_path.display()
+            ),
+            url: sig_path.display().to_string(),
+        });
+    }
+
+    let body = fs::read_to_string(&manifest_path)?;
+    let sig_text = fs::read_to_string(&sig_path)?;
+    let sig = minisign_verify::Signature::decode(&sig_text).map_err(|e| {
+        FetchError::SignatureUnavailable {
+            detail: format!("could not parse the manifest signature: {e}"),
+            url: sig_path.display().to_string(),
+        }
+    })?;
+    let public_key = signing_public_key()?;
+    // Same offline key as the tarball — no second trust root to manage.
+    public_key
+        .verify(body.as_bytes(), &sig, false)
+        .map_err(|e| FetchError::SignatureInvalid {
+            detail: format!("manifest signature does not verify: {e}"),
+        })?;
+
+    let manifest = crate::data_manifest::ContentManifest::parse(&body)
+        .map_err(|detail| FetchError::SignatureInvalid { detail })?;
+    manifest
+        .check_binding(DATA_VERSION, sig.trusted_comment())
+        .map_err(|detail| FetchError::SignatureInvalid { detail })?;
+    Ok(Some(manifest))
+}
+
+/// `FetchError` is not `Clone` (it wraps `io::Error`), and the fallback path
+/// needs to re-raise the original byte-signature failure after deciding no
+/// manifest is available. Preserves the variant where the distinction matters
+/// to the caller, and the message otherwise.
+fn clone_fetch_error(err: &FetchError) -> FetchError {
+    match err {
+        FetchError::SignatureInvalid { detail } => FetchError::SignatureInvalid {
+            detail: detail.clone(),
+        },
+        FetchError::ChecksumMismatch { expected, actual } => FetchError::ChecksumMismatch {
+            expected: expected.clone(),
+            actual: actual.clone(),
+        },
+        FetchError::NoSigningKey => FetchError::NoSigningKey,
+        other => FetchError::SignatureInvalid {
+            detail: other.to_string(),
+        },
+    }
 }
 
 /// Parse a `v{N}.{N}.{N}` directory name into a sortable tuple. Returns
@@ -4513,6 +4674,209 @@ mod tls_trust_tests {
                 assert!(cacert_env_vars.contains(&"SSL_CERT_FILE".to_string()));
             }
             other => panic!("wrong payload variant: {other:?}"),
+        }
+    }
+}
+
+/// End-to-end coverage of the manifest route (#621) — the path that survives a
+/// content-scanning gateway repacking the archive in transit.
+#[cfg(test)]
+mod manifest_install_tests {
+    use super::*;
+    use crate::data_manifest::{ContentManifest, ManifestEntry};
+    use std::collections::BTreeMap;
+
+    /// `make_test_tarball` writes exactly these two members under `data/`.
+    fn manifest_matching_the_fixture() -> ContentManifest {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "meta/marker".to_string(),
+            ManifestEntry {
+                sha256: hex_lower(&<sha2::Sha256 as sha2::Digest>::digest(b"test-marker")),
+                size: 11,
+            },
+        );
+        files.insert(
+            "tendl-test/xs/p_Cu.parquet".to_string(),
+            ManifestEntry {
+                sha256: hex_lower(&<sha2::Sha256 as sha2::Digest>::digest(b"xs-marker")),
+                size: 9,
+            },
+        );
+        ContentManifest {
+            manifest_version: 1,
+            data_version: DATA_VERSION.to_string(),
+            tag: format!("data-{DATA_VERSION}"),
+            data_sha256: String::new(),
+            file_count: files.len(),
+            tarball_sha256: None,
+            files,
+        }
+    }
+
+    /// A repacked-but-intact archive installs when its contents match the
+    /// signed manifest. This is the whole point: the framing changed, the data
+    /// did not.
+    #[test]
+    fn a_tree_matching_the_manifest_is_promoted() {
+        let _g = tests::SERIAL.lock().unwrap();
+        let td = tests::isolated_home();
+        let archive = td.path().join("repacked.tar.zst");
+        tests::make_test_tarball(&archive);
+
+        install_tarball_atomic_verified(
+            fs::File::open(&archive).unwrap(),
+            &["data"],
+            Some(&manifest_matching_the_fixture()),
+            &mut no_op_progress(),
+        )
+        .expect("contents match the manifest, so the repack is still trustworthy");
+
+        assert!(is_cache_complete());
+        assert!(cache_dir().unwrap().join("data/meta/marker").exists());
+    }
+
+    /// **Nothing is promoted when verification fails.** The check runs against
+    /// the staging directory, so a tree that fails is deleted rather than
+    /// merged into a working cache — a half-verified cache would be worse than
+    /// a refused install.
+    #[test]
+    fn a_tree_disagreeing_with_the_manifest_is_not_promoted() {
+        let _g = tests::SERIAL.lock().unwrap();
+        let td = tests::isolated_home();
+        let archive = td.path().join("tampered.tar.zst");
+        tests::make_test_tarball(&archive);
+
+        // Manifest omits `tendl-test/xs/p_Cu.parquet`, so the extracted tree
+        // carries a file nobody signed for — the planted-file shape.
+        let mut manifest = manifest_matching_the_fixture();
+        manifest.files.remove("tendl-test/xs/p_Cu.parquet");
+        manifest.file_count = manifest.files.len();
+
+        let err = install_tarball_atomic_verified(
+            fs::File::open(&archive).unwrap(),
+            &["data"],
+            Some(&manifest),
+            &mut no_op_progress(),
+        )
+        .expect_err("an unlisted file must block the install");
+
+        match &err {
+            FetchError::ManifestMismatch { problems, total } => {
+                assert_eq!(*total, 1);
+                assert!(problems[0].contains("unexpected file"), "{problems:?}");
+                assert!(problems[0].contains("p_Cu.parquet"), "{problems:?}");
+            }
+            other => panic!("wrong error: {other:?}"),
+        }
+
+        assert!(
+            !is_cache_complete(),
+            "a failed manifest check must leave the cache untouched"
+        );
+        assert!(!cache_dir().unwrap().join("data/meta/marker").exists());
+    }
+
+    /// A modified file is caught too, not just an added one.
+    #[test]
+    fn a_modified_file_blocks_the_install() {
+        let _g = tests::SERIAL.lock().unwrap();
+        let td = tests::isolated_home();
+        let archive = td.path().join("modified.tar.zst");
+        tests::make_test_tarball(&archive);
+
+        let mut manifest = manifest_matching_the_fixture();
+        manifest.files.get_mut("meta/marker").unwrap().sha256 = "0".repeat(64);
+
+        let err = install_tarball_atomic_verified(
+            fs::File::open(&archive).unwrap(),
+            &["data"],
+            Some(&manifest),
+            &mut no_op_progress(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("modified"), "{err}");
+        assert!(!is_cache_complete());
+    }
+
+    /// No manifest → unchanged behaviour, so releases predating
+    /// `FIRST_MANIFEST_VERSION` (2026.8.3 upstream) still install.
+    #[test]
+    fn without_a_manifest_the_install_is_unchanged() {
+        let _g = tests::SERIAL.lock().unwrap();
+        let td = tests::isolated_home();
+        let archive = td.path().join("plain.tar.zst");
+        tests::make_test_tarball(&archive);
+
+        install_tarball_atomic_verified(
+            fs::File::open(&archive).unwrap(),
+            &["data"],
+            None,
+            &mut no_op_progress(),
+        )
+        .unwrap();
+        assert!(is_cache_complete());
+    }
+
+    /// Absence is normal — releases before upstream's FIRST_MANIFEST_VERSION
+    /// (2026.8.3) have none — and must not read as failure.
+    #[test]
+    fn no_sibling_manifest_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("bundle.tar.zst");
+        fs::write(&archive, b"x").unwrap();
+        assert!(load_sibling_manifest(&archive).unwrap().is_none());
+    }
+
+    /// But a manifest with no signature beside it is refused. An unsigned
+    /// manifest authenticates nothing: whoever can rewrite the files can
+    /// rewrite it too.
+    #[test]
+    fn an_unsigned_sibling_manifest_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("bundle.tar.zst");
+        fs::write(&archive, b"x").unwrap();
+        fs::write(dir.path().join("bundle.tar.zst.manifest.json"), b"{}").unwrap();
+
+        let err =
+            load_sibling_manifest(&archive).expect_err("an unsigned manifest must not be used");
+        assert!(matches!(err, FetchError::SignatureUnavailable { .. }));
+        assert!(err.to_string().contains("authenticates nothing"));
+    }
+
+    /// A manifest signed by anything other than the pinned key is refused —
+    /// this exercises the real key, using a signature that is valid but is for
+    /// a tarball rather than this JSON.
+    #[test]
+    fn a_manifest_whose_signature_does_not_cover_it_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("bundle.tar.zst");
+        fs::write(&archive, b"x").unwrap();
+        fs::write(dir.path().join("bundle.tar.zst.manifest.json"), b"{}").unwrap();
+        fs::write(
+            dir.path().join("bundle.tar.zst.manifest.json.minisig"),
+            super::signature_tests::REAL_SIGNATURE,
+        )
+        .unwrap();
+
+        let err = load_sibling_manifest(&archive).unwrap_err();
+        assert!(matches!(err, FetchError::SignatureInvalid { .. }), "{err}");
+    }
+
+    #[test]
+    fn manifest_mismatch_has_a_wire_payload() {
+        let err = FetchError::ManifestMismatch {
+            problems: vec!["unexpected file: rogue.parquet".into()],
+            total: 3,
+        };
+        match FetchErrorPayload::from(&err) {
+            FetchErrorPayload::ManifestMismatch {
+                problems, total, ..
+            } => {
+                assert_eq!(total, 3);
+                assert_eq!(problems.len(), 1, "payload carries a bounded sample");
+            }
+            other => panic!("wrong payload: {other:?}"),
         }
     }
 }

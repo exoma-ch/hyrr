@@ -513,6 +513,9 @@ mod tests {
             }],
             irradiation_time_s: 86400.0,
             cooling_time_s: 86400.0,
+            // A fixture is not a real run, so it must not claim provenance it
+            // does not have (#593).
+            provenance: crate::provenance::Provenance::unknown(),
         }
     }
 
