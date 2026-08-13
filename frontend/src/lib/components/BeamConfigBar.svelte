@@ -10,9 +10,13 @@
     getCurrentProfile,
     setCurrentProfile,
     getEffectiveIrradiationS,
+    getSecondaryNeutron,
+    setSecondaryNeutron,
+    getNeutronFlux,
+    setNeutronFlux,
   } from "../stores/config.svelte";
   import { profileStats as computeProfileStats } from "@hyrr/compute";
-  import type { CurrentProfile } from "@hyrr/compute";
+  import type { CurrentProfile, NeutronFluxConfig } from "@hyrr/compute";
   import ProfilePreviewMini from "./current-profile/ProfilePreviewMini.svelte";
   import CurrentProfilePopup from "./CurrentProfilePopup.svelte";
   import {
@@ -33,6 +37,14 @@
     { id: "t", label: "t" },
     { id: "h", label: "\u00b3He" },
     { id: "a", label: "\u03b1" },
+    { id: "n", label: "n" }, // neutron source (ADR-0003 Phase 1)
+  ];
+
+  const NEUTRON_SPECTRA: { id: NeutronFluxConfig["kind"]; label: string }[] = [
+    { id: "fast", label: "Fast (fission)" },
+    { id: "thermal", label: "Thermal" },
+    { id: "epithermal", label: "Epithermal" },
+    { id: "monoenergetic", label: "Mono" },
   ];
 
   // Heavy ions disabled until multi-library XS routing is wired (#266).
@@ -148,6 +160,45 @@
 
   // --- Current profile ---
   let currentProfile = $derived(getCurrentProfile());
+  let secondaryNeutron = $derived(getSecondaryNeutron());
+  let isNeutron = $derived(beam.projectile === "n");
+  let neutronFlux = $derived(getNeutronFlux());
+
+  function onSpectrumChange(e: Event) {
+    const kind = (e.target as HTMLSelectElement).value as NeutronFluxConfig["kind"];
+    // Sensible default shape parameter per spectrum kind.
+    const shapeDefaults: Record<NeutronFluxConfig["kind"], Partial<NeutronFluxConfig>> = {
+      fast: { temp_mev: 1.5 },
+      thermal: { kt_mev: 2.53e-8 },
+      epithermal: { e_min_mev: 1e-6, e_max_mev: 0.1 },
+      monoenergetic: { e0_mev: 14 },
+    };
+    setNeutronFlux({ kind, flux: neutronFlux.flux, ...shapeDefaults[kind] });
+  }
+
+  function onFluxChange(e: Event) {
+    const v = parseFloat((e.target as HTMLInputElement).value);
+    if (!isNaN(v) && v > 0) setNeutronFlux({ ...neutronFlux, flux: v });
+  }
+
+  // Contextual shape parameter per spectrum kind (mono → E₀, fast → T,
+  // thermal → kT). Epithermal uses a fixed 1/E band, so no single scalar knob.
+  type SpectrumParam = { key: keyof NeutronFluxConfig; label: string; unit: string };
+  let spectrumParam = $derived<SpectrumParam | null>(
+    neutronFlux.kind === "monoenergetic"
+      ? { key: "e0_mev", label: "Energy", unit: "MeV" }
+      : neutronFlux.kind === "fast"
+        ? { key: "temp_mev", label: "Temp", unit: "MeV" }
+        : neutronFlux.kind === "thermal"
+          ? { key: "kt_mev", label: "kT", unit: "MeV" }
+          : null,
+  );
+
+  function onSpectrumParamChange(e: Event) {
+    if (!spectrumParam) return;
+    const v = parseFloat((e.target as HTMLInputElement).value);
+    if (!isNaN(v) && v > 0) setNeutronFlux({ ...neutronFlux, [spectrumParam.key]: v });
+  }
   let profileMode = $derived<"constant" | "profile">(currentProfile ? "profile" : "constant");
   let popupOpen = $state(false);
   let stats = $derived(currentProfile ? computeProfileStats(currentProfile) : null);
@@ -175,31 +226,70 @@
     </select>
   </div>
 
-  <div class="field">
-    <label for="bcb-energy">Energy</label>
-    <div class="input-group">
-      <input id="bcb-energy" type="text" inputmode="decimal" value={displayedEnergy} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onEnergyChange} />
-      <span class="unit">MeV</span>
+  {#if !isNeutron}
+    <div class="field">
+      <label for="bcb-energy">Energy</label>
+      <div class="input-group">
+        <input id="bcb-energy" type="text" inputmode="decimal" value={displayedEnergy} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onEnergyChange} />
+        <span class="unit">MeV</span>
+      </div>
     </div>
-  </div>
+  {:else}
+    <div class="field">
+      <label for="bcb-spectrum">Spectrum</label>
+      <select id="bcb-spectrum" value={neutronFlux.kind} onchange={onSpectrumChange}>
+        {#each NEUTRON_SPECTRA as s}
+          <option value={s.id}>{s.label}</option>
+        {/each}
+      </select>
+    </div>
+    {#if spectrumParam}
+      <div class="field">
+        <label for="bcb-spec-param">{spectrumParam.label}</label>
+        <div class="input-group">
+          <input
+            id="bcb-spec-param"
+            type="text"
+            inputmode="decimal"
+            value={neutronFlux[spectrumParam.key] ?? ""}
+            onfocus={(e) => (e.target as HTMLInputElement).select()}
+            onchange={onSpectrumParamChange}
+          />
+          <span class="unit">{spectrumParam.unit}</span>
+        </div>
+      </div>
+    {/if}
+  {/if}
 
   <!-- Current + Irradiation group: toggle spans both -->
   <div class="current-irrad-group">
-    <div class="current-toggle">
-      <button class="ct-btn" class:active={profileMode === "constant"} onclick={clearProfile}>Constant</button>
-      <button class="ct-btn" class:active={profileMode === "profile"} onclick={openProfilePopup}>Profile</button>
-    </div>
+    {#if !isNeutron}
+      <div class="current-toggle">
+        <button class="ct-btn" class:active={profileMode === "constant"} onclick={clearProfile}>Constant</button>
+        <button class="ct-btn" class:active={profileMode === "profile"} onclick={openProfilePopup}>Profile</button>
+      </div>
+    {/if}
 
     {#if !currentProfile}
       <!-- Constant mode: current + irradiation side by side -->
       <div class="const-fields">
-        <div class="field">
-          <label for="bcb-current">Current</label>
-          <div class="input-group">
-            <input id="bcb-current" type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
-            <span class="unit">µA</span>
+        {#if !isNeutron}
+          <div class="field">
+            <label for="bcb-current">Current</label>
+            <div class="input-group">
+              <input id="bcb-current" type="text" inputmode="decimal" value={beam.current_mA * 1000} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onCurrentChange} />
+              <span class="unit">µA</span>
+            </div>
           </div>
-        </div>
+        {:else}
+          <div class="field">
+            <label for="bcb-flux">Flux</label>
+            <div class="input-group">
+              <input id="bcb-flux" type="text" inputmode="decimal" value={neutronFlux.flux} onfocus={(e) => (e.target as HTMLInputElement).select()} onchange={onFluxChange} />
+              <span class="unit">n/cm²s</span>
+            </div>
+          </div>
+        {/if}
         <div class="field">
           <label for="bcb-irrad">Irradiation</label>
           <div class="input-with-feedback">
@@ -238,6 +328,16 @@
   </div>
 
   <div class="sim-controls">
+    {#if !isNeutron}
+      <button
+        class="mode-btn sn-btn"
+        class:on={secondaryNeutron}
+        onclick={() => setSecondaryNeutron(!secondaryNeutron)}
+        title="Also model neutrons produced by (x,n) reactions activating the target (ADR-0003 Phase 2, first-order estimate)"
+      >
+        2nd n {secondaryNeutron ? "on" : "off"}
+      </button>
+    {/if}
     <button class="mode-btn" class:auto={simMode === "auto"} onclick={toggleMode} title="Toggle auto/manual simulation">
       {simMode === "auto" ? "Auto" : "Manual"}
     </button>
@@ -373,6 +473,15 @@
     border-color: var(--c-green);
     color: var(--c-green-text);
     background: var(--c-green-tint);
+  }
+
+  /* Secondary-neutron toggle: reads clearly on/off in dark mode (accent-tinted
+     when active), sits just left of the Auto/Manual control. */
+  .sn-btn.on {
+    border-color: var(--c-accent);
+    color: var(--c-accent);
+    background: var(--c-accent-tint);
+    font-weight: 600;
   }
 
   .run-btn {

@@ -42,29 +42,52 @@ fn run(cool_s: f64) {
     let o15 = lr.isotope_results.get("O-15").expect("O-15");
 
     println!("--- cool_s = {} ---", cool_s);
-    println!(
-        "  R           = {:.3e} atoms/s",
-        o15.production_rate
-    );
+    println!("  R           = {:.3e} atoms/s", o15.production_rate);
     println!("  A_eob       = {:.3e} Bq", o15.activity_bq);
     println!("  time_grid_s = {} points", o15.time_grid_s.len());
-    let max = o15.activity_vs_time_bq.iter().cloned().fold(0.0_f64, f64::max);
+    let max = o15
+        .activity_vs_time_bq
+        .iter()
+        .cloned()
+        .fold(0.0_f64, f64::max);
     let min = o15
         .activity_vs_time_bq
         .iter()
         .cloned()
         .fold(f64::INFINITY, f64::min);
-    println!("  A_max       = {:.3e} Bq (ratio to R: {:.3})", max, max / o15.production_rate);
+    println!(
+        "  A_max       = {:.3e} Bq (ratio to R: {:.3})",
+        max,
+        max / o15.production_rate
+    );
     println!("  A_min       = {:.3e} Bq", min);
-    println!("  A_last      = {:.3e} Bq", o15.activity_vs_time_bq.last().unwrap());
+    println!(
+        "  A_last      = {:.3e} Bq",
+        o15.activity_vs_time_bq.last().unwrap()
+    );
 
     // Show how many points are exactly 0 / T_irr / T_irr+cool
-    let zeros = o15.activity_vs_time_bq.iter().filter(|&&a| a == 0.0).count();
+    let zeros = o15
+        .activity_vs_time_bq
+        .iter()
+        .filter(|&&a| a == 0.0)
+        .count();
     println!("  zero points in A(t): {}", zeros);
 
     // Time grid: first 5, middle 2, last 5
     let n = o15.time_grid_s.len();
-    let samples = vec![0, 1, 2, n / 4, n / 2 - 1, n / 2, n / 2 + 1, n / 2 + 2, n - 2, n - 1];
+    let samples = vec![
+        0,
+        1,
+        2,
+        n / 4,
+        n / 2 - 1,
+        n / 2,
+        n / 2 + 1,
+        n / 2 + 2,
+        n - 2,
+        n - 1,
+    ];
     println!("  time/activity samples:");
     for &i in &samples {
         if i < n {

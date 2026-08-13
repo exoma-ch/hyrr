@@ -1,6 +1,6 @@
 [package]
 name = "hyrr-core"
-version = "0.17.0"
+version = "0.19.0"
 edition = "2021"
 description = "Rust physics core for HYRR — Hierarchical Yield and Radionuclide Rates"
 license = "MIT"
@@ -19,10 +19,23 @@ embed-data = ["parquet-store", "dep:tempfile"]
 # the dep is fs/stderr based; the `tracing` facade itself is wasm-safe and
 # always present, so WASM emits the same events into its own ring subscriber.
 trace-jsonl = ["dep:guardrails-trace"]
+# TypeScript type generation (#539 increment 3a). Enables `ts_rs::TS` derives on
+# the `config_codec` canonical types and a gated generator test that writes
+# `packages/compute/src/generated/config-codec.ts`. Deliberately OUT of the
+# default set (and never enabled by `nix flake check`'s `rust-test`) so the
+# hermetic build never triggers ts-rs's file writes — a dedicated CI job
+# regenerates + diffs the committed output instead. See config_codec.rs.
+ts = ["dep:ts-rs"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `float_roundtrip`: serde_json's default float parser can be off by 1 ULP, so a
+# value like `0.05 + 3e-4` does NOT decode back to the exact same f64. JS
+# `JSON.parse` is correctly-rounded, so the config codec (config_codec.rs) would
+# otherwise drift by 1 ULP vs the TS decoder on `current_profile` values (which
+# are physics inputs). This feature enables the correctly-rounded parser so Rust
+# decode == JS decode exactly.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "2"
 # Tracing facade (#159). Wasm-safe — emitting an event is a no-op without an
 # installed subscriber, so this is always present; the JSONL subscriber (native)
@@ -38,14 +51,51 @@ flate2 = { version = "1.1.9", default-features = false, features = ["rust_backen
 arrow = { version = "54", optional = true, default-features = false }
 parquet = { version = "54", optional = true, default-features = false, features = ["arrow"] }
 base64 = { version = "0.22", optional = true }
+# TypeScript type generation for the config codec (#539 increment 3a). Optional,
+# gated behind the `ts` feature — pulled in only when regenerating the committed
+# `config-codec.ts`, never by the default/wasm/mcp builds. `serde-json-impl`
+# gives `TS` for the `serde_json::Value` passthrough fields (neutron flux /
+# enrichment) so they render as `JsonValue`.
+ts-rs = { version = "12", features = ["serde-json-impl"], optional = true }
 
 # Native-only deps for the lazy data-fetch path (#52). Gated so wasm32
-# consumers don't pull reqwest/tar/zstd into their dependency graph.
+# consumers don't pull the HTTP client / tar / zstd into their graph.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+# HTTP client for the ONE blocking GET that is the product's entire network
+# surface (#578, #579). `ureq` rather than `reqwest`: the whole requirement is
+# a single synchronous streamed download, and reqwest::blocking spins up a
+# Tokio runtime to service it — ~70 crates of review surface for a call that
+# is synchronous by construction. ureq does it in ~36 with no async runtime.
+#
+# Feature choice is load-bearing, so spell it out:
+#   rustls            -> pulls `rustls-no-provider` + `_ring` + `rustls-webpki-roots`.
+#                        `_ring` is what keeps ADR 0005's ring decision: ureq
+#                        installs `rustls::crypto::ring` when no process-wide
+#                        provider is set, so aws-lc-rs (and cmake, and a
+#                        broken aarch64 wheel cross-build) never enter the
+#                        graph. Keeping `rustls-webpki-roots` also avoids the
+#                        `panic!("WebPki is disabled…")` arm in ureq's
+#                        tls/rustls.rs.
+#   platform-verifier -> `rustls-platform-verifier`, i.e. the OS trust store.
+#                        REQUIRED: selecting `RootCerts::PlatformVerifier`
+#                        without it is a *runtime panic*, not a compile error
+#                        (ureq tls/rustls.rs:183). `tls::assert_feature_wiring`
+#                        pins this so a careless feature edit fails a test
+#                        rather than a user's first run.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "gzip"] }
 tar = "0.4"
 zstd = "0.13"
 fs2 = "0.4"
+# SHA-256 for the data-tarball integrity pin (#577). Pure Rust (RustCrypto),
+# no C toolchain — deliberately not `ring`, which is only in the graph as
+# rustls's crypto provider and shouldn't be depended on directly. Native-only:
+# wasm32 has no fetch path to verify.
+sha2 = { version = "0.10", default-features = false }
+# Verify the data tarball's minisign signature (#594). Pure Rust, zero
+# transitive dependencies — the whole point of choosing minisign over Sigstore
+# (`sigstore-rs` is 0.x with breaking changes between minors, and signing of
+# *data* artifacts is still rare across Zenodo / HF / IAEA / NNDC / JEFF).
+minisign-verify = "0.2"
 # `home` is the platform-correct way to resolve $HOME for redacting paths
 # at the Tauri/IPC boundary (#173). Pure-Rust, tiny, no transitive
 # baggage. Native-only because wasm32 has no filesystem.
@@ -69,3 +119,35 @@ tar = "0.4"
 [dev-dependencies]
 approx = "0.5"
 tempfile = "3"
+
+# Clippy gate (#484). `cargo clippy` is now a required `nix flake check`, so we
+# deny all clippy warnings — then allow the handful that are intentional in a
+# numerical/physics codebase. `priority = -1` makes the deny-all the base level
+# so the specific `allow`s (default priority 0) win over it. The auto-fixable
+# real lints (needless_borrow, redundant_closure, …) were cleaned up when the
+# gate landed; these allows are the deliberate, reviewed exceptions:
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+# Physics entry points legitimately carry many parameters (energy grid, material
+# refs, projectile, options) — bundling into structs hurts call-site clarity.
+too_many_arguments = "allow"
+# ComputeError/StoppingError are rich enums returned widely; boxing every Result
+# to shrink the Err variant trades real ergonomics for a microscopic size win.
+result_large_err = "allow"
+# Interpolation/table accessors return genuinely nested tuple types; aliases
+# would scatter the shape away from where it's read.
+type_complexity = "allow"
+# `from_str` is the established constructor name across the type surface here;
+# renaming to satisfy the std-trait-confusion lint would be a breaking API churn.
+should_implement_trait = "allow"
+# Numerical guards like `!(max_activity > 0.0)` are deliberate NaN handling —
+# they intentionally differ from `<= 0.0` (which would treat NaN the other way).
+neg_cmp_op_on_partial_ord = "allow"
+# Numerical loops that index parallel arrays by position read more clearly as
+# indexed loops than as zipped iterators.
+needless_range_loop = "allow"
+# `is_some()`/`is_none()` guards immediately before an `unwrap()` are kept for
+# readability in the chain solver rather than restructured into `if let`.
+unnecessary_unwrap = "allow"
+# Descending sort via an explicit comparator is clearer than `Reverse(key)`.
+unnecessary_sort_by = "allow"

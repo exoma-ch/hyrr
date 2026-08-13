@@ -3,6 +3,7 @@
 //! PSTAR/ASTAR table lookup with log-log interpolation,
 //! Bragg additivity for compounds, velocity scaling for d/t/³He.
 
+use crate::constants::MIN_TRACKED_ENERGY_MEV;
 use crate::db::DatabaseProtocol;
 use crate::interpolation::{linspace, make_log_log_interpolator};
 use crate::types::ProjectileType;
@@ -86,7 +87,10 @@ impl StoppingError {
     pub fn as_json(&self) -> serde_json::Value {
         let mut v = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
         if let Some(obj) = v.as_object_mut() {
-            obj.insert("kind".to_string(), serde_json::Value::String("StoppingError".to_string()));
+            obj.insert(
+                "kind".to_string(),
+                serde_json::Value::String("StoppingError".to_string()),
+            );
         }
         v
     }
@@ -95,12 +99,28 @@ impl StoppingError {
     /// compute step. Caller is the stack-loop orchestrator, which is the only
     /// site that knows which layer index/material was being processed when the
     /// error surfaced. Idempotent — overwrites any pre-existing context.
-    pub fn with_layer_context(mut self, layer_index: usize, layer_material: impl Into<String>) -> Self {
+    pub fn with_layer_context(
+        mut self,
+        layer_index: usize,
+        layer_material: impl Into<String>,
+    ) -> Self {
         let mat = layer_material.into();
         match &mut self {
-            StoppingError::NoSourceTable { layer_index: li, layer_material: lm, .. }
-            | StoppingError::EnergyOutOfRange { layer_index: li, layer_material: lm, .. }
-            | StoppingError::NoTargetData { layer_index: li, layer_material: lm, .. } => {
+            StoppingError::NoSourceTable {
+                layer_index: li,
+                layer_material: lm,
+                ..
+            }
+            | StoppingError::EnergyOutOfRange {
+                layer_index: li,
+                layer_material: lm,
+                ..
+            }
+            | StoppingError::NoTargetData {
+                layer_index: li,
+                layer_material: lm,
+                ..
+            } => {
                 *li = Some(layer_index);
                 *lm = Some(mat);
             }
@@ -139,7 +159,9 @@ fn get_interpolated_dedx(
         });
     }
 
-    if !available_zs.contains(&target_z) && (target_z < available_zs[0] || target_z > *available_zs.last().unwrap()) {
+    if !available_zs.contains(&target_z)
+        && (target_z < available_zs[0] || target_z > *available_zs.last().unwrap())
+    {
         return Err(StoppingError::NoTargetData {
             source_name: source.to_string(),
             target_symbol: db.get_element_symbol(target_z),
@@ -317,7 +339,10 @@ pub fn elemental_dedx(
         Ok(result)
     } else if proj.z == 2 {
         // α (He-4): ASTAR is the NIST reference. E × 4/4 = E, i.e. unscaled.
-        let lookup: Vec<f64> = energies_mev.iter().map(|&e| e * (4.0 / proj.a as f64)).collect();
+        let lookup: Vec<f64> = energies_mev
+            .iter()
+            .map(|&e| e * (4.0 / proj.a as f64))
+            .collect();
         let (result, _) = get_interpolated_dedx(db, SOURCE_ASTAR, target_z, &lookup, projectile)?;
         Ok(result)
     } else {
@@ -420,9 +445,13 @@ pub fn compound_dedx_with_nist(
 /// correct per-element `catima_He3` stopping (#194).
 fn compound_stopping_source(projectile: &ProjectileType) -> &'static str {
     let proj = projectile.projectile();
-    if proj.z == 1 { "PSTAR_compound" }
-    else if proj.z == 2 && proj.a == 4 { "ASTAR_compound" }
-    else { "" } // ³He and heavy ions: no NIST compound table → Bragg additivity.
+    if proj.z == 1 {
+        "PSTAR_compound"
+    } else if proj.z == 2 && proj.a == 4 {
+        "ASTAR_compound"
+    } else {
+        ""
+    } // ³He and heavy ions: no NIST compound table → Bragg additivity.
 }
 
 /// Linear stopping power [MeV/cm].
@@ -435,10 +464,12 @@ pub fn dedx_mev_per_cm(
     energies_mev: &[f64],
     nist_compound: Option<&str>,
 ) -> Result<Vec<f64>, StoppingError> {
-    Ok(compound_dedx_with_nist(db, projectile, composition, energies_mev, nist_compound)?
-        .iter()
-        .map(|&s| s * density_g_cm3)
-        .collect())
+    Ok(
+        compound_dedx_with_nist(db, projectile, composition, energies_mev, nist_compound)?
+            .iter()
+            .map(|&s| s * density_g_cm3)
+            .collect(),
+    )
 }
 
 /// Scalar variant of [`dedx_mev_per_cm`]. Panics on a stopping-data
@@ -451,12 +482,27 @@ pub fn dedx_mev_per_cm_scalar(
     energy_mev: f64,
     nist_compound: Option<&str>,
 ) -> f64 {
-    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_mev], nist_compound)
-        .expect("dedx_mev_per_cm_scalar: caller failed to pre-validate source/target/energy")[0]
+    dedx_mev_per_cm(
+        db,
+        projectile,
+        composition,
+        density_g_cm3,
+        &[energy_mev],
+        nist_compound,
+    )
+    .expect("dedx_mev_per_cm_scalar: caller failed to pre-validate source/target/energy")[0]
 }
 
 /// Compute target thickness [cm] from energy loss.
 /// Integration: dx = dE / (dE/dx) from E_out to E_in using midpoint rule.
+///
+/// `energy_out_mev` is clamped up to [`MIN_TRACKED_ENERGY_MEV`] before building
+/// the integration grid: a user-configured "beam-stopper" layer (e.g. Nb with
+/// `energy_out = 0`) would otherwise place midpoints below the stopping-power
+/// table minimum and abort the whole run with `EnergyOutOfRange` (issue #527).
+/// The residual range from `MIN_TRACKED_ENERGY_MEV` down to the requested
+/// `energy_out` is sub-µm for any physical target — negligible for the
+/// resulting thickness.
 pub fn compute_thickness_from_energy(
     db: &dyn DatabaseProtocol,
     projectile: &ProjectileType,
@@ -467,12 +513,25 @@ pub fn compute_thickness_from_energy(
     n_points: usize,
     nist_compound: Option<&str>,
 ) -> Result<f64, StoppingError> {
-    let energies = linspace(energy_out_mev, energy_in_mev, n_points);
+    let e_low = energy_out_mev.max(MIN_TRACKED_ENERGY_MEV);
+    if energy_in_mev <= e_low {
+        // Requested `energy_out` is already ≥ energy_in (or the whole layer is
+        // below the tracked floor): no material needed.
+        return Ok(0.0);
+    }
+    let energies = linspace(e_low, energy_in_mev, n_points);
     let de = energies[1] - energies[0];
 
     let midpoints: Vec<f64> = (0..n_points - 1).map(|i| energies[i] + de / 2.0).collect();
 
-    let dedx_arr = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &midpoints, nist_compound)?;
+    let dedx_arr = dedx_mev_per_cm(
+        db,
+        projectile,
+        composition,
+        density_g_cm3,
+        &midpoints,
+        nist_compound,
+    )?;
 
     let mut thickness = 0.0;
     for &dedx_val in &dedx_arr {
@@ -483,6 +542,13 @@ pub fn compute_thickness_from_energy(
 
 /// Compute exit energy after traversing a material of known thickness.
 /// Forward Euler integration of dE/dx.
+///
+/// If the beam energy steps down to at or below [`MIN_TRACKED_ENERGY_MEV`], the
+/// projectile is treated as stopped and `0.0` is returned. Without this floor a
+/// layer thick enough to fully stop the beam trips `EnergyOutOfRange` on the
+/// next iteration's dE/dx lookup (issue #527): the previous guard only fired
+/// when `energy <= 0`, so a residual in (0, table_min) leaked through and
+/// aborted the whole simulation.
 pub fn compute_energy_out(
     db: &dyn DatabaseProtocol,
     projectile: &ProjectileType,
@@ -496,9 +562,20 @@ pub fn compute_energy_out(
     if thickness_cm <= 0.0 {
         return Ok(energy_in_mev);
     }
+    if energy_in_mev <= MIN_TRACKED_ENERGY_MEV {
+        // Entering below the tracked floor: beam is already effectively stopped.
+        return Ok(0.0);
+    }
 
     // Pre-validate by sampling at the entrance energy.
-    dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy_in_mev], nist_compound)?;
+    dedx_mev_per_cm(
+        db,
+        projectile,
+        composition,
+        density_g_cm3,
+        &[energy_in_mev],
+        nist_compound,
+    )?;
 
     let dx = thickness_cm / n_points as f64;
     let mut energy = energy_in_mev;
@@ -508,9 +585,20 @@ pub fn compute_energy_out(
         // as typed Err(EnergyOutOfRange) instead of panicking via _scalar.
         // See #150 — without this, heavy-ion stacks that bring residual
         // energy below the catima table-min crash compute opaquely.
-        let dedx = dedx_mev_per_cm(db, projectile, composition, density_g_cm3, &[energy], nist_compound)?;
+        let dedx = dedx_mev_per_cm(
+            db,
+            projectile,
+            composition,
+            density_g_cm3,
+            &[energy],
+            nist_compound,
+        )?;
         energy -= dedx[0] * dx;
-        if energy <= 0.0 {
+        // Fold "stepped below the tracked floor" into the same "beam stopped"
+        // exit as "stepped below zero" (#527). A residual in (0, table_min)
+        // used to be handed back to `dedx_mev_per_cm` on the next iteration
+        // and error out as EnergyOutOfRange, aborting the entire run.
+        if energy <= MIN_TRACKED_ENERGY_MEV {
             return Ok(0.0);
         }
     }
@@ -702,10 +790,18 @@ mod tests {
 
         let dedx = elemental_dedx(&db, &he3, 29, &energies).unwrap();
         for (i, &v) in dedx.iter().enumerate() {
-            assert!(v.is_finite() && v > 0.0, "³He dE/dx at {} MeV: {v}", energies[i]);
+            assert!(
+                v.is_finite() && v > 0.0,
+                "³He dE/dx at {} MeV: {v}",
+                energies[i]
+            );
         }
         for w in dedx.windows(2) {
-            assert!(w[1] < w[0], "³He dE/dx should decrease with energy: {:?}", dedx);
+            assert!(
+                w[1] < w[0],
+                "³He dE/dx should decrease with energy: {:?}",
+                dedx
+            );
         }
         // Same order of magnitude as α at each energy (within 10×).
         let a = elemental_dedx(&db, &alpha, 29, &energies).unwrap();
@@ -749,12 +845,109 @@ mod tests {
         };
         let stamped = err.with_layer_context(2, "havar");
         match stamped {
-            StoppingError::EnergyOutOfRange { layer_index, layer_material, .. } => {
+            StoppingError::EnergyOutOfRange {
+                layer_index,
+                layer_material,
+                ..
+            } => {
                 assert_eq!(layer_index, Some(2));
                 assert_eq!(layer_material.as_deref(), Some("havar"));
             }
             other => panic!("expected EnergyOutOfRange, got {other:?}"),
         }
+    }
+
+    /// #527 regression: a "beam-stopper" layer with `energy_out = 0` (or any
+    /// value below the tracked floor) must not trip `EnergyOutOfRange` on the
+    /// sub-keV midpoints. The thickness returned is the physical range from
+    /// `energy_in` down to `MIN_TRACKED_ENERGY_MEV` — the residual range below
+    /// that is sub-µm for any real target and folded into "stopped".
+    #[test]
+    fn compute_thickness_from_energy_handles_zero_energy_out() {
+        let db = pstar_db();
+        let projectile = ProjectileType::Proton;
+        // pure Al @ 2.7 g/cm³, single-element composition — mass fraction = 1.
+        let composition = vec![(13u32, 1.0)];
+        let thickness = compute_thickness_from_energy(
+            &db,
+            &projectile,
+            &composition,
+            2.7,
+            5.0,
+            0.0,
+            1000,
+            None,
+        )
+        .expect("energy_out = 0 must not panic / EnergyOutOfRange (#527)");
+        assert!(
+            thickness > 0.0 && thickness.is_finite(),
+            "expected positive finite range, got {thickness}"
+        );
+    }
+
+    /// #527 regression: a small (but not sub-tracked-floor) `energy_in` combined
+    /// with `energy_out = 0` used to place `midpoints[0] < table_min` and abort.
+    /// Now it must produce a valid thickness.
+    #[test]
+    fn compute_thickness_from_energy_low_energy_in_zero_energy_out() {
+        let db = pstar_db();
+        let projectile = ProjectileType::Proton;
+        let composition = vec![(13u32, 1.0)];
+        // 1.5 MeV entrance → midpoints[0] would be 1.5/1998 ≈ 0.00075 MeV
+        // (< table min 0.001 MeV) under the old code.
+        let thickness = compute_thickness_from_energy(
+            &db,
+            &projectile,
+            &composition,
+            2.7,
+            1.5,
+            0.0,
+            1000,
+            None,
+        )
+        .expect("small energy_in + zero energy_out must not error (#527)");
+        assert!(
+            thickness > 0.0 && thickness.is_finite(),
+            "expected positive finite range, got {thickness}"
+        );
+    }
+
+    /// #527 regression: `compute_energy_out` used to abort with
+    /// `EnergyOutOfRange` when the Euler step landed in `(0, table_min)` — the
+    /// existing `if energy <= 0.0` guard didn't fire, so the next iteration's
+    /// dE/dx lookup crashed. It must now cleanly return `0.0`.
+    #[test]
+    fn compute_energy_out_beam_stops_mid_layer_without_error() {
+        let db = pstar_db();
+        let projectile = ProjectileType::Proton;
+        let composition = vec![(13u32, 1.0)];
+        // 2 MeV proton in Al has range ~0.005 cm; 5 cm is 1000× that — the beam
+        // ranges out well before the loop exits.
+        let e_out = compute_energy_out(&db, &projectile, &composition, 2.7, 2.0, 5.0, 1000, None)
+            .expect("beam-fully-stopped layer must return Ok, not EnergyOutOfRange (#527)");
+        assert_eq!(e_out, 0.0, "fully-stopped beam must exit at 0 MeV");
+    }
+
+    /// Symmetry check: energy_in that itself is below the tracked floor is
+    /// treated as an already-stopped beam (Ok(0.0)) rather than a dE/dx lookup
+    /// on a sub-table-min energy.
+    #[test]
+    fn compute_energy_out_below_tracked_floor_returns_zero() {
+        let db = pstar_db();
+        let projectile = ProjectileType::Proton;
+        let composition = vec![(13u32, 1.0)];
+        let e_out = compute_energy_out(
+            &db,
+            &projectile,
+            &composition,
+            2.7,
+            0.005, // < MIN_TRACKED_ENERGY_MEV
+            0.1,
+            1000,
+            None,
+        )
+        .expect("sub-floor energy_in must return Ok(0.0), not error");
+        assert_eq!(e_out, 0.0);
     }
 
     #[test]
@@ -769,7 +962,10 @@ mod tests {
         };
         let json = err.as_json();
         assert!(json.get("layer_index").is_none(), "must not serialize None");
-        assert!(json.get("layer_material").is_none(), "must not serialize None");
+        assert!(
+            json.get("layer_material").is_none(),
+            "must not serialize None"
+        );
 
         let stamped = StoppingError::NoTargetData {
             source_name: "PSTAR".to_string(),
@@ -778,7 +974,8 @@ mod tests {
             available_zs: vec![1, 8, 13, 29],
             layer_index: None,
             layer_material: None,
-        }.with_layer_context(1, "H2O-18");
+        }
+        .with_layer_context(1, "H2O-18");
         let json = stamped.as_json();
         assert_eq!(json["layer_index"], 1);
         assert_eq!(json["layer_material"], "H2O-18");

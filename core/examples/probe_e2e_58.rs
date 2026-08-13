@@ -40,7 +40,11 @@ fn run(cool_s: f64) {
     let lr = &result.layer_results[0];
     let o15 = lr.isotope_results.get("O-15").expect("O-15");
 
-    let max = o15.activity_vs_time_bq.iter().cloned().fold(0.0_f64, f64::max);
+    let max = o15
+        .activity_vs_time_bq
+        .iter()
+        .cloned()
+        .fold(0.0_f64, f64::max);
     let last = *o15.activity_vs_time_bq.last().unwrap();
 
     let lam = std::f64::consts::LN_2 / 122.24;

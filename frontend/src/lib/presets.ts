@@ -153,4 +153,67 @@ export const PRESETS: Preset[] = [
       currentProfile: buildMockProfile(),
     },
   },
+  // ── Neutron activation (ADR-0003) ────────────────────────────────────────
+  // Projectile "n": inputs become spectrum + flux (n/cm²/s) instead of energy +
+  // current. Neutron layers are defined by thickness (there is no dE/dx to solve
+  // an energy-out against). All three are cross-checked against the shipped
+  // endfb-8.0 NJOY neutron data (thermal→20 MeV, log-log/INT=5); the products/
+  // channels below are the dominant ones the engine reports.
+  {
+    id: "co60-nact",
+    name: "Co-60 (n,γ)",
+    description:
+      "Fast-neutron activation: n + Co-59 → Co-60 via (n,γ). The classic Co-60 gamma source (5.27 y).",
+    config: {
+      beam: { projectile: "n", energy_MeV: 2, current_mA: 0 },
+      layers: [{ material: "Co", thickness_cm: 0.05, density_g_cm3: 8.9 }],
+      irradiation_s: 86400,
+      cooling_s: 0,
+      neutronFlux: { kind: "fast", flux: 1e13, temp_mev: 1.4 },
+    },
+  },
+  {
+    id: "na24-dt",
+    name: "Na-24 (14 MeV n,α)",
+    description:
+      "D–T fusion neutrons: 14.1 MeV n + Al-27 → Na-24 via (n,α). The canonical fast-neutron dosimetry reaction (Na-24, 15 h).",
+    config: {
+      beam: { projectile: "n", energy_MeV: 14, current_mA: 0 },
+      layers: [{ material: "Al", thickness_cm: 0.1, density_g_cm3: 2.7 }],
+      irradiation_s: 86400,
+      cooling_s: 3600,
+      neutronFlux: { kind: "monoenergetic", flux: 1e12, e0_mev: 14.1 },
+    },
+  },
+  {
+    id: "au198-nact",
+    name: "Au-198 (n,γ)",
+    description:
+      "Gold-foil neutron flux monitor: n + Au-197 → Au-198 via (n,γ). Standard activation reference (Au-198, 2.7 d).",
+    config: {
+      beam: { projectile: "n", energy_MeV: 2, current_mA: 0 },
+      layers: [{ material: "Au", thickness_cm: 0.01, density_g_cm3: 19.3 }],
+      irradiation_s: 86400,
+      cooling_s: 0,
+      neutronFlux: { kind: "fast", flux: 1e13, temp_mev: 1.4 },
+    },
+  },
+  {
+    id: "co60-thermal",
+    name: "Co-60 (thermal n,γ)",
+    description:
+      "Reactor thermal-neutron production: thermal n + Co-59 → Co-60 via (n,γ). How Co-60 is actually made — thermal capture (37 b) dominates. Needs the reconstructed thermal cross-sections.",
+    config: {
+      beam: { projectile: "n", energy_MeV: 0.025e-6, current_mA: 0 },
+      layers: [{ material: "Co", thickness_cm: 0.05, density_g_cm3: 8.9 }],
+      irradiation_s: 86400 * 30,
+      cooling_s: 0,
+      neutronFlux: { kind: "thermal", flux: 1e14, kt_mev: 2.53e-8 },
+    },
+  },
 ];
+
+/** Look up a preset by its stable id (used by the #preset= deep-link). */
+export function findPreset(id: string): Preset | undefined {
+  return PRESETS.find((p) => p.id === id);
+}

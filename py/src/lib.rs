@@ -8,12 +8,15 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use hyrr_core::bateman::bateman_activity as rust_bateman;
-use hyrr_core::compute::compute_stack;
+use hyrr_core::compute::{
+    compute_neutron_stack, compute_stack, compute_stack_with_secondary_neutrons,
+};
 use hyrr_core::data_fetch;
 use hyrr_core::data_fetch::{FetchProgress, FetchStage};
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::formula::parse_formula;
 use hyrr_core::materials::resolve_material;
+use hyrr_core::neutron::FluxModel;
 use hyrr_core::production::saturation_yield as rust_sat_yield;
 use hyrr_core::stopping;
 use hyrr_core::types::*;
@@ -58,11 +61,22 @@ impl PyDataStore {
             // with no density) as a Python exception. `.expect()` here aborted
             // the interpreter; the WASM path already returns this as an error
             // via `?` (see #344).
-            let resolution = resolve_material(&*db, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)
-                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            let resolution = resolve_material(
+                &*db,
+                &lc.material,
+                lc.enrichment.as_ref(),
+                None,
+                lc.density_g_cm3,
+            )
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
             for (elem, _) in &resolution.elements {
                 db.load_xs(projectile_str, elem.z)
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+                // Phase 2: the secondary neutrons also need the "n" xs loaded.
+                if config.secondary_neutron {
+                    db.load_xs("n", elem.z)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+                }
             }
         }
 
@@ -77,7 +91,9 @@ impl PyDataStore {
             .current_profile
             .map(|cp| CurrentProfile::from_values(cp.times_s, cp.currents_ma))
             .transpose()
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid current profile: {e}")))?;
+            .map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("Invalid current profile: {e}"))
+            })?;
 
         let mut stack = TargetStack {
             beam: Beam::new(projectile, config.beam.energy_mev, config.beam.current_ma),
@@ -93,11 +109,65 @@ impl PyDataStore {
         // {"Err": ...} envelope. Surfacing the error as a PyRuntimeError also
         // prevents the failure mode where a compute error serialized to
         // {"Err": ...} was silently read as "no layers" by the Python side.
-        let result = compute_stack(&*db, &mut stack, true)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("compute_stack failed: {e}")))?;
+        let result = if config.secondary_neutron {
+            compute_stack_with_secondary_neutrons(&*db, &mut stack, true)
+        } else {
+            compute_stack(&*db, &mut stack, true)
+        }
+        .map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("compute_stack failed: {e}"))
+        })?;
         let json = serde_json::to_string(&result)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
         Ok(json)
+    }
+
+    /// Run neutron-source activation (ADR-0003 Phase 1). `config_json` is a
+    /// SimulationConfig (layers + times; `beam` ignored); `flux_json` is a
+    /// tagged FluxModel, e.g. `{"kind":"fast","flux":1e14,"temp_mev":1.4}`.
+    /// Output: bare StackResult JSON.
+    fn compute_neutron_stack(&self, config_json: &str, flux_json: &str) -> PyResult<String> {
+        let config: SimConfig = serde_json::from_str(config_json)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid config: {e}")))?;
+        let flux: FluxModel = serde_json::from_str(flux_json).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Invalid neutron flux: {e}"))
+        })?;
+
+        let mut db = self
+            .inner
+            .lock()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+
+        // Lazily load the neutron cross-sections for every element present.
+        for lc in &config.layers {
+            let resolution = resolve_material(
+                &*db,
+                &lc.material,
+                lc.enrichment.as_ref(),
+                None,
+                lc.density_g_cm3,
+            )
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            for (elem, _) in &resolution.elements {
+                db.load_xs("n", elem.z)
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
+            }
+        }
+
+        let layers =
+            config_to_layers(&*db, &config).map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+        let result = compute_neutron_stack(
+            &*db,
+            &layers,
+            &flux,
+            config.irradiation_s,
+            config.cooling_s,
+            1.0,
+            true,
+        );
+        serde_json::to_string(&result)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
     }
 }
 
@@ -125,7 +195,8 @@ fn py_parse_formula(formula: &str) -> PyResult<HashMap<String, u32>> {
 fn resolve_material_json(data_dir: &str, library: &str, identifier: &str) -> PyResult<String> {
     let db = ParquetDataStore::new(data_dir, library)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))?;
-    let resolution = resolve_material(&db, identifier, None, None, None).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+    let resolution = resolve_material(&db, identifier, None, None, None)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
     let result = serde_json::json!({
         "density": resolution.density,
         "molecular_weight": resolution.molecular_weight,
@@ -189,8 +260,9 @@ fn py_dedx_mev_per_cm(
     let proj = ProjectileType::from_str(projectile).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!("Invalid projectile: {projectile}"))
     })?;
-    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
+    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}"))
+    })?;
     stopping::dedx_mev_per_cm(&db, &proj, &composition, density, &energies, None)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
@@ -213,10 +285,20 @@ fn py_compute_energy_out(
     let proj = ProjectileType::from_str(projectile).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!("Invalid projectile: {projectile}"))
     })?;
-    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    stopping::compute_energy_out(&db, &proj, &composition, density, e_in, thickness, n_points, None)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
+    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}"))
+    })?;
+    stopping::compute_energy_out(
+        &db,
+        &proj,
+        &composition,
+        density,
+        e_in,
+        thickness,
+        n_points,
+        None,
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
 /// Compute target thickness [cm] from energy loss.
@@ -237,10 +319,20 @@ fn py_compute_thickness(
     let proj = ProjectileType::from_str(projectile).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!("Invalid projectile: {projectile}"))
     })?;
-    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}")))?;
-    stopping::compute_thickness_from_energy(&db, &proj, &composition, density, e_in, e_out, n_points, None)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
+    let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("Invalid composition: {e}"))
+    })?;
+    stopping::compute_thickness_from_energy(
+        &db,
+        &proj,
+        &composition,
+        density,
+        e_in,
+        e_out,
+        n_points,
+        None,
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -308,12 +400,13 @@ fn make_py_progress(progress_obj: Py<PyAny>) -> impl FnMut(FetchProgress) {
 /// filesystem walk with no progress wiring upstream — the callback is
 /// ignored for that mode.
 #[pyfunction]
-#[pyo3(signature = (library=None, all_libs=false, offline_bundle=None, from_tarball=None, progress=None))]
+#[pyo3(signature = (library=None, all_libs=false, offline_bundle=None, from_tarball=None, signature=None, progress=None))]
 fn py_fetch_data(
     library: Option<&str>,
     all_libs: bool,
     offline_bundle: Option<&str>,
     from_tarball: Option<&str>,
+    signature: Option<&str>,
     progress: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     let active = [
@@ -340,13 +433,23 @@ fn py_fetch_data(
     };
 
     if let Some(path) = from_tarball {
-        return data_fetch::install_from_tarball_with_progress(&PathBuf::from(path), &mut *cb)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
+        // `signature` overrides the sibling `<archive>.minisig` lookup, for
+        // when the two were carried separately onto the isolated machine.
+        let sig = signature.map(PathBuf::from);
+        return data_fetch::install_from_tarball_with_signature(
+            &PathBuf::from(path),
+            sig.as_deref(),
+            &mut *cb,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
     }
     if let Some(path) = offline_bundle {
-        // `export_offline_bundle` has no progress-aware variant — it's a
-        // pure filesystem walk with no network step. Ignore the callback.
-        return data_fetch::export_offline_bundle(&PathBuf::from(path))
+        // Since #614 this downloads the *signed* upstream artefact and writes
+        // it alongside its `.minisig`, rather than repacking the local cache —
+        // a repack cannot be authenticated on the isolated machine, because
+        // the exporting user holds no signing key. So it is a network
+        // operation now and does report progress.
+        return data_fetch::export_offline_bundle_with_progress(&PathBuf::from(path), &mut *cb)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
     }
     if all_libs {
@@ -409,6 +512,10 @@ struct SimConfig {
     /// Time-varying beam current (piecewise-constant).
     #[serde(default)]
     current_profile: Option<CurrentProfileCfg>,
+    /// Model secondary (x,n) neutron activation on this charged run (ADR-0003
+    /// Phase 2). Off by default.
+    #[serde(default, alias = "secondaryNeutron")]
+    secondary_neutron: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -443,7 +550,13 @@ fn config_to_layers(db: &ParquetDataStore, config: &SimConfig) -> Result<Vec<Lay
         .layers
         .iter()
         .map(|lc| {
-            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)?;
+            let resolution = resolve_material(
+                db,
+                &lc.material,
+                lc.enrichment.as_ref(),
+                None,
+                lc.density_g_cm3,
+            )?;
             Ok(Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,

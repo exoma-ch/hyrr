@@ -11,9 +11,17 @@
 import type { SimulationResult } from "./types";
 import type { SerializableConfig } from "./stores/config.svelte";
 import type { DisplayThresholdsState } from "./stores/display-thresholds.svelte";
+import {
+  parseSharedCustomMaterial,
+  type SharedCustomMaterial,
+} from "./config-codec-map";
 
-/** v1 → v2 added optional `display` (issue #130). v1 files load fine. */
-export const SESSION_SCHEMA_VERSION = 2;
+/** v1 → v2 added optional `display` (#130). v2 → v3 added optional
+ *  `customMaterials` — the FULL defs of every custom alloy the config
+ *  references, so a stack using a custom alloy is self-contained and
+ *  round-trips across machines (#539). The bump is ADDITIVE: v1/v2 files (no
+ *  `customMaterials`) still load; the field is optional. */
+export const SESSION_SCHEMA_VERSION = 3;
 /** MIME-sensible marker that the file was produced by HYRR. */
 export const SESSION_SCHEMA_ID = "hyrr-session";
 
@@ -29,6 +37,10 @@ export interface SessionFile {
   notes?: string;
   /** Optional UI prefs (display-layer only — never affects the result). */
   display?: DisplayThresholdsState;
+  /** v3 (#539): full defs of every custom alloy referenced by `config`, so the
+   *  file resolves on a fresh machine with an empty custom-material library.
+   *  Omitted when the config references no custom materials. */
+  customMaterials?: SharedCustomMaterial[];
 }
 
 declare const __APP_VERSION__: string;
@@ -38,6 +50,7 @@ export function buildSessionFile(
   result: SimulationResult | null,
   notes?: string,
   display?: DisplayThresholdsState,
+  customMaterials?: SharedCustomMaterial[],
 ): SessionFile {
   return {
     $schema: SESSION_SCHEMA_ID,
@@ -48,6 +61,10 @@ export function buildSessionFile(
     result,
     notes,
     display,
+    // Keep the field absent (not an empty array) when there's nothing to embed,
+    // so config-only files stay byte-identical to the pre-v3 shape.
+    customMaterials:
+      customMaterials && customMaterials.length > 0 ? customMaterials : undefined,
   };
 }
 
@@ -66,9 +83,13 @@ export function downloadSessionFile(file: SessionFile): void {
   URL.revokeObjectURL(url);
 }
 
-/** Validate and coerce an arbitrary JSON value into a SessionFile. */
+/** Validate and coerce an arbitrary JSON value into a SessionFile.
+ *  On success, `warnings` is non-empty when we dropped malformed entries the
+ *  file was better off without (e.g. `customMaterials[i]` with a non-finite
+ *  composition value, #551 nit 1). The caller SHOULD surface these — silent
+ *  drops are the failure mode this whole hardening pass exists to prevent. */
 export type ParseResult =
-  | { ok: true; file: SessionFile }
+  | { ok: true; file: SessionFile; warnings: string[] }
   | { ok: false; error: string };
 
 export function parseSessionJson(raw: string): ParseResult {
@@ -98,8 +119,35 @@ export function parseSessionJson(raw: string): ParseResult {
   if (obj.result !== null && obj.result !== undefined && typeof obj.result !== "object") {
     return { ok: false, error: "Result field has wrong type" };
   }
+  // v3 (#539): embedded custom-material defs. Defensively shape-check each entry
+  // (like the display/result guards) and drop malformed ones rather than failing
+  // the whole load — a partial embed still beats silent name-only loss.
+  //
+  // #551 nit 1: `parseSharedCustomMaterial` drops entries with non-finite
+  // composition/enrichment values (would-be silent NaN physics). Count the
+  // drops and surface them via `warnings` — the alternative (silent) is
+  // exactly the failure mode the hardening exists to prevent.
+  let embeddedRaw = 0;
+  let embeddedKept = 0;
+  const customMaterials = Array.isArray(obj.customMaterials)
+    ? (embeddedRaw = obj.customMaterials.length,
+      obj.customMaterials
+        .map(parseSharedCustomMaterial)
+        .filter((m: SharedCustomMaterial | null): m is SharedCustomMaterial => m !== null))
+    : undefined;
+  if (customMaterials) embeddedKept = customMaterials.length;
+  const warnings: string[] = [];
+  if (embeddedRaw > embeddedKept) {
+    const dropped = embeddedRaw - embeddedKept;
+    warnings.push(
+      `Dropped ${dropped} embedded custom-material def${dropped === 1 ? "" : "s"} with ` +
+        `missing/invalid values (name, density, mass fractions, or enrichment). ` +
+        `Referenced materials will fall back to library resolution — check the layer stack.`,
+    );
+  }
   return {
     ok: true,
+    warnings,
     file: {
       $schema: SESSION_SCHEMA_ID,
       schema_version: obj.schema_version,
@@ -109,16 +157,25 @@ export function parseSessionJson(raw: string): ParseResult {
       result: obj.result ?? null,
       notes: typeof obj.notes === "string" ? obj.notes : undefined,
       display: obj.display && typeof obj.display === "object" ? obj.display : undefined,
+      customMaterials: customMaterials && customMaterials.length > 0 ? customMaterials : undefined,
     },
   };
 }
 
+/** Parsed session plus any non-fatal warnings the parser wants to surface
+ *  (e.g. dropped malformed embedded custom-material entries, #551 nit 1). */
+export interface LoadedSession {
+  file: SessionFile;
+  warnings: string[];
+}
+
 /**
  * Open a file picker and load a .hyrr.json file. Resolves with the parsed
- * session or throws with the first error encountered. Browser-only — the
- * Tauri path uses `tauri-plugin-dialog` upstream.
+ * session + any non-fatal warnings, or throws with the first error
+ * encountered. Browser-only — the Tauri path uses `tauri-plugin-dialog`
+ * upstream.
  */
-export function pickSessionFile(): Promise<SessionFile> {
+export function pickSessionFile(): Promise<LoadedSession> {
   return new Promise((resolve, reject) => {
     const input = document.createElement("input");
     input.type = "file";
@@ -130,7 +187,7 @@ export function pickSessionFile(): Promise<SessionFile> {
         const text = await file.text();
         const r = parseSessionJson(text);
         if (!r.ok) return reject(new Error(r.error));
-        resolve(r.file);
+        resolve({ file: r.file, warnings: r.warnings });
       } catch (e: any) {
         reject(e);
       }
@@ -139,10 +196,10 @@ export function pickSessionFile(): Promise<SessionFile> {
   });
 }
 
-/** Read a File object (from drop-target or picker) into a SessionFile. */
-export async function readSessionFile(file: File): Promise<SessionFile> {
+/** Read a File object (from drop-target or picker) into a LoadedSession. */
+export async function readSessionFile(file: File): Promise<LoadedSession> {
   const text = await file.text();
   const r = parseSessionJson(text);
   if (!r.ok) throw new Error(r.error);
-  return r.file;
+  return { file: r.file, warnings: r.warnings };
 }

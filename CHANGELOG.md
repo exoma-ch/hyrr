@@ -5,6 +5,102 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0](https://github.com/exoma-ch/hyrr/compare/v0.18.0...v0.19.0) (2026-08-06)
+
+
+### Features
+
+* **config:** embed custom-material defs in .hyrr.json for self-contained round-trip ([#550](https://github.com/exoma-ch/hyrr/issues/550)) ([14e8c80](https://github.com/exoma-ch/hyrr/commit/14e8c808121bb3c41510bd0d63297cef63b8f58d)), closes [#539](https://github.com/exoma-ch/hyrr/issues/539)
+* **config:** route browser encode/decode through the WASM codec; delete hand-rolled TS encoder ([7b0501a](https://github.com/exoma-ch/hyrr/commit/7b0501a9074adbcb9d0143397c51a8ba1d21238c)), closes [#539](https://github.com/exoma-ch/hyrr/issues/539)
+* **config:** unified Rust codec — MCP/URL links carry full state ([#539](https://github.com/exoma-ch/hyrr/issues/539) increment 1) ([7b3441b](https://github.com/exoma-ch/hyrr/commit/7b3441b57c54c41b712d2cabdca7cb8ef30329d6)), closes [#531](https://github.com/exoma-ch/hyrr/issues/531)
+* **frontend:** #preset=&lt;id&gt; deep-link — load any preset by URL (fixes red e2e properly) ([#503](https://github.com/exoma-ch/hyrr/issues/503)) ([6cb2d85](https://github.com/exoma-ch/hyrr/commit/6cb2d850a5a32ce87e053803bfc2742e1793d5be))
+* **mcp:** absolute activity_floor_bq at tool layer; strip backend clamp ([#575](https://github.com/exoma-ch/hyrr/issues/575)) ([f52b868](https://github.com/exoma-ch/hyrr/commit/f52b8684e9bc4eda70b9341be03969a2997cd3fd))
+* **mcp:** get_activity_at / get_dose_rate_at — exact Bateman point queries ([#584](https://github.com/exoma-ch/hyrr/issues/584)) ([ac5d971](https://github.com/exoma-ch/hyrr/commit/ac5d971df41f5672c94f70cbb164fb569a9dfcb7))
+* **mcp:** impact-classified release notes so an agent can judge upgrade impact ([#572](https://github.com/exoma-ch/hyrr/issues/572)) ([#586](https://github.com/exoma-ch/hyrr/issues/586)) ([49da331](https://github.com/exoma-ch/hyrr/commit/49da331c9061bcc4de86495df9319908e919376f))
+* **mcp:** persist StackResult cache to disk across restarts ([#574](https://github.com/exoma-ch/hyrr/issues/574)) ([2e9838e](https://github.com/exoma-ch/hyrr/commit/2e9838e3616140e0aacc905ad69be1de014a2588))
+* **mcp:** scoped tool descriptions + instructions, get_nuclide_data, dose tools ([#562](https://github.com/exoma-ch/hyrr/issues/562)) ([42afaa7](https://github.com/exoma-ch/hyrr/commit/42afaa70add3671a8679f738b5c48845b26c80e2)), closes [#528](https://github.com/exoma-ch/hyrr/issues/528) [#459](https://github.com/exoma-ch/hyrr/issues/459) [#440](https://github.com/exoma-ch/hyrr/issues/440) [#441](https://github.com/exoma-ch/hyrr/issues/441)
+* **mcp:** self-describing dataset schema + provenance ([#569](https://github.com/exoma-ch/hyrr/issues/569)) ([#582](https://github.com/exoma-ch/hyrr/issues/582)) ([2ec759a](https://github.com/exoma-ch/hyrr/commit/2ec759a201dccd05fb7b14f73dc6b4c72c04e4b2))
+* **mcp:** update awareness — shared detection in core, per-surface rendering ([#585](https://github.com/exoma-ch/hyrr/issues/585)) ([28a6019](https://github.com/exoma-ch/hyrr/commit/28a60199f68c62dbb92fe527195dcf55547dc2c3))
+* **wasm:** expose config codec + ts-rs generated types with CI drift gate ([2992f16](https://github.com/exoma-ch/hyrr/commit/2992f163863c10e7af8bb6a26ec8b2e4241f6484)), closes [#539](https://github.com/exoma-ch/hyrr/issues/539)
+
+
+### Bug Fixes
+
+* **compute:** resolve Z-named cross-section files in TS data layer; complete element map ([#557](https://github.com/exoma-ch/hyrr/issues/557)) ([962382f](https://github.com/exoma-ch/hyrr/commit/962382f9a5027319e0e63833a69e6f83ab62d29f)), closes [#488](https://github.com/exoma-ch/hyrr/issues/488)
+* **config:** harden codec seam — compound customs, URL budget, forget path, NaN guards ([#542](https://github.com/exoma-ch/hyrr/issues/542) [#544](https://github.com/exoma-ch/hyrr/issues/544) [#551](https://github.com/exoma-ch/hyrr/issues/551)) ([#560](https://github.com/exoma-ch/hyrr/issues/560)) ([a2adfc3](https://github.com/exoma-ch/hyrr/commit/a2adfc35979fdebb48d5bbee82237a56de448612))
+* **config:** skip cross-lang fixture drift-check when fixture absent ([9d61a4b](https://github.com/exoma-ch/hyrr/commit/9d61a4b4eeba1d1cd2bb7bad4774a956eaa2c8d0))
+* **config:** surface dropped/over-budget warnings on all share URLs; reactive codec-ready ([#546](https://github.com/exoma-ch/hyrr/issues/546) nits) ([b2a8e51](https://github.com/exoma-ch/hyrr/commit/b2a8e516acd37565e44fd930f4c3152e7c9d7834)), closes [#539](https://github.com/exoma-ch/hyrr/issues/539)
+* **config:** surface over-budget + &gt;30-item link warnings; fixture drift-check ([#541](https://github.com/exoma-ch/hyrr/issues/541) nits) ([76ee968](https://github.com/exoma-ch/hyrr/commit/76ee968716c2cccae5ce20827ad83f1a4bc24afc))
+* **core:** handle beam ranging out mid-layer (E_out=0) without panic ([#553](https://github.com/exoma-ch/hyrr/issues/553)) ([38be9bd](https://github.com/exoma-ch/hyrr/commit/38be9bd42561049648ad1b8c9e95f88c46bbd230))
+* **core:** resolve Z-named cross-section targets (p_Z88 → Ra); warn on missing target data ([#555](https://github.com/exoma-ch/hyrr/issues/555)) ([fabde23](https://github.com/exoma-ch/hyrr/commit/fabde23acf1a89084704f4f2a5a109bf70a5fcdd)), closes [#488](https://github.com/exoma-ch/hyrr/issues/488)
+* **deploy:** refuse to deploy a stale ETH access whitelist ([#565](https://github.com/exoma-ch/hyrr/issues/565)) ([b574cdb](https://github.com/exoma-ch/hyrr/commit/b574cdb15547d6da196d6cd96f887dc108b3a120))
+* **frontend:** unify filters section styling with sibling panels ([#554](https://github.com/exoma-ch/hyrr/issues/554)) ([f462a54](https://github.com/exoma-ch/hyrr/commit/f462a542bfb84de912be346d2a1c5519ee9b838c)), closes [#532](https://github.com/exoma-ch/hyrr/issues/532)
+* **mcp:** keep long-lived low-yield products in the inventory prune ([#533](https://github.com/exoma-ch/hyrr/issues/533)) ([#556](https://github.com/exoma-ch/hyrr/issues/556)) ([df7d625](https://github.com/exoma-ch/hyrr/commit/df7d625f3ec0d83fd7f74296529c2ee93471a65a))
+* **mcp:** negotiate protocol version + stop replying to notifications ([#561](https://github.com/exoma-ch/hyrr/issues/561)) ([03f7d19](https://github.com/exoma-ch/hyrr/commit/03f7d19264565d80ae6468e0bd04ea87a1cea1e8)), closes [#535](https://github.com/exoma-ch/hyrr/issues/535)
+* **release:** keep package-lock.json in sync with bumped versions ([#566](https://github.com/exoma-ch/hyrr/issues/566)) ([a04e726](https://github.com/exoma-ch/hyrr/commit/a04e726288548135591f8f7d857f04f6f9733e37))
+
+
+### Miscellaneous
+
+* **access:** grant ETH instance access to a PSI collaborator (closes [#552](https://github.com/exoma-ch/hyrr/issues/552)) ([#564](https://github.com/exoma-ch/hyrr/issues/564)) ([3366ec8](https://github.com/exoma-ch/hyrr/commit/3366ec8c9b04fc3130ad57173e2b81dc2c045940))
+* **data:** bump nucl-parquet → data-2026.7.2 (neutron thermal-grid fix) ([#548](https://github.com/exoma-ch/hyrr/issues/548)) ([a28ab9d](https://github.com/exoma-ch/hyrr/commit/a28ab9d31f02135ce563daf569f2c967210c1e75)), closes [#539](https://github.com/exoma-ch/hyrr/issues/539)
+
+
+### Documentation
+
+* **adr:** 0004 — one Rust-owned config codec (codec-only B′) ([#547](https://github.com/exoma-ch/hyrr/issues/547)) ([5e47b0c](https://github.com/exoma-ch/hyrr/commit/5e47b0c23584005b07fd252d871d6d5cb37917e6)), closes [#539](https://github.com/exoma-ch/hyrr/issues/539)
+* **release-notes:** add the 0.19.0 entries for [#571](https://github.com/exoma-ch/hyrr/issues/571) and [#572](https://github.com/exoma-ch/hyrr/issues/572) ([#591](https://github.com/exoma-ch/hyrr/issues/591)) ([243c17d](https://github.com/exoma-ch/hyrr/commit/243c17da736d51e159c75263454b02a4db1c809f))
+
+
+### CI
+
+* **dependabot:** watch cargo crates (grouped, all 5 lockfiles) ([#536](https://github.com/exoma-ch/hyrr/issues/536)) ([fd4ec87](https://github.com/exoma-ch/hyrr/commit/fd4ec879fe2e3f397df824684f3f13d5bd2f0974)), closes [#535](https://github.com/exoma-ch/hyrr/issues/535)
+* **release:** build the aarch64 wheel on a native ARM runner ([#576](https://github.com/exoma-ch/hyrr/issues/576)) ([e0dd1c0](https://github.com/exoma-ch/hyrr/commit/e0dd1c0095afb9470fef67775f5fb5d0d85f6a4c))
+* **release:** sync all Cargo.lock files on release + gate them, not just wasm ([#525](https://github.com/exoma-ch/hyrr/issues/525)) ([ac10c9f](https://github.com/exoma-ch/hyrr/commit/ac10c9f15b5d3cbfa0a3f0800e20501cd206aca5))
+
+## [0.18.0](https://github.com/exoma-ch/hyrr/compare/v0.17.0...v0.18.0) (2026-07-14)
+
+
+### Features
+
+* **core:** reaction-route provenance — Phase 0 of neutron activation (ADR-0003) ([#507](https://github.com/exoma-ch/hyrr/issues/507)) ([23f9eee](https://github.com/exoma-ch/hyrr/commit/23f9eee1073aede45d893ea20744708f08f8b77b))
+* **deploy:** ETH webhosting deploy ladder (ent → tst → prd) ([#489](https://github.com/exoma-ch/hyrr/issues/489)) ([45029e2](https://github.com/exoma-ch/hyrr/commit/45029e25d27f6033132e97909e8c893cbd363fa2))
+* **landing:** E2E-encrypt access requests (age) + privacy notice ([#499](https://github.com/exoma-ch/hyrr/issues/499)) ([b75d8b5](https://github.com/exoma-ch/hyrr/commit/b75d8b57ba39ef6a5eaed753d39dd2849573934a))
+* **landing:** point 'Open HYRR' at hyrr.ethz.ch (canonical via redirect) ([#497](https://github.com/exoma-ch/hyrr/issues/497)) ([24098de](https://github.com/exoma-ch/hyrr/commit/24098dee2e9827a3cf89078b4f3a614bd749009f))
+* **landing:** public landing page with access-request form ([#496](https://github.com/exoma-ch/hyrr/issues/496)) ([a4a85c7](https://github.com/exoma-ch/hyrr/commit/a4a85c799dd07120bcc4bc427a97cceedb80a482))
+* neutron activation — Phase 1 primary source engine (ADR-0003) ([#508](https://github.com/exoma-ch/hyrr/issues/508)) ([813f1c2](https://github.com/exoma-ch/hyrr/commit/813f1c2f28c90a749fb7d62356c0339ea15567bb))
+* neutron activation — Phase 2 + full frontend UI (ADR-0003) ([#509](https://github.com/exoma-ch/hyrr/issues/509)) ([f35c16a](https://github.com/exoma-ch/hyrr/commit/f35c16a9dffc9eea28f17eab9969fca0b51b8251))
+* **neutron:** adopt endfb-8.0 NJOY data + log-log fold + MCP neutron tool (ADR-0003) ([#524](https://github.com/exoma-ch/hyrr/issues/524)) ([b04c246](https://github.com/exoma-ch/hyrr/commit/b04c24684c58b95bbb65da900e1d8d9f0c621bbd))
+* **neutron:** LRF=7 thermal data (Cu/V/W/Fe) — bump nucl-parquet [#259](https://github.com/exoma-ch/hyrr/issues/259) ([#518](https://github.com/exoma-ch/hyrr/issues/518)) ([d68a370](https://github.com/exoma-ch/hyrr/commit/d68a370109e9507a1818d7464ae388e08351619f))
+* **neutron:** thermal (n,γ) activation via reconstructed resonance data ([#517](https://github.com/exoma-ch/hyrr/issues/517)) ([746a515](https://github.com/exoma-ch/hyrr/commit/746a515504d2f9d83f8e3e1879dd790d0aabbf46))
+
+
+### Bug Fixes
+
+* **bug-report:** don't publish reporter email + disclose public issue ([#500](https://github.com/exoma-ch/hyrr/issues/500)) ([08ca4cd](https://github.com/exoma-ch/hyrr/commit/08ca4cd398f63f807354296ec717fb0e0cf393db))
+* **ci:** add checkout to gh-pages redirect deploy ([#492](https://github.com/exoma-ch/hyrr/issues/492)) ([7c31125](https://github.com/exoma-ch/hyrr/commit/7c3112510f12856391656aad4df90b69e7a86ba8))
+* **ci:** point copy-frontend-data.sh guard at the post-migration deploy set ([#501](https://github.com/exoma-ch/hyrr/issues/501)) ([ae27a21](https://github.com/exoma-ch/hyrr/commit/ae27a21de1fe5fec71c08c08958d6b54c19e8931))
+* **core:** repair stale call sites so embed-data tests + examples compile ([#483](https://github.com/exoma-ch/hyrr/issues/483)) ([c540472](https://github.com/exoma-ch/hyrr/commit/c54047230c09c7e3f2b91d85ff8997d0340bc2e5)), closes [#274](https://github.com/exoma-ch/hyrr/issues/274)
+* **frontend:** make neutron activation actually usable (ADR-0003) ([#512](https://github.com/exoma-ch/hyrr/issues/512)) ([e05fb88](https://github.com/exoma-ch/hyrr/commit/e05fb883bc2fe9f3620e774876eeb862889270f4))
+* **landing:** neutral institution placeholder (drop PSI example) ([#498](https://github.com/exoma-ch/hyrr/issues/498)) ([11346b6](https://github.com/exoma-ch/hyrr/commit/11346b6c6909d2cd7ea8a5ec3aff2e893cce0845))
+* **neutron:** exclude elastic contamination from (n,γ) — bump nucl-parquet [#260](https://github.com/exoma-ch/hyrr/issues/260) ([#521](https://github.com/exoma-ch/hyrr/issues/521)) ([4bb2e52](https://github.com/exoma-ch/hyrr/commit/4bb2e5260defc3264fb5932452ecf3be2687e77d))
+
+
+### Miscellaneous
+
+* **deps:** bump actions/checkout from 6 to 7 ([#453](https://github.com/exoma-ch/hyrr/issues/453)) ([1ffb81f](https://github.com/exoma-ch/hyrr/commit/1ffb81f20b7886886ca137de737e7065aeea50e7))
+* **deps:** bump DeterminateSystems/nix-installer-action from 16 to 22 ([#412](https://github.com/exoma-ch/hyrr/issues/412)) ([32ed868](https://github.com/exoma-ch/hyrr/commit/32ed868461222121a7ced39aa4ab645586913eb1))
+
+
+### Documentation
+
+* **adr:** 0003 neutron activation — accepted design record (ADR-0003) ([#510](https://github.com/exoma-ch/hyrr/issues/510)) ([c5ce111](https://github.com/exoma-ch/hyrr/commit/c5ce1118a38e3059fd643a4d5bc9dd940814da58))
+
+
+### CI
+
+* **deploy:** main→ent auto-deploy via heimdall ProxyJump + sops secrets ([#511](https://github.com/exoma-ch/hyrr/issues/511)) ([e0bb497](https://github.com/exoma-ch/hyrr/commit/e0bb497a1ab19c5793e3f00ad602d839d55bafcc))
+
 ## [0.17.0](https://github.com/exoma-ch/hyrr/compare/v0.16.3...v0.17.0) (2026-06-24)
 
 

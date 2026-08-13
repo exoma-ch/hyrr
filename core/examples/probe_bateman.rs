@@ -11,7 +11,10 @@ fn main() {
 
     let result = bateman_activity(r, Some(hl_s), irr, cool, 200);
 
-    println!("bateman_activity(R={:.3e}, t½={}, irr={}, cool={})", r, hl_s, irr, cool);
+    println!(
+        "bateman_activity(R={:.3e}, t½={}, irr={}, cool={})",
+        r, hl_s, irr, cool
+    );
     println!(
         "  saturation R × (1 - exp(-λ×irr)) = {:.3e}",
         r * (1.0 - (-std::f64::consts::LN_2 / hl_s * irr).exp())
@@ -32,7 +35,11 @@ fn main() {
             let a_eoi = r * (1.0 - (-std::f64::consts::LN_2 / hl_s * irr).exp());
             a_eoi * (-std::f64::consts::LN_2 / hl_s * (t - irr)).exp()
         };
-        let err = if expected > 0.0 { (a - expected).abs() / expected } else { 0.0 };
+        let err = if expected > 0.0 {
+            (a - expected).abs() / expected
+        } else {
+            0.0
+        };
         println!(
             "  i={:>3}  t={:>8.2}s  A={:.3e}  expected={:.3e}  rel_err={:.2e}",
             i, t, a, expected, err

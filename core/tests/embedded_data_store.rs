@@ -37,7 +37,10 @@ fn embedded_store_has_abundances() {
     assert!(cu.contains_key(&63), "Cu-63 should be present");
     assert!(cu.contains_key(&65), "Cu-65 should be present");
     let cu63_frac = cu[&63].0;
-    assert!(cu63_frac > 0.68 && cu63_frac < 0.70, "Cu-63 abundance ~69%: got {cu63_frac}");
+    assert!(
+        cu63_frac > 0.68 && cu63_frac < 0.70,
+        "Cu-63 abundance ~69%: got {cu63_frac}"
+    );
 }
 
 #[test]
@@ -64,7 +67,10 @@ fn embedded_store_has_decay_data() {
     assert!(d.half_life_s.is_some());
     let hl = d.half_life_s.unwrap();
     // Tc-99m half-life: ~6.007 hours = ~21625 s
-    assert!(hl > 20000.0 && hl < 23000.0, "Tc-99m half-life ~21625s: got {hl}");
+    assert!(
+        hl > 20000.0 && hl < 23000.0,
+        "Tc-99m half-life ~21625s: got {hl}"
+    );
 }
 
 #[test]
@@ -97,7 +103,7 @@ fn embedded_store_runs_full_simulation() {
         energy_out_mev: None,
         is_monitor: false,
         nist_compound: None,
-                computed_energy_in: 0.0,
+        computed_energy_in: 0.0,
         computed_energy_out: 0.0,
         computed_thickness: 0.0,
     };

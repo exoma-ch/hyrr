@@ -25,6 +25,23 @@ use std::path::Path;
 
 fn main() {
     // --- DATA_VERSION from nucl-parquet submodule ---
+    //
+    // The nuclear-data version is deliberately WELDED to the build (#606).
+    // `hyrr-mcp==0.19.0` therefore implies exactly one data tree, and new data
+    // can only arrive via a new release.
+    //
+    // That coupling is a feature, not an oversight, and it is the reason to
+    // resist "let data float so users get new evaluations sooner": a floating
+    // data dir would silently change the physics under a pinned binary, and a
+    // result defended months later could no longer be reproduced from the
+    // version alone. Cross-section evaluations move yields by tens of percent
+    // on some channels — far more than a code point-release — so the data
+    // version is the load-bearing half of provenance.
+    //
+    // Consequence to keep in mind: because data cannot change without a
+    // release, a *data* release upstream is only reachable through a *software*
+    // release here, which is why there is no separate "new data available"
+    // check. The existing update notice covers it.
     let catalog = Path::new("../nucl-parquet/data/catalog.json");
     println!("cargo:rerun-if-changed=../nucl-parquet/data/catalog.json");
 
@@ -69,9 +86,231 @@ fn main() {
     };
     println!("cargo:rustc-env=HYRR_DEFAULT_LIBRARY={default_library}");
 
+    // --- release-notes.json is compiled in via include_str! in
+    // release_notes.rs (#572). Rebuild the crate when the artifact changes so
+    // an edit to the classified changelog does not silently ship stale bytes.
+    println!("cargo:rerun-if-changed=../release-notes.json");
+
+    // --- DATA_TARBALL_SHA256 from hyrr.json (#577) ---
+    emit_data_tarball_pin(&version);
+
     // --- Embed nuclear data as a tar (#274) ---
     #[cfg(feature = "embed-data")]
     pack_data_tar(&default_library);
+}
+
+/// Sentinel emitted by the `DATA_VERSION` resolution above when the
+/// submodule isn't checked out. The integrity pin must fail *with* it,
+/// never independently — see [`emit_data_tarball_pin`].
+const UNKNOWN_VERSION: &str = "0.0.0-unknown";
+
+/// Export the pinned SHA-256 of the data release tarball as
+/// `HYRR_DATA_TARBALL_SHA256`, and refuse to build if the pin has
+/// drifted from the submodule.
+///
+/// Two failure modes, deliberately treated differently:
+///
+/// 1. **Submodule absent** (`data_version` == [`UNKNOWN_VERSION`]).
+///    Emit an empty pin and say nothing. This build already cannot
+///    resolve a real release URL, so it was never going to fetch
+///    anything; wasm, `nix flake check`, Dependabot and submodule-less
+///    `cargo test` all land here and must keep compiling. `data_fetch`
+///    treats an empty pin as *refuse to install*, so the two sentinels
+///    fail together and there is no window where a build has a usable
+///    URL but no pin.
+///
+/// 2. **Submodule present but the pin disagrees with it.** Hard build
+///    failure. This is the drift that bit us as #117 (default library)
+///    and it is far nastier here: a stale pin against a freshly-bumped
+///    submodule surfaces at runtime as a checksum mismatch, which is
+///    indistinguishable from a tampered download. Turning it into a
+///    compile error means a contributor who bumps the submodule and
+///    forgets to re-pin finds out in seconds, not from a user's bug
+///    report about a suspected attack.
+fn emit_data_tarball_pin(data_version: &str) {
+    let hyrr_json = Path::new("../hyrr.json");
+    let content = std::fs::read_to_string(hyrr_json).unwrap_or_default();
+
+    let pinned_version = extract_json_string(&content, "data_tarball_version");
+    let pinned_sha = extract_json_string(&content, "data_tarball_sha256");
+
+    if data_version == UNKNOWN_VERSION {
+        // Case 1 — nothing to check against, and nothing will be fetched.
+        // Both vars must still be *defined*, or `env!()` fails to compile.
+        // Empty means "no pin"; `data_fetch` refuses to install rather than
+        // treating an absent pin as permission to skip verification.
+        println!("cargo:rustc-env=HYRR_DATA_TARBALL_SHA256=");
+        println!("cargo:rustc-env=HYRR_DATA_SIGNING_PUBKEY=");
+        return;
+    }
+
+    let (Some(pinned_version), Some(pinned_sha)) = (pinned_version, pinned_sha) else {
+        panic!(
+            "core/build.rs: the nucl-parquet submodule pins data_version {data_version}, but \
+             hyrr.json has no `data_tarball_version` / `data_tarball_sha256` (#577).\n\
+             \n\
+             The data tarball would be installed with no integrity check at all.\n\
+             Fix: re-pin with `just repin-data`."
+        );
+    };
+
+    if pinned_version != data_version {
+        panic!(
+            "core/build.rs: data-tarball pin is stale (#577).\n\
+             \n\
+               nucl-parquet submodule : data_version {data_version}\n\
+               hyrr.json              : data_tarball_version {pinned_version}\n\
+             \n\
+             The submodule was bumped without re-pinning the tarball hash. Left alone this \
+             would ship a binary that downloads {data_version} and checks it against \
+             {pinned_version}'s hash — a runtime failure that looks exactly like a tampered \
+             download.\n\
+             \n\
+             Fix: re-pin with `just repin-data`."
+        );
+    }
+
+    // Shape check. A truncated or placeholder value would otherwise fail
+    // far away from here, at first fetch, on a user's machine.
+    let valid = pinned_sha.len() == 64 && pinned_sha.bytes().all(|b| b.is_ascii_hexdigit());
+    if !valid {
+        panic!(
+            "core/build.rs: `data_tarball_sha256` in hyrr.json is not a 64-char hex SHA-256 \
+             (got {} chars) (#577).\n\
+             \n\
+             Fix: re-pin with `just repin-data`.",
+            pinned_sha.len()
+        );
+    }
+
+    println!("cargo:rustc-env=HYRR_DATA_TARBALL_SHA256={pinned_sha}");
+    emit_data_signing_pubkey(&content);
+}
+
+/// Export the minisign public key the data tarball is verified against (#594).
+///
+/// The trust root for the nuclear data is this key, **not** the GitHub
+/// release: upstream releases are mutable, so the published asset digest is a
+/// convenience rather than a control. Baking the key into the binary is what
+/// makes `just repin-data` stop being a trust decision — the expected hash can
+/// be read out of the signature's authenticated trusted comment instead of
+/// from whatever GitHub currently serves.
+///
+/// Missing key is a **hard build failure** rather than a silent downgrade to
+/// hash-only verification. A build that quietly stopped checking signatures
+/// would be indistinguishable from one that never did, which is exactly the
+/// property signing exists to provide. Removing the check has to be a
+/// deliberate edit to `hyrr.json`, not an oversight.
+fn emit_data_signing_pubkey(hyrr_json: &str) {
+    let Some(key) = extract_json_string(hyrr_json, "data_signing_pubkey") else {
+        panic!(
+            "core/build.rs: hyrr.json has no `data_signing_pubkey` (#594).\n\
+             \n\
+             The data tarball would be installed with no publisher authentication — only \
+             the SHA-256 pin, which cannot tell `the bytes we pinned` from `the bytes the \
+             nuclear-data team published`.\n\
+             \n\
+             Fix: copy the key from nucl-parquet `docs/security/data-signing-key.pub` \
+             (the base64 line, not the `untrusted comment:` line) into hyrr.json."
+        );
+    };
+
+    // Shape check: a minisign key line is base64 and begins with the "Ed"
+    // algorithm marker, which base64-encodes to a leading "RW". Catching a
+    // pasted comment line or a truncated key here beats failing at first
+    // fetch on a user's machine.
+    if !key.starts_with("RW") || key.len() < 40 {
+        panic!(
+            "core/build.rs: `data_signing_pubkey` in hyrr.json does not look like a minisign \
+             public key (#594). Expected a base64 line starting `RW`, got {} chars starting \
+             {:?}.\n\
+             \n\
+             Note this must be the KEY line, not the `untrusted comment:` line above it.",
+            key.len(),
+            key.chars().take(4).collect::<String>()
+        );
+    }
+
+    // Diff against upstream's own published key. See below for why this is
+    // the single highest-value check in this file.
+    assert_pubkey_matches_upstream(&key);
+
+    println!("cargo:rustc-env=HYRR_DATA_SIGNING_PUBKEY={key}");
+}
+
+/// Fail the build if `hyrr.json`'s pinned signing key disagrees with the key
+/// published in the pinned `nucl-parquet` submodule.
+///
+/// **Why this exists.** An adversarial review of the data-integrity design
+/// ranked "a pull request that quietly edits `data_signing_pubkey`" as the
+/// highest-leverage attack on HYRR: one merge silently swaps the trust root
+/// for every user, on every surface, permanently — and every downstream
+/// signature check then passes, because it is checking against the attacker's
+/// key. Verifying signatures against a key nobody re-derives is a closed loop.
+///
+/// This breaks the loop by re-deriving it from the submodule, which is pinned
+/// by commit hash and bumped in a reviewed, separate change. Editing the key
+/// alone now fails the build; editing key *and* submodule together is two
+/// obviously-related changes in one diff, which is what review is for.
+///
+/// Mirrors the `data_version` vs `data_tarball_version` guard above: the same
+/// "two records of the same fact must agree" pattern that already catches a
+/// stale checksum pin.
+///
+/// A missing file is **not** silently tolerated. `docs/security/` is part of
+/// every sparse checkout that fetches data; if it is absent while
+/// `catalog.json` is present, the checkout is misconfigured and the guard
+/// would otherwise be skipped exactly when it matters.
+fn assert_pubkey_matches_upstream(pinned: &str) {
+    let upstream_path = Path::new("../nucl-parquet/docs/security/data-signing-key.pub");
+    println!("cargo:rerun-if-changed=../nucl-parquet/docs/security/data-signing-key.pub");
+
+    let Ok(contents) = std::fs::read_to_string(upstream_path) else {
+        panic!(
+            "core/build.rs: cannot read {} (#614).\n\
+             \n\
+             The nucl-parquet submodule has a `data/catalog.json` (so this is a real data \n\
+             build) but no published signing key to check `hyrr.json::data_signing_pubkey` \n\
+             against. That check is what stops a pull request from silently swapping the \n\
+             trust root, so it is not skipped when the file is missing.\n\
+             \n\
+             Fix: include `docs/security` in the submodule's sparse checkout —\n\
+                 git -C nucl-parquet sparse-checkout add docs/security",
+            upstream_path.display()
+        );
+    };
+
+    // A minisign `.pub` is two lines: an untrusted comment, then the key.
+    // Take the first line that looks like a key and ignore the comment — the
+    // comment is attacker-controllable text and must not influence the match.
+    let Some(upstream) = contents
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("RW") && l.len() >= 40)
+    else {
+        panic!(
+            "core/build.rs: {} contains no minisign public key line (#614). Expected a \
+             base64 line starting `RW`.",
+            upstream_path.display()
+        );
+    };
+
+    if upstream != pinned {
+        panic!(
+            "core/build.rs: the pinned data-signing key does not match upstream (#614).\n\
+             \n\
+               hyrr.json                     : {pinned}\n\
+               nucl-parquet docs/security/…  : {upstream}\n\
+             \n\
+             Either the upstream key rotated and `hyrr.json` needs updating deliberately \n\
+             (confirm the new key out of band first — a rotation announced only through \n\
+             the same channel it protects is not a rotation), or `data_signing_pubkey` was \n\
+             edited without a matching submodule bump.\n\
+             \n\
+             This is the check that stops the trust root being swapped in a single PR. \n\
+             Do not silence it."
+        );
+    }
 }
 
 /// Pack the required nucl-parquet files into an uncompressed tar in OUT_DIR.
@@ -79,7 +318,6 @@ fn main() {
 #[cfg(feature = "embed-data")]
 fn pack_data_tar(library: &str) {
     use std::fs;
-    use std::io::Write;
 
     let data_root = Path::new("../nucl-parquet/data");
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
@@ -95,8 +333,8 @@ fn pack_data_tar(library: &str) {
 
     // Helper: add a single file under a relative path in the tar.
     let add_file = |tar: &mut tar::Builder<fs::File>, disk_path: &Path, tar_path: &str| {
-        let data = fs::read(disk_path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", disk_path.display()));
+        let data =
+            fs::read(disk_path).unwrap_or_else(|e| panic!("read {}: {e}", disk_path.display()));
         let mut header = tar::Header::new_gnu();
         header.set_size(data.len() as u64);
         header.set_mode(0o644);
@@ -106,7 +344,11 @@ fn pack_data_tar(library: &str) {
     };
 
     // Meta: single-file Dbs
-    for name in &["abundances.parquet", "decay.parquet", "dose_constants.parquet"] {
+    for name in &[
+        "abundances.parquet",
+        "decay.parquet",
+        "dose_constants.parquet",
+    ] {
         let disk = data_root.join("meta").join(name);
         if disk.exists() {
             add_file(&mut tar, &disk, &format!("meta/{name}"));
@@ -145,7 +387,9 @@ fn pack_data_tar(library: &str) {
 fn add_dir_recursive(tar: &mut tar::Builder<std::fs::File>, dir: &Path, prefix: &str) {
     use std::fs;
 
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
         let name = entry.file_name();
@@ -157,8 +401,7 @@ fn add_dir_recursive(tar: &mut tar::Builder<std::fs::File>, dir: &Path, prefix: 
         } else if path.extension().and_then(|e| e.to_str()) == Some("parquet")
             || path.extension().and_then(|e| e.to_str()) == Some("json")
         {
-            let data = fs::read(&path)
-                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let data = fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
             let mut header = tar::Header::new_gnu();
             header.set_size(data.len() as u64);
             header.set_mode(0o644);

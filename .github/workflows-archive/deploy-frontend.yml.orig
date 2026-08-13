@@ -1,0 +1,93 @@
+name: Deploy frontend (staging slot)
+
+# Every push to main lands in /hyrr/tst/ — never directly to /hyrr/.
+# Promotion to prod is gated behind the staging smoke (deploy-staging-smoke.yml)
+# and explicit dispatch of promote-to-prod.yml. This means broken main pushes
+# can't land on the user-facing URL anymore — they fail the smoke and the
+# previous prod stays live.
+on:
+  push:
+    branches: [main]
+    # WASM is built from wasm/** linking core/**, then bundled into
+    # frontend/dist — so a core or wasm change is functionally a
+    # frontend change for the deployed /tst bundle. Without these
+    # paths a wasm-only PR (e.g. depth-grid bump) merges to main but
+    # never reaches staging. Cargo.lock is here because dependency
+    # bumps can affect WASM size/behavior even without source changes.
+    paths:
+      - "frontend/**"
+      - "wasm/**"
+      - "core/**"
+      - "Cargo.lock"
+      - ".github/workflows/deploy-frontend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to push to gh-pages branch
+  pages: read
+
+# Serialize against the prod promotion workflow — they both write the same branch.
+concurrency:
+  group: gh-pages-branch
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Init nucl-parquet submodule (sparse)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs data/hi-xs-prod/xs data/endfb-8.1/xs
+
+      - name: Copy nuclear data for frontend
+        run: |
+          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
+            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: "v0.13.1"
+
+      - name: Build WASM compute engine
+        run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Fix rollup native bindings
+        working-directory: frontend
+        run: npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
+
+      - name: Build frontend (base=/hyrr/tst/)
+        working-directory: frontend
+        env:
+          VITE_BASE_PATH: /hyrr/tst/
+        run: npm run build
+
+      - name: Deploy to gh-pages /tst/
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: gh-pages
+          folder: frontend/dist
+          target-folder: tst
+          # `clean` removes files inside `tst/` that aren't in `frontend/dist`.
+          # It doesn't touch sibling folders like `/` (prod) or `/preview/*/`.
+          clean: true
+          # Record the source SHA so promote-to-prod can reproduce this build.
+          commit-message: "deploy(staging): tst/ from ${{ github.sha }}"

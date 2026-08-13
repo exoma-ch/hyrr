@@ -20,6 +20,13 @@ export interface BugReportBodyInput {
   screenshotUrl?: string;
   config: SimulationConfig;
   configUrl: string;
+  /** What the `#config=` share link couldn't carry, straight from the codec's
+   *  `EncodeOutcome`. Threaded through so the report is honest that the
+   *  "Reproduce this config" link may not be lossless — the bug shouldn't imply
+   *  a state the link never encoded (#539 / #546). */
+  configDropped?: string[];
+  configWarnings?: string[];
+  configLinkUnusable?: boolean;
   result: SimulationResult | null;
   computeError: unknown | null;
   appVersion: string;
@@ -56,15 +63,39 @@ function formatComputeError(err: unknown): string {
   return String(err);
 }
 
+/**
+ * Human-readable caveats about what the share link dropped, mirroring the
+ * warnings HeaderBar's share menu surfaces (#539 inc3b). Keeps the bug report
+ * honest: the "Reproduce this config" link may be over-budget or unusable, and
+ * that must be stated rather than implying a lossless share (#546 nit).
+ */
+function shareLinkCaveats(input: BugReportBodyInput): string[] {
+  if (input.configLinkUnusable) {
+    // Matches HeaderBar's `link_unusable` branch — the single dominant message.
+    return [
+      "⚠ Stack too large to share by link — the reproduce link above can't carry the full configuration. Attach an exported config/session file for the complete state.",
+    ];
+  }
+  const caveats: string[] = [];
+  if (input.configDropped?.includes("currentProfile")) {
+    caveats.push(
+      "⚠ Current profile was too large for the share link and was left out — it won't reproduce from the link above.",
+    );
+  }
+  for (const w of input.configWarnings ?? []) caveats.push(`⚠ ${w}`);
+  return caveats;
+}
+
 export function buildBugReportBody(input: BugReportBodyInput): string {
   const sections: string[] = [];
 
   sections.push(input.reportType === "bug" ? `## Bug Report` : `## Feature Request`);
   const titleLine = (input.title ?? "").trim() || input.description.slice(0, 70);
   if (titleLine) sections.push(`## ${titleLine}`);
-  sections.push(
-    `**Reporter:** ${input.name || "Anonymous"}${input.email ? ` (${input.email})` : ""}`,
-  );
+  // Reporter email is sent to the worker (for follow-up) but intentionally NOT
+  // published here — the issue is public, and a public email is needless
+  // personal-data exposure. Only the optional, self-chosen name is shown.
+  sections.push(`**Reporter:** ${input.name || "Anonymous"}`);
   sections.push(`## Description\n\n${input.description}`);
 
   if (input.screenshotUrl) {
@@ -73,6 +104,8 @@ export function buildBugReportBody(input: BugReportBodyInput): string {
 
   sections.push(`## Debug Context`);
   sections.push(`**[Reproduce this config](${input.configUrl})**`);
+  const caveats = shareLinkCaveats(input);
+  if (caveats.length) sections.push(caveats.join("\n"));
   sections.push(
     `**Beam:** ${input.config.beam?.projectile ?? "?"} @ ${input.config.beam?.energy_MeV ?? "?"} MeV, ${input.config.beam?.current_mA ?? "?"} mA`,
   );

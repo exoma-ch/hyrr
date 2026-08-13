@@ -43,7 +43,12 @@ pub fn compute_stack_done(n_layers: usize, n_isotopes: usize) {
 
 /// Per-layer boundary. Scales with layer count (≤ tens/run), not iterations → `debug`.
 #[inline]
-pub fn compute_layer(layer_index: usize, energy_in_mev: f64, energy_out_mev: f64, n_products: usize) {
+pub fn compute_layer(
+    layer_index: usize,
+    energy_in_mev: f64,
+    energy_out_mev: f64,
+    n_products: usize,
+) {
     debug!(
         event = "compute.layer",
         layer_index, energy_in_mev, energy_out_mev, n_products
@@ -57,10 +62,42 @@ pub fn stopping_fallback(projectile: &str, requested: &str, used: &str) {
     warn!(event = "stopping.fallback", projectile, requested, used);
 }
 
+/// The layer's isotope inventory dropped `n_dropped` entries as genuine
+/// numerical dust (issues #533, #567). Dust here is strictly numerical
+/// residue — subnormal / non-finite production rate AND subnormal /
+/// non-finite activity everywhere in the trace (see
+/// [`crate::constants::DUST_MAGNITUDE_THRESHOLD`]). Relevance filtering (e.g.
+/// "isotopes below 1 kBq") is the caller's job via the MCP
+/// `activity_floor_bq` argument, per the #130 contract; this event surfaces
+/// only what compute strips. Emitted at `debug` (per-layer, bounded
+/// frequency); anchor for "never silent" (§533 / §567).
+#[inline]
+pub fn layer_inventory_pruned(layer_index: usize, n_kept: usize, n_dropped: usize) {
+    debug!(
+        event = "compute.layer.inventory_pruned",
+        layer_index, n_kept, n_dropped
+    );
+}
+
 /// Context: which nuclear-data library a run resolved to. Emitted once per run.
 #[inline]
 pub fn library_selected(library: &str) {
     info!(event = "data.library.selected", library);
+}
+
+/// A requested target element's cross-section file is absent from the library
+/// (neither the symbol-named `{proj}_{Symbol}.parquet` nor the Z-named
+/// `{proj}_Z{Z}.parquet` fallback exists in `{library}/xs/`). This produces
+/// zero isotopes for that element — the caller sees "no channels" rather than
+/// a hard error, so we surface it as a warning so the silence is not silent
+/// (#488). Emitted at most once per (projectile, Z) per store instance because
+/// the XS cache blocks re-loads. Degraded-but-recovered → `warn`.
+#[inline]
+pub fn xs_data_missing(library: &str, projectile: &str, target_z: u32, symbol: &str) {
+    warn!(
+        event = "data.xs.missing",
+        library, projectile, target_z, symbol
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +161,28 @@ mod native {
         error!(event = "data.fetch.error", stage, message);
     }
 
+    /// MCP StackResult cache — in-memory tier hit (#568). Per-tool-invocation
+    /// frequency, but that's user-driven (one per MCP call), not compute-inner
+    /// → `debug`. `tier` distinguishes mem vs disk so a subscriber can tally
+    /// separately without regexing the event name.
+    #[inline]
+    pub fn mcp_cache_hit_mem() {
+        debug!(event = "mcp.cache.hit", tier = "mem");
+    }
+
+    /// MCP StackResult cache — on-disk tier hit. Same shape as `mcp_cache_hit_mem`.
+    #[inline]
+    pub fn mcp_cache_hit_disk() {
+        debug!(event = "mcp.cache.hit", tier = "disk");
+    }
+
+    /// MCP StackResult cache — miss (both tiers). The next event on this key
+    /// will be a full `compute.stack.start`.
+    #[inline]
+    pub fn mcp_cache_miss() {
+        debug!(event = "mcp.cache.miss");
+    }
+
     /// Initialize native tracing for a binary entrypoint (#159).
     ///
     /// Human-readable logs go to stderr (level from `RUST_LOG`, default `info`).
@@ -165,6 +224,7 @@ mod tests {
         compute_stack_done(2, 87);
         stopping_fallback("a", "ASTAR", "catima");
         library_selected("tendl-2023-iso");
+        xs_data_missing("tendl-2023-iso", "p", 88, "Ra");
     }
 
     /// Native path-bearing events redact `$HOME` before emission. Redaction
@@ -179,5 +239,8 @@ mod tests {
         fetch_start("metadata", "https://example.com/x.parquet");
         extract_done(Path::new("/home/u/.hyrr/data"), 10, 1234);
         fetch_error("extract", "failed at ~/.hyrr/x");
+        mcp_cache_hit_mem();
+        mcp_cache_hit_disk();
+        mcp_cache_miss();
     }
 }

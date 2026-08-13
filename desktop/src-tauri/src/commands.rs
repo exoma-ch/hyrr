@@ -6,9 +6,7 @@ use hyrr_core::compute::compute_stack;
 use hyrr_core::db::EmbeddedDataStore;
 use hyrr_core::materials::resolve_material;
 use hyrr_core::production::generate_depth_profile;
-use hyrr_core::stopping::{
-    compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm,
-};
+use hyrr_core::stopping::{compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm};
 use hyrr_core::types::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -64,53 +62,6 @@ pub struct LayerConfig {
     /// Override resolved density (g/cm³). If set, takes precedence over
     /// the density from resolve_material / material catalog.
     pub density_g_cm3: Option<f64>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SimulationResult {
-    pub config: serde_json::Value,
-    pub layers: Vec<LayerResultData>,
-    pub timestamp: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct LayerResultData {
-    pub layer_index: usize,
-    pub energy_in: f64,
-    pub energy_out: f64,
-    pub delta_E_MeV: f64,
-    pub heat_kW: f64,
-    pub isotopes: Vec<IsotopeResultData>,
-    pub depth_profile: Vec<DepthPointData>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub depth_production_rates: HashMap<String, Vec<f64>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct IsotopeResultData {
-    pub name: String,
-    pub Z: u32,
-    pub A: u32,
-    pub state: String,
-    pub half_life_s: Option<f64>,
-    pub production_rate: f64,
-    pub saturation_yield_Bq_uA: f64,
-    pub activity_Bq: f64,
-    pub source: String,
-    pub activity_direct_Bq: f64,
-    pub activity_ingrowth_Bq: f64,
-    pub time_grid_s: Vec<f64>,
-    pub activity_vs_time_Bq: Vec<f64>,
-    pub reactions: Vec<String>,
-    pub decay_notations: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DepthPointData {
-    pub depth_mm: f64,
-    pub energy_MeV: f64,
-    pub dedx_MeV_cm: f64,
-    pub heat_W_cm3: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -196,17 +147,14 @@ fn layer_composition(layer: &Layer) -> Vec<(u32, f64)> {
 /// All nuclear data is baked into the binary at build time (#274).
 /// No filesystem probing, no network, no cache — instant init.
 #[tauri::command]
-pub fn init_data_store(
-    state: State<'_, DataStoreState>,
-    library: String,
-) -> Result<(), String> {
+pub fn init_data_store(state: State<'_, DataStoreState>, library: String) -> Result<(), String> {
     let lib = if library.is_empty() {
         hyrr_core::mcp::transport::DEFAULT_LIBRARY
     } else {
         &library
     };
-    let store = EmbeddedDataStore::new(lib)
-        .map_err(|e| format!("Failed to init embedded DB: {e}"))?;
+    let store =
+        EmbeddedDataStore::new(lib).map_err(|e| format!("Failed to init embedded DB: {e}"))?;
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
     *guard = Some(store);
     Ok(())
@@ -353,8 +301,14 @@ pub fn compute_depth_preview(
             continue;
         }
 
-        let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)
-            .map_err(|e| format!("Material '{}': {e}", lc.material))?;
+        let resolution = resolve_material(
+            db,
+            &lc.material,
+            lc.enrichment.as_ref(),
+            None,
+            lc.density_g_cm3,
+        )
+        .map_err(|e| format!("Material '{}': {e}", lc.material))?;
         let composition = compute_composition(&resolution.elements);
         let density = lc.density_g_cm3.unwrap_or(resolution.density);
 
@@ -364,12 +318,27 @@ pub fn compute_depth_preview(
             (ad / density, "areal_density", None)
         } else if let Some(e_out) = lc.energy_out_MeV {
             if energy_in <= 0.0 {
-                (0.0, "energy_out", Some("Beam stopped before this layer".to_string()))
+                (
+                    0.0,
+                    "energy_out",
+                    Some("Beam stopped before this layer".to_string()),
+                )
             } else if e_out > energy_in {
-                (0.0, "energy_out", Some(format!("Eout ({e_out} MeV) > Ein ({energy_in:.1} MeV)")))
+                (
+                    0.0,
+                    "energy_out",
+                    Some(format!("Eout ({e_out} MeV) > Ein ({energy_in:.1} MeV)")),
+                )
             } else {
                 match compute_thickness_from_energy(
-                    db, &projectile, &composition, density, energy_in, e_out.max(0.0), 1000, None,
+                    db,
+                    &projectile,
+                    &composition,
+                    density,
+                    energy_in,
+                    e_out.max(0.0),
+                    1000,
+                    None,
                 ) {
                     Ok(t) => (t, "energy_out", None),
                     Err(e) => (0.0, "energy_out", Some(e.to_string())),
@@ -383,12 +352,22 @@ pub fn compute_depth_preview(
         let areal_density = thickness_cm * density;
 
         let (energy_out, depth_points, heat_kw) = if energy_in > 0.0 && thickness_cm > 0.0 {
-            let e_out_res: Result<f64, hyrr_core::stopping::StoppingError> = if user_specified == "energy_out" {
-                Ok(lc.energy_out_MeV.unwrap_or(0.0).min(energy_in).max(0.0))
-            } else {
-                compute_energy_out(db, &projectile, &composition, density, energy_in, thickness_cm, 1000, None)
+            let e_out_res: Result<f64, hyrr_core::stopping::StoppingError> =
+                if user_specified == "energy_out" {
+                    Ok(lc.energy_out_MeV.unwrap_or(0.0).min(energy_in).max(0.0))
+                } else {
+                    compute_energy_out(
+                        db,
+                        &projectile,
+                        &composition,
+                        density,
+                        energy_in,
+                        thickness_cm,
+                        1000,
+                        None,
+                    )
                     .map(|v| v.max(0.0))
-            };
+                };
             let e_out = match e_out_res {
                 Ok(v) => v,
                 Err(err) => {
@@ -413,24 +392,25 @@ pub fn compute_depth_preview(
             let energies: Vec<f64> = (0..n_pts)
                 .map(|i| e_min + (energy_in - e_min) * (i as f64) / ((n_pts - 1) as f64))
                 .collect();
-            let dedx_vals = match dedx_mev_per_cm(db, &projectile, &composition, density, &energies, None) {
-                Ok(v) => v,
-                Err(err) => {
-                    preview_layers.push(DepthPreviewLayer {
-                        material: lc.material.clone(),
-                        thickness_mm: thickness_cm * 10.0,
-                        areal_density_g_cm2: thickness_cm * density,
-                        energy_in_MeV: energy_in,
-                        energy_out_MeV: 0.0,
-                        delta_E_MeV: 0.0,
-                        heat_kW: 0.0,
-                        depth_points: vec![],
-                        user_specified: user_specified.to_string(),
-                        error: Some(err.to_string()),
-                    });
-                    continue;
-                }
-            };
+            let dedx_vals =
+                match dedx_mev_per_cm(db, &projectile, &composition, density, &energies, None) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        preview_layers.push(DepthPreviewLayer {
+                            material: lc.material.clone(),
+                            thickness_mm: thickness_cm * 10.0,
+                            areal_density_g_cm2: thickness_cm * density,
+                            energy_in_MeV: energy_in,
+                            energy_out_MeV: 0.0,
+                            delta_E_MeV: 0.0,
+                            heat_kW: 0.0,
+                            depth_points: vec![],
+                            user_specified: user_specified.to_string(),
+                            error: Some(err.to_string()),
+                        });
+                        continue;
+                    }
+                };
 
             let dp = generate_depth_profile(&energies, &dedx_vals, beam_current, beam_area, proj_z);
 
@@ -463,8 +443,16 @@ pub fn compute_depth_preview(
             // Extend to full layer when beam stops
             let last_mm = points.last().map(|p| p.depth_mm).unwrap_or(0.0);
             if last_mm < thickness_mm - 0.001 {
-                points.push(DepthPreviewPoint { depth_mm: last_mm + 0.001, energy_MeV: 0.0, heat_W_cm3: 0.0 });
-                points.push(DepthPreviewPoint { depth_mm: thickness_mm, energy_MeV: 0.0, heat_W_cm3: 0.0 });
+                points.push(DepthPreviewPoint {
+                    depth_mm: last_mm + 0.001,
+                    energy_MeV: 0.0,
+                    heat_W_cm3: 0.0,
+                });
+                points.push(DepthPreviewPoint {
+                    depth_mm: thickness_mm,
+                    energy_MeV: 0.0,
+                    heat_W_cm3: 0.0,
+                });
             }
 
             (e_out, points, heat_w / 1000.0)
@@ -472,8 +460,16 @@ pub fn compute_depth_preview(
             (
                 0.0,
                 vec![
-                    DepthPreviewPoint { depth_mm: 0.0, energy_MeV: 0.0, heat_W_cm3: 0.0 },
-                    DepthPreviewPoint { depth_mm: thickness_mm, energy_MeV: 0.0, heat_W_cm3: 0.0 },
+                    DepthPreviewPoint {
+                        depth_mm: 0.0,
+                        energy_MeV: 0.0,
+                        heat_W_cm3: 0.0,
+                    },
+                    DepthPreviewPoint {
+                        depth_mm: thickness_mm,
+                        energy_MeV: 0.0,
+                        heat_W_cm3: 0.0,
+                    },
                 ],
                 0.0,
             )
@@ -518,69 +514,21 @@ fn compute_composition(elements: &[(Element, f64)]) -> Vec<(u32, f64)> {
     raw.iter().map(|&(z, w)| (z, w / total)).collect()
 }
 
-fn convert_stack_result(config_json: &str, result: &StackResult) -> SimulationResult {
+/// Delegate to the core-owned converter (ADR 0008).
+///
+/// This mapping used to be hand-mirrored here and in `wasm/src/lib.rs`, and the
+/// two had drifted: this copy silently dropped `pruned_negligible_count`, so
+/// desktop users never saw that the negligible-inventory prune (#533) had
+/// filtered isotopes. Routing through `hyrr_core::viewer` fixes that as a side
+/// effect of removing the duplicate.
+fn convert_stack_result(
+    config_json: &str,
+    result: &StackResult,
+) -> hyrr_core::viewer::SimulationResultJson {
     let config_val: serde_json::Value = serde_json::from_str(config_json).unwrap_or_default();
-
-    let layers: Vec<LayerResultData> = result
-        .layer_results
-        .iter()
-        .enumerate()
-        .map(|(idx, lr)| {
-            let mut isotopes: Vec<IsotopeResultData> = lr
-                .isotope_results
-                .values()
-                .map(|iso| IsotopeResultData {
-                    name: iso.name.clone(),
-                    Z: iso.z,
-                    A: iso.a,
-                    state: iso.state.clone(),
-                    half_life_s: iso.half_life_s,
-                    production_rate: iso.production_rate,
-                    saturation_yield_Bq_uA: iso.saturation_yield_bq_ua,
-                    activity_Bq: iso.activity_bq,
-                    source: iso.source.clone(),
-                    activity_direct_Bq: iso.activity_direct_bq,
-                    activity_ingrowth_Bq: iso.activity_ingrowth_bq,
-                    time_grid_s: iso.time_grid_s.clone(),
-                    activity_vs_time_Bq: iso.activity_vs_time_bq.clone(),
-                    reactions: iso.reactions.clone(),
-                    decay_notations: iso.decay_notations.clone(),
-                })
-                .collect();
-            isotopes.sort_by(|a, b| b.activity_Bq.partial_cmp(&a.activity_Bq).unwrap_or(std::cmp::Ordering::Equal));
-
-            let depth_profile: Vec<DepthPointData> = lr
-                .depth_profile
-                .iter()
-                .map(|dp| DepthPointData {
-                    depth_mm: dp.depth_cm * 10.0,
-                    energy_MeV: dp.energy_mev,
-                    dedx_MeV_cm: dp.dedx_mev_cm,
-                    heat_W_cm3: dp.heat_w_cm3,
-                })
-                .collect();
-
-            LayerResultData {
-                layer_index: idx,
-                energy_in: lr.energy_in,
-                energy_out: lr.energy_out,
-                delta_E_MeV: lr.delta_e_mev,
-                heat_kW: lr.heat_kw,
-                isotopes,
-                depth_profile,
-                depth_production_rates: lr.depth_production_rates.clone(),
-            }
-        })
-        .collect();
-
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-
-    SimulationResult {
-        config: config_val,
-        layers,
-        timestamp,
-    }
+    hyrr_core::viewer::convert_stack_result(config_val, result, timestamp)
 }

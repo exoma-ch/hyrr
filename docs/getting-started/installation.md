@@ -58,14 +58,17 @@ The default library is `tendl-2023-iso`. Override with `--library` or `HYRR_LIBR
 
 For machines without internet (Faraday-cage labs, isolated networks):
 
-1. **On a connected machine**, populate the cache and pack it:
+1. **On a connected machine**, download the signed bundle:
 
    ```bash
-   hyrr fetch-data --all
    hyrr fetch-data --offline-bundle hyrr-data.tar.zst
    ```
 
-2. **Copy** `hyrr-data.tar.zst` to the air-gapped machine (USB stick, internal share, etc.)
+   This writes **two** files: `hyrr-data.tar.zst` and `hyrr-data.tar.zst.minisig`.
+
+2. **Copy both files** to the air-gapped machine (USB stick, internal share, …).
+   The signature is small but not optional — the install refuses a bundle it
+   cannot authenticate, and there is no override.
 
 3. **On the air-gapped machine**, install the bundle:
 
@@ -73,13 +76,32 @@ For machines without internet (Faraday-cage labs, isolated networks):
    hyrr fetch-data --from hyrr-data.tar.zst
    ```
 
+   If the signature travelled separately, point at it explicitly:
+
+   ```bash
+   hyrr fetch-data --from hyrr-data.tar.zst --signature /other/media/hyrr-data.tar.zst.minisig
+   ```
+
 Both machines must run matching `hyrr` versions for the bundle to apply cleanly — the cache is version-pinned, so a v0.9 bundle won't be picked up by a v0.10 install. Alternatively, drop the upstream GitHub Releases tarball directly. The release URL pattern — host, path layout, tarball filename — is defined by `hyrr_core::data_fetch::release_url()` / `tarball_filename()`. Read your installed version from Python with `python -c "import hyrr._native as n; print(n.py_data_version())"` and substitute it for `<V>` below:
 
 ```bash
 # On a connected machine — substitute <V> with the version printed above
-# (data version is CalVer YYYY.MM.MICRO, e.g. 2026.5.0; no `v` prefix)
+# (data version is CalVer YYYY.MM.MICRO, e.g. 2026.5.0; no `v` prefix).
+# Fetch the SIGNATURE too — the install refuses an unsigned bundle.
 curl -LO "https://github.com/exoma-ch/nucl-parquet/releases/download/data-<V>/nucl-parquet-data-<V>.tar.zst"
+curl -LO "https://github.com/exoma-ch/nucl-parquet/releases/download/data-<V>/nucl-parquet-data-<V>.tar.zst.minisig"
 
 # On the air-gapped machine
 hyrr fetch-data --from "nucl-parquet-data-<V>.tar.zst"
 ```
+
+The bundle's data version must match the one your `hyrr` build pins — a
+validly-signed bundle for a different release is refused, because the cache is
+version-keyed and because accepting an older signed release is exactly the
+rollback a signature alone does not prevent.
+
+> **Sites with content-scanning (CDR) gateways:** appliances that unpack and
+> repack archives in transit will break the signature even though the data is
+> intact, and the install will refuse. See
+> [`docs/DATA_INTEGRITY.md`](../DATA_INTEGRITY.md) — this is a known limitation
+> tracked upstream, and the workaround is a transfer route that preserves bytes.

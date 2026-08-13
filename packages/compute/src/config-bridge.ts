@@ -53,12 +53,30 @@ export function isGroup(item: StackItem): item is LayerGroup {
   return (item as LayerGroup).isGroup === true;
 }
 
+/** Neutron-source spectrum (ADR-0003 Phase 1). Serialises to the Rust
+ *  FluxModel, tagged by `kind`. `flux` is total n/cm²/s. */
+export interface NeutronFluxConfig {
+  kind: "thermal" | "epithermal" | "fast" | "monoenergetic";
+  flux: number;
+  kt_mev?: number;
+  e_min_mev?: number;
+  e_max_mev?: number;
+  temp_mev?: number;
+  e0_mev?: number;
+}
+
 export interface SimulationConfig {
   beam: BeamConfig;
   layers: LayerConfig[];
   irradiation_s: number;
   cooling_s: number;
   currentProfile?: CurrentProfile | null;
+  /** Model secondary (x,n) neutron activation on this charged run (ADR-0003
+   *  Phase 2). Serialised as-is; the Rust side reads `secondary_neutron`. */
+  secondary_neutron?: boolean;
+  /** Neutron-source spectrum, used when beam.projectile === "n" (ADR-0003
+   *  Phase 1). Routed to computeNeutronStack. */
+  neutronFlux?: NeutronFluxConfig;
 }
 
 /**
@@ -108,6 +126,9 @@ export interface LayerResultData {
   isotopes: IsotopeResultData[];
   depth_profile: DepthPointData[];
   depth_production_rates?: Record<string, number[]>;
+  /** Isotopes removed by the negligible-inventory prune (#533); absent/0 when
+   *  nothing was filtered (TS fallback engine never prunes). */
+  pruned_negligible_count?: number;
 }
 
 export interface SimulationResult {

@@ -12,6 +12,30 @@ pub fn linspace(start: f64, stop: f64, num: usize) -> Vec<f64> {
     (0..num).map(|i| start + i as f64 * step).collect()
 }
 
+/// Generate log-spaced values (like numpy.geomspace). Both bounds must be > 0.
+///
+/// Required for neutron flux/cross-section integration: a Maxwellian thermal
+/// peak sits at ~2.5e-8 MeV while fast neutrons reach tens of MeV — a linear
+/// grid can't resolve both, so the neutron path samples in log-energy
+/// (ADR-0003 spike #506, the #1 silent-failure pitfall).
+pub fn geomspace(start: f64, stop: f64, num: usize) -> Vec<f64> {
+    if num == 0 {
+        return Vec::new();
+    }
+    if num == 1 {
+        return vec![start];
+    }
+    debug_assert!(
+        start > 0.0 && stop > 0.0,
+        "geomspace bounds must be positive"
+    );
+    let (log_start, log_stop) = (start.ln(), stop.ln());
+    let step = (log_stop - log_start) / (num - 1) as f64;
+    (0..num)
+        .map(|i| (log_start + i as f64 * step).exp())
+        .collect()
+}
+
 /// Trapezoidal integration of y over x.
 pub fn trapezoid(y: &[f64], x: &[f64]) -> f64 {
     assert_eq!(y.len(), x.len());
@@ -48,6 +72,49 @@ pub fn interp(x_new: &[f64], x: &[f64], y: &[f64], left: f64, right: f64) -> Vec
             }
             let t = (xv - x[lo]) / (x[hi] - x[lo]);
             y[lo] + t * (y[hi] - y[lo])
+        })
+        .collect()
+}
+
+/// Log-log interpolation (ENDF INT=5) — the correct law for neutron
+/// cross-sections. Thermal capture is 1/v and the evaluated data stores that
+/// region compactly on the log-log assumption: a pure-1/v segment is *exact*
+/// from just its two endpoints under log-log, so 1/v nuclides carry no thermal
+/// grid points at all. Linear interpolation of that sparse grid over-predicts
+/// the thermal fold by ~30x (the Maxwellian peak at 0.0253 eV falls in a
+/// multi-decade gap). Within each bracket this interpolates `ln y` linearly in
+/// `ln x`; it falls back to linear for any segment whose endpoints aren't
+/// strictly positive (a channel closing to 0, where `ln` is undefined). Values
+/// outside `[x[0], x[n-1]]` get `left`/`right` (the reaction is closed there).
+pub fn interp_log_log(x_new: &[f64], x: &[f64], y: &[f64], left: f64, right: f64) -> Vec<f64> {
+    let n = x.len();
+    x_new
+        .iter()
+        .map(|&xv| {
+            if xv <= x[0] {
+                return left;
+            }
+            if xv >= x[n - 1] {
+                return right;
+            }
+            let mut lo = 0usize;
+            let mut hi = n - 1;
+            while hi - lo > 1 {
+                let mid = (lo + hi) >> 1;
+                if x[mid] <= xv {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let (x0, x1, y0, y1) = (x[lo], x[hi], y[lo], y[hi]);
+            if x0 > 0.0 && x1 > 0.0 && y0 > 0.0 && y1 > 0.0 {
+                let t = (xv.ln() - x0.ln()) / (x1.ln() - x0.ln());
+                (y0.ln() + t * (y1.ln() - y0.ln())).exp()
+            } else {
+                let t = (xv - x0) / (x1 - x0);
+                y0 + t * (y1 - y0)
+            }
         })
         .collect()
 }

@@ -4,13 +4,17 @@ use std::collections::HashMap;
 
 use crate::bateman::bateman_activity;
 use crate::chains::{discover_chains, solve_chain, split_components};
-use crate::constants::{ACTIVITY_CUTOFF_FRACTION, AVOGADRO, LN2, MAX_CHAIN_SIZE};
+use crate::constants::{
+    AVOGADRO, DUST_MAGNITUDE_THRESHOLD, LN2, MAX_CHAIN_SIZE, MIN_TRACKED_ENERGY_MEV,
+};
 use crate::db::DatabaseProtocol;
 use crate::interpolation::{linspace, trapezoid};
+use crate::neutron::{neutron_channel_rate, FluxModel};
 use crate::production::{
     compute_depth_production_rate, compute_production_rate, generate_depth_profile,
     saturation_yield,
 };
+use crate::projectile::Projectile;
 use crate::stopping::{
     compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm, dedx_mev_per_cm_scalar,
     get_stopping_sources, StoppingError,
@@ -96,23 +100,29 @@ pub fn compute_stack(
         )
         .map_err(|e| e.with_layer_context(idx, material_hint))?;
         // Per-layer boundary (debug — scales with layer count, not iterations).
-        crate::trace_schema::compute_layer(
-            idx,
-            energy_in,
-            lr.energy_out,
-            lr.isotope_results.len(),
-        );
+        crate::trace_schema::compute_layer(idx, energy_in, lr.energy_out, lr.isotope_results.len());
+        if lr.pruned_negligible_count > 0 {
+            crate::trace_schema::layer_inventory_pruned(
+                idx,
+                lr.isotope_results.len(),
+                lr.pruned_negligible_count,
+            );
+        }
         energy_in = lr.energy_out;
         layer_results.push(lr);
     }
 
-    let n_isotopes: usize = layer_results.iter().map(|lr| lr.isotope_results.len()).sum();
+    let n_isotopes: usize = layer_results
+        .iter()
+        .map(|lr| lr.isotope_results.len())
+        .sum();
     crate::trace_schema::compute_stack_done(layer_results.len(), n_isotopes);
 
     Ok(StackResult {
         layer_results,
         irradiation_time_s: irr_time,
         cooling_time_s: cool_time,
+        provenance: crate::provenance::Provenance::new(db.library(), db.data_origin()),
     })
 }
 
@@ -134,7 +144,10 @@ fn compute_layer(
     // querying dE/dx at 0 MeV (which trips EnergyOutOfRange under the table_min
     // floor). Mirrors the depth-preview behavior so the user sees the stack as
     // configured, with the deposited-here layers cleanly empty. See #211.
-    if energy_in <= 0.0 {
+    // Sub-tracked-floor energies (e.g. a hair above zero from the previous
+    // layer's Euler residual) are folded into the same branch — otherwise the
+    // dE/dx precheck below would abort with EnergyOutOfRange (#527).
+    if energy_in <= MIN_TRACKED_ENERGY_MEV {
         layer.computed_energy_in = 0.0;
         layer.computed_energy_out = 0.0;
         layer.computed_thickness = layer.thickness_cm.unwrap_or(0.0);
@@ -147,6 +160,8 @@ fn compute_layer(
             isotope_results: HashMap::new(),
             stopping_power_sources: HashMap::new(),
             depth_production_rates: HashMap::new(),
+            neutron_source_rate: 0.0,
+            pruned_negligible_count: 0,
         });
     }
 
@@ -200,7 +215,7 @@ fn compute_layer(
 
     let sp_sources = get_stopping_sources(db, projectile, &composition)?;
 
-    let layer_e_low_for_validate = energy_out.max(0.01);
+    let layer_e_low_for_validate = energy_out.max(MIN_TRACKED_ENERGY_MEV);
     dedx_mev_per_cm(
         db,
         projectile,
@@ -228,7 +243,7 @@ fn compute_layer(
     // produces uneven depth steps (sparse near beam entry, tight at Bragg peak); 300
     // pts keeps the visible stair-step well below pixel-scale at typical plot widths.
     // Proper fix tracked separately — uniform-in-depth grid via dE/dx back-solve.
-    let layer_e_low = energy_out.max(0.01);
+    let layer_e_low = energy_out.max(MIN_TRACKED_ENERGY_MEV);
     let layer_energies = linspace(layer_e_low, energy_in, 300);
     let layer_dedx = dedx_fn(&layer_energies);
 
@@ -238,6 +253,11 @@ fn compute_layer(
 
     let mut isotope_results: HashMap<String, IsotopeResult> = HashMap::new();
     let mut depth_production_rates: HashMap<String, Vec<f64>> = HashMap::new();
+    // Free neutrons/s from (x,n)-type channels — the Phase-2 secondary source.
+    let mut neutron_source_rate = 0.0_f64;
+
+    // Resolved once — Z/A of the incident projectile for reaction-route balance.
+    let proj_za = Projectile::from_type(projectile);
 
     for (elem, atom_frac) in &layer.elements {
         for (&a_target, &isotope_abundance) in &elem.isotopes {
@@ -272,6 +292,20 @@ fn compute_layer(
                 // Normalize "g" → "" — ground state has no suffix (#315 SSoT)
                 let state_suffix = if xs.state == "g" { "" } else { &xs.state };
                 let name = format!("{}-{}{}", symbol, xs.residual_a, state_suffix);
+
+                // Production-route provenance, e.g. "⁹⁸Mo(p,n)" (#444). Emitted
+                // nucleons from mass/charge balance of compound → residual.
+                let target_symbol = db.get_element_symbol(elem.z);
+                let dz = (elem.z + proj_za.z) as i32 - xs.residual_z as i32;
+                let da = (a_target + proj_za.a) as i32 - xs.residual_a as i32;
+                let route = reaction_route(&target_symbol, a_target, projectile.symbol(), dz, da);
+
+                // (x,n)-type channel: no charged ejectile (dz==0) ⇒ da free
+                // neutrons emitted per reaction. Restricting to dz==0 excludes
+                // nucleons bound in charged ejectiles like α (spike #506).
+                if dz == 0 && da > 0 {
+                    neutron_source_rate += scaled_rate * da as f64;
+                }
 
                 // Depth-resolved rate for this channel. Same integrand as
                 // compute_production_rate in different coordinates (dE → dx); verified
@@ -311,6 +345,13 @@ fn compute_layer(
                     existing.activity_bq = combined_bateman.activity.last().copied().unwrap_or(0.0);
                     existing.time_grid_s = combined_bateman.time_grid;
                     existing.activity_vs_time_bq = combined_bateman.activity;
+                    // A product can come from several routes (different targets /
+                    // channels) — accumulate the distinct ones.
+                    if let Some(r) = &route {
+                        if !existing.reactions.contains(r) {
+                            existing.reactions.push(r.clone());
+                        }
+                    }
                 } else {
                     isotope_results.insert(
                         name.clone(),
@@ -318,7 +359,11 @@ fn compute_layer(
                             name,
                             z: xs.residual_z,
                             a: xs.residual_a,
-                            state: if xs.state == "g" { String::new() } else { xs.state.clone() },
+                            state: if xs.state == "g" {
+                                String::new()
+                            } else {
+                                xs.state.clone()
+                            },
                             half_life_s: half_life,
                             production_rate: scaled_rate,
                             saturation_yield_bq_ua: sat_yield,
@@ -330,7 +375,7 @@ fn compute_layer(
                             activity_ingrowth_bq: 0.0,
                             activity_direct_vs_time_bq: Vec::new(),
                             activity_ingrowth_vs_time_bq: Vec::new(),
-                            reactions: Vec::new(),
+                            reactions: route.iter().cloned().collect(),
                             decay_notations: Vec::new(),
                         },
                     );
@@ -339,19 +384,12 @@ fn compute_layer(
         }
     }
 
-    // Prune negligible isotopes
-    if !isotope_results.is_empty() {
-        let peak_activity: f64 = isotope_results
-            .values()
-            .flat_map(|iso| iso.activity_vs_time_bq.iter())
-            .cloned()
-            .fold(0.0_f64, f64::max);
-
-        let cutoff = peak_activity * ACTIVITY_CUTOFF_FRACTION;
-        if cutoff > 0.0 {
-            isotope_results.retain(|_, iso| iso.activity_vs_time_bq.iter().any(|&a| a > cutoff));
-        }
-    }
+    // Prune numerical-dust isotopes — but NOT long-lived low-yield products
+    // (issue #533). See `prune_negligible_isotopes` for the criterion.
+    // NOTE: prune runs BEFORE the chain solver — decay daughters (whose
+    // production_rate is 0) are not yet in the map, so the rate arm never
+    // misjudges them.
+    let pruned_negligible_count = prune_negligible_isotopes(&mut isotope_results);
 
     // Chain solver
     let enable_chains = enable_chains || current_profile.is_some();
@@ -405,6 +443,8 @@ fn compute_layer(
         isotope_results,
         stopping_power_sources: sp_sources,
         depth_production_rates,
+        neutron_source_rate,
+        pruned_negligible_count,
     })
 }
 
@@ -432,10 +472,63 @@ fn nuc_label(symbol: &str, a: u32, state: &str) -> String {
 /// Canonical short decay-notation string, e.g. "⁹⁹Mo(β⁻)". The `mode` is the
 /// raw string from the nuclear-data file; empty/unknown modes fall back to a
 /// generic "decay" label so the parent nuclide still surfaces in the table.
-fn format_decay_notation(parent_symbol: &str, parent_a: u32, parent_state: &str, mode: &str) -> String {
+fn format_decay_notation(
+    parent_symbol: &str,
+    parent_a: u32,
+    parent_state: &str,
+    mode: &str,
+) -> String {
     let label = nuc_label(parent_symbol, parent_a, parent_state);
     let mode_label = if mode.is_empty() { "decay" } else { mode };
     format!("{}({})", label, mode_label)
+}
+
+/// Ejectile label for a reaction from mass/charge balance: emitted protons =
+/// ΔZ, emitted neutrons = ΔA − ΔZ (free-nucleon accounting). `γ` for radiative
+/// capture and `α` for the one cluster we name explicitly; everything else is
+/// spelled as `p`/`n` counts (e.g. `2n`, `p2n`). Returns `None` for exotic
+/// balances that can't be rendered as simple p/n(/α) ejectiles (e.g. a residual
+/// heavier/more-charged than the compound — bad data, or a cluster we don't name).
+fn ejectile_notation(dz: i32, da: i32) -> Option<String> {
+    if dz < 0 || da < dz {
+        return None;
+    }
+    let p_out = dz;
+    let n_out = da - dz;
+    if p_out == 0 && n_out == 0 {
+        return Some("γ".to_string());
+    }
+    if p_out == 2 && n_out == 2 {
+        return Some("α".to_string());
+    }
+    let part = |count: i32, sym: &str| match count {
+        0 => String::new(),
+        1 => sym.to_string(),
+        _ => format!("{count}{sym}"),
+    };
+    Some(format!("{}{}", part(p_out, "p"), part(n_out, "n")))
+}
+
+/// Full production-route notation for a channel, e.g. `⁹⁸Mo(p,n)`. The residual
+/// is the row's own isotope, so it isn't repeated. Provenance for the reaction
+/// table (#444) — pairs with `decay_notations` (the ingrowth route). Built here
+/// per-channel (not in the per-depth loop), so a plain `String` is cheap; if this
+/// ever moves into a hot per-depth path, switch to an integer key + format later.
+fn reaction_route(
+    target_symbol: &str,
+    target_a: u32,
+    projectile_symbol: &str,
+    dz: i32,
+    da: i32,
+) -> Option<String> {
+    ejectile_notation(dz, da).map(|ej| {
+        format!(
+            "{}({},{})",
+            nuc_label(target_symbol, target_a, ""),
+            projectile_symbol,
+            ej
+        )
+    })
 }
 
 fn apply_chain_solver_by_component(
@@ -491,7 +584,11 @@ fn apply_chain_solver_by_component(
             // isotope as directly-produced and has no parent-graph context.
             for ciso in component {
                 let symbol = db.get_element_symbol(ciso.z);
-                let state_suffix = if ciso.state == "g" { "" } else { ciso.state.as_str() };
+                let state_suffix = if ciso.state == "g" {
+                    ""
+                } else {
+                    ciso.state.as_str()
+                };
                 let name = format!("{}-{}{}", symbol, ciso.a, state_suffix);
                 if let Some(existing) = isotope_results.get(&name) {
                     let mut iso = existing.clone();
@@ -518,7 +615,11 @@ fn apply_chain_solver_by_component(
 
         for (i, ciso) in solution.isotopes.iter().enumerate() {
             let symbol = db.get_element_symbol(ciso.z);
-            let state_suffix = if ciso.state == "g" { "" } else { ciso.state.as_str() };
+            let state_suffix = if ciso.state == "g" {
+                ""
+            } else {
+                ciso.state.as_str()
+            };
             let name = format!("{}-{}{}", symbol, ciso.a, state_suffix);
 
             let total_activity = &solution.activities[i];
@@ -561,14 +662,10 @@ fn apply_chain_solver_by_component(
                         // Look up the parent ChainIsotope to recover the
                         // symbol via the database — this keeps the formatting
                         // consistent with the isotope `name` field.
-                        let parent = solution
-                            .isotopes
-                            .iter()
-                            .find(|p| &p.key() == parent_key);
+                        let parent = solution.isotopes.iter().find(|p| &p.key() == parent_key);
                         let Some(parent) = parent else { continue };
                         let psym = db.get_element_symbol(parent.z);
-                        let notation =
-                            format_decay_notation(&psym, parent.a, &parent.state, mode);
+                        let notation = format_decay_notation(&psym, parent.a, &parent.state, mode);
                         if seen.insert(notation.clone()) {
                             decay_notations.push(notation);
                         }
@@ -582,7 +679,11 @@ fn apply_chain_solver_by_component(
                     name,
                     z: ciso.z,
                     a: ciso.a,
-                    state: if ciso.state == "g" { String::new() } else { ciso.state.clone() },
+                    state: if ciso.state == "g" {
+                        String::new()
+                    } else {
+                        ciso.state.clone()
+                    },
                     half_life_s: ciso.half_life_s,
                     production_rate: prod_rate,
                     saturation_yield_bq_ua: sat_yield,
@@ -650,6 +751,7 @@ pub fn compute_stack_stopping_only(
         layer_results,
         irradiation_time_s: stack.irradiation_time_s,
         cooling_time_s: stack.cooling_time_s,
+        provenance: crate::provenance::Provenance::new(db.library(), db.data_origin()),
     })
 }
 
@@ -666,8 +768,9 @@ fn compute_layer_stopping_only(
     energy_in: f64,
     area: f64,
 ) -> Result<LayerResult, StoppingError> {
-    // Beam already stopped upstream — see [`compute_layer`] for rationale (#211).
-    if energy_in <= 0.0 {
+    // Beam already stopped upstream — see [`compute_layer`] for rationale
+    // (#211 / sub-tracked-floor handling for #527).
+    if energy_in <= MIN_TRACKED_ENERGY_MEV {
         layer.computed_energy_in = 0.0;
         layer.computed_energy_out = 0.0;
         layer.computed_thickness = layer.thickness_cm.unwrap_or(0.0);
@@ -680,6 +783,8 @@ fn compute_layer_stopping_only(
             isotope_results: HashMap::new(),
             stopping_power_sources: HashMap::new(),
             depth_production_rates: HashMap::new(),
+            neutron_source_rate: 0.0,
+            pruned_negligible_count: 0,
         });
     }
 
@@ -689,18 +794,39 @@ fn compute_layer_stopping_only(
 
     let (thickness, energy_out) = if let Some(e_out) = layer.energy_out_mev {
         let thick = compute_thickness_from_energy(
-            db, projectile, &composition, density, energy_in, e_out, 1000, nist,
+            db,
+            projectile,
+            &composition,
+            density,
+            energy_in,
+            e_out,
+            1000,
+            nist,
         )?;
         (thick, e_out)
     } else if let Some(thick) = layer.thickness_cm {
         let e_out = compute_energy_out(
-            db, projectile, &composition, density, energy_in, thick, 1000, nist,
+            db,
+            projectile,
+            &composition,
+            density,
+            energy_in,
+            thick,
+            1000,
+            nist,
         )?;
         (thick, e_out)
     } else {
         let thick = layer.areal_density_g_cm2.unwrap() / density;
         let e_out = compute_energy_out(
-            db, projectile, &composition, density, energy_in, thick, 1000, nist,
+            db,
+            projectile,
+            &composition,
+            density,
+            energy_in,
+            thick,
+            1000,
+            nist,
         )?;
         (thick, e_out)
     };
@@ -711,7 +837,7 @@ fn compute_layer_stopping_only(
 
     let sp_sources = get_stopping_sources(db, projectile, &composition)?;
 
-    let layer_e_low = energy_out.max(0.01);
+    let layer_e_low = energy_out.max(MIN_TRACKED_ENERGY_MEV);
     let layer_energies = linspace(layer_e_low, energy_in, 300);
     let layer_dedx = dedx_mev_per_cm(db, projectile, &composition, density, &layer_energies, nist)?;
 
@@ -743,6 +869,8 @@ fn compute_layer_stopping_only(
         isotope_results: HashMap::new(),
         stopping_power_sources: sp_sources,
         depth_production_rates: HashMap::new(),
+        neutron_source_rate: 0.0,
+        pruned_negligible_count: 0,
     })
 }
 
@@ -756,6 +884,75 @@ fn integrate_heat(profile: &[DepthPoint], area_cm2: f64) -> f64 {
 
     let power_w = area_cm2 * trapezoid(&heat, &depths);
     power_w * 1e-3 // W -> kW
+}
+
+/// Drop isotopes that are genuine numerical dust — nothing more (issue #567).
+///
+/// # Contract (issue #130)
+///
+/// Compute output is the source of truth. Never clamp physically-real values
+/// inside compute — the caller decides what "too small to care about" means
+/// via a reporting-layer floor (`activity_floor_bq`). This helper exists ONLY
+/// to strip numerical residue that has no physical meaning: subnormal
+/// underflow accumulations, or the odd non-finite that would poison
+/// downstream arithmetic.
+///
+/// # What is "dust" here
+///
+/// An isotope is dropped iff **both**:
+///
+/// 1. its production rate is subnormal (below [`DUST_MAGNITUDE_THRESHOLD`] =
+///    `f64::MIN_POSITIVE`) or non-finite / non-positive, **and**
+/// 2. every sample in its activity time-series is subnormal / non-finite /
+///    non-positive.
+///
+/// The AND is deliberate. If a rate is subnormal but the chain solver later
+/// grew a real activity from a parent decay, we mustn't drop it; and if a
+/// rate is real, activity noise is irrelevant. In practice the upstream
+/// `scaled_rate <= 0.0 { continue; }` guard in `compute_layer` already stops
+/// exact zeros entering the map, so this helper is a defensive floor plus a
+/// visibility hook — [`LayerResult::pruned_negligible_count`] and the
+/// `compute.layer.inventory_pruned` trace event stay populated so a future
+/// path that bypasses the upstream guard is never silent.
+///
+/// # What is NOT dust (previous behavior, now the caller's job)
+///
+/// The pre-#567 prune compared every isotope's peak activity and production
+/// rate against `1e-6 × peak_of_whole_stack`. That is a **relevance** filter,
+/// not a numerical filter: it silently dropped physically-real, long-lived,
+/// low-yield minor-component products (Fe-55 from trace Mn in Al; Zn-65
+/// from Cu; Co-60 from steel — all the isotopes waste-classification work
+/// actually cares about — reported in issue #533). The fix layered a peak-
+/// relative *rate* arm on top, which patched #533 but kept a hidden clamp
+/// in compute. Per #130 that clamp does not belong here at all: activity /
+/// dose / fraction relevance filters live in the caller (frontend display
+/// thresholds, MCP `activity_floor_bq`), not the backend. This function
+/// therefore no longer knows the concept of "peak" or "relative".
+///
+/// Returns the number of dropped isotopes so the caller can surface it
+/// (never silent — same contract as before).
+fn prune_negligible_isotopes(isotope_results: &mut HashMap<String, IsotopeResult>) -> usize {
+    if isotope_results.is_empty() {
+        return 0;
+    }
+    let before = isotope_results.len();
+    isotope_results.retain(|_, iso| {
+        // A finite, at-least-subnormal-positive production rate counts as
+        // physically real (see the doc comment). The upstream guard rejects
+        // exact zeros before insertion; anything above the subnormal floor
+        // that survives here is not our concern to filter.
+        let rate_real =
+            iso.production_rate.is_finite() && iso.production_rate >= DUST_MAGNITUDE_THRESHOLD;
+        // Likewise, a single normal-range positive activity anywhere in the
+        // trace means the isotope has meaningful inventory (e.g. built up
+        // by a chain solver from a decaying parent whose direct rate is 0).
+        let activity_real = iso
+            .activity_vs_time_bq
+            .iter()
+            .any(|&a| a.is_finite() && a >= DUST_MAGNITUDE_THRESHOLD);
+        rate_real || activity_real
+    });
+    before - isotope_results.len()
 }
 
 /// Clamp each isotope's activity time-series and scalar activities to the
@@ -830,11 +1027,544 @@ fn clamp_activities_to_saturation(
     }
 }
 
+// ─── Neutron-source activation (ADR-0003 Phase 1 — primary source) ──────────
+
+/// Energy-grid resolution for the neutron flux×σ fold (log-spaced, per flux).
+const NEUTRON_GRID_POINTS: usize = 400;
+
+/// Compute neutron-source activation of a layered target.
+///
+/// Neutrons carry no beam energy to step down, so — in this thin-target phase —
+/// every layer sees the same incident spectrum `flux` (inter-layer Σ_t
+/// attenuation is the follow-up needing the `nucl-parquet` total-xs reader).
+/// Produces the same [`StackResult`] shape as [`compute_stack`] and feeds the
+/// shared, projectile-agnostic decay-chain solver — the seam is "two pipelines,
+/// one back-half" (spike #506), not a forced trait.
+pub fn compute_neutron_stack(
+    db: &dyn DatabaseProtocol,
+    layers: &[Layer],
+    flux: &FluxModel,
+    irradiation_time_s: f64,
+    cooling_time_s: f64,
+    area_cm2: f64,
+    enable_chains: bool,
+) -> StackResult {
+    let layer_results: Vec<LayerResult> = layers
+        .iter()
+        .enumerate()
+        .map(|(idx, layer)| {
+            let lr = compute_neutron_layer(
+                db,
+                layer,
+                flux,
+                irradiation_time_s,
+                cooling_time_s,
+                area_cm2,
+                enable_chains,
+            );
+            if lr.pruned_negligible_count > 0 {
+                crate::trace_schema::layer_inventory_pruned(
+                    idx,
+                    lr.isotope_results.len(),
+                    lr.pruned_negligible_count,
+                );
+            }
+            lr
+        })
+        .collect();
+    StackResult {
+        layer_results,
+        irradiation_time_s,
+        cooling_time_s,
+        provenance: crate::provenance::Provenance::new(db.library(), db.data_origin()),
+    }
+}
+
+fn compute_neutron_layer(
+    db: &dyn DatabaseProtocol,
+    layer: &Layer,
+    flux: &FluxModel,
+    irr_time: f64,
+    cool_time: f64,
+    area: f64,
+    enable_chains: bool,
+) -> LayerResult {
+    let blank = LayerResult {
+        energy_in: 0.0,
+        energy_out: 0.0,
+        delta_e_mev: 0.0,
+        heat_kw: 0.0,
+        depth_profile: Vec::new(),
+        isotope_results: HashMap::new(),
+        stopping_power_sources: HashMap::new(),
+        depth_production_rates: HashMap::new(),
+        neutron_source_rate: 0.0,
+        pruned_negligible_count: 0,
+    };
+
+    // Neutron layers are specified by thickness (no energy-loss stepping).
+    let thickness = layer
+        .thickness_cm
+        .or_else(|| {
+            (layer.density_g_cm3 > 0.0)
+                .then(|| layer.areal_density_g_cm2.map(|ad| ad / layer.density_g_cm3))
+                .flatten()
+        })
+        .unwrap_or(0.0);
+    let avg_a = layer.average_atomic_mass();
+    if thickness <= 0.0 || avg_a <= 0.0 {
+        return blank;
+    }
+    let number_density = layer.density_g_cm3 * AVOGADRO / avg_a; // atoms/cm³
+
+    let mut isotope_results: HashMap<String, IsotopeResult> = HashMap::new();
+
+    for (elem, atom_frac) in &layer.elements {
+        let target_symbol = db.get_element_symbol(elem.z);
+        for (&a_target, &abundance) in &elem.isotopes {
+            let n_target = number_density * atom_frac * abundance;
+            if n_target <= 0.0 {
+                continue;
+            }
+            for xs in &db.get_cross_sections("n", elem.z, a_target) {
+                // Thin-target: empty Σ_t ⇒ the depth factor is the thickness.
+                let rate = neutron_channel_rate(
+                    &xs.energies_mev,
+                    &xs.xs_mb,
+                    flux,
+                    &[],
+                    &[],
+                    n_target,
+                    area,
+                    thickness,
+                    NEUTRON_GRID_POINTS,
+                );
+                if rate <= 0.0 {
+                    continue;
+                }
+
+                let decay = db.get_decay_data(xs.residual_z, xs.residual_a, &xs.state);
+                let half_life = decay.as_ref().and_then(|d| d.half_life_s);
+                let symbol = db.get_element_symbol(xs.residual_z);
+                let state_suffix = if xs.state == "g" { "" } else { &xs.state };
+                let name = format!("{}-{}{}", symbol, xs.residual_a, state_suffix);
+
+                // Neutron production route, e.g. "⁹⁸Mo(n,γ)" — incident n is Z=0, A=1.
+                let dz = elem.z as i32 - xs.residual_z as i32;
+                let da = (a_target + 1) as i32 - xs.residual_a as i32;
+                let route = reaction_route(&target_symbol, a_target, "n", dz, da);
+
+                let bateman = bateman_activity(rate, half_life, irr_time, cool_time, 200);
+                let activity_final = bateman.activity.last().copied().unwrap_or(0.0);
+
+                if let Some(existing) = isotope_results.get_mut(&name) {
+                    let combined_rate = existing.production_rate + rate;
+                    let combined =
+                        bateman_activity(combined_rate, half_life, irr_time, cool_time, 200);
+                    existing.production_rate = combined_rate;
+                    existing.activity_bq = combined.activity.last().copied().unwrap_or(0.0);
+                    existing.time_grid_s = combined.time_grid;
+                    existing.activity_vs_time_bq = combined.activity;
+                    if let Some(r) = &route {
+                        if !existing.reactions.contains(r) {
+                            existing.reactions.push(r.clone());
+                        }
+                    }
+                } else {
+                    isotope_results.insert(
+                        name.clone(),
+                        IsotopeResult {
+                            name,
+                            z: xs.residual_z,
+                            a: xs.residual_a,
+                            state: if xs.state == "g" {
+                                String::new()
+                            } else {
+                                xs.state.clone()
+                            },
+                            half_life_s: half_life,
+                            production_rate: rate,
+                            // Bq/µA is a charged-beam yield metric; n/a for a flux source.
+                            saturation_yield_bq_ua: 0.0,
+                            activity_bq: activity_final,
+                            time_grid_s: bateman.time_grid,
+                            activity_vs_time_bq: bateman.activity,
+                            source: "direct".to_string(),
+                            activity_direct_bq: 0.0,
+                            activity_ingrowth_bq: 0.0,
+                            activity_direct_vs_time_bq: Vec::new(),
+                            activity_ingrowth_vs_time_bq: Vec::new(),
+                            reactions: route.iter().cloned().collect(),
+                            decay_notations: Vec::new(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    // See #533 — prune criterion is peak-relative in BOTH activity and
+    // production rate, so long-lived low-yield products survive. Runs BEFORE
+    // the chain solver (daughters with production_rate == 0 not yet present).
+    let pruned_negligible_count = prune_negligible_isotopes(&mut isotope_results);
+    if enable_chains && !isotope_results.is_empty() {
+        // Shared back-half. No beam current / profile for a neutron source, so
+        // particles_per_s and nominal_current are inert (used only when a
+        // current_profile is present).
+        isotope_results = apply_chain_solver_by_component(
+            db,
+            isotope_results,
+            irr_time,
+            cool_time,
+            0.0,
+            None,
+            0.0,
+        );
+    }
+    clamp_activities_to_saturation(&mut isotope_results, irr_time);
+
+    LayerResult {
+        isotope_results,
+        pruned_negligible_count,
+        ..blank
+    }
+}
+
+// ─── Secondary neutron activation (ADR-0003 Phase 2 — (p,xn) neutrons) ──────
+
+/// Effective evaporation temperature for the secondary neutron spectrum (MeV).
+/// Weisskopf evaporation peaks near T; ~1.5 MeV is typical for the compound
+/// nuclei of cyclotron (p,xn) reactions. (The forward-direct / pre-equilibrium
+/// component and the anisotropic bidirectional transport are the Σ_t-dependent
+/// refinement — spike #506 — and become relevant once attenuation is modelled.)
+const SECONDARY_EVAPORATION_T_MEV: f64 = 1.5;
+
+/// Charged-particle run **with** secondary neutron activation (ADR-0003 Phase 2).
+///
+/// 1. Run the charged pass (`compute_stack`); each layer reports its (x,n)
+///    free-neutron production (`neutron_source_rate`).
+/// 2. Treat the summed source `S` [n/s] as an evaporation flux `φ ≈ S/area`
+///    irradiating the stack (a first-order, thin-target, isotropic estimate —
+///    the bidirectional/anisotropic transport is a Σ_t follow-up).
+/// 3. Run the neutron pass with that flux and **superimpose** the results:
+///    activities are linear in production rate, so the total is the sum of the
+///    charged and secondary contributions (no double-counting).
+///
+/// With no (x,n) channels open, `S = 0` and the result equals `compute_stack`.
+pub fn compute_stack_with_secondary_neutrons(
+    db: &dyn DatabaseProtocol,
+    stack: &mut TargetStack,
+    enable_chains: bool,
+) -> Result<StackResult, StoppingError> {
+    let mut charged = compute_stack(db, stack, enable_chains)?;
+
+    let total_source: f64 = charged
+        .layer_results
+        .iter()
+        .map(|lr| lr.neutron_source_rate)
+        .sum();
+    if total_source <= 0.0 {
+        return Ok(charged);
+    }
+
+    let area = stack.area_cm2.max(f64::MIN_POSITIVE);
+    let secondary_flux = FluxModel::Fast {
+        flux: total_source / area,
+        temp_mev: SECONDARY_EVAPORATION_T_MEV,
+    };
+    let secondary = compute_neutron_stack(
+        db,
+        &stack.layers,
+        &secondary_flux,
+        stack.irradiation_time_s,
+        stack.cooling_time_s,
+        stack.area_cm2,
+        enable_chains,
+    );
+
+    for (charged_layer, sec_layer) in charged
+        .layer_results
+        .iter_mut()
+        .zip(secondary.layer_results)
+    {
+        merge_secondary_isotopes(
+            &mut charged_layer.isotope_results,
+            sec_layer.isotope_results,
+        );
+    }
+    Ok(charged)
+}
+
+/// Superimpose secondary-neutron isotope results onto the charged results.
+/// Activities/rates add (linear system); provenance routes merge; a nuclide made
+/// by both routes is tagged `source = "both"`.
+fn merge_secondary_isotopes(
+    charged: &mut HashMap<String, IsotopeResult>,
+    secondary: HashMap<String, IsotopeResult>,
+) {
+    for (name, sec) in secondary {
+        match charged.get_mut(&name) {
+            Some(existing) => {
+                existing.production_rate += sec.production_rate;
+                existing.activity_bq += sec.activity_bq;
+                if existing.time_grid_s == sec.time_grid_s
+                    && existing.activity_vs_time_bq.len() == sec.activity_vs_time_bq.len()
+                {
+                    for (a, b) in existing
+                        .activity_vs_time_bq
+                        .iter_mut()
+                        .zip(&sec.activity_vs_time_bq)
+                    {
+                        *a += b;
+                    }
+                }
+                for r in sec.reactions {
+                    if !existing.reactions.contains(&r) {
+                        existing.reactions.push(r);
+                    }
+                }
+                if existing.source != "both" && existing.source != sec.source {
+                    existing.source = "both".to_string();
+                }
+            }
+            None => {
+                charged.insert(name, sec);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::InMemoryDataStore;
+    use crate::neutron::{FluxModel, KT_THERMAL_MEV};
+
+    // ── Neutron-source activation, end-to-end (ADR-0003 Phase 1) ─────────
+
+    #[test]
+    fn neutron_capture_produces_daughter_with_route() {
+        let mut db = InMemoryDataStore::new("test");
+        db.add_element(42, "Mo");
+        // ⁹⁹Mo — 66 h, radioactive so it registers past the activity cutoff.
+        db.add_decay_data(DecayData {
+            z: 42,
+            a: 99,
+            state: String::new(),
+            half_life_s: Some(237_000.0),
+            decay_modes: vec![],
+        });
+        // n + ⁹⁸Mo → ⁹⁹Mo radiative capture, flat 100 mb thermal→fast.
+        db.add_cross_sections(
+            "n",
+            "Mo",
+            vec![CrossSectionData {
+                target_a: 98,
+                residual_z: 42,
+                residual_a: 99,
+                state: String::new(),
+                energies_mev: vec![1e-11, 20.0],
+                xs_mb: vec![100.0, 100.0],
+            }],
+        );
+
+        let layer = Layer {
+            density_g_cm3: 10.28,
+            elements: vec![(
+                Element {
+                    symbol: "Mo".into(),
+                    z: 42,
+                    isotopes: HashMap::from([(98u32, 1.0)]),
+                },
+                1.0,
+            )],
+            thickness_cm: Some(0.1),
+            areal_density_g_cm2: None,
+            energy_out_mev: None,
+            is_monitor: false,
+            nist_compound: None,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        };
+        let flux = FluxModel::Thermal {
+            flux: 1.0e13,
+            kt_mev: KT_THERMAL_MEV,
+        };
+        let result = compute_neutron_stack(&db, &[layer], &flux, 3600.0, 0.0, 1.0, true);
+
+        let l = &result.layer_results[0];
+        let mo99 = l
+            .isotope_results
+            .get("Mo-99")
+            .expect("Mo-99 produced by neutron capture");
+        assert!(
+            mo99.production_rate > 0.0,
+            "expected positive production rate"
+        );
+        assert!(mo99.activity_bq > 0.0, "expected positive activity");
+        assert!(
+            mo99.reactions.iter().any(|r| r == "⁹⁸Mo(n,γ)"),
+            "neutron route should be ⁹⁸Mo(n,γ); got {:?}",
+            mo99.reactions
+        );
+    }
+
+    // ── Secondary (p,xn) neutron activation, end-to-end (ADR-0003 Phase 2) ──
+
+    #[test]
+    fn secondary_neutrons_from_pn_activate_the_stack() {
+        let mut db = InMemoryDataStore::new("test");
+        db.add_element(29, "Cu");
+        db.add_element(30, "Zn");
+        // PSTAR proton stopping for Cu (mirrors the stopping.rs test pattern).
+        let energies: Vec<f64> = (0..50)
+            .map(|i| 0.001_f64 * 10f64.powf(i as f64 / 10.0))
+            .collect();
+        let dedx_cu: Vec<f64> = energies.iter().map(|&e| 30.0 / e.sqrt()).collect();
+        db.add_stopping_data("PSTAR", 29, energies, dedx_cu);
+        // Charged (p,n): p + ⁶³Cu → ⁶³Zn — emits 1 free neutron.
+        db.add_cross_sections(
+            "p",
+            "Cu",
+            vec![CrossSectionData {
+                target_a: 63,
+                residual_z: 30,
+                residual_a: 63,
+                state: String::new(),
+                energies_mev: vec![1.0, 20.0],
+                xs_mb: vec![500.0, 500.0],
+            }],
+        );
+        // Neutron capture: n + ⁶³Cu → ⁶⁴Cu — activated by the secondary neutrons.
+        db.add_cross_sections(
+            "n",
+            "Cu",
+            vec![CrossSectionData {
+                target_a: 63,
+                residual_z: 29,
+                residual_a: 64,
+                state: String::new(),
+                energies_mev: vec![1e-3, 20.0],
+                xs_mb: vec![100.0, 100.0],
+            }],
+        );
+        db.add_decay_data(DecayData {
+            z: 30,
+            a: 63,
+            state: String::new(),
+            half_life_s: Some(2310.0),
+            decay_modes: vec![],
+        });
+        db.add_decay_data(DecayData {
+            z: 29,
+            a: 64,
+            state: String::new(),
+            half_life_s: Some(45720.0),
+            decay_modes: vec![],
+        });
+
+        let layer = Layer {
+            density_g_cm3: 8.96,
+            elements: vec![(
+                Element {
+                    symbol: "Cu".into(),
+                    z: 29,
+                    isotopes: HashMap::from([(63u32, 1.0)]),
+                },
+                1.0,
+            )],
+            thickness_cm: Some(0.1),
+            areal_density_g_cm2: None,
+            energy_out_mev: None,
+            is_monitor: false,
+            nist_compound: None,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        };
+        let mut stack = TargetStack {
+            beam: Beam::new(ProjectileType::Proton, 15.0, 1.0),
+            layers: vec![layer],
+            irradiation_time_s: 3600.0,
+            cooling_time_s: 0.0,
+            area_cm2: 1.0,
+            current_profile: None,
+        };
+
+        let result = compute_stack_with_secondary_neutrons(&db, &mut stack, true).unwrap();
+        let l = &result.layer_results[0];
+
+        // The layer recorded a positive (p,n) free-neutron source.
+        assert!(
+            l.neutron_source_rate > 0.0,
+            "expected positive (p,n) neutron source"
+        );
+        // Charged (p,n) product present.
+        assert!(
+            l.isotope_results.contains_key("Zn-63"),
+            "charged (p,n) should make Zn-63; got {:?}",
+            l.isotope_results.keys().collect::<Vec<_>>()
+        );
+        // Secondary neutron-capture product present, with the (n,γ) route.
+        let cu64 = l
+            .isotope_results
+            .get("Cu-64")
+            .expect("secondary (n,γ) should make Cu-64");
+        assert!(cu64.production_rate > 0.0, "positive Cu-64 production rate");
+        assert!(
+            cu64.reactions.iter().any(|r| r == "⁶³Cu(n,γ)"),
+            "secondary route should be ⁶³Cu(n,γ); got {:?}",
+            cu64.reactions
+        );
+    }
     use std::collections::HashMap;
+
+    // ── Reaction-route provenance (#444) ─────────────────────────────────
+
+    #[test]
+    fn ejectile_notation_covers_the_common_channels() {
+        assert_eq!(ejectile_notation(0, 0).as_deref(), Some("γ")); // radiative capture
+        assert_eq!(ejectile_notation(0, 1).as_deref(), Some("n")); // (x,n)
+        assert_eq!(ejectile_notation(0, 2).as_deref(), Some("2n"));
+        assert_eq!(ejectile_notation(0, 3).as_deref(), Some("3n"));
+        assert_eq!(ejectile_notation(1, 1).as_deref(), Some("p")); // (x,p)
+        assert_eq!(ejectile_notation(1, 2).as_deref(), Some("pn")); // (x,pn)
+        assert_eq!(ejectile_notation(2, 2).as_deref(), Some("2p"));
+        assert_eq!(ejectile_notation(2, 4).as_deref(), Some("α")); // named cluster
+    }
+
+    #[test]
+    fn ejectile_notation_rejects_exotic_balances() {
+        assert_eq!(ejectile_notation(-1, 0), None); // negative protons out
+        assert_eq!(ejectile_notation(2, 1), None); // neutrons out < 0
+    }
+
+    #[test]
+    fn reaction_route_matches_spectroscopy_notation() {
+        // p + ⁹⁸Mo → ⁹⁸Tc: compound (43,99) → residual (43,98) ⇒ (p,n)
+        assert_eq!(
+            reaction_route("Mo", 98, "p", (42 + 1) - 43, (98 + 1) - 98).as_deref(),
+            Some("⁹⁸Mo(p,n)")
+        );
+        // p + ¹⁰⁰Mo → ⁹⁹Tc: (43,101) → (43,99) ⇒ (p,2n)
+        assert_eq!(
+            reaction_route("Mo", 100, "p", (42 + 1) - 43, (100 + 1) - 99).as_deref(),
+            Some("¹⁰⁰Mo(p,2n)")
+        );
+        // p + ⁹⁸Mo → ⁹⁹Tc: (43,99) → (43,99) ⇒ (p,γ)
+        assert_eq!(
+            reaction_route("Mo", 98, "p", 0, 0).as_deref(),
+            Some("⁹⁸Mo(p,γ)")
+        );
+        // α cluster channel
+        assert_eq!(
+            reaction_route("Bi", 209, "p", 2, 4).as_deref(),
+            Some("²⁰⁹Bi(p,α)")
+        );
+        // exotic balance ⇒ no route
+        assert_eq!(reaction_route("Mo", 98, "p", -1, 0), None);
+    }
 
     /// Build a minimal IsotopeResult for clamp tests.
     fn iso_with(
@@ -997,8 +1727,7 @@ mod tests {
         ];
         let mut iso = iso_with("W-179", half_life_s, r, activity.clone());
         iso.source = "both".to_string();
-        iso.activity_ingrowth_vs_time_bq =
-            activity.iter().map(|&a| 0.4 * a).collect();
+        iso.activity_ingrowth_vs_time_bq = activity.iter().map(|&a| 0.4 * a).collect();
         iso.activity_ingrowth_bq = 0.4 * *activity.last().unwrap();
 
         let mut results = HashMap::new();
@@ -1017,6 +1746,117 @@ mod tests {
             clamped[2] > clamped[3] && clamped[3] > clamped[4],
             "post-EOB activity must decay, not plateau: {clamped:?}"
         );
+    }
+
+    /// Regression test for issues #533 and #567.
+    ///
+    /// A long-lived, low-yield minor-component product (Fe-55, t½ = 2.7 y, in
+    /// dilute Mn-in-Al) has EOB activity suppressed by (λ · t_irr) — for a
+    /// 1-day irradiation, that's ~7×10⁻⁴ of its saturation. Riding under a
+    /// saturated short-lived matrix peak (Si-27), its activity ratio drops
+    /// many orders of magnitude below the peak even though the atom
+    /// inventory is exactly the number waste-classification work needs.
+    ///
+    /// Per #567, the internal prune no longer looks at "peak" at all —
+    /// relative filtering is a caller concern (MCP `activity_floor_bq` /
+    /// GUI display thresholds, per the #130 contract). Compute keeps
+    /// everything physically real; only genuine numerical dust (subnormal
+    /// rate AND subnormal activity trace) is dropped, and the count is
+    /// still surfaced via `pruned_negligible_count`.
+    #[test]
+    fn prune_keeps_everything_physically_real_regardless_of_peak() {
+        // Peak: short-lived matrix product (Si-27-like), fully saturated.
+        let peak = iso_with("Si-27", 4.16, 1.0e10, vec![1.0e10; 5]);
+
+        // Long-lived low-yield product (Fe-55-like). Activity/peak ≈ 5e-7,
+        // rate/peak_rate = 1e-5 — the old peak-relative activity arm would
+        // have dropped it; the peak-relative rate arm rescued it (#533).
+        let long_lived_hl = 2.7 * 365.25 * 86400.0;
+        let long_lived = iso_with("Fe-55", long_lived_hl, 1.0e5, vec![5.0e3; 5]);
+
+        // The isotope #567 was written to protect: a real but truly
+        // low-yield product (rate 1.0 atoms/s, activity 1.0 Bq) — anything
+        // above subnormal. Old prune (1e-6 of peak) dropped it. New prune
+        // keeps it — it is physically real, and thresholding it is the
+        // caller's job.
+        let low_yield = iso_with("Cr-51", 2.4e6, 1.0, vec![1.0; 5]);
+
+        let mut results = HashMap::new();
+        results.insert("Si-27".to_string(), peak);
+        results.insert("Fe-55".to_string(), long_lived);
+        results.insert("Cr-51".to_string(), low_yield);
+
+        let dropped = prune_negligible_isotopes(&mut results);
+
+        assert!(results.contains_key("Si-27"), "matrix peak stays");
+        assert!(
+            results.contains_key("Fe-55"),
+            "long-lived low-yield product stays (#533)"
+        );
+        assert!(
+            results.contains_key("Cr-51"),
+            "physically-real low-yield product stays — thresholding is the \
+             caller's job now (#567)"
+        );
+        assert_eq!(
+            dropped, 0,
+            "no dust here — everything is physically real; prune must be a no-op"
+        );
+    }
+
+    /// Drops only genuine numerical dust — an isotope whose production rate
+    /// is exactly zero and whose activity trace is all zero. The upstream
+    /// `scaled_rate <= 0.0 { continue; }` guard in `compute_layer` normally
+    /// prevents this from ever entering the map; we exercise the prune's
+    /// defensive floor directly (#567).
+    #[test]
+    fn prune_drops_only_genuine_dust() {
+        let real = iso_with("Fe-55", 1.0e8, 1.0e5, vec![5.0e3; 5]);
+        // Zero rate + zero activity — the only kind of thing the new prune
+        // removes. `activity_bq` is a scalar snapshot; the trace-array
+        // is what the prune inspects.
+        let dust = iso_with("Xx-1", 3600.0, 0.0, vec![0.0; 5]);
+
+        let mut results = HashMap::new();
+        results.insert("Fe-55".to_string(), real);
+        results.insert("Xx-1".to_string(), dust);
+
+        let dropped = prune_negligible_isotopes(&mut results);
+
+        assert!(results.contains_key("Fe-55"));
+        assert!(!results.contains_key("Xx-1"), "true dust must be dropped");
+        assert_eq!(dropped, 1, "dust drop is surfaced (never silent)");
+    }
+
+    /// A rate that is real but activity that is a subnormal underflow
+    /// residue is still real — kept, because `rate_real` alone qualifies.
+    #[test]
+    fn prune_keeps_real_rate_even_with_subnormal_activity() {
+        let iso = iso_with("Yy-1", 1.0, 1.0e-20, vec![f64::MIN_POSITIVE / 2.0; 3]);
+        let mut results = HashMap::new();
+        results.insert("Yy-1".to_string(), iso);
+        assert_eq!(prune_negligible_isotopes(&mut results), 0);
+        assert!(results.contains_key("Yy-1"));
+    }
+
+    /// A zero direct rate but a real activity elsewhere in the trace (e.g.
+    /// grown by the chain solver from a decaying parent) must survive —
+    /// rate alone is not what makes an isotope real.
+    #[test]
+    fn prune_keeps_zero_rate_with_real_activity() {
+        let iso = iso_with("Daughter", 60.0, 0.0, vec![0.0, 0.0, 1.0e6, 5.0e5]);
+        let mut results = HashMap::new();
+        results.insert("Daughter".to_string(), iso);
+        assert_eq!(prune_negligible_isotopes(&mut results), 0);
+        assert!(results.contains_key("Daughter"));
+    }
+
+    /// Empty input: helper is a no-op, reports zero drops.
+    #[test]
+    fn prune_negligible_isotopes_handles_empty_input() {
+        let mut results: HashMap<String, IsotopeResult> = HashMap::new();
+        assert_eq!(prune_negligible_isotopes(&mut results), 0);
+        assert!(results.is_empty());
     }
 
     #[test]
@@ -1120,9 +1960,7 @@ mod tests {
             },
         );
 
-        let results = apply_chain_solver_by_component(
-            &db, direct, 600.0, 0.0, 1.0e13, None, 1.0,
-        );
+        let results = apply_chain_solver_by_component(&db, direct, 600.0, 0.0, 1.0e13, None, 1.0);
 
         // B is a daughter-only isotope fed by A; its decay_notations must
         // mention A via the parent nuclide format.
@@ -1232,7 +2070,9 @@ mod tests {
         assert!(
             err < 0.05,
             "bateman build-up at t=t½: got {}, expected {} (err {:.2})",
-            a_at_hl, expected, err
+            a_at_hl,
+            expected,
+            err
         );
 
         // Last point — well into cooling after ~10 half-lives of decay.
@@ -1243,7 +2083,8 @@ mod tests {
         assert!(
             err_last < 0.05,
             "bateman decay at end of cooling: got {}, expected {}",
-            last, expected_last
+            last,
+            expected_last
         );
 
         // Ensure it's NOT the step-function shape (i.e. mid-cooling value is

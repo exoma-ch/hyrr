@@ -254,6 +254,54 @@ export function setCustomCompositionLookup(fn: (identifier: string) => Record<st
   customCompositionLookup = fn;
 }
 
+/** Optional per-element isotopic enrichment lookup for a custom material —
+ *  `{ elementSymbol: { A: fraction } }`. Set by the UI's shared-materials
+ *  hydration seam so an embedded enriched alloy actually enriches at compute
+ *  time (#544 nit 2 — previously, embedded enrichment traveled but was ignored
+ *  by `resolveMaterial`). Per-layer overrides still win over these material-
+ *  level entries — see the merge in `resolveMaterial`. */
+let customEnrichmentLookup:
+  | ((identifier: string) => Record<string, Record<number, number>> | null)
+  | null = null;
+
+/** Register a function that returns custom-material-level isotopic enrichment
+ *  vectors (element → `{A: fraction}`). Consumed by `resolveMaterial`. */
+export function setCustomEnrichmentLookup(
+  fn: (identifier: string) => Record<string, Record<number, number>> | null,
+): void {
+  customEnrichmentLookup = fn;
+}
+
+/** Merge a material-level enrichment vector (from the custom-material def)
+ *  with per-layer overrides. Per-layer wins per element (a user-supplied
+ *  layer override always trumps the shipped default). Returns undefined when
+ *  neither has anything to say, so the natural-abundance path stays hot.
+ *
+ *  Exported for tests only — callers should use `resolveMaterial`. */
+export function mergeMaterialAndLayerEnrichment(
+  material: Record<string, Record<number, number>> | null | undefined,
+  layer: Record<string, Map<number, number>> | undefined,
+): Record<string, Map<number, number>> | undefined {
+  const hasMat = material && Object.keys(material).length > 0;
+  const hasLayer = layer && Object.keys(layer).length > 0;
+  if (!hasMat && !hasLayer) return undefined;
+  const out: Record<string, Map<number, number>> = {};
+  if (hasMat) {
+    for (const [el, vec] of Object.entries(material!)) {
+      out[el] = new Map(Object.entries(vec).map(([a, f]) => [Number(a), f]));
+    }
+  }
+  if (hasLayer) {
+    // Layer wins wholesale per element — the user-supplied override replaces
+    // the material's material-level default for that element (mirrors how
+    // resolveElement treats a single enrichment vector: not merged partially).
+    for (const [el, m] of Object.entries(layer!)) {
+      out[el] = m;
+    }
+  }
+  return out;
+}
+
 /**
  * Resolve a material identifier (name, formula, or element symbol with mass number)
  * into elements, density, and molecular weight.
@@ -271,11 +319,17 @@ export function resolveMaterial(
     return { elements, density: catalogEntry.density, molecularWeight: 0 };
   }
 
-  // Check for custom material with stored mass fractions (wt% materials)
+  // Check for custom material with stored mass fractions (wt% materials).
+  // #544 nit 2: fold a custom material's own enrichment vector into the
+  // resolution — per-layer overrides still win (mergeMaterialAndLayerEnrichment),
+  // but a shared alloy that ships enriched no longer computes with natural
+  // abundances just because the layer didn't restate the enrichment.
   if (customCompositionLookup) {
     const massFracs = customCompositionLookup(identifier);
     if (massFracs) {
-      const elements = resolveIsotopics(db, massFracs, false, overrides);
+      const materialEnr = customEnrichmentLookup ? customEnrichmentLookup(identifier) : null;
+      const effectiveOverrides = mergeMaterialAndLayerEnrichment(materialEnr, overrides);
+      const elements = resolveIsotopics(db, massFracs, false, effectiveOverrides);
       let density: number | undefined;
       if (customDensityLookup) {
         const d = customDensityLookup(identifier);

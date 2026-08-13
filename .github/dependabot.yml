@@ -23,3 +23,43 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+
+  # Cargo (Rust crates — no workspace, so each carries its own Cargo.lock).
+  # One entry covers all six crate dirs; a catch-all group collapses the
+  # week's bumps into a single PR (keeps churn down and plays nice with the
+  # lockfile-sync gate). NOTE: core/hyrr-mcp/py/py-mcp/desktop path-depend on
+  # the nucl-parquet Rust client (a submodule); if Dependabot can't resolve
+  # that path it will error on those dirs — wasm has no submodule dep and
+  # always works. Watch the first run and narrow `directories` to /wasm if
+  # needed.
+  #
+  # /py-mcp joined the list in #576, when its Cargo.lock was committed for the
+  # first time. It matters more than its siblings: py-mcp is the crate
+  # published to PyPI as the `hyrr-mcp` wheel, so without Dependabot here its
+  # transitive graph would be frozen at whatever it was seeded with and would
+  # quietly rot — which is the failure mode committing the lock was meant to
+  # avoid, not create.
+  - package-ecosystem: "cargo"
+    directories:
+      - "/core"
+      - "/hyrr-mcp"
+      - "/py"
+      - "/py-mcp"
+      - "/wasm"
+      - "/desktop/src-tauri"
+    schedule:
+      interval: "weekly"
+    # arrow/parquet are pinned to whatever the nucl-parquet SUBMODULE uses —
+    # it is a path dependency, so a version skew puts two majors of both in
+    # every dependent's graph, with arrow types crossing the boundary compiled
+    # against different majors. core/Cargo.toml says so explicitly. A bump here
+    # is only correct once nucl-parquet moves, so dependabot must not propose
+    # one: #619 bumped them 54 -> 59, broke the build on `parquet::format`, and
+    # would have regenerated every week.
+    ignore:
+      - dependency-name: "arrow"
+      - dependency-name: "parquet"
+    groups:
+      cargo:
+        patterns:
+          - "*"

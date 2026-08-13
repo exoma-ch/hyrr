@@ -1,5 +1,12 @@
 name: E2E (Playwright cross-platform)
 
+# Cost-rescope (#484 Part B, folds in #203). The full cross-OS × multi-viewport
+# fan-out is expensive on GitHub-hosted runners and was firing on every PR. Now:
+#   • PR  → ONE smoke job: ubuntu-latest + chromium + the desktop-1280 project.
+#   • tag (v*) / manual dispatch → the full matrix (5 OSes × 4 viewports + the
+#     Linux-distro container sweep + the prod-like static-host job).
+# So a normal PR triggers ~1 e2e job instead of ~9; the scarce macOS/Windows
+# fan-out runs a few times a week (at releases), not on every push.
 on:
   pull_request:
     branches: [main]
@@ -7,31 +14,53 @@ on:
       - "frontend/**"
       - "wasm/**"
       - ".github/workflows/e2e.yml"
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
-  # Uncomment to run nightly:
-  # schedule:
-  #   - cron: "17 4 * * *"
 
 permissions:
   contents: read
 
 jobs:
+  # Decide PR-smoke vs full matrix from the trigger. Outputs feed the e2e
+  # matrix + the `if:` gates on the heavy distro / static-host jobs.
+  config:
+    runs-on: ubuntu-latest
+    outputs:
+      os: ${{ steps.set.outputs.os }}
+      pw: ${{ steps.set.outputs.pw }}
+      full: ${{ steps.set.outputs.full }}
+    steps:
+      - id: set
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            {
+              echo 'os=["ubuntu-latest"]'
+              # Smoke = the @smoke-tagged subset on desktop-1280 — the same fast,
+              # stable set deploy-staging-smoke.yml runs. The full spec suite
+              # (incl. the slow @preset-heavy golden tests + every viewport)
+              # runs in the tag-time matrix. (@smoke is a literal grep — no shell
+              # metacharacters — so it's safe to splice into the run line.)
+              echo 'pw=--project=desktop-1280 --grep @smoke'
+              echo 'full=false'
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo 'os=["ubuntu-22.04","ubuntu-24.04","windows-2022","windows-2025","macos-15"]'
+              echo 'pw='
+              echo 'full=true'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
   e2e:
     name: e2e (${{ matrix.os }})
+    needs: config
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-22.04
-          - ubuntu-24.04
-          - windows-2022
-          - windows-2025
-          - macos-15
-        # To also cover ARM Linux on public repos:
-        #   - ubuntu-24.04-arm
-        # To cover other Linux distros, add a separate job that runs the
-        # same steps inside a `container:` (archlinux, fedora, debian, alpine).
+        os: ${{ fromJSON(needs.config.outputs.os) }}
 
     defaults:
       run:
@@ -47,16 +76,17 @@ jobs:
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
           git sparse-checkout set \
+            docs/security \
             data/meta \
             data/stopping \
             data/tendl-2023-iso/xs \
             data/hi-xs-prod/xs \
-            data/endfb-8.1/xs
+            data/endfb-8.0/xs
 
       - name: Copy nuclear data for frontend
         run: |
           scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
+            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -77,7 +107,7 @@ jobs:
         # and deploy-frontend.yml still optimizes for production.
         run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: "npm"
@@ -91,7 +121,7 @@ jobs:
         run: npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/ms-playwright
@@ -111,7 +141,9 @@ jobs:
 
       - name: Run Playwright tests
         working-directory: frontend
-        run: npx playwright test --reporter=list,html
+        # `pw` is empty on the full (tag) matrix → all projects; on PR it pins
+        # the desktop-1280 project for the single smoke run.
+        run: npx playwright test ${{ needs.config.outputs.pw }} --reporter=list,html
         env:
           CI: "1"
 
@@ -139,6 +171,8 @@ jobs:
   # under musl is its own adventure.
   e2e-linux-distros:
     name: e2e-linux (${{ matrix.distro }})
+    needs: config
+    if: needs.config.outputs.full == 'true'
     runs-on: ubuntu-latest
     container:
       image: ${{ matrix.image }}
@@ -209,16 +243,17 @@ jobs:
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
           git sparse-checkout set \
+            docs/security \
             data/meta \
             data/stopping \
             data/tendl-2023-iso/xs \
             data/hi-xs-prod/xs \
-            data/endfb-8.1/xs
+            data/endfb-8.0/xs
 
       - name: Copy nuclear data for frontend
         run: |
           scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
+            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
 
       - name: Build WASM compute engine
         run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
@@ -262,6 +297,8 @@ jobs:
   # service-worker scope regressions that the `vite preview` jobs don't see.
   e2e-static-host:
     name: e2e-static-host (linux, prod-like)
+    needs: config
+    if: needs.config.outputs.full == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -277,16 +314,17 @@ jobs:
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
           git sparse-checkout set \
+            docs/security \
             data/meta \
             data/stopping \
             data/tendl-2023-iso/xs \
             data/hi-xs-prod/xs \
-            data/endfb-8.1/xs
+            data/endfb-8.0/xs
 
       - name: Copy nuclear data for frontend
         run: |
           scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.1:neutron-xs
+            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -304,7 +342,7 @@ jobs:
       - name: Build WASM compute engine
         run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: "npm"
@@ -327,7 +365,7 @@ jobs:
           ls -la _site/hyrr/ | head -5
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-static-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}

@@ -11,8 +11,7 @@ use hyrr_core::materials::resolve_material;
 use hyrr_core::types::*;
 
 fn data_dir() -> String {
-    std::env::var("HYRR_DATA")
-        .unwrap_or_else(|_| "../nucl-parquet/data".to_string())
+    std::env::var("HYRR_DATA").unwrap_or_else(|_| "../nucl-parquet/data".to_string())
 }
 
 /// Build a single-layer Cu stack with the given density override.
@@ -42,21 +41,25 @@ fn cu_stack_with_density(db: &ParquetDataStore, density: f64) -> TargetStack {
 
 #[test]
 fn density_override_changes_thickness() {
-    let db = ParquetDataStore::new(&data_dir(), "tendl-2023-iso")
-        .expect("ParquetDataStore::new");
+    let db = ParquetDataStore::new(data_dir(), "tendl-2023-iso").expect("ParquetDataStore::new");
 
-    let default_density = resolve_material(&db, "Cu", None, None, None).unwrap().density;
-    assert!((default_density - 8.96).abs() < 0.1, "Cu default density should be ~8.96");
+    let default_density = resolve_material(&db, "Cu", None, None, None)
+        .unwrap()
+        .density;
+    assert!(
+        (default_density - 8.96).abs() < 0.1,
+        "Cu default density should be ~8.96"
+    );
 
     // Run with default density
     let mut stack_default = cu_stack_with_density(&db, default_density);
-    let result_default = compute_stack(&db, &mut stack_default, false).unwrap();
+    let _result_default = compute_stack(&db, &mut stack_default, false).unwrap();
     let thickness_default = stack_default.layers[0].computed_thickness;
 
     // Run with half density — should produce ~2× thickness for same energy loss
     let half_density = default_density / 2.0;
     let mut stack_half = cu_stack_with_density(&db, half_density);
-    let result_half = compute_stack(&db, &mut stack_half, false).unwrap();
+    let _result_half = compute_stack(&db, &mut stack_half, false).unwrap();
     let thickness_half = stack_half.layers[0].computed_thickness;
 
     assert!(
@@ -83,8 +86,7 @@ fn density_override_changes_thickness() {
 /// resolve_material density error.
 #[test]
 fn unknown_compound_with_density_override_runs() {
-    let db = ParquetDataStore::new(&data_dir(), "tendl-2023-iso")
-        .expect("ParquetDataStore::new");
+    let db = ParquetDataStore::new(data_dir(), "tendl-2023-iso").expect("ParquetDataStore::new");
 
     // Ca44O — not in density catalog, would error without override
     let ca44o = resolve_material(&db, "Ca44O", None, None, None);
@@ -96,8 +98,12 @@ fn unknown_compound_with_density_override_runs() {
         let ca = resolve_material(&db, "Ca", None, None, None).unwrap();
         let o = resolve_material(&db, "O", None, None, None).unwrap();
         let mut elems = Vec::new();
-        for (e, f) in &ca.elements { elems.push((e.clone(), f * 0.524)); }
-        for (e, f) in &o.elements { elems.push((e.clone(), f * 0.476)); }
+        for (e, f) in &ca.elements {
+            elems.push((e.clone(), f * 0.524));
+        }
+        for (e, f) in &o.elements {
+            elems.push((e.clone(), f * 0.476));
+        }
         elems
     };
 
@@ -139,7 +145,11 @@ fn unknown_compound_with_density_override_runs() {
     };
 
     let result = compute_stack(&db, &mut stack, false);
-    assert!(result.is_ok(), "compute_stack should succeed with density override: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "compute_stack should succeed with density override: {:?}",
+        result.err()
+    );
 
     // Should produce isotopes in the Ca44O layer
     let lr = &result.unwrap().layer_results[1];

@@ -37,7 +37,11 @@ fn make_db(library: &str) -> Option<ParquetDataStore> {
 /// lookup machinery itself is broken — exactly what #137 was. Energy + areal
 /// density are picked so heavy ions don't stop short of the back of the layer
 /// (sub-MeV outgoing energy trips the catima table-min at 0.012 MeV).
-fn trivial_cu_stack(db: &ParquetDataStore, projectile: ProjectileType, energy_mev: f64) -> TargetStack {
+fn trivial_cu_stack(
+    db: &ParquetDataStore,
+    projectile: ProjectileType,
+    energy_mev: f64,
+) -> TargetStack {
     let cu = resolve_material(db, "Cu", None, None, None).unwrap();
     let layer = Layer {
         density_g_cm3: cu.density,
@@ -62,8 +66,7 @@ fn trivial_cu_stack(db: &ParquetDataStore, projectile: ProjectileType, energy_me
 }
 
 const PROJECTILES: &[&str] = &[
-    "p", "d", "t", "h", "a",
-    "C-12", "O-16", "Ne-20", "Si-28", "Ar-40", "Fe-56",
+    "p", "d", "t", "h", "a", "C-12", "O-16", "Ne-20", "Si-28", "Ar-40", "Fe-56",
 ];
 
 #[test]
@@ -86,7 +89,11 @@ fn every_supported_projectile_computes_without_panic() {
         let _ = db.load_xs(proj_str, 29);
         // Heavy ions need a higher per-particle energy than light ions to avoid
         // the catima table-min trip; pick generously per the projectile mass.
-        let energy = if proj.z() <= 2 { 10.0 } else { 50.0 * proj.a() as f64 };
+        let energy = if proj.z() <= 2 {
+            10.0
+        } else {
+            50.0 * proj.a() as f64
+        };
         let stack = trivial_cu_stack(&db, proj, energy);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut s = stack;
@@ -131,10 +138,15 @@ fn unsupported_heavy_ion_returns_typed_error_not_panic() {
         let mut s = stack;
         compute_stack(&db, &mut s, true)
     }));
-    let inner = outcome.expect("compute_stack PANICKED on unsupported projectile — should return typed Err");
+    let inner = outcome
+        .expect("compute_stack PANICKED on unsupported projectile — should return typed Err");
 
     match inner {
-        Err(StoppingError::NoSourceTable { source_name, projectile, .. }) => {
+        Err(StoppingError::NoSourceTable {
+            source_name,
+            projectile,
+            ..
+        }) => {
             assert!(
                 source_name.contains("Cl"),
                 "expected source_name to mention Cl, got {source_name}"
@@ -197,10 +209,18 @@ fn thick_target_residual_below_table_min_returns_typed_error_not_panic() {
         "compute_stack PANICKED on residual-below-table_min — must return typed Err (#150)",
     );
     match inner {
-        Err(StoppingError::EnergyOutOfRange { layer_index, layer_material, .. }) => {
+        Err(StoppingError::EnergyOutOfRange {
+            layer_index,
+            layer_material,
+            ..
+        }) => {
             // #213: a per-layer error must arrive with layer attribution stamped
             // by compute_stack's loop, so the recovery card can name the offending layer.
-            assert_eq!(layer_index, Some(0), "single-layer stack must report L1 / index 0");
+            assert_eq!(
+                layer_index,
+                Some(0),
+                "single-layer stack must report L1 / index 0"
+            );
             assert!(
                 layer_material.as_deref() == Some("Cu"),
                 "expected layer_material=Cu, got {layer_material:?}"
@@ -239,7 +259,7 @@ fn beam_stopped_upstream_yields_empty_downstream_layers_not_error() {
             energy_out_mev: eo,
             is_monitor: false,
             nist_compound: None,
-        computed_energy_in: 0.0,
+            computed_energy_in: 0.0,
             computed_energy_out: 0.0,
             computed_thickness: 0.0,
         }
@@ -267,6 +287,12 @@ fn beam_stopped_upstream_yields_empty_downstream_layers_not_error() {
     let last = result.layer_results.last().unwrap();
     assert_eq!(last.energy_in, 0.0);
     assert_eq!(last.energy_out, 0.0);
-    assert!(last.isotope_results.is_empty(), "stopped layer must produce nothing");
-    assert!(last.depth_profile.is_empty(), "stopped layer has no depth profile");
+    assert!(
+        last.isotope_results.is_empty(),
+        "stopped layer must produce nothing"
+    );
+    assert!(
+        last.depth_profile.is_empty(),
+        "stopped layer has no depth profile"
+    );
 }

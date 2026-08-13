@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import type { SimulationResult, IsotopeResultData } from "../types";
-  import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
+  import { asPlotlyDiv, darkLayout, PLOTLY_CONFIG, TRACE_COLORS, themeColors } from "../plotting/plotly-helpers";
   import type { CsvTrace } from "../plotting/csv-export";
   import SaveMenu from "./SaveMenu.svelte";
   import SectionHeader from "./SectionHeader.svelte";
@@ -114,7 +114,7 @@
 
   function attachLegendListeners() {
     if (!plotDiv || legendListenersAttached) return;
-    const el = plotDiv as any;
+    const el = asPlotlyDiv(plotDiv);
     if (!el.on) return; // Plotly hasn't rendered yet
     legendListenersAttached = true;
     el.on("plotly_legendclick", (evt: any) => {

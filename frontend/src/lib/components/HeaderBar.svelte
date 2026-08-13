@@ -1,22 +1,22 @@
 <script lang="ts">
   import { toggleHistory, getHistoryOpen } from "../stores/ui.svelte";
-  import { resetConfig, getSerializableConfig, restoreSerializableConfig, getCurrentProfile } from "../stores/config.svelte";
+  import { resetConfig, getSerializableConfig, restoreSerializableConfig, restoreFromSimConfig, getCurrentProfile } from "../stores/config.svelte";
   import { encodeConfigV2, decodeSerializableFromString } from "../config-url-v2";
   import { PRESETS } from "../presets";
-  import type { SimulationConfig } from "../types";
   import SessionTabs from "./SessionTabs.svelte";
   import HelpModal from "./HelpModal.svelte";
   import { openBugReport } from "../stores/bugreport.svelte";
   import { cycleTheme, getThemeMode, getResolvedTheme } from "../stores/theme.svelte";
   import { getResult, setResult } from "../stores/results.svelte";
   import { buildSessionFile, downloadSessionFile, pickSessionFile } from "../session-io";
+  import { exportViewerHtml, canExportTierB, ExportError, type ExportTier } from "../viewer/export";
+  import { collectCustomMaterials, hydrateSharedCustomMaterial } from "../config-codec-map";
+  import { SHARE_BASE } from "../config-codec.svelte";
   import { getDisplayThresholds, setDisplayThresholds } from "../stores/display-thresholds.svelte";
   import { openExternalUrl } from "../utils/open-url";
   import { copyText } from "../utils/copy-text";
   import { Bug, Check, CircleHelp, Clipboard, History, Link, Monitor, Moon, Save, Sun } from "lucide-svelte";
   import logoUrl from "/logo.svg?url";
-
-  const SHARE_BASE = "https://exoma-ch.github.io/hyrr/";
 
   let historyOpen = $derived(getHistoryOpen());
   let helpOpen = $state(false);
@@ -25,6 +25,9 @@
   let saveMenuOpen = $state(false);
   let copied = $state<"hash" | "share" | null>(null);
   let loadError = $state("");
+  /** Subtle notice after an import — e.g. an embedded custom material shadowed a
+   *  differing same-named local one (#539). */
+  let loadNotice = $state("");
 
   function loadFromUrl(input: string) {
     loadError = "";
@@ -40,9 +43,13 @@
   }
 
   let hasProfile = $derived(getCurrentProfile() !== null);
-  // encodeConfigV2 receives full config — currentProfile is stripped by config-url layer
-  let currentHash = $derived(encodeConfigV2(getSerializableConfig()));
+  // The one Rust codec (via WASM) encodes the full config, currentProfile
+  // included — measure-and-keep decides whether it fits the URL budget. The
+  // outcome carries structured warnings so nothing is ever lost silently (#539).
+  let encodeOutcome = $derived(encodeConfigV2(getSerializableConfig()));
+  let currentHash = $derived(encodeOutcome.hash);
   let shareUrl = $derived(`${SHARE_BASE}${currentHash}`);
+  let profileDropped = $derived(encodeOutcome.dropped.includes("currentProfile"));
 
   async function copyToClipboard(text: string, which: "hash" | "share") {
     // Only show the "Copied!" badge if the write actually succeeded. The macOS
@@ -61,40 +68,83 @@
 
   function feelingLucky() {
     const idx = Math.floor(Math.random() * PRESETS.length);
-    loadSimConfig(PRESETS[idx].config);
-  }
-
-  /** SSoT config loader — converts SimulationConfig to SerializableConfig
-   *  and routes through restoreSerializableConfig. One path for all loads. */
-  function loadSimConfig(c: SimulationConfig) {
-    restoreSerializableConfig({
-      beam: c.beam,
-      items: c.layers,
-      irradiation_s: c.irradiation_s,
-      cooling_s: c.cooling_s,
-      currentProfile: c.currentProfile
-        ? { timesS: Array.from(c.currentProfile.timesS), currentsMA: Array.from(c.currentProfile.currentsMA) }
-        : undefined,
-    });
+    restoreFromSimConfig(PRESETS[idx].config);
   }
 
   function saveSession(includeResult: boolean) {
     saveMenuOpen = false;
     const cfg = getSerializableConfig();
     const res = includeResult ? getResult() : null;
-    const file = buildSessionFile(cfg, res, undefined, getDisplayThresholds());
+    // Embed the FULL defs of every custom alloy the config references so the
+    // file is self-contained and round-trips on a fresh machine (#539).
+    const customMaterials = collectCustomMaterials(cfg);
+    const file = buildSessionFile(cfg, res, undefined, getDisplayThresholds(), customMaterials);
     downloadSessionFile(file);
+  }
+
+  // ── Shareable HTML export (ADR 0008) ──────────────────────────────────
+  // For recipients who cannot reach the gated app at all. View-only: the
+  // artifact carries no engine, so it cannot be re-run or re-tuned.
+  let exporting = $state(false);
+  let exportNotice = $state("");
+  let hasResult = $derived(Boolean(getResult()));
+  // Emission lines load lazily after a run, so a Tier B export can be
+  // legitimately unavailable for a moment — say so rather than fail on click.
+  let tierBReady = $derived(canExportTierB(getResult()));
+
+  async function exportShareable(tier: ExportTier) {
+    if (exporting) return;
+    saveMenuOpen = false;
+    exportNotice = "";
+    const res = getResult();
+    if (!res) {
+      exportNotice = "Run a simulation first.";
+      return;
+    }
+    exporting = true;
+    try {
+      const where = await exportViewerHtml(res, tier);
+      // null = the desktop save dialog was dismissed; not an error.
+      exportNotice = where ? `Saved ${where}` : "";
+    } catch (e) {
+      exportNotice =
+        e instanceof ExportError ? e.message : `Export failed: ${String((e as Error)?.message ?? e)}`;
+    } finally {
+      exporting = false;
+    }
   }
 
   async function importSession() {
     saveMenuOpen = false;
+    loadNotice = "";
     try {
-      const f = await pickSessionFile();
+      const { file: f, warnings } = await pickSessionFile();
+      // Hydrate embedded custom-material defs BEFORE restoring the config, so
+      // the config store's migrateMissingDensities resolves them from the
+      // embedded defs (not the recipient's possibly-empty or differing local
+      // library). Embedded def WINS over a same-named local material (#539); a
+      // differing collision surfaces a subtle notice.
+      const collisions = (f.customMaterials ?? [])
+        .map(hydrateSharedCustomMaterial)
+        .filter((c): c is NonNullable<typeof c> => c !== null);
       restoreSerializableConfig(f.config);
       if (f.result) {
         setResult(f.result);
       }
       if (f.display) setDisplayThresholds(f.display);
+      // Compose the load notice: parser warnings first (dropped malformed
+      // embedded defs — #551 nit 1), then collision notices (embedded def
+      // shadows a same-named local material — #539). Both surface silently-
+      // wrong-outcomes: the alternative is the user never learning.
+      const notices: string[] = [];
+      notices.push(...warnings);
+      if (collisions.length > 0) {
+        const names = collisions.map((c) => c.name).join(", ");
+        notices.push(
+          `Using the file's version of ${names} — it differs from a material of the same name in your library.`,
+        );
+      }
+      loadNotice = notices.join(" ");
     } catch (e: any) {
       if (!/No file selected/.test(String(e?.message ?? e))) {
         // eslint-disable-next-line no-alert
@@ -187,11 +237,30 @@
                 {/if}
               </button>
             </div>
-            {#if hasProfile}
-              <p class="share-warning">Current profile not included in share link — recipient will need the CSV file.</p>
+            {#if encodeOutcome.link_unusable}
+              <p class="load-error">
+                Stack too large to share by link. Use “Save session” or “Export
+                config” below to download the full configuration instead.
+              </p>
+            {:else}
+              {#if profileDropped}
+                <p class="share-warning">
+                  Current profile is too large for the share link and was left
+                  out — the recipient won’t get it. Use “Export config” below for
+                  the full config including the profile.
+                </p>
+              {:else if hasProfile}
+                <p class="share-info">Current profile included in the share link.</p>
+              {/if}
+              {#each encodeOutcome.warnings as w}
+                <p class="share-warning">{w}</p>
+              {/each}
             {/if}
             {#if loadError}
               <p class="load-error">{loadError}</p>
+            {/if}
+            {#if loadNotice}
+              <p class="load-notice">{loadNotice}</p>
             {/if}
           </div>
           <div class="menu-sep"></div>
@@ -202,12 +271,48 @@
             Export config <span class="menu-hint">(re-computes on load)</span>
           </button>
           <div class="menu-sep"></div>
+          <button
+            class="menu-item"
+            role="menuitem"
+            disabled={!hasResult || !tierBReady || exporting}
+            onclick={() => exportShareable("B")}
+            title={!hasResult
+              ? "Run a simulation first"
+              : !tierBReady
+                ? "Emission data is still loading"
+                : "Single HTML file with spectra — opens anywhere, cannot be re-run"}
+          >
+            Share result…
+            <span class="menu-hint">
+              {exporting ? "(building…)" : "(self-contained HTML)"}
+            </span>
+          </button>
+          <button
+            class="menu-item"
+            role="menuitem"
+            disabled={!hasResult || exporting}
+            onclick={() => exportShareable("A")}
+            title="Same, without emission spectra — embeds no evaluated nuclear data"
+          >
+            Share result, no spectra
+            <span class="menu-hint">(results only)</span>
+          </button>
+          <div class="menu-sep"></div>
           <button class="menu-item" role="menuitem" onclick={importSession}>
             Import session or config…
           </button>
         </div>
       {/if}
     </div>
+
+    {#if exportNotice}
+      <!-- Outside the dropdown on purpose: exporting closes the menu, so a
+           notice rendered inside it would never be seen — including errors. -->
+      <p class="export-toast" role="status">
+        {exportNotice}
+        <button class="toast-x" onclick={() => (exportNotice = "")} aria-label="Dismiss">×</button>
+      </p>
+    {/if}
 
     <button class="icon-btn" onclick={() => helpOpen = true} title="Help">
       <CircleHelp size={16} aria-hidden="true" />
@@ -320,6 +425,35 @@
     font-size: 0.7rem;
     color: var(--c-red, #c00);
   }
+  .export-toast {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    color: var(--c-text-muted);
+    background: var(--c-bg-subtle);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    max-width: 22rem;
+  }
+
+  .toast-x {
+    background: none;
+    border: none;
+    color: var(--c-text-muted);
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+    padding: 0 0.15rem;
+  }
+
+  .load-notice {
+    margin: 4px 0 0;
+    font-size: 0.7rem;
+    color: var(--c-text-muted);
+  }
   .share-btn {
     display: flex;
     align-items: center;
@@ -340,6 +474,12 @@
     margin: 4px 0 0;
     font-size: 0.65rem;
     color: var(--c-warning, #dd6b20);
+    line-height: 1.3;
+  }
+  .share-info {
+    margin: 4px 0 0;
+    font-size: 0.65rem;
+    color: var(--c-text-muted);
     line-height: 1.3;
   }
   .header-bar {

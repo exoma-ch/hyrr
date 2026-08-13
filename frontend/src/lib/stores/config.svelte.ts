@@ -75,6 +75,21 @@ export interface InternalGroup {
   energyThreshold?: number;
 }
 
+/** Neutron-source spectrum (ADR-0003 Phase 1). Serialises to the Rust FluxModel
+ *  (tagged by `kind`). `flux` is the total n/cm²/s; the shape param depends on
+ *  kind. */
+export interface NeutronFluxConfig {
+  kind: "thermal" | "epithermal" | "fast" | "monoenergetic";
+  flux: number;
+  kt_mev?: number;
+  e_min_mev?: number;
+  e_max_mev?: number;
+  temp_mev?: number;
+  e0_mev?: number;
+}
+
+const DEFAULT_NEUTRON_FLUX: NeutronFluxConfig = { kind: "fast", flux: 1e13, temp_mev: 1.5 };
+
 /** Internal state - can contain groups. */
 interface InternalState {
   beam: BeamConfig;
@@ -82,6 +97,11 @@ interface InternalState {
   irradiation_s: number;
   cooling_s: number;
   currentProfile: CurrentProfile | null;
+  /** Model secondary (x,n) neutron activation on this charged run (ADR-0003
+   *  Phase 2). Off by default. */
+  secondaryNeutron: boolean;
+  /** Neutron-source spectrum, used when projectile === "n" (ADR-0003 Phase 1). */
+  neutronFlux: NeutronFluxConfig;
 }
 
 /** Default internal state. */
@@ -91,6 +111,8 @@ const DEFAULT_STATE: InternalState = {
   irradiation_s: 86400,
   cooling_s: 86400,
   currentProfile: null,
+  secondaryNeutron: false,
+  neutronFlux: { ...DEFAULT_NEUTRON_FLUX },
 };
 
 // ─── Reactive state ─────────────────────────────────────────────────
@@ -254,7 +276,31 @@ export function getConfig(): SimulationConfig {
     irradiation_s: getEffectiveIrradiationS(),
     cooling_s: state.cooling_s,
     currentProfile: state.currentProfile,
+    secondary_neutron: state.secondaryNeutron,
+    neutronFlux: state.neutronFlux,
   };
+}
+
+/** Whether secondary (x,n) neutron activation is modelled (ADR-0003 Phase 2). */
+export function getSecondaryNeutron(): boolean {
+  return state.secondaryNeutron;
+}
+
+export function setSecondaryNeutron(on: boolean): void {
+  mutate(() => {
+    state.secondaryNeutron = on;
+  });
+}
+
+/** Neutron-source spectrum (used when projectile === "n", ADR-0003 Phase 1). */
+export function getNeutronFlux(): NeutronFluxConfig {
+  return state.neutronFlux;
+}
+
+export function setNeutronFlux(flux: NeutronFluxConfig): void {
+  mutate(() => {
+    state.neutronFlux = flux;
+  });
 }
 
 export function getBeam(): BeamConfig {
@@ -275,6 +321,10 @@ export interface SerializableConfig {
   irradiation_s: number;
   cooling_s: number;
   currentProfile?: { timesS: number[]; currentsMA: number[] } | null;
+  /** ADR-0003 Phase 2 secondary-neutron toggle (omitted when false). */
+  secondaryNeutron?: boolean;
+  /** ADR-0003 Phase 1 neutron-source spectrum (omitted for charged runs). */
+  neutronFlux?: NeutronFluxConfig;
 }
 
 /** Get the internal state in a JSON-serializable form (preserves groups). */
@@ -291,6 +341,10 @@ export function getSerializableConfig(): SerializableConfig {
     currentProfile: profile
       ? { timesS: Array.from(profile.timesS), currentsMA: Array.from(profile.currentsMA) }
       : null,
+    // Omit when false to keep shared URLs stable for charged-only runs.
+    ...(state.secondaryNeutron ? { secondaryNeutron: true } : {}),
+    // Persist the neutron spectrum only for a neutron source.
+    ...(state.beam.projectile === "n" ? { neutronFlux: state.neutronFlux } : {}),
   }));
 }
 
@@ -316,7 +370,31 @@ export function restoreSerializableConfig(c: SerializableConfig): void {
       currentProfile: profile
         ? { timesS: new Float64Array(profile.timesS), currentsMA: new Float64Array(profile.currentsMA) }
         : null,
+      secondaryNeutron: c.secondaryNeutron ?? false,
+      neutronFlux: c.neutronFlux ?? { ...DEFAULT_NEUTRON_FLUX },
     };
+  });
+}
+
+/** SSoT loader for a full SimulationConfig (preset, deep-link, session import).
+ *  Maps to SerializableConfig and routes through restoreSerializableConfig so
+ *  every "load a whole config" path — feeling-lucky, the #preset= deep-link —
+ *  shares one code path. The currentProfile (which can't ride in a #config=
+ *  hash) is carried through here, since presets build it locally. */
+export function restoreFromSimConfig(c: SimulationConfig): void {
+  restoreSerializableConfig({
+    beam: c.beam,
+    items: c.layers,
+    irradiation_s: c.irradiation_s,
+    cooling_s: c.cooling_s,
+    currentProfile: c.currentProfile
+      ? { timesS: Array.from(c.currentProfile.timesS), currentsMA: Array.from(c.currentProfile.currentsMA) }
+      : undefined,
+    // Neutron state must ride through, or #preset= (and any SimConfig load)
+    // silently falls back to DEFAULT_NEUTRON_FLUX — corrupting the physics of
+    // the neutron presets (e.g. co60-thermal → fast spectrum). #503 review.
+    secondaryNeutron: c.secondary_neutron,
+    neutronFlux: c.neutronFlux,
   });
 }
 
@@ -330,6 +408,8 @@ export function setConfig(c: SimulationConfig): void {
       irradiation_s: c.irradiation_s,
       cooling_s: c.cooling_s,
       currentProfile: c.currentProfile ?? null,
+      secondaryNeutron: c.secondary_neutron ?? false,
+      neutronFlux: c.neutronFlux ?? { ...DEFAULT_NEUTRON_FLUX },
     };
   });
 }
@@ -523,7 +603,14 @@ export function clearLayers(): void {
 
 export function isConfigValid(): boolean {
   const { beam, irradiation_s } = state;
-  if (beam.energy_MeV <= 0 || beam.current_mA <= 0) return false;
+  // A neutron source (ADR-0003) has no beam energy/current — it's defined by a
+  // flux spectrum. Validate the flux instead, or the scheduler would treat every
+  // neutron run as invalid and never fire (→ "no activation").
+  if (beam.projectile === "n") {
+    if (!state.neutronFlux || state.neutronFlux.flux <= 0) return false;
+  } else if (beam.energy_MeV <= 0 || beam.current_mA <= 0) {
+    return false;
+  }
   if (state.items.length === 0) return false;
   if (irradiation_s <= 0) return false;
 

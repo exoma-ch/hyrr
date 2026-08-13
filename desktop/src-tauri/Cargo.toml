@@ -3,6 +3,10 @@ name = "hyrr-desktop"
 version = "0.8.0"
 description = "HYRR Desktop — offline nuclear data simulation"
 edition = "2021"
+# Every sibling crate (core, py, py-mcp, hyrr-mcp, wasm) declares this; the
+# desktop crate was the one that didn't, so the repo shipped an undeclared
+# licence on the artifact users actually install. Surfaced by cargo-deny (#580).
+license = "MIT"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

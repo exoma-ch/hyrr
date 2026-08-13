@@ -235,10 +235,22 @@ export async function computeStackBackend(
   traceId = "_wasm",
 ): Promise<SimulationResult> {
   const configJson = prepareConfigJson(config);
+  // Neutron source (ADR-0003 Phase 1): projectile "n" routes to the neutron
+  // engine with the configured flux spectrum instead of the charged path.
+  const isNeutronSource = config.beam.projectile === "n";
+  const fluxJson = JSON.stringify(
+    config.neutronFlux ?? { kind: "fast", flux: 1e13, temp_mev: 1.5 },
+  );
 
   switch (activeBackend) {
     case "tauri": {
       const { invoke } = await import("@tauri-apps/api/core");
+      if (isNeutronSource) {
+        // Desktop neutron-source support is a follow-up (no Tauri command yet).
+        throw new Error(
+          "Neutron-source simulation is available in the browser build; the desktop app support is pending.",
+        );
+      }
       const resultJson: string = await invoke("run_compute_stack", {
         configJson,
       });
@@ -249,7 +261,9 @@ export async function computeStackBackend(
       return runWasmWithRecovery(async () => {
         // Ensure cross-sections are loaded for required elements
         await ensureWasmCrossSections(config);
-        const resultJson = wasmStore.computeStack(configJson);
+        const resultJson = isNeutronSource
+          ? wasmStore.computeNeutronStack(configJson, fluxJson)
+          : wasmStore.computeStack(configJson);
         const result = JSON.parse(resultJson);
         result.timestamp = Date.now();
         return result;
@@ -411,34 +425,45 @@ async function ensureWasmCrossSections(
 ): Promise<void> {
   const { getRequiredElements } = await import("@hyrr/compute");
   const elements = getRequiredElements(config);
-  const projectile = config.beam.projectile;
+
+  // The charged projectile, plus neutrons when secondary activation is modelled
+  // (ADR-0003 Phase 2). Neutron xs are best-effort: if the data path isn't
+  // available the fold simply yields no secondary products (no crash).
+  const projectiles = [config.beam.projectile];
+  if (config.secondary_neutron) projectiles.push("n");
 
   // Use the TS DataStore (created during WASM init) to load XS, then transfer
   if (!wasmTsDataStore) throw new Error("WASM TS DataStore not initialized");
   const ds = wasmTsDataStore;
-  await ds.ensureMultipleCrossSections(projectile, elements);
 
-  for (const sym of elements) {
-    const cacheKey = `${projectile}_${sym}`;
-    // Idempotent: skip elements already transferred into the current store.
-    // Cleared on rebuild so a fresh store reloads them (#344).
-    if (loadedXsKeys.has(cacheKey)) continue;
-    if (ds.xsCache?.has(cacheKey)) {
-      const rawRows = ds.xsCache.get(cacheKey);
-      if (!rawRows || rawRows.length === 0) continue;
+  for (const projectile of projectiles) {
+    try {
+      await ds.ensureMultipleCrossSections(projectile, elements);
+    } catch {
+      continue; // no data for this projectile (e.g. neutron sublibrary absent)
+    }
+    for (const sym of elements) {
+      const cacheKey = `${projectile}_${sym}`;
+      // Idempotent: skip elements already transferred into the current store.
+      // Cleared on rebuild so a fresh store reloads them (#344).
+      if (loadedXsKeys.has(cacheKey)) continue;
+      if (ds.xsCache?.has(cacheKey)) {
+        const rawRows = ds.xsCache.get(cacheKey);
+        if (!rawRows || rawRows.length === 0) continue;
 
-      // Raw parquet rows have: target_A, residual_Z, residual_A, energy_MeV, xs_mb
-      // hi-xs-prod files omit the `state` column — fall back to ""
-      const rows: any[] = rawRows.map((r: any) => ({
-        target_A: Number(r.target_A),
-        residual_Z: Number(r.residual_Z),
-        residual_A: Number(r.residual_A),
-        state: r.state ?? "",
-        energy_MeV: Number(r.energy_MeV),
-        xs_mb: Number(r.xs_mb),
-      }));
-      wasmStore.loadCrossSections(projectile, sym, JSON.stringify(rows));
-      loadedXsKeys.add(cacheKey);
+        // Raw parquet rows have: target_A, residual_Z, residual_A, energy_MeV, xs_mb
+        // hi-xs-prod files omit the `state` column — fall back to ""
+        const rows: any[] = rawRows.map((r: any) => ({
+          target_A: Number(r.target_A),
+          residual_Z: Number(r.residual_Z),
+          residual_A: Number(r.residual_A),
+          state: r.state ?? "",
+          energy_MeV: Number(r.energy_MeV),
+          xs_mb: Number(r.xs_mb),
+        }));
+        wasmStore.loadCrossSections(projectile, sym, JSON.stringify(rows));
+        loadedXsKeys.add(cacheKey);
+      }
     }
   }
 }

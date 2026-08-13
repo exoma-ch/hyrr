@@ -222,6 +222,9 @@
     // getShareableUrl requires SerializableConfig (with `items`, group-aware);
     // getConfig returns SimulationConfig (flat `layers`). Use the right shape
     // for the URL, keep the flat shape for the human-readable debug summary.
+    // The codec outcome rides along so the body can flag an over-budget / dead
+    // reproduce link instead of implying it's lossless (#539 / #546).
+    const share = getShareableUrl(getSerializableConfig());
     return buildBugReportBody({
       reportType,
       title,
@@ -230,7 +233,10 @@
       description,
       screenshotUrl,
       config: getConfig(),
-      configUrl: getShareableUrl(getSerializableConfig()),
+      configUrl: share.url,
+      configDropped: share.outcome.dropped,
+      configWarnings: share.outcome.warnings,
+      configLinkUnusable: share.outcome.link_unusable,
       result: getResult(),
       computeError: getResultError(),
       appVersion: __APP_VERSION__,
@@ -470,6 +476,13 @@
         {:else if WORKER_URL}
           Have a GitHub account? Use "Open on GitHub" — no email needed.
         {/if}
+      </p>
+
+      <p class="hint disclosure">
+        ⚠ This creates a <strong>public</strong> GitHub issue — the title, description,
+        screenshot and attached state are visible to everyone. Please don't include
+        passwords or sensitive personal data. Your email (if given) is used only for
+        follow-up and is <strong>not</strong> published.
       </p>
 
       {#if resultMsg}
@@ -752,6 +765,14 @@
     font-size: 0.7rem;
     color: var(--c-text-subtle);
     margin: 0;
+  }
+
+  .hint.disclosure {
+    color: var(--c-text-muted);
+    padding: 0.3rem 0.5rem;
+    background: var(--c-gold-tint-faint);
+    border-left: 2px solid var(--c-gold);
+    border-radius: 4px;
   }
 
   .result-msg {

@@ -7,17 +7,53 @@ notes here are frontend-specific.
 
 ## Quick reference
 
-| Task                  | Command                                  |
-| --------------------- | ---------------------------------------- |
-| Install               | `npm install --workspaces`               |
+| Task                  | Command                                   |
+| --------------------- | ----------------------------------------- |
+| Build the WASM engine | `just wasm`                               |
+| Install               | `npm install --workspaces`                |
 | Type / template check | `npm run check --workspace=hyrr-frontend` |
-| Unit + render tests   | `npm test --workspace=hyrr-frontend`     |
-| Dev server            | `npm run dev --workspace=hyrr-frontend`  |
-| E2E (Playwright)      | See `frontend/e2e/README.md`             |
+| Unit + render tests   | `npm test --workspace=hyrr-frontend`      |
+| Dev server            | `just dev`                                |
+| Dev server (no WASM rebuild) | `just dev-fast`                    |
+| Production build      | `npm run build --workspace=hyrr-frontend` |
+| E2E (Playwright)      | See `frontend/e2e/README.md`              |
 
-`npm run check` must report `0 ERRORS 0 WARNINGS` before a PR is ready
-to merge. The full test suite runs in ~15 s and is expected to pass on
-every PR.
+### Build the WASM engine first
+
+`frontend/package.json` depends on the compute engine as a local path
+dependency:
+
+```json
+"hyrr-wasm": "file:src/lib/compute/hyrr-wasm-pkg"
+```
+
+That directory is **generated, not checked in** (it is gitignored), so on
+a fresh clone you must build it before anything else:
+
+```sh
+just wasm     # wasm-pack build wasm/ --target web --out-dir ...
+```
+
+Skip it and `npm run build` fails with `[UNLOADABLE_DEPENDENCY] Could not
+load .../hyrr_wasm.js` pointing at `src/lib/compute/backend.ts` — which
+reads like a bundler or dependency problem but is only the missing
+artifact. `just dev` builds it for you; `just dev-fast` reuses the
+existing one and errors clearly if it is absent.
+
+### What must pass
+
+`npm run check` must report **`0 ERRORS`** before a PR is ready to merge.
+
+It currently also reports 14 warnings (a11y and unused-CSS lint from
+`svelte-check`). Those are known and tracked separately — they are not a
+merge gate today, so do not treat a non-zero warning count as a
+regression, but do avoid adding new ones.
+
+The unit suite runs in ~3 s and is expected to pass on every PR.
+
+> **Note:** `npm run check` and `npm test` are not yet enforced in CI —
+> only the production build is, via `e2e.yml`. Run both locally before
+> pushing.
 
 ## Testing Svelte components
 

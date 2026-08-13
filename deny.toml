@@ -1,0 +1,125 @@
+# cargo-deny configuration (#580).
+#
+# Shared by all six crates — core, py, py-mcp, hyrr-mcp, wasm,
+# desktop/src-tauri — each of which has its own Cargo.lock (no workspace).
+# `cargo-deny` takes exactly one `--manifest-path`, so `.github/workflows/
+# cargo-deny.yml` fans out over them in a matrix.
+#
+# Gate philosophy, matching the rule already written into
+# .pre-commit-config.yaml (the `no-commented-code` hook is disabled there for
+# being 13-false-positive / 0-true-positive): a gate must have a low enough
+# false-positive rate that nobody reflexively bypasses it. Everything below is
+# tuned for that rather than for maximum strictness.
+
+[graph]
+# Check every feature combination's dependencies, not just the default set —
+# `mcp`, `embed-data` and `trace-jsonl` each pull crates the default build
+# doesn't, and those ship in real artifacts.
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db"]
+# A yanked crate is worth knowing about but is not a vulnerability, and a
+# yank can happen between a PR opening and merging. Warn.
+yanked = "warn"
+# Deliberately empty. When the nightly sweep files an advisory issue, the
+# choice is: upgrade, or add an entry here WITH a reason and a link. A bare
+# id with no justification is how an ignore list rots into a blindfold.
+#
+# ignore = [
+#   { id = "RUSTSEC-0000-0000", reason = "why this is unreachable here + link" },
+# ]
+ignore = []
+
+[bans]
+# "warn", not "deny". Six independent lockfiles plus the Tauri tree guarantee
+# duplicate versions (windows-sys, hashbrown, getrandom). Denying would mean a
+# permanent skip-list treadmill, which is exactly the kind of gate people learn
+# to bypass. rust-lang/cargo and bevy both settle on "warn" for the same reason.
+multiple-versions = "warn"
+# `wildcards` counts a `path` dep and a `git` dep as "wildcard" because neither
+# carries a version requirement. Both of ours are deliberate and *more*
+# precise than a semver range, not less:
+#   - nucl-parquet    — path dep into the pinned submodule
+#   - guardrails-trace — git dep pinned to an exact rev
+# `allow-wildcard-paths` clears the first. The git one would still fire, so
+# this is "warn": denying would mean a permanently-suppressed gate, and a
+# suppressed gate teaches people to ignore the whole file. Revisit once the
+# guardrails pin becomes a tag (see [sources] below).
+wildcards = "warn"
+allow-wildcard-paths = true
+
+# Real policy calls, not hygiene. ADR 0005 settled on rustls for TLS; these
+# make an accidental reintroduction of the OpenSSL path loud rather than
+# silent. Note desktop/src-tauri legitimately links system OpenSSL via
+# webkitgtk at the *system* level — that is not a cargo dependency and is
+# unaffected by this.
+deny = [
+  { crate = "openssl", use-instead = "rustls" },
+  { crate = "openssl-sys", use-instead = "rustls" },
+]
+
+skip-tree = [
+  # Foundational and versioned far faster than anything downstream can track.
+  { crate = "windows-sys", reason = "bumps constantly across the tree; duplicates here are noise" },
+]
+
+[licenses]
+# 0.8 is cargo-deny's default (askalono confidence). Embark's own 0.93 trips on
+# hand-edited LICENSE files and produces exactly the noise this gate must not.
+confidence-threshold = 0.8
+# There is no built-in default allow-list — an empty list denies everything.
+# This is the intersection of rust-lang/cargo's and bevy's, which covers the
+# permissive crates.io tail. HYRR is MIT; all of these are compatible with
+# shipping an MIT binary.
+#
+# Every entry below was confirmed to actually appear in one of the six
+# dependency graphs. Allowing licenses "just in case" is how the list stops
+# describing the project.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "0BSD",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "CC0-1.0",
+  # ryu and a few numeric crates.
+  "BSL-1.0",
+  # webpki-roots. The Community Data License Agreement is a *data* licence,
+  # which is the right shape for a crate whose payload is Mozilla's root
+  # certificate store rather than code. Permissive; no copyleft obligation on
+  # a linking MIT binary.
+  "CDLA-Permissive-2.0",
+  # File-level copyleft. Required by the *desktop* graph only — cssparser,
+  # cssparser-macros, dtoa-short and friends, pulled in through Tauri's
+  # HTML/CSS handling. MPL-2.0's obligations attach per-file to those crates'
+  # own sources, which we don't modify, so linking them into an MIT binary is
+  # fine. (Note this is why the allow-list must be the union across all six
+  # crates: MPL-2.0 appears in none of core/py/py-mcp/hyrr-mcp/wasm.)
+  "MPL-2.0",
+]
+# Prefer a crate-scoped exception over widening `allow` — an exception records
+# *which* crate needed it, which is auditable; a broadened allow-list is not.
+exceptions = []
+
+# `guardrails-trace` publishes no `license` field at all (it is a git dep on
+# gerchowl/guardrails, pinned by rev). That is a gap in that repo, not a
+# licence we accept — filed upstream. Until it declares one, the alternative
+# to this clarification is either failing every run or widening `allow`, and
+# both are worse: the first is a gate people bypass, the second silently
+# accepts unlicensed code from anywhere.
+[[licenses.clarify]]
+crate = "guardrails-trace"
+expression = "MIT"
+license-files = []
+
+[sources]
+unknown-registry = "deny"
+# `warn` for now: hyrr-core pins `guardrails-trace` by git rev deliberately
+# (see core/Cargo.toml — flip to a tag once gerchowl/guardrails#24 merges).
+# Promote to "deny" with an explicit allow-org once that pin becomes a tag.
+unknown-git = "warn"

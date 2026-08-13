@@ -18,7 +18,11 @@ pub enum ProjectileType {
     Helion,
     Alpha,
     /// Heavy ion with element symbol, Z, and A (e.g., C-12, O-16).
-    HeavyIon { symbol: String, z: u32, a: u32 },
+    HeavyIon {
+        symbol: String,
+        z: u32,
+        a: u32,
+    },
 }
 
 impl Serialize for ProjectileType {
@@ -30,7 +34,8 @@ impl Serialize for ProjectileType {
 impl<'de> Deserialize<'de> for ProjectileType {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        Self::from_str(&s).ok_or_else(|| serde::de::Error::custom(format!("unknown projectile: {s}")))
+        Self::from_str(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown projectile: {s}")))
     }
 }
 
@@ -86,7 +91,7 @@ impl ProjectileType {
     }
 
     pub fn projectile(&self) -> Projectile {
-        Projectile::from_type(&self)
+        Projectile::from_type(self)
     }
 
     pub fn z(&self) -> u32 {
@@ -325,6 +330,19 @@ pub struct LayerResult {
     /// Keyed by the same isotope name as isotope_results. Summed across target channels.
     #[serde(default)]
     pub depth_production_rates: HashMap<String, Vec<f64>>,
+    /// Free neutrons produced per second in this layer by (x,n)-type charged
+    /// reactions — the source term for secondary neutron activation (ADR-0003
+    /// Phase 2). Zero on the neutron-source and stopping-only paths.
+    #[serde(default)]
+    pub neutron_source_rate: f64,
+    /// How many produced isotopes were pruned as numerical dust before the
+    /// chain solver ran (issue #533). Non-zero values are surfaced so the
+    /// filter is never silent — the pruned entries had activity below the
+    /// relative floor *and* production rate below the relative rate floor
+    /// (long-lived, low-yield minor-component products are exempt from the
+    /// activity floor and reach the reported inventory).
+    #[serde(default)]
+    pub pruned_negligible_count: usize,
 }
 
 /// Full result for all layers in a stack.
@@ -333,6 +351,15 @@ pub struct StackResult {
     pub layer_results: Vec<LayerResult>,
     pub irradiation_time_s: f64,
     pub cooling_time_s: f64,
+    /// Which nuclear data produced this result (#593) — version, library, and
+    /// the verified tarball hash where one applies.
+    ///
+    /// `#[serde(default)]` so results written before #593 still deserialize;
+    /// they land on [`Provenance::unknown`], which reports
+    /// [`DataSource::Unknown`](crate::provenance::DataSource::Unknown) rather
+    /// than inheriting the running build's identity.
+    #[serde(default)]
+    pub provenance: crate::provenance::Provenance,
 }
 
 /// A single radiation emission line for a decaying nuclide (#427).

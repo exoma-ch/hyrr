@@ -8,13 +8,16 @@ use std::collections::HashMap;
 
 mod trace;
 
-use hyrr_core::compute::compute_stack;
+use hyrr_core::compute::{
+    compute_neutron_stack, compute_stack, compute_stack_with_secondary_neutrons,
+};
 use hyrr_core::db::{DatabaseProtocol, InMemoryDataStore};
 use hyrr_core::formula::parse_formula;
 use hyrr_core::materials::resolve_material;
+use hyrr_core::neutron::FluxModel;
 use hyrr_core::production::generate_depth_profile;
 use hyrr_core::stopping::{
-    compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm, StoppingError,
+    StoppingError, compute_energy_out, compute_thickness_from_energy, dedx_mev_per_cm,
 };
 use hyrr_core::types::*;
 use serde::{Deserialize, Serialize};
@@ -59,7 +62,8 @@ impl WasmDataStore {
         let entries: Vec<AbundanceEntry> =
             serde_json::from_str(json).map_err(|e| JsValue::from_str(&e.to_string()))?;
         for e in entries {
-            self.inner.add_abundance(e.z, e.a, e.abundance, e.atomic_mass);
+            self.inner
+                .add_abundance(e.z, e.a, e.abundance, e.atomic_mass);
         }
         Ok(())
     }
@@ -126,7 +130,8 @@ impl WasmDataStore {
                 let target_z: u32 = z_str.parse().unwrap_or(0);
                 let energies: Vec<f64> = pairs.iter().map(|p| p.0).collect();
                 let dedx: Vec<f64> = pairs.iter().map(|p| p.1).collect();
-                self.inner.add_stopping_data(source, target_z, energies, dedx);
+                self.inner
+                    .add_stopping_data(source, target_z, energies, dedx);
             }
         }
         Ok(())
@@ -150,7 +155,8 @@ impl WasmDataStore {
             if let Some((source, compound)) = key.split_once('\0') {
                 let energies: Vec<f64> = pairs.iter().map(|p| p.0).collect();
                 let dedx: Vec<f64> = pairs.iter().map(|p| p.1).collect();
-                self.inner.add_compound_stopping_data(source, compound, energies, dedx);
+                self.inner
+                    .add_compound_stopping_data(source, compound, energies, dedx);
             }
         }
         Ok(())
@@ -171,10 +177,19 @@ impl WasmDataStore {
         // Group by (target_A, residual_Z, residual_A, state)
         let mut grouped: HashMap<String, (u32, u32, u32, String, Vec<(f64, f64)>)> = HashMap::new();
         for e in entries {
-            let key = format!("{}_{}_{}_{}", e.target_a, e.residual_z, e.residual_a, e.state);
-            let entry = grouped
-                .entry(key)
-                .or_insert_with(|| (e.target_a, e.residual_z, e.residual_a, e.state.clone(), Vec::new()));
+            let key = format!(
+                "{}_{}_{}_{}",
+                e.target_a, e.residual_z, e.residual_a, e.state
+            );
+            let entry = grouped.entry(key).or_insert_with(|| {
+                (
+                    e.target_a,
+                    e.residual_z,
+                    e.residual_a,
+                    e.state.clone(),
+                    Vec::new(),
+                )
+            });
             entry.4.push((e.energy_mev, e.xs_mb));
         }
 
@@ -192,7 +207,8 @@ impl WasmDataStore {
             });
         }
 
-        self.inner.add_cross_sections(projectile, element_symbol, xs_list);
+        self.inner
+            .add_cross_sections(projectile, element_symbol, xs_list);
         Ok(())
     }
 
@@ -202,11 +218,11 @@ impl WasmDataStore {
         let config: SimulationConfig =
             serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        let projectile = ProjectileType::from_str(&config.beam.projectile)
-            .ok_or_else(|| JsValue::from_str(&format!("Invalid projectile: {}", config.beam.projectile)))?;
+        let projectile = ProjectileType::from_str(&config.beam.projectile).ok_or_else(|| {
+            JsValue::from_str(&format!("Invalid projectile: {}", config.beam.projectile))
+        })?;
 
-        let layers = config_to_layers(&self.inner, &config)
-            .map_err(|e| JsValue::from_str(&e))?;
+        let layers = config_to_layers(&self.inner, &config).map_err(|e| JsValue::from_str(&e))?;
 
         let current_profile = config
             .current_profile
@@ -223,8 +239,43 @@ impl WasmDataStore {
             current_profile,
         };
 
-        let result = compute_stack(&self.inner, &mut stack, true)
-            .map_err(stopping_error_to_jsvalue)?;
+        let result = if config.secondary_neutron {
+            compute_stack_with_secondary_neutrons(&self.inner, &mut stack, true)
+        } else {
+            compute_stack(&self.inner, &mut stack, true)
+        }
+        .map_err(stopping_error_to_jsvalue)?;
+        let sim_result = convert_stack_result(config_json, &result);
+        serde_json::to_string(&sim_result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Neutron-source activation (ADR-0003 Phase 1). `config_json` carries the
+    /// layer stack + irradiation/cooling times (same shape as `computeStack`,
+    /// its `beam` ignored); `flux_json` is a tagged `FluxModel`, e.g.
+    /// `{"kind":"fast","flux":1e14,"temp_mev":1.4}`. Every layer sees the same
+    /// incident spectrum (thin-target). Result JSON matches `computeStack`.
+    #[wasm_bindgen(js_name = computeNeutronStack)]
+    pub fn compute_neutron_stack_js(
+        &self,
+        config_json: &str,
+        flux_json: &str,
+    ) -> Result<String, JsValue> {
+        let config: SimulationConfig =
+            serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let flux: FluxModel = serde_json::from_str(flux_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid neutron flux: {e}")))?;
+
+        let layers = config_to_layers(&self.inner, &config).map_err(|e| JsValue::from_str(&e))?;
+
+        let result = compute_neutron_stack(
+            &self.inner,
+            &layers,
+            &flux,
+            config.irradiation_s,
+            config.cooling_s,
+            1.0,
+            true,
+        );
         let sim_result = convert_stack_result(config_json, &result);
         serde_json::to_string(&sim_result).map_err(|e| JsValue::from_str(&e.to_string()))
     }
@@ -235,8 +286,9 @@ impl WasmDataStore {
         let config: SimulationConfig =
             serde_json::from_str(config_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        let projectile = ProjectileType::from_str(&config.beam.projectile)
-            .ok_or_else(|| JsValue::from_str(&format!("Invalid projectile: {}", config.beam.projectile)))?;
+        let projectile = ProjectileType::from_str(&config.beam.projectile).ok_or_else(|| {
+            JsValue::from_str(&format!("Invalid projectile: {}", config.beam.projectile))
+        })?;
         let proj_z = projectile.z();
         let beam_current = config.beam.current_ma;
         let beam_area = 1.0_f64;
@@ -268,8 +320,14 @@ impl WasmDataStore {
                 continue;
             }
 
-            let resolution = resolve_material(&self.inner, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)
-                .map_err(|e| JsValue::from_str(&e))?;
+            let resolution = resolve_material(
+                &self.inner,
+                &lc.material,
+                lc.enrichment.as_ref(),
+                None,
+                lc.density_g_cm3,
+            )
+            .map_err(|e| JsValue::from_str(&e))?;
             let composition = compute_composition(&resolution.elements);
             let density = resolution.density;
 
@@ -279,12 +337,27 @@ impl WasmDataStore {
                 (ad / density, "areal_density", None)
             } else if let Some(e_out) = lc.energy_out_mev {
                 if energy_in <= 0.0 {
-                    (0.0, "energy_out", Some("Beam stopped before this layer".to_string()))
+                    (
+                        0.0,
+                        "energy_out",
+                        Some("Beam stopped before this layer".to_string()),
+                    )
                 } else if e_out > energy_in {
-                    (0.0, "energy_out", Some(format!("Eout ({e_out} MeV) > Ein ({energy_in:.1} MeV)")))
+                    (
+                        0.0,
+                        "energy_out",
+                        Some(format!("Eout ({e_out} MeV) > Ein ({energy_in:.1} MeV)")),
+                    )
                 } else {
                     match compute_thickness_from_energy(
-                        &self.inner, &projectile, &composition, density, energy_in, e_out.max(0.0), 1000, None,
+                        &self.inner,
+                        &projectile,
+                        &composition,
+                        density,
+                        energy_in,
+                        e_out.max(0.0),
+                        1000,
+                        None,
                     ) {
                         Ok(t) => (t, "energy_out", None),
                         Err(e) => (0.0, "energy_out", Some(e.to_string())),
@@ -301,8 +374,17 @@ impl WasmDataStore {
                 let e_out_res: Result<f64, StoppingError> = if user_specified == "energy_out" {
                     Ok(lc.energy_out_mev.unwrap_or(0.0).min(energy_in).max(0.0))
                 } else {
-                    compute_energy_out(&self.inner, &projectile, &composition, density, energy_in, thickness_cm, 1000, None)
-                        .map(|v| v.max(0.0))
+                    compute_energy_out(
+                        &self.inner,
+                        &projectile,
+                        &composition,
+                        density,
+                        energy_in,
+                        thickness_cm,
+                        1000,
+                        None,
+                    )
+                    .map(|v| v.max(0.0))
                 };
                 let e_out = match e_out_res {
                     Ok(v) => v,
@@ -332,7 +414,14 @@ impl WasmDataStore {
                 let energies: Vec<f64> = (0..n_pts)
                     .map(|i| e_min + (energy_in - e_min) * (i as f64) / ((n_pts - 1) as f64))
                     .collect();
-                let dedx_vals = match dedx_mev_per_cm(&self.inner, &projectile, &composition, density, &energies, None) {
+                let dedx_vals = match dedx_mev_per_cm(
+                    &self.inner,
+                    &projectile,
+                    &composition,
+                    density,
+                    &energies,
+                    None,
+                ) {
                     Ok(v) => v,
                     Err(err) => {
                         preview_layers.push(DepthPreviewLayer {
@@ -350,7 +439,8 @@ impl WasmDataStore {
                         continue;
                     }
                 };
-                let dp = generate_depth_profile(&energies, &dedx_vals, beam_current, beam_area, proj_z);
+                let dp =
+                    generate_depth_profile(&energies, &dedx_vals, beam_current, beam_area, proj_z);
 
                 let mut points: Vec<DepthPreviewPoint> = Vec::new();
                 for i in 0..dp.depths.len() {
@@ -378,8 +468,16 @@ impl WasmDataStore {
 
                 let last_mm = points.last().map(|p| p.depth_mm).unwrap_or(0.0);
                 if last_mm < thickness_mm - 0.001 {
-                    points.push(DepthPreviewPoint { depth_mm: last_mm + 0.001, energy_mev: 0.0, heat_w_cm3: 0.0 });
-                    points.push(DepthPreviewPoint { depth_mm: thickness_mm, energy_mev: 0.0, heat_w_cm3: 0.0 });
+                    points.push(DepthPreviewPoint {
+                        depth_mm: last_mm + 0.001,
+                        energy_mev: 0.0,
+                        heat_w_cm3: 0.0,
+                    });
+                    points.push(DepthPreviewPoint {
+                        depth_mm: thickness_mm,
+                        energy_mev: 0.0,
+                        heat_w_cm3: 0.0,
+                    });
                 }
 
                 (e_out, points, heat_w / 1000.0)
@@ -387,8 +485,16 @@ impl WasmDataStore {
                 (
                     0.0,
                     vec![
-                        DepthPreviewPoint { depth_mm: 0.0, energy_mev: 0.0, heat_w_cm3: 0.0 },
-                        DepthPreviewPoint { depth_mm: thickness_mm, energy_mev: 0.0, heat_w_cm3: 0.0 },
+                        DepthPreviewPoint {
+                            depth_mm: 0.0,
+                            energy_mev: 0.0,
+                            heat_w_cm3: 0.0,
+                        },
+                        DepthPreviewPoint {
+                            depth_mm: thickness_mm,
+                            energy_mev: 0.0,
+                            heat_w_cm3: 0.0,
+                        },
                     ],
                     0.0,
                 )
@@ -432,9 +538,18 @@ impl WasmDataStore {
             .ok_or_else(|| JsValue::from_str(&format!("Invalid projectile: {projectile}")))?;
         let composition: Vec<(u32, f64)> = serde_json::from_str(composition_json)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        compute_energy_out(&self.inner, &proj, &composition, density_g_cm3, energy_in_mev, thickness_cm, 1000, None)
-            .map(|v| v.max(0.0))
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+        compute_energy_out(
+            &self.inner,
+            &proj,
+            &composition,
+            density_g_cm3,
+            energy_in_mev,
+            thickness_cm,
+            1000,
+            None,
+        )
+        .map(|v| v.max(0.0))
+        .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Parse a chemical formula. Returns JSON `{"H": 2, "O": 1}`.
@@ -464,6 +579,141 @@ impl WasmDataStore {
         };
         serde_json::to_string(&result).map_err(|e| JsValue::from_str(&e.to_string()))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Config codec (#539 increment 3a)
+// ---------------------------------------------------------------------------
+//
+// Expose the ONE canonical Rust config codec (`hyrr_core::config_codec`) to the
+// browser so the share-URL / `.hyrr.json` encode+decode is the same bytes the
+// MCP server and desktop app produce — killing the hand-mirrored TS codec drift
+// class (#531). These are free functions (the codec needs no `DataStore`).
+//
+// Marshalling: `serde-wasm-bindgen`. The JS-facing shape is the generated
+// `CodecConfig` / `SizePolicy` / `EncodeOutcome` TS types
+// (`packages/compute/src/generated/config-codec.ts`). `json_compatible()`
+// serializes maps as plain objects (not JS `Map`s) so `mass_fractions` etc.
+// round-trip as the object shape the frontend expects.
+//
+// Panic discipline (wasm memory model — a panic poisons the store, ADR/memory
+// "wasm-panic-poisons-store"): the untrusted-hash `decode` path NEVER unwraps.
+// Every fallible step maps its error to a thrown JS `Error` via `Result`, so a
+// malformed/hostile `#config=` string surfaces as a catchable exception, not an
+// abort.
+
+use hyrr_core::config_codec::{
+    CodecConfig, SizePolicy, decode as codec_decode, encode as codec_encode,
+};
+use serde_wasm_bindgen::Serializer;
+
+/// Encode a canonical config to a `#config=1:…` hash under a size policy.
+///
+/// `config` is a `CodecConfig` object, `policy` a `SizePolicy`
+/// (`{ kind: "file" }` or `{ kind: "url", budget_bytes }`). Returns an
+/// `EncodeOutcome` (`{ hash, dropped, warnings, link_unusable }`). A malformed
+/// `config`/`policy` throws a JS `Error` rather than panicking.
+#[wasm_bindgen(js_name = encodeConfig)]
+pub fn encode_config(config: JsValue, policy: JsValue) -> Result<JsValue, JsValue> {
+    let cfg: CodecConfig = serde_wasm_bindgen::from_value(config)
+        .map_err(|e| JsValue::from_str(&format!("invalid config: {e}")))?;
+    let policy: SizePolicy = serde_wasm_bindgen::from_value(policy)
+        .map_err(|e| JsValue::from_str(&format!("invalid size policy: {e}")))?;
+    let outcome = codec_encode(&cfg, policy);
+    outcome
+        .serialize(&Serializer::json_compatible())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Decode a `#config=1:…` hash back to a canonical `CodecConfig`.
+///
+/// Accepts a full URL, a bare `#config=1:…`/`config=1:…` hash, or the raw
+/// `1:<payload>`. On any decode failure (bad prefix, base64, decompression-bomb
+/// caps, JSON, item/float/map bounds) this throws a JS `Error` carrying the
+/// codec's message — it never panics on the untrusted input.
+#[wasm_bindgen(js_name = decodeConfig)]
+pub fn decode_config(hash: &str) -> Result<JsValue, JsValue> {
+    let cfg = codec_decode(hash).map_err(|e| JsValue::from_str(&format!("decode failed: {e}")))?;
+    cfg.serialize(&Serializer::json_compatible())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Shareable results viewer (ADR 0008)
+// ---------------------------------------------------------------------------
+
+/// Stamp a result snapshot into the built viewer template.
+///
+/// The browser already holds the *converted* result (it came back from
+/// `run_stack`), so this takes the wire JSON rather than a `StackResult` and
+/// hands it straight to the core-owned builder — the same one the MCP surface
+/// uses, so the tier gate cannot diverge between them.
+///
+/// `evaluated_json` carries `{ emissions, doseConstants }` gathered by the
+/// caller from its own data source (hyparquet in the browser). It is an
+/// argument rather than a lookup because only the native Parquet store can
+/// answer `get_emissions` — a builder that fetched for itself would silently
+/// emit Tier A here.
+///
+/// Throws a JS `Error` rather than returning a half-artifact.
+#[wasm_bindgen(js_name = buildViewerHtml)]
+pub fn build_viewer_html(
+    result_json: &str,
+    evaluated_json: &str,
+    tier: &str,
+    hyrr_version: &str,
+    generated_at: Option<String>,
+    template: &str,
+) -> Result<String, JsValue> {
+    use hyrr_core::viewer::{
+        EvaluatedData, SimulationResultJson, SnapshotTier, build_snapshot, render_html,
+    };
+
+    let tier = match tier {
+        "A" => SnapshotTier::A,
+        "B" => SnapshotTier::B,
+        other => {
+            return Err(JsValue::from_str(&format!(
+                "unknown viewer tier {other:?} — expected \"A\" or \"B\""
+            )));
+        }
+    };
+
+    let wire: SimulationResultJson = serde_json::from_str(result_json)
+        .map_err(|e| JsValue::from_str(&format!("result is not a valid simulation result: {e}")))?;
+
+    let evaluated: EvaluatedData = if evaluated_json.trim().is_empty() {
+        EvaluatedData::default()
+    } else {
+        let parsed: EvaluatedDataJson = serde_json::from_str(evaluated_json)
+            .map_err(|e| JsValue::from_str(&format!("evaluated data is not valid: {e}")))?;
+        EvaluatedData {
+            emissions: parsed.emissions,
+            dose_constants: parsed.dose_constants,
+        }
+    };
+
+    // Refuse rather than mislabel: a Tier B artifact with no spectra looks
+    // identical to Tier A but claims otherwise in its own payload.
+    if tier == SnapshotTier::B && evaluated.emissions.is_empty() {
+        return Err(JsValue::from_str(
+            "Tier B requested but no emission data was supplied — load emission data first, \
+             or export tier \"A\".",
+        ));
+    }
+
+    let snapshot = build_snapshot(wire, tier, hyrr_version, generated_at, evaluated);
+    render_html(template, &snapshot).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Wire form of [`hyrr_core::viewer::EvaluatedData`] — the JS side sends the
+/// same key names the viewer reads back out.
+#[derive(serde::Deserialize)]
+struct EvaluatedDataJson {
+    #[serde(default)]
+    emissions: std::collections::BTreeMap<String, Vec<hyrr_core::viewer::EmissionLineJson>>,
+    #[serde(default, rename = "doseConstants")]
+    dose_constants: std::collections::BTreeMap<String, hyrr_core::viewer::DoseConstantEntry>,
 }
 
 // ---------------------------------------------------------------------------
@@ -553,6 +803,10 @@ struct SimulationConfig {
     /// Time-varying beam current (piecewise-constant).
     #[serde(default, alias = "currentProfile")]
     current_profile: Option<CurrentProfileConfig>,
+    /// Model secondary (x,n) neutron activation on this charged run (ADR-0003
+    /// Phase 2). Off by default.
+    #[serde(default, alias = "secondaryNeutron")]
+    secondary_neutron: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -582,65 +836,6 @@ struct LayerConfig {
     energy_out_mev: Option<f64>,
     is_monitor: Option<bool>,
     density_g_cm3: Option<f64>,
-}
-
-#[derive(Debug, Serialize)]
-struct SimulationResultJson {
-    config: serde_json::Value,
-    layers: Vec<LayerResultJson>,
-    timestamp: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct LayerResultJson {
-    layer_index: usize,
-    energy_in: f64,
-    energy_out: f64,
-    #[serde(rename = "delta_E_MeV")]
-    delta_e_mev: f64,
-    #[serde(rename = "heat_kW")]
-    heat_kw: f64,
-    isotopes: Vec<IsotopeResultJson>,
-    depth_profile: Vec<DepthPointJson>,
-    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
-    depth_production_rates: std::collections::HashMap<String, Vec<f64>>,
-}
-
-#[derive(Debug, Serialize)]
-struct IsotopeResultJson {
-    name: String,
-    #[serde(rename = "Z")]
-    z: u32,
-    #[serde(rename = "A")]
-    a: u32,
-    state: String,
-    half_life_s: Option<f64>,
-    production_rate: f64,
-    #[serde(rename = "saturation_yield_Bq_uA")]
-    saturation_yield_bq_ua: f64,
-    #[serde(rename = "activity_Bq")]
-    activity_bq: f64,
-    source: String,
-    #[serde(rename = "activity_direct_Bq")]
-    activity_direct_bq: f64,
-    #[serde(rename = "activity_ingrowth_Bq")]
-    activity_ingrowth_bq: f64,
-    time_grid_s: Vec<f64>,
-    #[serde(rename = "activity_vs_time_Bq")]
-    activity_vs_time_bq: Vec<f64>,
-    reactions: Vec<String>,
-    decay_notations: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct DepthPointJson {
-    depth_mm: f64,
-    #[serde(rename = "energy_MeV")]
-    energy_mev: f64,
-    #[serde(rename = "dedx_MeV_cm")]
-    dedx_mev_cm: f64,
-    #[serde(rename = "heat_W_cm3")]
-    heat_w_cm3: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -697,7 +892,10 @@ fn stopping_error_to_jsvalue(err: StoppingError) -> JsValue {
     use serde::Serialize;
     let mut value = err.as_json();
     if let Some(obj) = value.as_object_mut() {
-        obj.insert("message".to_string(), serde_json::Value::String(err.to_string()));
+        obj.insert(
+            "message".to_string(),
+            serde_json::Value::String(err.to_string()),
+        );
     }
     // `serde_wasm_bindgen::to_value` defaults to converting JSON objects into
     // JS `Map`s, which the frontend's `parseComputeError` can't introspect via
@@ -710,12 +908,21 @@ fn stopping_error_to_jsvalue(err: StoppingError) -> JsValue {
     }
 }
 
-fn config_to_layers(db: &dyn DatabaseProtocol, config: &SimulationConfig) -> Result<Vec<Layer>, String> {
+fn config_to_layers(
+    db: &dyn DatabaseProtocol,
+    config: &SimulationConfig,
+) -> Result<Vec<Layer>, String> {
     config
         .layers
         .iter()
         .map(|lc| {
-            let resolution = resolve_material(db, &lc.material, lc.enrichment.as_ref(), None, lc.density_g_cm3)?;
+            let resolution = resolve_material(
+                db,
+                &lc.material,
+                lc.enrichment.as_ref(),
+                None,
+                lc.density_g_cm3,
+            )?;
             Ok(Layer {
                 density_g_cm3: lc.density_g_cm3.unwrap_or(resolution.density),
                 elements: resolution.elements,
@@ -748,68 +955,86 @@ fn compute_composition(elements: &[(Element, f64)]) -> Vec<(u32, f64)> {
     raw.iter().map(|&(z, w)| (z, w / total)).collect()
 }
 
-fn convert_stack_result(config_json: &str, result: &StackResult) -> SimulationResultJson {
+/// Delegate to the core-owned converter (ADR 0008).
+///
+/// This mapping used to be hand-mirrored here and in
+/// `desktop/src-tauri/src/commands.rs`, and the two had already drifted — the
+/// desktop copy silently dropped `pruned_negligible_count`. `hyrr_core::viewer`
+/// is now the single owner.
+///
+/// `timestamp` stays 0: JS overwrites it with `Date.now()`.
+fn convert_stack_result(
+    config_json: &str,
+    result: &StackResult,
+) -> hyrr_core::viewer::SimulationResultJson {
     let config_val: serde_json::Value = serde_json::from_str(config_json).unwrap_or_default();
+    hyrr_core::viewer::convert_stack_result(config_val, result, 0)
+}
 
-    let layers: Vec<LayerResultJson> = result
-        .layer_results
-        .iter()
-        .enumerate()
-        .map(|(idx, lr)| {
-            let mut isotopes: Vec<IsotopeResultJson> = lr
-                .isotope_results
-                .values()
-                .map(|iso| IsotopeResultJson {
-                    name: iso.name.clone(),
-                    z: iso.z,
-                    a: iso.a,
-                    state: iso.state.clone(),
-                    half_life_s: iso.half_life_s,
-                    production_rate: iso.production_rate,
-                    saturation_yield_bq_ua: iso.saturation_yield_bq_ua,
-                    activity_bq: iso.activity_bq,
-                    source: iso.source.clone(),
-                    activity_direct_bq: iso.activity_direct_bq,
-                    activity_ingrowth_bq: iso.activity_ingrowth_bq,
-                    time_grid_s: iso.time_grid_s.clone(),
-                    activity_vs_time_bq: iso.activity_vs_time_bq.clone(),
-                    reactions: iso.reactions.clone(),
-                    decay_notations: iso.decay_notations.clone(),
-                })
-                .collect();
-            isotopes.sort_by(|a, b| {
-                b.activity_bq
-                    .partial_cmp(&a.activity_bq)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+// ---------------------------------------------------------------------------
+// Config-codec host tests (#539 increment 3a)
+// ---------------------------------------------------------------------------
+//
+// These run on the native host under `cargo test` (the wasm-bindgen JsValue
+// marshalling is covered separately by `tests/codec.rs` via `wasm-pack test
+// --node`). Their job is to pin the `float_roundtrip` gotcha: they exercise the
+// exact `serde_json` instance this wasm crate resolves — so if feature
+// unification (or the explicit pin in Cargo.toml) ever stopped carrying
+// `float_roundtrip`, this fails on the host, no browser needed.
+#[cfg(test)]
+mod codec_host_tests {
+    use hyrr_core::config_codec::{
+        Beam, CodecConfig, CurrentProfile, Item, Layer, SizePolicy, decode, encode,
+    };
 
-            let depth_profile: Vec<DepthPointJson> = lr
-                .depth_profile
-                .iter()
-                .map(|dp| DepthPointJson {
-                    depth_mm: dp.depth_cm * 10.0,
-                    energy_mev: dp.energy_mev,
-                    dedx_mev_cm: dp.dedx_mev_cm,
-                    heat_w_cm3: dp.heat_w_cm3,
-                })
-                .collect();
+    fn cfg_with_profile(currents: Vec<f64>) -> CodecConfig {
+        let n = currents.len();
+        CodecConfig {
+            beam: Beam {
+                projectile: "p".to_string(),
+                energy_mev: 28.0,
+                current_ma: 0.2,
+            },
+            items: vec![Item::Layer(Layer {
+                material: "Cu".to_string(),
+                thickness_cm: Some(0.1),
+                ..Default::default()
+            })],
+            irradiation_s: 3600.0,
+            cooling_s: 3600.0,
+            neutron_flux: None,
+            secondary_neutron: false,
+            current_profile: Some(CurrentProfile {
+                times_s: (0..n).map(|i| i as f64 * 60.0).collect(),
+                currents_ma: currents,
+            }),
+        }
+    }
 
-            LayerResultJson {
-                layer_index: idx,
-                energy_in: lr.energy_in,
-                energy_out: lr.energy_out,
-                delta_e_mev: lr.delta_e_mev,
-                heat_kw: lr.heat_kw,
-                isotopes,
-                depth_profile,
-                depth_production_rates: lr.depth_production_rates.clone(),
-            }
-        })
-        .collect();
-
-    SimulationResultJson {
-        config: config_val,
-        layers,
-        timestamp: 0, // JS will override with Date.now()
+    /// The inc1 gotcha: prove `serde_json`'s `float_roundtrip` is active in the
+    /// wasm crate's dependency graph. `0.05 + 3e-4` and friends must survive an
+    /// encode→decode bit-for-bit — which is exactly what the correctly-rounded
+    /// parser guarantees and what JS `JSON.parse` (correctly rounded) matches.
+    #[test]
+    fn float_roundtrip_is_active_in_wasm_crate_graph() {
+        let values: Vec<f64> = vec![
+            0.05_f64 + 3e-4,
+            0.1 + 0.2,
+            1.0 / 3.0,
+            9.999_999_999_999_999e-5,
+            123_456.789_012_345,
+            2.225_073_858_507_201e-308, // near subnormal boundary
+        ];
+        let cfg = cfg_with_profile(values.clone());
+        let outcome = encode(&cfg, SizePolicy::File);
+        let decoded = decode(&outcome.hash).expect("decode");
+        let got = decoded.current_profile.expect("profile").currents_ma;
+        for (want, have) in values.iter().zip(got.iter()) {
+            assert_eq!(
+                want.to_bits(),
+                have.to_bits(),
+                "f64 {want} lost precision through the codec — float_roundtrip not active?"
+            );
+        }
     }
 }

@@ -107,3 +107,37 @@ describe("buildBugReportBody (#143)", () => {
     expect(body).toContain("Energy 0 MeV outside PSTAR range");
   });
 });
+
+describe("buildBugReportBody share-link caveats (#546 nit / no silent loss)", () => {
+  it("says nothing extra when the link carried everything", () => {
+    const body = buildBugReportBody(
+      baseInput({ configDropped: [], configWarnings: [], configLinkUnusable: false }),
+    );
+    // The reproduce link is present but there's no over-budget caveat.
+    expect(body).toContain("[Reproduce this config]");
+    expect(body).not.toContain("⚠");
+  });
+
+  it("surfaces a caveat when currentProfile was dropped from the share link", () => {
+    const body = buildBugReportBody(baseInput({ configDropped: ["currentProfile"] }));
+    expect(body).toContain("Current profile was too large for the share link");
+    expect(body).toContain("won't reproduce from the link above");
+  });
+
+  it("surfaces the dominant caveat when the link is unusable (>budget stack)", () => {
+    const body = buildBugReportBody(
+      baseInput({ configLinkUnusable: true, configDropped: ["currentProfile"] }),
+    );
+    expect(body).toContain("Stack too large to share by link");
+    // link_unusable is the single dominant message — the profile-dropped line is
+    // subsumed (mirrors HeaderBar's branch), so it isn't also emitted.
+    expect(body).not.toContain("Current profile was too large");
+  });
+
+  it("passes through generic codec warnings verbatim", () => {
+    const body = buildBugReportBody(
+      baseInput({ configWarnings: ["approaching URL size limit"] }),
+    );
+    expect(body).toContain("⚠ approaching URL size limit");
+  });
+});

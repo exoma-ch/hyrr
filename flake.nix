@@ -8,9 +8,26 @@
     # nixpkgs eval (shared store/cache).
     guardrails.url = "github:gerchowl/guardrails";
     guardrails.inputs.nixpkgs.follows = "nixpkgs";
+    # crane: hermetic, cached Rust builds for the `nix flake check` gates
+    # (#484). Vendors deps from Cargo.lock so `cargo {test,clippy,fmt}` run
+    # byte-identically local and in CI — no `dtolnay/rust-toolchain` +
+    # `Swatinem/rust-cache` per-job network dance.
+    crane.url = "github:ipetkov/crane";
+    # Pinned nucl-parquet data + Rust client at the submodule rev (#484). The
+    # data tests + build.rs (`data/catalog.json` → HYRR_DATA_VERSION) need it as
+    # a *fixed input* (a hermetic check can't `git submodule update`). This is
+    # the same tree the `nucl-parquet` submodule points at; bump both in
+    # lockstep — `scripts/check-lockfiles.sh` now fails the commit if they
+    # diverge, after #574 bumped the gitlink alone and left the hermetic gates
+    # testing data_version 2026.7.2 while everything else shipped 2026.8.1.
+    # flake=false → consumed as a plain source path.
+    nucl-parquet = {
+      url = "github:exoma-ch/nucl-parquet/a1b84f8cd5328ff42b2b62691696ce5bd19e90dd";
+      flake = false;
+    };
   };
 
-  outputs = { nixpkgs, flake-utils, guardrails, ... }:
+  outputs = { nixpkgs, flake-utils, guardrails, crane, nucl-parquet, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -81,6 +98,62 @@
 
         mkLibPath = libs:
           pkgs.lib.optionalString isLinux (pkgs.lib.makeLibraryPath libs);
+
+        # ══ Hermetic Rust checks (crane, #484) ═══════════════════════════
+        # Lift the ci.yml cargo jobs (rust-projectile-matrix, embedded-data-
+        # store, mcp-tools, hyrr-py-check, data-fetch-integration) into
+        # `nix flake check` derivations so they run byte-identically on a
+        # laptop and in CI — deps vendored from Cargo.lock, toolchain pinned by
+        # flake.lock, no per-job Nix-reinstall + rust-cache dance.
+        craneLib = crane.mkLib pkgs;
+
+        # Each crate is standalone (no cargo workspace; `py` is excluded for the
+        # PyO3 extension-module link issue), so crane builds each with its own
+        # Cargo.toml/lock at the source root — the layout cargo + vendored git
+        # deps expect. core/build.rs reads two siblings of core/:
+        # `../nucl-parquet/data/catalog.json` (→ HYRR_DATA_VERSION) and
+        # `../hyrr.json` (→ default library). `core/src/release_notes.rs` also
+        # `include_str!`s `../../release-notes.json` (#572) — a COMPILE-time
+        # read, so its absence breaks the build outright, not just a test.
+        # We materialise all three in the build sandbox's parent dir (`..` of
+        # sourceRoot) — nucl-parquet (~650 MB) as a symlink (referenced store
+        # path, never copied), the two small JSONs copied in.
+        nuclData = "${nucl-parquet}/data";
+        provisionSiblings = ''
+          ln -sfn ${nucl-parquet} ../nucl-parquet
+          install -m644 ${./hyrr.json} ../hyrr.json
+          install -m644 ${./release-notes.json} ../release-notes.json
+        '';
+        # py path-deps ../core, which itself path-deps ../nucl-parquet and reads
+        # ../hyrr.json — so the py build sandbox needs all three siblings.
+        provisionCoreSibling = ''
+          ${provisionSiblings}
+          cp -r ${craneLib.cleanCargoSource ./core} ../core
+          chmod -R u+w ../core
+        '';
+
+        commonRustArgs = {
+          src = craneLib.cleanCargoSource ./core;
+          pname = "hyrr-core";
+          version = "0.0.0";
+          strictDeps = true;
+          preConfigure = provisionSiblings;
+          nativeBuildInputs = with pkgs; [ pkg-config ];
+        };
+        # Deps (incl. the guardrails-trace git dep, fetched by rev) built once
+        # and reused by every check. Default features keep this lean; checks
+        # that need `mcp`/`embed-data` rebuild just those extra crates on top.
+        cargoArtifacts = craneLib.buildDepsOnly commonRustArgs;
+
+        # ── Pure-source guards (lifted verbatim from ci.yml) ─────────────
+        # No toolchain/network — just grep/node over the tree. Trivially
+        # hermetic, so they belong in `nix flake check` rather than a runner job.
+        mkGuard = name: script:
+          pkgs.runCommandLocal "check-${name}" { } ''
+            cd ${./.}
+            ${script}
+            touch $out
+          '';
       in
       {
         devShells = {
@@ -155,9 +228,52 @@
                 fi
 
                 # ── nucl-parquet submodule ──────────────────────────
+                # Bootstrap from the main clone's object store, not from GitHub.
+                #
+                # git does NOT share submodules across worktrees: a linked
+                # worktree gets its own submodule git dir at
+                # .git/worktrees/<name>/modules/nucl-parquet. So every throwaway
+                # worktree re-downloaded the whole ~800 MB data repo from
+                # scratch. Cloning from the main clone's module dir instead is
+                # network-free and takes ~6s, which also means a new worktree
+                # bootstraps offline.
+                #
+                # Why not `--reference` (alternates, which would also dedupe the
+                # objects on disk)? .gitmodules sets `shallow = true`, and git
+                # refuses to borrow from a shallow repo — "fatal: reference
+                # repository ... is shallow". A local clone has no such
+                # restriction. It repacks rather than hardlinks, so the disk
+                # saving is modest; the fetch is what this removes.
+                #
+                # `protocol.file.allow` is required for local-path submodule
+                # clones (CVE-2022-39253). It is scoped to this one invocation,
+                # and the path is one we derive ourselves from --git-common-dir
+                # — never attacker-controlled .gitmodules content, which is what
+                # that CVE was actually about.
+                #
+                # Both -c overrides are transient: the shared .git/config keeps
+                # the real GitHub URL, so `git submodule sync`/`update` from
+                # anywhere else is unaffected.
                 if [ ! -f "nucl-parquet/data/catalog.json" ]; then
                   echo "[hyrr] initializing nucl-parquet submodule..."
-                  git submodule update --init nucl-parquet 2>/dev/null || true
+                  sm_gitdir="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+                  sm_common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+                  sm_ref="$sm_common/modules/nucl-parquet"
+                  # Skipped in the main clone, where git-dir == git-common-dir
+                  # and the "reference" would be the destination itself.
+                  if [ -n "$sm_common" ] && [ "$sm_gitdir" != "$sm_common" ] && [ -d "$sm_ref" ]; then
+                    echo "[hyrr] cloning from the main clone (no network): $sm_ref"
+                    git -c protocol.file.allow=always \
+                        -c submodule.nucl-parquet.url="$sm_ref" \
+                        submodule update --init nucl-parquet 2>/dev/null || true
+                  fi
+                  # Network fallback — main clone has no submodule checked out
+                  # yet (fresh clone, CI), or the local clone above failed. git
+                  # cleans up a failed submodule clone, so this starts clean.
+                  if [ ! -f "nucl-parquet/data/catalog.json" ]; then
+                    git submodule update --init nucl-parquet 2>/dev/null || true
+                  fi
+                  unset sm_gitdir sm_common sm_ref
                 fi
 
                 echo "hyrr devshell — python $(python3 --version 2>&1 | cut -d' ' -f2), rustc $(rustc --version | cut -d' ' -f2), node $(node --version)"
@@ -168,6 +284,196 @@
               export CXX="${pkgs.clang}/bin/clang++"
             '';
           };
+        };
+
+        # ══ checks: `nix flake check` == the CI merge gate (#484) ════════
+        # Hermetic, cached, local==runner. The cross-OS e2e + desktop matrices
+        # stay on GitHub-hosted runners (real browsers / Windows / macOS can't
+        # be a nix sandbox) and run rescoped — see Part B in the workflows.
+        checks = {
+          # ── Rust (crane) ───────────────────────────────────────────────
+          # rustfmt + clippy pinned by flake.lock so `nix develop`'s formatter
+          # and CI agree — no "different rustfmt version" drift. Both were never
+          # gated before #484; the repo was cleaned to pass them in this PR.
+          rust-fmt = craneLib.cargoFmt {
+            inherit (commonRustArgs) src pname version;
+          };
+
+          # Deny level + intentional allows live in core/Cargo.toml's
+          # [lints.clippy] (SSoT, so a bare `cargo clippy` matches CI), hence no
+          # `-- --deny warnings` here.
+          rust-clippy = craneLib.cargoClippy (commonRustArgs // {
+            inherit cargoArtifacts;
+            cargoClippyExtraArgs = "--all-targets --all-features";
+          });
+
+          # Lib + integration tests with the real pinned data (HYRR_DATA), run
+          # serially (data_fetch lock-contention tests need --test-threads=1)
+          # and `--include-ignored` to pick up the projectile-matrix tier-1 set.
+          # Subsumes ci.yml's rust-projectile-matrix + data-fetch-integration.
+          #
+          # `--skip live_` because `#[ignore]` means two different things here
+          # and --include-ignored cannot tell them apart:
+          #
+          #   * "requires bundled nucl-parquet data" (core/tests/projectile_matrix.rs)
+          #     — offline, and this derivation supplies exactly that via HYRR_DATA.
+          #     These are the tests --include-ignored exists to run.
+          #   * "requires network" (data_fetch's live signature check) — the nix
+          #     sandbox has NO network, so these can only ever fail here.
+          #
+          # Convention: a test needing the network is named `live_*`. Run them
+          # deliberately, outside the sandbox:
+          #   cargo test --manifest-path core/Cargo.toml -- --ignored live_
+          rust-test = craneLib.cargoTest (commonRustArgs // {
+            inherit cargoArtifacts;
+            HYRR_DATA = nuclData;
+            cargoTestExtraArgs = "-- --include-ignored --test-threads=1 --skip live_";
+          });
+
+          # MCP tool surface (feature `mcp` isn't in the default set) — runs the
+          # mcp:: lib tests + the two mcp integration tests against real data.
+          # Subsumes ci.yml's mcp-tools job. (A single `--features mcp` run, not
+          # a `--lib mcp::` filter, since that filter would also be applied to —
+          # and exclude — the `--test` integration binaries.)
+          rust-test-mcp = craneLib.cargoTest (commonRustArgs // {
+            inherit cargoArtifacts;
+            HYRR_DATA = nuclData;
+            cargoExtraArgs = "--features mcp";
+            cargoTestExtraArgs = "-- --test-threads=1";
+          });
+
+          # Embedded data store: build-time tar (#274) + full simulation through
+          # it. Subsumes ci.yml's embedded-data-store job.
+          rust-test-embed = craneLib.cargoTest (commonRustArgs // {
+            inherit cargoArtifacts;
+            cargoExtraArgs = "--features embed-data";
+            cargoTestExtraArgs = "--test embedded_data_store";
+          });
+
+          # PyO3 binding type-drift gate (#181). `cargo check` (not build/test)
+          # because the pyo3 `extension-module` feature defers libpython linking
+          # — but pyo3's build script still needs an interpreter for ABI
+          # detection, hence python + PYO3_PYTHON. py path-deps core, so
+          # provision core + the nucl-parquet/hyrr.json siblings. Subsumes
+          # ci.yml's hyrr-py-check job.
+          py-bindings =
+            let
+              pyArgs = {
+                src = craneLib.cleanCargoSource ./py;
+                pname = "hyrr-py";
+                version = "0.0.0";
+                strictDeps = true;
+                preConfigure = provisionCoreSibling;
+                nativeBuildInputs = with pkgs; [ pkg-config python ];
+                PYO3_PYTHON = "${python}/bin/python3.12";
+              };
+            in
+            craneLib.mkCargoDerivation (pyArgs // {
+              cargoArtifacts = craneLib.buildDepsOnly pyArgs;
+              buildPhaseCargoCommand = "cargo check --release --offline";
+              doInstallCargoArtifacts = false;
+            });
+
+          # py-mcp is the crate PUBLISHED TO PyPI as the `hyrr-mcp` wheel, and
+          # until #581 it was the one crate `nix flake check` never built — the
+          # widest-distribution artifact with the narrowest hermetic coverage.
+          # Its Cargo.lock was only committed in #576; before that there was
+          # nothing to build `--locked` against. `check-lockfiles.sh` proves the
+          # lock *resolves*; this proves the crate *compiles* from it.
+          #
+          # Same shape as py-bindings above: both are PyO3 `cdylib` extension
+          # modules, so both need the extension-module link workaround (each in
+          # its own derivation, outside any workspace) and the core sibling
+          # provisioned. Deliberately `cargo check`, not a full build — the real
+          # wheel is built by maturin in release-hyrr-mcp.yml, so a second full
+          # build here would be redundant; what's missing is the `--locked`
+          # compile on every PR.
+          py-mcp-bindings =
+            let
+              pyMcpArgs = {
+                src = craneLib.cleanCargoSource ./py-mcp;
+                pname = "hyrr-mcp-py";
+                version = "0.0.0";
+                strictDeps = true;
+                preConfigure = provisionCoreSibling;
+                nativeBuildInputs = with pkgs; [ pkg-config python ];
+                PYO3_PYTHON = "${python}/bin/python3.12";
+              };
+            in
+            craneLib.mkCargoDerivation (pyMcpArgs // {
+              cargoArtifacts = craneLib.buildDepsOnly pyMcpArgs;
+              buildPhaseCargoCommand = "cargo check --release --offline";
+              doInstallCargoArtifacts = false;
+            });
+
+          # ── WASM compute backend (crane, wasm32 compile) ───────────────
+          # The artifact the frontend imports (#251). Compiles hyrr-wasm for
+          # wasm32 — the hermetic gate against the #457-class breakage (wasm
+          # won't compile / a core change breaks the wasm import), which
+          # silently broke the frontend + desktop builds since v0.12.1. The
+          # wasm-bindgen JS-gen + wasm-opt steps stay in wasm-pack (deploy /
+          # e2e / tauri jobs), which self-manages the bindgen-cli version. wasm
+          # uses core with default-features=false (no parquet-store), but
+          # core/build.rs still reads the catalog/hyrr.json siblings.
+          wasm-build =
+            let
+              wasmArgs = {
+                src = craneLib.cleanCargoSource ./wasm;
+                pname = "hyrr-wasm";
+                version = "0.0.0";
+                strictDeps = true;
+                doCheck = false;
+                preConfigure = provisionCoreSibling;
+                cargoExtraArgs = "--lib";
+                CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+                # wasm32 links with lld (`wasm-ld`); nixpkgs rustc doesn't ship
+                # it self-contained, so put it on PATH.
+                nativeBuildInputs = with pkgs; [ pkg-config lld ];
+              };
+            in
+            craneLib.buildPackage (wasmArgs // {
+              cargoArtifacts = craneLib.buildDepsOnly wasmArgs;
+            });
+
+          # ── Pure-source guards (lifted from ci.yml) ────────────────────
+          data-fetch-ssot = mkGuard "data-fetch-ssot" ''
+            if grep -RnE 'nucl-parquet-data-[0-9]{4}\.[0-9]+\.[0-9]+\.tar\.zst' docs/; then
+              echo "::error::docs hardcodes a concrete data-tarball version. Use <V> placeholder; SSoT is hyrr_core::data_fetch::release_url()."
+              exit 1
+            fi
+            if grep -RnE 'nucl-parquet-data-v[0-9]+\.[0-9]+\.[0-9]+\.tar\.zst' docs/; then
+              echo "::error::docs uses the legacy v-prefixed tarball name (pre nucl-parquet#151)."
+              exit 1
+            fi
+            grep -q '"https://github.com/exoma-ch/nucl-parquet/releases/download"' core/src/data_fetch.rs || {
+              echo "::error::RELEASE_BASE literal in core/src/data_fetch.rs has drifted."
+              exit 1
+            }
+          '';
+
+          release-workflow-guards = mkGuard "release-workflow-guards" ''
+            CONF=desktop/src-tauri/tauri.conf.json
+            if grep -qE '"before(Build|Dev)Command".*--prefix \.\./frontend"' "$CONF"; then
+              echo "::error::beforeBuildCommand/beforeDevCommand uses --prefix ../frontend (needs ../../frontend under Tauri v2)."
+              exit 1
+            fi
+            # Workflows that build the app WITH nuclear data. Post ETH-deploy
+            # migration: deploy-eth.yml is the gated data-bearing prod deploy;
+            # deploy-frontend.yml ships only the public landing page (no data);
+            # promote-to-prod.yml is archived. Mirrors the ci.yml guard (#501).
+            for wf in tauri-build deploy-eth e2e e2e-tauri; do
+              if ! grep -q 'copy-frontend-data.sh' ".github/workflows/''${wf}.yml"; then
+                echo "::error::''${wf}.yml doesn't use scripts/copy-frontend-data.sh — data copy will drift."
+                exit 1
+              fi
+            done
+            WF=.github/workflows/release-hyrr-mcp.yml
+            COUNT=$(grep -c 'submodule update --init' "$WF")
+            if [ "$COUNT" -lt 3 ]; then
+              echo "::error::release-hyrr-mcp.yml has only $COUNT submodule-init steps — need ≥3."
+              exit 1
+            fi
+          '';
         };
       });
 }

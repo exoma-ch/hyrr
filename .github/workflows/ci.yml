@@ -6,35 +6,67 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs on the same ref — a re-push (or a release-please
+# rewrite) shouldn't leave the old run hogging a runner slot (#484).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  lockfile-sync:
+  # ── The merge gate: one hermetic `nix flake check` ─────────────────────
+  # Replaces the old per-job cargo matrix (rust-projectile-matrix,
+  # embedded-data-store, mcp-tools, hyrr-py-check, data-fetch-integration,
+  # data-fetch-ssot, release-workflow-guards). Every one of those is now a
+  # `checks.*` derivation in flake.nix — built identically here and on a
+  # laptop (`nix flake check`), deps vendored from Cargo.lock, the
+  # nucl-parquet data a pinned flake input (no submodule init needed), the
+  # whole thing cached so unchanged inputs are hits (#484 Part A).
+  nix-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Check lockfiles in sync
-        run: bash scripts/check-lockfiles.sh
+          submodules: false
+      - uses: DeterminateSystems/nix-installer-action@v22
+      # Cache the /nix/store (toolchain, vendored crates, the ~650 MB
+      # nucl-parquet input, built check outputs) across runs via the GitHub
+      # Actions cache — kills the "rebuild everything every run" tax. Keyed on
+      # the lockfile + flake/Cargo inputs so it busts only on real changes.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', '**/Cargo.lock', 'core/Cargo.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          # Cap GC so the cache stays under the repo budget.
+          gc-max-store-size-linux: 5G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+      - name: nix flake check (all hermetic gates)
+        run: nix flake check -L
 
-  # lint + test run inside the flake's lean `ci` devShell so the toolchain
-  # (ruff, pyright, typos, typstyle, just, prek, uv, Python 3.12) is the exact
-  # versions used by local dev (`nix develop`) — one pinned toolchain via
-  # flake.lock, no drift.
+  # ── Lint: the prek SSoT (network — prek fetches/builds remote hook envs) ─
+  # Can't be a hermetic check (prek downloads yamllint/shellcheck/pymarkdown
+  # repos + builds their language envs), so it stays a thin cached job. Runs
+  # the exact same `prek run --all-files` as local dev. (#159)
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@v22
-      # Run the SAME gate local dev runs (.pre-commit-config.yaml via prek):
-      # ruff, ruff-format, pyright, yamllint, shellcheck, pymarkdown, typos,
-      # the pre-commit-hooks file checks, etc. One SSoT for "is this clean?".
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-lint-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-lint-${{ runner.os }}-
       - name: Lint (prek run --all-files via flake)
         run: nix develop .#ci --command prek run --all-files --show-diff-on-failure
 
+  # ── Python tests (cached job) ──────────────────────────────────────────
+  # Not hermetic: the suite leans on internal packages
+  # (pycatima / py-materials / nucl-parquet) that have no public wheels, so a
+  # uv2nix venv isn't worth the thrash — and the physics it exercises is
+  # already hermetic-tested in Rust (`nix flake check`). Uses the flake-pinned
+  # Python 3.12 + uv, so `nix develop .#ci -c pytest` reproduces it locally.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -45,8 +77,12 @@ jobs:
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
-          git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs
+          git sparse-checkout set docs/security data/meta data/stopping data/tendl-2023-iso/xs
       - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-test-${{ runner.os }}-${{ hashFiles('flake.lock', 'uv.lock') }}
+          restore-prefixes-first-match: nix-test-${{ runner.os }}-
       - name: Test (uv + pytest via flake, Python 3.12)
         run: |
           nix develop .#ci --command bash -c '
@@ -54,212 +90,89 @@ jobs:
             uv run pytest tests/ --cov --benchmark-disable --ignore=tests/integration
           '
 
-  rust-projectile-matrix:
+  # ── Lockfile sync (uv.lock / wasm Cargo.lock vs their manifests) ────────
+  # Not a hermetic check: `uv lock --check` + `cargo check --locked` resolve /
+  # compile against the network. Cheap, so it stays a standalone job.
+  lockfile-sync:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: false
-      - name: Init nucl-parquet submodule (sparse)
+      # cargo needs the nucl-parquet Rust client on disk to resolve the
+      # core/hyrr-mcp/py/desktop -> nucl-parquet path-dep chain (default features
+      # pull parquet-store; wasm doesn't, so this wasn't needed before). Sparse:
+      # client only.
+      - name: Init nucl-parquet submodule (sparse — Rust client only)
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
-          git sparse-checkout set clients/rs/nucl-parquet data/meta data/stopping data/tendl-2023-iso/xs
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+          git sparse-checkout set clients/rs/nucl-parquet
+      - uses: actions/setup-python@v7
         with:
-          workspaces: core
-      - name: Run projectile matrix (#148 Tier 1)
-        working-directory: core
-        env:
-          HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
-        run: cargo test --test projectile_matrix -- --include-ignored
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check lockfiles in sync
+        run: bash scripts/check-lockfiles.sh
 
-  embedded-data-store:
-    # #274 — verify the embedded data store initializes, queries work,
-    # and a full simulation runs through the build-time tar.
+  # ── ts-rs binding drift gate (config codec, #539) ──────────────────────
+  # The canonical TypeScript config-codec types
+  # (packages/compute/src/generated/config-codec.ts) are GENERATED from the Rust
+  # structs in hyrr-core::config_codec via `ts_rs::TS`. This job regenerates them
+  # and `git diff --exit-code`s the path — so the committed types can never
+  # silently drift from the Rust source of truth (the hand-mirror drift class
+  # #531 belongs to). Deliberately NOT a `nix flake check` derivation: ts-rs
+  # writes files during `cargo test`, which fights the read-only nix sandbox, so
+  # the `ts` feature is off in every hermetic check and the generation lives here
+  # as a thin standalone job (like lockfile-sync). Cheap: `--lib
+  # --no-default-features` builds only hyrr-core's lib with the codec (no
+  # arrow/parquet/data), so no nuclear-data checkout is needed to build.
+  ts-bindings-sync:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: false
-      - name: Init nucl-parquet submodule (sparse)
-        run: |
-          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
-          cd nucl-parquet
-          git sparse-checkout set --no-cone \
-            'clients/rs/nucl-parquet/' \
-            'data/catalog.json' \
-            'data/meta/' \
-            'data/stopping/' \
-            'data/tendl-2023-iso/xs/'
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: core
-      - name: Run EmbeddedDataStore tests (including full simulation)
-        working-directory: core
-        run: cargo test --features embed-data --test embedded_data_store
-
-  mcp-tools:
-    # #427/#428 — exercise the MCP tool surface (layer selection, structured
-    # export, emission curves). The `mcp` feature isn't in the default set, so
-    # without this job the mcp:: tests are never compiled in CI.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: false
-      - name: Init nucl-parquet submodule (sparse)
-        run: |
-          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
-          cd nucl-parquet
-          git sparse-checkout set clients/rs/nucl-parquet data/meta data/stopping data/tendl-2023-iso/xs
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: core
-      - name: MCP tool unit tests (layer selection, result cache, dataset round-trip)
-        working-directory: core
-        run: "cargo test --features mcp --lib mcp::"
-      - name: MCP layer-selection integration test (real tendl-2023-iso data)
-        working-directory: core
-        env:
-          HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
-        run: cargo test --features mcp --test mcp_layer_selection
-      - name: MCP structured-export integration test (inventory / dataset / emission curve)
-        working-directory: core
-        env:
-          HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
-        run: cargo test --features mcp --test mcp_structured_export
-
-  hyrr-py-check:
-    # Catches PyO3 binding type drift against hyrr-core (Refs: #181).
-    # The py/ crate is excluded from the default workspace because the
-    # pyo3 extension-module feature gate breaks linking under `cargo test`,
-    # so signature changes in core (e.g. #150's Result-returning stopping
-    # functions) can break the wheel silently. `cargo check` doesn't link
-    # libpython, so it's safe to run here.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: false
+      # cargo needs the nucl-parquet Rust client on disk to resolve the
+      # core -> nucl-parquet optional path-dep (even deactivated under
+      # --no-default-features, the manifest must exist). Sparse: client only.
       - name: Init nucl-parquet submodule (sparse — Rust client only)
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
           git sparse-checkout set clients/rs/nucl-parquet
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: py
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: cargo check py/ (PyO3 bindings)
-        run: cargo check --manifest-path py/Cargo.toml
+      - name: Regenerate TS bindings from the Rust source of truth
+        run: |
+          REGEN_TS=1 cargo test --manifest-path core/Cargo.toml \
+            --lib --no-default-features --features ts \
+            ts_bindings_match_committed
+      - name: Fail if the generated TS types drifted
+        run: |
+          git diff --exit-code packages/compute/src/generated/ \
+            || { echo "::error::Generated config-codec.ts is stale. Regenerate with \`REGEN_TS=1 cargo test --manifest-path core/Cargo.toml --lib --no-default-features --features ts ts_bindings_match_committed\` and commit."; exit 1; }
 
-  data-fetch-integration:
-    # #263 — exercises data_dir resolution, cache lifecycle, seed_from_dir,
-    # and cold-start error paths without network access.
+  # ── Shell-script tests (bash) ──────────────────────────────────────────
+  # These cover the guards that protect releases and deploys: the #572
+  # release-notes gate, and the #401 deploy/release verification. They ran
+  # nowhere until now — neither CI nor prek — which made them documentation
+  # rather than guards.
+  #
+  # No network and no secrets: gh and curl are stubbed onto PATH, and the
+  # deploy checks are driven against a local http.server.
+  script-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
-      - name: Init nucl-parquet submodule (sparse)
-        run: |
-          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
-          cd nucl-parquet
-          git sparse-checkout set --no-cone \
-            'clients/rs/nucl-parquet/' \
-            'data/catalog.json'
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: core
-      - name: Run data_fetch unit tests (serial)
-        working-directory: core
-        run: cargo test --lib -- data_fetch --test-threads=1
-      - name: Run MCP cold-start integration tests
-        working-directory: core
-        run: cargo test --test mcp_cold_start
+      - name: Run scripts/tests
+        run: scripts/tests/run-all.sh
 
-  data-fetch-ssot:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Assert docs do not pin a concrete data tarball version
-        run: |
-          # SSoT: tarball filename pattern lives in core/src/data_fetch.rs.
-          # Concrete CalVer URLs in markdown drift silently when the
-          # submodule version bumps. Use placeholder `<V>` instead.
-          # Wire format (nucl-parquet#151 — Path A) is CalVer
-          # YYYY.MM.MICRO, no `v` prefix; the 4-digit-year anchor
-          # forces this regex to match the new shape, not loose
-          # SemVer-shaped tokens like "data-1.2.3" that might appear
-          # in unrelated prose.
-          if grep -RnE 'nucl-parquet-data-[0-9]{4}\.[0-9]+\.[0-9]+\.tar\.zst' docs/; then
-            echo "::error::docs hardcodes a concrete data-tarball version. Use <V> placeholder; SSoT is hyrr_core::data_fetch::release_url()."
-            exit 1
-          fi
-          # Also catch the legacy `v`-prefixed shape — anything still
-          # writing the pre-#151 format is a stale reference.
-          if grep -RnE 'nucl-parquet-data-v[0-9]+\.[0-9]+\.[0-9]+\.tar\.zst' docs/; then
-            echo "::error::docs uses the legacy v-prefixed tarball name (pre nucl-parquet#151). Update to data-<V> shape; SSoT is hyrr_core::data_fetch::release_url()."
-            exit 1
-          fi
-      - name: Assert RELEASE_BASE host appears verbatim in data_fetch.rs
-        run: |
-          grep -q '"https://github.com/exoma-ch/nucl-parquet/releases/download"' core/src/data_fetch.rs || {
-            echo "::error::RELEASE_BASE literal in core/src/data_fetch.rs has drifted; CI/docs assertions need updating in lockstep."
-            exit 1
-          }
-
-  release-workflow-guards:
-    # Catch release-workflow drift before it breaks a real release.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      # tauri.conf.json beforeBuildCommand runs from desktop/src-tauri/
-      # (Tauri v2 CWD semantics). All --prefix paths must use ../../ to
-      # reach the repo-root frontend/, matching frontendDist's depth.
-      - name: Assert tauri.conf.json paths resolve from src-tauri/
-        run: |
-          CONF=desktop/src-tauri/tauri.conf.json
-          if grep -qE '"before(Build|Dev)Command".*--prefix \.\./frontend"' "$CONF"; then
-            echo "::error::beforeBuildCommand/beforeDevCommand uses --prefix ../frontend (1 level up) but Tauri v2 runs from src-tauri/ (needs ../../frontend, 2 levels up)."
-            exit 1
-          fi
-
-      # All frontend-building workflows must use the SSoT copy script.
-      - name: Assert workflows use copy-frontend-data.sh
-        run: |
-          for wf in tauri-build deploy-frontend promote-to-prod e2e e2e-tauri; do
-            if ! grep -q 'copy-frontend-data.sh' ".github/workflows/${wf}.yml"; then
-              echo "::error::${wf}.yml doesn't use scripts/copy-frontend-data.sh — data copy will drift."
-              exit 1
-            fi
-          done
-
-      # release-hyrr-mcp build/sdist jobs must init the nucl-parquet
-      # submodule — core depends on it via path.
-      - name: Assert release-hyrr-mcp.yml inits submodule in all build jobs
-        run: |
-          WF=.github/workflows/release-hyrr-mcp.yml
-          COUNT=$(grep -c 'submodule update --init' "$WF")
-          if [ "$COUNT" -lt 3 ]; then
-            echo "::error::release-hyrr-mcp.yml has only $COUNT submodule-init steps — build, sdist, and parity-test all need one (core path-depends on nucl-parquet)."
-            exit 1
-          fi
-
+  # ── Supplier catalog freshness (warn-only, node) ───────────────────────
   supplier-catalog-freshness:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
       - name: Warn if supplier catalog is stale (>90 days)

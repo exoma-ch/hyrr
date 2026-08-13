@@ -16,19 +16,26 @@ import type { CustomMaterial } from "../stores/custom-materials.svelte";
 import {
   setCustomDensityLookup as setPkgDensityLookup,
   setCustomCompositionLookup as setPkgCompositionLookup,
+  setCustomEnrichmentLookup as setPkgEnrichmentLookup,
 } from "@hyrr/compute";
 
 /** Lazy getter — called on every lookup so mutations are always visible. */
 let getMaterials: () => CustomMaterial[] = () => [];
 
 /** Initialize the registry with a live getter. Call once after data load.
- *  Also wires the @hyrr/compute package lookups for resolveMaterial(). */
+ *  Also wires the @hyrr/compute package lookups for resolveMaterial().
+ *
+ *  The enrichment lookup (#544 nit 2) is wired here so a local-only enriched
+ *  custom material also reaches compute — parity with the shared-embed path
+ *  (`config-codec-map.ts::rewireLookups`) which overrides these with a
+ *  session-first-then-local chain the moment a shared def is hydrated. */
 export function initCustomMaterialRegistry(getter: () => CustomMaterial[]): void {
   getMaterials = getter;
 
   // Wire the @hyrr/compute package lookups (used by config store's migrateMissingDensities)
   setPkgDensityLookup((id) => lookupByIdentifier(id)?.density ?? null);
   setPkgCompositionLookup((id) => lookupByIdentifier(id)?.massFractions ?? null);
+  setPkgEnrichmentLookup((id) => lookupByIdentifier(id)?.enrichment ?? null);
 }
 
 /** Look up by exact name (for compute backend: name → formula + density). */

@@ -2,8 +2,10 @@
   import { onMount } from "svelte";
   import "./lib/stores/theme.svelte"; // initialise theme (applies data-theme attribute)
   import { registerServiceWorker } from "./lib/sw-register";
-  import { decodeSerializableConfigFromHash, setConfigInHash } from "./lib/config-url";
+  import { decodeSerializableConfigFromHash, setConfigInHash, getPresetIdFromHash } from "./lib/config-url";
   import { getSharedCustomMaterial } from "./lib/config-url-v2";
+  import { initConfigCodec, isCodecReady } from "./lib/config-codec.svelte";
+  import { findPreset } from "./lib/presets";
   import type { EditableMaterial } from "./lib/components/material/DefineForm.svelte";
   import {
     getConfig,
@@ -17,6 +19,7 @@
     redo,
     getSerializableConfig,
     restoreSerializableConfig,
+    restoreFromSimConfig,
   } from "./lib/stores/config.svelte";
   import {
     getResult,
@@ -99,9 +102,6 @@
   let elementPopupLayerIndex = $state(0);
   let isotopePopupOpen = $state(false);
   let isotopePopupData = $state({ name: "", Z: 0, A: 0, nuclearState: "" });
-  /** One-time banner shown after the 0.x material-schema break (#92).
-   *  Dismissed permanently in localStorage on close. */
-  let showSchemaBreakBanner = $state(false);
 
   // The sticky Filters bar pins directly below the sticky top bar. Track the top
   // bar's live height (it reflows responsively / when layers change) and publish
@@ -164,16 +164,30 @@
 
 
   async function finishPostDataLoad(): Promise<void> {
-    // Check URL for shared config — URL hash takes priority over session restore
-    const urlConfig = decodeSerializableConfigFromHash();
+    // Cold-load ready-gate (#539 inc3b): a `#config=` share link on first paint
+    // must decode through the Rust WASM codec, which is async to initialize.
+    // Await it here — before the `#config=` decode below and before `ready` — so
+    // a shared link never races an uninitialized codec. (This gate covers the
+    // `#config=` URL path ONLY; a `.hyrr.json` session file decodes via
+    // session-io's plain `JSON.parse`, never the codec, so it doesn't depend on
+    // this.) In the browser the WASM binary was already instantiated by
+    // initBackend, so this resolves immediately; in Tauri it loads the codec
+    // module (native compute doesn't otherwise pull in WASM).
+    await initConfigCodec();
+
+    // Check URL for a deep-link, then a shared config — both take priority over
+    // session restore. `#preset=<id>` loads a named preset (incl. its
+    // currentProfile, which can't ride in a #config= hash), so presets are
+    // reachable by URL on every viewport — not just via the desktop-only
+    // feeling-lucky tab.
+    const presetId = getPresetIdFromHash();
+    const preset = presetId ? findPreset(presetId) : undefined;
+    const urlConfig = preset ? null : decodeSerializableConfigFromHash();
     await restoreSessions();
-    if (urlConfig) restoreSerializableConfig(urlConfig);
+    if (preset) restoreFromSimConfig(preset.config);
+    else if (urlConfig) restoreSerializableConfig(urlConfig);
 
     await loadCustomMaterials();
-    try {
-      const seen = localStorage.getItem("hyrr.notice.materialSchemaBreak");
-      if (!seen) showSchemaBreakBanner = true;
-    } catch { /* no-op */ }
 
     // Single registration point — replaces 6 separate closures (#388).
     // Lazy: getter is called on every lookup, so add/update/delete mutations are visible.
@@ -225,7 +239,7 @@
     const _snapshot = JSON.stringify(c); // force deep dependency tracking
     if (!ready) return;
     const timer = setTimeout(() => {
-      if (isConfigValid()) {
+      if (isConfigValid() && isCodecReady()) {
         setConfigInHash(getSerializableConfig());
       }
     }, 500);
@@ -275,7 +289,12 @@
     const shared = !cm && mat ? getSharedCustomMaterial(mat) : null;
     materialPopupPrefill = shared
       ? {
-          formula: shared.formula,
+          // Fall back to `name` for the DefineForm's `formula` field — the
+          // form treats formula as required and the recipient is about to
+          // fill it in anyway. The codec-level parser no longer defaults
+          // formula to name (#551 nit 2), but at the UI layer that fallback
+          // is safe: it seeds a form for editing, not a compute lookup.
+          formula: shared.formula ?? shared.name,
           name: shared.name,
           density: shared.density,
           editingCustomId: "",
@@ -353,23 +372,6 @@
 </script>
 
 <main>
-  {#if showSchemaBreakBanner}
-    <div class="schema-break-banner" role="status">
-      <span>
-        hyrr 0.x — the material schema changed in this build. If saved custom materials don't open, redefine them via the "Define & save material" form. Share URLs from earlier versions may no longer load.
-      </span>
-      <button
-        type="button"
-        class="schema-break-close"
-        aria-label="Dismiss"
-        onclick={() => {
-          showSchemaBreakBanner = false;
-          try { localStorage.setItem("hyrr.notice.materialSchemaBreak", "1"); } catch { /* no-op */ }
-        }}
-      >×</button>
-    </div>
-  {/if}
-
   <div class="top-bar" bind:this={topBarEl}>
     <HeaderBar />
     {#if ready}
@@ -539,146 +541,8 @@
 <BugReportModal />
 
 <style>
-  .schema-break-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.6rem;
-    background: var(--c-yellow-tint, var(--c-bg-muted));
-    color: var(--c-text);
-    padding: 0.5rem 0.9rem;
-    font-size: 0.78rem;
-    border-bottom: 1px solid var(--c-border);
-  }
-  .schema-break-close {
-    background: none;
-    border: none;
-    color: var(--c-text-muted);
-    font-size: 1.1rem;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0.15rem 0.4rem;
-    border-radius: 3px;
-  }
-  .schema-break-close:hover { color: var(--c-text); background: var(--c-bg-default); }
-  /* ─── Theme tokens ─── */
-  :global(:root),
-  :global([data-theme="dark"]) {
-    --c-bg-page: #0f1117;
-    --c-bg-default: #0d1117;
-    --c-bg-subtle: #161b22;
-    --c-bg-hover: #1c2128;
-    --c-bg-muted: #21262d;
-    --c-bg-active: #1f3a5f;
-
-    --c-text: #e1e4e8;
-    --c-text-label: #c9d1d9;
-    --c-text-muted: #8b949e;
-    --c-text-subtle: #6e7681;
-    --c-text-faint: #484f58;
-
-    --c-border: #2d333b;
-    --c-border-muted: #30363d;
-    --c-border-emphasis: #484f58;
-
-    --c-accent: #58a6ff;
-    --c-accent-hover: #79c0ff;
-    --c-green: #238636;
-    --c-green-emphasis: #2ea043;
-    --c-green-bright: #3fb950;
-    --c-green-text: #7ee787;
-    --c-red: #f85149;
-    --c-gold: #d29922;
-    --c-gold-hover: #e3b341;
-    --c-orange: #f0883e;
-    --c-purple: #bc8cff;
-
-    --c-overlay: rgba(0, 0, 0, 0.4);
-    --c-overlay-heavy: rgba(0, 0, 0, 0.6);
-    --c-accent-tint: rgba(88, 166, 255, 0.15);
-    --c-accent-tint-subtle: rgba(88, 166, 255, 0.1);
-    --c-gold-tint: rgba(210, 153, 34, 0.15);
-    --c-gold-tint-subtle: rgba(210, 153, 34, 0.1);
-    --c-gold-tint-faint: rgba(210, 153, 34, 0.08);
-    --c-red-tint: rgba(248, 81, 73, 0.15);
-    --c-red-tint-subtle: rgba(248, 81, 73, 0.1);
-    --c-red-tint-faint: rgba(248, 81, 73, 0.05);
-    --c-green-tint: rgba(63, 185, 80, 0.1);
-  }
-
-  :global([data-theme="light"]) {
-    --c-bg-page: #ffffff;
-    --c-bg-default: #ffffff;
-    --c-bg-subtle: #f6f8fa;
-    --c-bg-hover: #eef1f5;
-    --c-bg-muted: #e8eaed;
-    --c-bg-active: #ddf4ff;
-
-    --c-text: #1f2328;
-    --c-text-label: #31373d;
-    --c-text-muted: #656d76;
-    --c-text-subtle: #6e7681;
-    --c-text-faint: #8c959f;
-
-    --c-border: #d0d7de;
-    --c-border-muted: #d8dee4;
-    --c-border-emphasis: #afb8c1;
-
-    --c-accent: #0969da;
-    --c-accent-hover: #218bff;
-    --c-green: #1a7f37;
-    --c-green-emphasis: #2da44e;
-    --c-green-bright: #1a7f37;
-    --c-green-text: #1a7f37;
-    --c-red: #cf222e;
-    --c-gold: #9a6700;
-    --c-gold-hover: #bf8700;
-    --c-orange: #bc4c00;
-    --c-purple: #8250df;
-
-    --c-overlay: rgba(0, 0, 0, 0.15);
-    --c-overlay-heavy: rgba(0, 0, 0, 0.3);
-    --c-accent-tint: rgba(9, 105, 218, 0.12);
-    --c-accent-tint-subtle: rgba(9, 105, 218, 0.08);
-    --c-gold-tint: rgba(154, 103, 0, 0.12);
-    --c-gold-tint-subtle: rgba(154, 103, 0, 0.08);
-    --c-gold-tint-faint: rgba(154, 103, 0, 0.05);
-    --c-red-tint: rgba(207, 34, 46, 0.12);
-    --c-red-tint-subtle: rgba(207, 34, 46, 0.08);
-    --c-red-tint-faint: rgba(207, 34, 46, 0.04);
-    --c-green-tint: rgba(26, 127, 55, 0.08);
-  }
-
-  :global(body) {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: var(--c-bg-page);
-    color: var(--c-text);
-  }
-
-  :global(*) {
-    scrollbar-width: thin;
-    scrollbar-color: var(--c-border) var(--c-bg-default);
-  }
-
-  :global(*::-webkit-scrollbar) {
-    width: 6px;
-    height: 6px;
-  }
-
-  :global(*::-webkit-scrollbar-track) {
-    background: var(--c-bg-default);
-    border-radius: 3px;
-  }
-
-  :global(*::-webkit-scrollbar-thumb) {
-    background: var(--c-border);
-    border-radius: 3px;
-  }
-
-  :global(*::-webkit-scrollbar-thumb:hover) {
-    background: var(--c-border-emphasis);
-  }
+  /* Theme tokens + document base styles live in lib/styles/tokens.css,
+     imported by both entries (App and the ADR-0008 viewer). */
 
   main {
     max-width: 1600px;
@@ -697,16 +561,15 @@
 
   /* Filters bar pinned just below the sticky top bar (--top-bar-h is published
      by a ResizeObserver on .top-bar). z-index below the top bar so it tucks
-     under it; the background + gap-bleed keep content from peeking through when
-     pinned. */
+     under it. Background matches the page (not the card's --c-bg-subtle) so
+     the wrapper is invisible in flow — the filter card renders identically to
+     its sibling panels (#532) — while still masking scrolled content behind
+     the card's rounded corners when pinned. */
   .filter-sticky {
     position: sticky;
     top: var(--top-bar-h, 2.5rem);
     z-index: 15;
-    background: var(--c-bg-subtle, var(--c-bg, #1a1a2e));
-    padding-block: 0.4rem;
-    margin-block: -0.4rem;
-    border-bottom: 1px solid var(--c-border);
+    background: var(--c-bg-page, #0f1117);
   }
 
   .top-bar {
