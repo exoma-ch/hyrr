@@ -54,6 +54,13 @@ test-integration *args:
 data:
     scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet tendl-2023-iso
 
+# Re-pin the data-tarball integrity hash after a nucl-parquet submodule bump (#577).
+# Pass --verify-download to hash the asset yourself instead of trusting GitHub's
+# published digest. Commit hyrr.json alongside the submodule bump.
+[group('dev')]
+repin-data *args:
+    scripts/repin-data.sh {{args}}
+
 # Manual deploy to GitHub Pages tst/
 [group('deploy')]
 deploy-tst:
@@ -83,6 +90,23 @@ deploy-eth-ladder:
 [group('deploy')]
 elevate:
     scripts/deploy-eth.sh prd
+
+# Plain HTTPS (unlike the deploys above), so this DOES work from vm-dev and CI.
+# Pass --gate-only to assert just the licensing gate, with no version compare.
+# Check a deployed instance from outside: version + AAI gate still active
+[group('deploy')]
+verify-deploy env *args:
+    scripts/verify-deploy.sh {{env}} {{args}}
+
+# Check a published release: tags, latest.json, PyPI wheel set, release notes
+[group('deploy')]
+verify-release version *args:
+    scripts/verify-release.sh {{version}} {{args}}
+
+# Run the shell-script tests (release gate + deploy/release verification)
+[group('test')]
+test-scripts:
+    scripts/tests/run-all.sh
 
 # Run frontend unit tests
 [group('test')]

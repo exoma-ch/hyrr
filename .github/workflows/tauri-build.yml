@@ -48,6 +48,7 @@ jobs:
           cd nucl-parquet
           git sparse-checkout set --no-cone \
             'clients/rs/nucl-parquet/' \
+            'docs/security/' \
             'data/catalog.json' \
             'data/meta/' \
             'data/stopping/' \
@@ -75,7 +76,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm

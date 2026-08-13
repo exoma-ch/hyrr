@@ -60,7 +60,7 @@ to guard against future divergence.
 |---|---|---|
 | Desktop GUI | GitHub Releases (`.dmg` / `.msi` / `.deb` / `.AppImage`) | Native installers, code-signing, bundled ~68 MB Parquet data, OS integration, auto-update |
 | MCP server (headless) | `uvx hyrr-mcp` (PyPI wheel, primary) | MCP-ecosystem norm; matches sibling `nucl-parquet-mcp`; no Rust toolchain required |
-| MCP server (developer) | `cargo install hyrr-mcp` | Convenience for Rust contributors; not a public-facing recommendation |
+| MCP server (developer) | `cd hyrr-mcp && cargo build --release`, from a checkout | Convenience for Rust contributors; not a public-facing recommendation. **Not published to crates.io** — see the amendment below |
 | MCP server (already have desktop) | `hyrr --mcp` | Free with GUI install; reuses bundled data |
 | Python library | `pip install hyrr` / `uv pip install hyrr` | Existing |
 | Browser SPA | static GitHub Pages (WASM) | Existing |
@@ -158,6 +158,35 @@ without trusting an invisible default.
   ~27/16/12 MeV·cm²/g (NIST PSTAR within 6%); `get_stack_energy_budget
   p@20 MeV / 1 mm Cu` reports beam fully stopped with ~2020 W
   deposition (matches `P = E·I/q = 2000 W` for a 0.1 mA proton beam).
+
+## Amendment — 2026-08-13 (#603)
+
+Two things this ADR asserted have been corrected against reality.
+
+**`cargo install hyrr-mcp` never worked.** The crate was never published to
+crates.io, so the command in the original install table 404s. The `hyrr-mcp/`
+crate is kept — it is still the zero-Tauri headless binary this ADR designed,
+buildable from a checkout — but the install channel is now documented as
+build-from-source. Publishing was considered and declined: it would require
+publishing `hyrr-core` and the `nucl-parquet` path-dependency chain first, plus
+semver and yank discipline in perpetuity, to support a channel this ADR itself
+calls "not a public-facing recommendation".
+
+**Version identity was outside the SSoT rule.** This ADR made `hyrr-core` the
+single source of truth for MCP *tool logic*, and the parity test enforced it —
+but that test explicitly normalized the version field out of the comparison,
+on the rationale that "each entry point has its own `CARGO_PKG_VERSION`". That
+was the gap, not a property of the world: the published wheel reported `0.1.0`
+for four releases while every protocol surface correctly reported the real
+version, because `py-mcp/Cargo.toml` is intentionally never bumped and
+`py-mcp/src/lib.rs` read it anyway (#599).
+
+The rule now extends to the version string. `hyrr_core::VERSION` is the one
+definition; every entry point reads it; the shim crates' `Cargo.toml` versions
+are genuinely inert, enforced by a guardrail hook that forbids
+`env!("CARGO_PKG_VERSION")` outside `core/`. The parity test no longer
+normalizes the field, so version identity is now covered by the same guard as
+everything else.
 
 ## References
 

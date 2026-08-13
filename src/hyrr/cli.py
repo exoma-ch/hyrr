@@ -98,7 +98,10 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         metavar="PATH",
-        help="Repack the existing cache into a portable .tar.zst at PATH",
+        help=(
+            "Download the signed data release to PATH, plus PATH.minisig, for transfer to an "
+            "air-gapped machine. Copy BOTH files — the install refuses an unsigned bundle."
+        ),
     )
     fd_group.add_argument(
         "--from",
@@ -106,7 +109,10 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         metavar="PATH",
-        help="Install from a local .tar.zst (use after --offline-bundle on a connected machine)",
+        help=(
+            "Install from a local .tar.zst (use after --offline-bundle on a connected machine). "
+            "Its signature must sit next to it as PATH.minisig, or be given with --signature"
+        ),
     )
     fd_group.add_argument(
         "--gc",
@@ -123,6 +129,15 @@ def main(argv: list[str] | None = None) -> int:
         default=2,
         metavar="N",
         help="With --gc: number of historical versions to retain (default: 2)",
+    )
+    # NOT in the mutually-exclusive group — this modifies `--from`, it is not
+    # an alternative to it.
+    fd_parser.add_argument(
+        "--signature",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Signature for --from, when it was not carried next to the archive",
     )
 
     # hyrr download-data — deprecated alias retained for legacy docs
@@ -738,7 +753,9 @@ def _cmd_fetch_data(args: argparse.Namespace) -> int:
         if args.from_tarball is not None:
             print(f"Installing from {args.from_tarball} ...")
             _native.py_fetch_data(
-                from_tarball=str(args.from_tarball), progress=on_progress
+                from_tarball=str(args.from_tarball),
+                signature=str(args.signature) if args.signature else None,
+                progress=on_progress,
             )
             print(f"Installed to ~/.hyrr/nucl-parquet/v{_native.py_data_version()}/")
             return 0
@@ -753,7 +770,11 @@ def _cmd_fetch_data(args: argparse.Namespace) -> int:
                 )
                 return 1
             print(f"Packing cache into {args.offline_bundle} ...")
-            _native.py_fetch_data(offline_bundle=str(args.offline_bundle))
+            # Downloads the signed release + .minisig since #614, so it has
+            # real progress to report.
+            _native.py_fetch_data(
+                offline_bundle=str(args.offline_bundle), progress=on_progress
+            )
             print(f"Wrote {args.offline_bundle}")
             return 0
 
@@ -795,6 +816,7 @@ def _cmd_download_data(args: argparse.Namespace) -> int:
         library=None,
         offline_bundle=None,
         from_tarball=None,
+        signature=None,
         gc=False,
         keep=2,
     )

@@ -98,7 +98,7 @@ pub const DEFAULT_STALENESS_MONTHS: u32 = 6;
 /// The running crate version compiled into hyrr-core. Every surface
 /// (MCP, desktop, PyO3 CLI) shares this identifier via re-export so a
 /// version notice always names the same thing across surfaces.
-pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const SERVER_VERSION: &str = crate::VERSION;
 
 // -- Pure helpers (portable across all targets) -----------------------
 
@@ -442,22 +442,22 @@ mod native {
         })
     }
 
-    /// Default fetcher — [`reqwest::blocking`] with a
-    /// [`CHECK_TIMEOUT`] total-timeout. Fail-silent — any transport
-    /// error (DNS, connect, TLS, HTTP status, body read) collapses
-    /// to `None`.
+    /// Default fetcher — `ureq` with a [`CHECK_TIMEOUT`] global timeout.
+    /// Fail-silent — any transport error (DNS, connect, TLS, HTTP status,
+    /// body read) collapses to `None`.
+    ///
+    /// Shares the data fetch's trust-root policy (#578), so an institutional
+    /// CA configured via `HYRR_CACERT` / `SSL_CERT_FILE` works here too.
+    /// Unlike the data fetch this stays silent on a trust-store misconfig:
+    /// an update check must never surface an error, and the data fetch is
+    /// where the user gets a real diagnostic.
     fn default_fetcher() -> Option<String> {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent(concat!("hyrr-update-check/", env!("CARGO_PKG_VERSION")))
-            .timeout(CHECK_TIMEOUT)
-            .connect_timeout(CHECK_TIMEOUT)
-            .build()
-            .ok()?;
-        let resp = client.get(LATEST_JSON_URL).send().ok()?;
+        let agent = crate::data_fetch::build_update_check_agent().ok()?;
+        let mut resp = agent.get(LATEST_JSON_URL).call().ok()?;
         if !resp.status().is_success() {
             return None;
         }
-        resp.text().ok()
+        resp.body_mut().read_to_string().ok()
     }
 
     /// Process-wide guard so we spawn the background check at most

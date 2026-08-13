@@ -32,7 +32,7 @@ jobs:
       # nucl-parquet input, built check outputs) across runs via the GitHub
       # Actions cache — kills the "rebuild everything every run" tax. Keyed on
       # the lockfile + flake/Cargo inputs so it busts only on real changes.
-      - uses: nix-community/cache-nix-action@v6
+      - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix', '**/Cargo.lock', 'core/Cargo.toml') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
@@ -54,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@v22
-      - uses: nix-community/cache-nix-action@v6
+      - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: nix-lint-${{ runner.os }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: nix-lint-${{ runner.os }}-
@@ -77,9 +77,9 @@ jobs:
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
-          git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs
+          git sparse-checkout set docs/security data/meta data/stopping data/tendl-2023-iso/xs
       - uses: DeterminateSystems/nix-installer-action@v22
-      - uses: nix-community/cache-nix-action@v6
+      - uses: nix-community/cache-nix-action@v7
         with:
           primary-key: nix-test-${{ runner.os }}-${{ hashFiles('flake.lock', 'uv.lock') }}
           restore-prefixes-first-match: nix-test-${{ runner.os }}-
@@ -150,12 +150,29 @@ jobs:
           git diff --exit-code packages/compute/src/generated/ \
             || { echo "::error::Generated config-codec.ts is stale. Regenerate with \`REGEN_TS=1 cargo test --manifest-path core/Cargo.toml --lib --no-default-features --features ts ts_bindings_match_committed\` and commit."; exit 1; }
 
+  # ── Shell-script tests (bash) ──────────────────────────────────────────
+  # These cover the guards that protect releases and deploys: the #572
+  # release-notes gate, and the #401 deploy/release verification. They ran
+  # nowhere until now — neither CI nor prek — which made them documentation
+  # rather than guards.
+  #
+  # No network and no secrets: gh and curl are stubbed onto PATH, and the
+  # deploy checks are driven against a local http.server.
+  script-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Run scripts/tests
+        run: scripts/tests/run-all.sh
+
   # ── Supplier catalog freshness (warn-only, node) ───────────────────────
   supplier-catalog-freshness:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
       - name: Warn if supplier catalog is stale (>90 days)
