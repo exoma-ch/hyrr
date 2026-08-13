@@ -200,7 +200,7 @@ fn build_dataset_meta(
 ) -> DatasetMeta {
     DatasetMeta {
         simulation_id: sim_id.to_string(),
-        core_version: env!("CARGO_PKG_VERSION"),
+        core_version: crate::VERSION,
         library: library.to_string(),
         config_json: serde_json::to_string(args).unwrap_or_else(|_| "null".to_string()),
         time_grid_s: dataset::shared_time_grid(result),
@@ -3103,7 +3103,7 @@ fn tool_get_changelog(args: &Value) -> Result<String, String> {
 
     let envelope = serde_json::json!({
         "header": {
-            "running_version": env!("CARGO_PKG_VERSION"),
+            "running_version": crate::VERSION,
             "since_version": since_ref,
             "release_count": releases.len(),
             "physics_affecting_count": physics_affecting_summary.len(),

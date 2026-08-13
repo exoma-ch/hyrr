@@ -115,6 +115,10 @@ jobs:
           # (no workspace), and the hermetic nix-check builds them with --locked —
           # so a bumped version must be repinned in ALL of them, not just wasm, or
           # the release PR's nix-check fails (core/hyrr-mcp/py) on a stale lock.
+          # Only `-p hyrr-core` for wasm/desktop: their own versions are inert
+          # (not in extra-files), so `-p hyrr-wasm` / `-p hyrr-desktop` were
+          # no-ops that read as "these get bumped" and cost a reader an hour
+          # of confusion. Removed in #603.
           uv lock
           cargo update --manifest-path core/Cargo.toml -p hyrr-core
           cargo update --manifest-path hyrr-mcp/Cargo.toml -p hyrr-core -p hyrr-mcp
@@ -125,8 +129,8 @@ jobs:
           # reproducible); without this line the `lockfile-sync` gate would go
           # red on every release PR from that point on.
           cargo update --manifest-path py-mcp/Cargo.toml -p hyrr-core
-          cargo update --manifest-path wasm/Cargo.toml -p hyrr-core -p hyrr-wasm
-          cargo update --manifest-path desktop/src-tauri/Cargo.toml -p hyrr-core -p hyrr-desktop
+          cargo update --manifest-path wasm/Cargo.toml -p hyrr-core
+          cargo update --manifest-path desktop/src-tauri/Cargo.toml -p hyrr-core
           # release-please bumps frontend/package.json via `extra-files` but does
           # not touch package-lock.json, so the lockfile's workspace version sat a
           # release behind until the next `npm install` silently rewrote it mid-

@@ -98,7 +98,7 @@ pub const DEFAULT_STALENESS_MONTHS: u32 = 6;
 /// The running crate version compiled into hyrr-core. Every surface
 /// (MCP, desktop, PyO3 CLI) shares this identifier via re-export so a
 /// version notice always names the same thing across surfaces.
-pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const SERVER_VERSION: &str = crate::VERSION;
 
 // -- Pure helpers (portable across all targets) -----------------------
 
