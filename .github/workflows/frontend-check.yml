@@ -1,0 +1,117 @@
+name: Frontend checks
+
+# svelte-check + vitest in CI (#611).
+#
+# Neither ran anywhere before this: `npm test` (683 vitest tests) and
+# `npm run check` (svelte-check) were local-only, so `frontend/CONTRIBUTING.md`
+# could assert "0 ERRORS 0 WARNINGS before merge" while `main` sat at 12 errors
+# (#612). Every frontend dependency bump also merged unverified — that is how
+# typescript 7 nearly landed (#523), which crashes svelte-check on load and
+# would have left the project's only type-checker permanently broken while
+# every check stayed green.
+#
+# Why its own workflow rather than a job in ci.yml or e2e.yml:
+#   * ci.yml has no paths filter, so this would pay a Rust + wasm-pack build on
+#     every PR, including docs-only ones.
+#   * e2e.yml has the right filter, but its tag-time full matrix and PR-smoke
+#     rescope (#484 Part B) is a different cost model; unit-test signal should
+#     not be coupled to it.
+#
+# Deliberately NOT a required status check in branch protection: it carries a
+# paths filter, and a required check that never runs blocks the PR outright.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "packages/**"
+      - "wasm/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/frontend-check.yml"
+  push:
+    branches: [main]
+    # Duplicated rather than a YAML anchor: if the anchor were ever resolved
+    # differently, this trigger would silently never fire — the exact failure
+    # class this workflow exists to catch.
+    paths:
+      - "frontend/**"
+      - "packages/**"
+      - "wasm/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/frontend-check.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-check:
+    name: svelte-check + vitest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      # core/build.rs needs two things out of the submodule:
+      #   * data/catalog.json  -> HYRR_DATA_VERSION. Cone mode brings the files
+      #     sitting directly in data/ along with data/meta.
+      #   * docs/security/data-signing-key.pub -> checked against
+      #     hyrr.json::data_signing_pubkey (#614). build.rs PANICS rather than
+      #     skipping when it is absent, deliberately: that comparison is what
+      #     stops a PR silently swapping the trust root.
+      # Still a few MB, not the full ~650 MB tree.
+      - name: Init nucl-parquet submodule (sparse, metadata + signing key)
+        run: |
+          git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+          cd nucl-parquet
+          git sparse-checkout set data/meta docs/security
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          # Pinned for the same reason as e2e.yml: "latest" can resolve to a
+          # 0.12.x build that does not know --no-opt.
+          version: "v0.13.1"
+
+      # frontend/package.json takes the engine as a path dependency
+      # ("hyrr-wasm": "file:src/lib/compute/hyrr-wasm-pkg") and that directory
+      # is generated + gitignored, so npm install fails without this. --no-opt
+      # skips wasm-opt: tests do not care about bundle size.
+      - name: Build WASM compute engine
+        run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm install
+
+      # npm's optional-dependency bug: rollup's platform binary can be skipped
+      # on a fresh install. Same workaround as e2e.yml and deploy-eth.sh.
+      - name: Fix rollup native bindings
+        working-directory: frontend
+        run: npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
+
+      # Gates on ERRORS only. svelte-check exits 0 with warnings, and there are
+      # 14 known ones (a11y + unused CSS) documented in #612. Driving those to
+      # zero and gating on them too is a separate decision — see #611.
+      - name: svelte-check
+        working-directory: frontend
+        run: npm run check
+
+      - name: vitest
+        working-directory: frontend
+        run: npm test
