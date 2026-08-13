@@ -5,7 +5,7 @@
     {
       "version": "0.20.0",
       "date": "2026-08-13",
-      "data_version": "2026.8.1",
+      "data_version": "2026.8.2",
       "entries": [
         {
           "summary": "get_changelog reported the wrong nuclear-data version for 0.19.0 — `2026.7.2` instead of the `2026.8.1` that actually shipped (#606).",
@@ -39,6 +39,38 @@
           "guidance": "No runtime behaviour change. Releases are now verified after publishing — both tags present, latest.json present and naming the version, the PyPI wheel set complete by platform tag, and `uvx hyrr-mcp@<version>` actually resolving and running on x86_64 and aarch64. Deployments verify the bundle server-side and assert the access gate is still active. This is what would have caught 0.16.3/0.17.0/0.18.0 shipping with no aarch64 wheel.",
           "refs": [
             401
+          ]
+        },
+        {
+          "summary": "Nuclear data moves 2026.8.1 -> 2026.8.2, adding Swiss StSV Annex 3 exemption/clearance values. No cross-section or decay data changed.",
+          "impact": "data_update",
+          "silent": false,
+          "affected": [],
+          "guidance": "Nothing to re-run. Verified against the upstream changelog: 2026.8.2 is HuggingFace-mirror fixes, minisign release signing, and the new StSV Annex 3 ingest — no evaluated cross-section or decay values were touched, so every previous result stands unchanged. The bump matters because HYRR welds one data version to each release: `hyrr-mcp==0.20.0` implies exactly this tree.",
+          "refs": [
+            606
+          ]
+        },
+        {
+          "summary": "The nuclear-data download is now verified for publisher authenticity (minisign) on both the network and air-gapped install paths; an unsigned, mis-signed or wrong-version bundle is refused rather than installed.",
+          "impact": "api_change",
+          "silent": false,
+          "affected": [],
+          "guidance": "Installs that previously succeeded can now fail — deliberately. A tarball whose signature is missing, does not verify against the pinned key, or belongs to a different data release is rejected and nothing is extracted; the SHA-256 pin is retained as the rollback defence. This closes the gap where `install_from_tarball` accepted any file handed to it, which matters at the accelerator and hospital sites that install offline from removable media. Errors name the failing artefact and the remedy.",
+          "refs": [
+            594,
+            614,
+            577
+          ]
+        },
+        {
+          "summary": "The hermetic nix gates were building against different nuclear data than the submodule declared, and nothing compared the two pins (#617).",
+          "impact": "internal",
+          "silent": true,
+          "affected": [],
+          "guidance": "No runtime effect — this is about what CI verified, not what shipped. The flake input and the submodule gitlink had drifted 10 commits and 4,634 data files apart, across a breaking cross-section schema change, so the gate that exists to prove 'this builds against the data we ship' was green against data nobody shipped. Both pins are now realigned and a check fails the commit if they diverge again.",
+          "refs": [
+            617
           ]
         }
       ]
