@@ -5,6 +5,7 @@
 #   1. uv.lock matches pyproject.toml (uv lock --check)
 #   2. every crate's Cargo.lock matches its manifest (cargo metadata --locked)
 #   3. package-lock.json records each npm workspace's real package.json version
+#   4. flake.lock's nucl-parquet input == the nucl-parquet submodule gitlink
 #
 # Exits non-zero on the first mismatch with a clear fix suggestion.
 # Used by prek (local git hook) and CI.
@@ -95,6 +96,54 @@ sys.exit(1 if bad else 0)
 PY
   else
     echo "::warning::python3 not found — skipping package-lock.json check"
+  fi
+fi
+
+# --- nucl-parquet: flake input rev == submodule gitlink ---
+# There are TWO pins on the same nuclear-data tree and they are updated by
+# different motions, so they drift silently:
+#
+#   * the submodule gitlink  — what the devshell checks out, what CI's submodule
+#     job tests against, and what the release data tarball is cut from
+#   * flake.lock's nucl-parquet input — what the hermetic `nix flake check`
+#     gates build against (#484), because a sandboxed check cannot run
+#     `git submodule update`
+#
+# THE FAILURE THIS PREVENTS. #574 bumped the gitlink and left flake.lock alone.
+# The two pins then sat 10 commits and 4,634 data files apart — data_version
+# 2026.7.2 vs 2026.8.1, across a BREAKING cross-section schema change
+# (nucl-parquet#280). So the hermetic gate went green against nuclear data that
+# was not the data anyone shipped, which is the one thing that gate exists to
+# rule out. Nothing caught it: `nix flake check` is self-consistent, and the
+# submodule path is self-consistent — only comparing them finds it.
+#
+# Reads the INDEX (`git ls-files -s`), not HEAD, so a `git add nucl-parquet`
+# with no matching flake.lock bump fails at commit time rather than in CI.
+#
+# To fix a reported mismatch, move the flake input to the gitlink:
+#   nix flake update nucl-parquet   (after pointing flake.nix's url at the rev)
+if [ -f flake.lock ] && [ -f .gitmodules ]; then
+  if command -v python3 &>/dev/null; then
+    gitlink="$(git ls-files -s nucl-parquet 2>/dev/null | awk '{print $2}')"
+    flakerev="$(python3 -c '
+import json, sys
+try:
+    node = json.load(open("flake.lock"))["nodes"]["nucl-parquet"]["locked"]
+except (KeyError, ValueError, OSError):
+    sys.exit(0)
+print(node.get("rev", ""))
+' 2>/dev/null)"
+    if [ -n "$gitlink" ] && [ -n "$flakerev" ] && [ "$gitlink" != "$flakerev" ]; then
+      echo "::error::nucl-parquet pins disagree — the hermetic nix gates would"
+      echo "::error::  test different nuclear data than the devshell and release ship."
+      echo "::error::    submodule gitlink : $gitlink"
+      echo "::error::    flake.lock input  : $flakerev"
+      echo "::error::  Bump flake.nix's nucl-parquet url to $gitlink, then:"
+      echo "::error::    nix flake update nucl-parquet"
+      rc=1
+    fi
+  else
+    echo "::warning::python3 not found — skipping nucl-parquet lockstep check"
   fi
 fi
 

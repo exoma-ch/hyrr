@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import type { CurrentProfile } from "@hyrr/compute";
-  import { darkLayout, PLOTLY_CONFIG, TRACE_COLORS } from "../plotting/plotly-helpers";
+  import { asPlotlyDiv, darkLayout, PLOTLY_CONFIG, TRACE_COLORS } from "../plotting/plotly-helpers";
   import { bestTimeUnit } from "../utils/format";
   import { getResolvedTheme } from "../stores/theme.svelte";
 
@@ -28,7 +28,7 @@
 
   onDestroy(() => {
     if (Plotly && plotDiv) {
-      plotDiv.removeAllListeners?.("plotly_relayout");
+      asPlotlyDiv(plotDiv).removeAllListeners?.("plotly_relayout");
       Plotly.purge(plotDiv);
     }
   });
@@ -89,8 +89,9 @@
     Plotly.react(plotDiv, [trace], darkLayout(layoutOpts), config);
 
     if (trimmable) {
-      plotDiv.removeAllListeners?.("plotly_relayout");
-      plotDiv.on("plotly_relayout", (ev: Record<string, number>) => {
+      const el = asPlotlyDiv(plotDiv);
+      el.removeAllListeners?.("plotly_relayout");
+      el.on("plotly_relayout", (ev: Record<string, number>) => {
         // Handle shapes are indices 2 (start) and 3 (end)
         let newStart = trimStartS;
         let newEnd = trimEndS;

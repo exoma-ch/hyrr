@@ -80,7 +80,7 @@ HYRR ships through one channel per surface. Pick the one that matches what you a
 | The MCP server, already have desktop | desktop binary | `claude mcp add hyrr -- /Applications/HYRR.app/Contents/MacOS/hyrr --mcp` |
 | The Python library | pip / uv | `pip install hyrr` |
 | The browser app | static GitHub Pages | [hyrr.app](https://exoma-ch.github.io/hyrr/) |
-| Build the MCP from source (devs) | cargo | `cargo install hyrr-mcp` |
+| Build the MCP from source (devs) | cargo, from a checkout | `cd hyrr-mcp && cargo build --release` → `./target/release/hyrr-mcp` |
 
 See [docs/adr/0001-mcp-single-ssot-and-install-channels.md](docs/adr/0001-mcp-single-ssot-and-install-channels.md) for the rationale behind the split.
 

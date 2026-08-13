@@ -23,7 +23,7 @@
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("hyrr-mcp {}", env!("CARGO_PKG_VERSION"));
+        println!("hyrr-mcp {}", hyrr_core::VERSION);
         return;
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -245,7 +245,7 @@ fn print_help() {
          \n\
          Register with Claude Code:\n    \
              claude mcp add hyrr -- hyrr-mcp\n",
-        env!("CARGO_PKG_VERSION")
+        hyrr_core::VERSION
     );
 }
 

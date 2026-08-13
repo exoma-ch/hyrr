@@ -76,6 +76,7 @@ jobs:
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
           git sparse-checkout set \
+            docs/security \
             data/meta \
             data/stopping \
             data/tendl-2023-iso/xs \
@@ -106,7 +107,7 @@ jobs:
         # and deploy-frontend.yml still optimizes for production.
         run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: "npm"
@@ -120,7 +121,7 @@ jobs:
         run: npm install @rollup/rollup-linux-x64-gnu --no-save 2>/dev/null || true
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/ms-playwright
@@ -242,6 +243,7 @@ jobs:
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
           git sparse-checkout set \
+            docs/security \
             data/meta \
             data/stopping \
             data/tendl-2023-iso/xs \
@@ -312,6 +314,7 @@ jobs:
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
           git sparse-checkout set \
+            docs/security \
             data/meta \
             data/stopping \
             data/tendl-2023-iso/xs \
@@ -339,7 +342,7 @@ jobs:
       - name: Build WASM compute engine
         run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: "npm"
@@ -362,7 +365,7 @@ jobs:
           ls -la _site/hyrr/ | head -5
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-static-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}

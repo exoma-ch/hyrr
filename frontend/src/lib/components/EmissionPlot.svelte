@@ -248,7 +248,9 @@
           // Scale: rate spectrum = activity × branching × shape (already normalized)
           const scaled = shape.map((s) => activity * line.intensity * s);
 
-          if (!combinedX) {
+          // Both accumulators are assigned together, so testing either one
+          // narrows both for the accumulate branch below.
+          if (!combinedX || !combinedY) {
             combinedX = ex;
             combinedY = scaled;
           } else {
@@ -260,8 +262,8 @@
               combinedX = ex;
               combinedY = padded;
             }
-            for (let i = 0; i < Math.min(scaled.length, combinedY!.length); i++) {
-              combinedY![i] += scaled[i];
+            for (let i = 0; i < Math.min(scaled.length, combinedY.length); i++) {
+              combinedY[i] += scaled[i];
             }
           }
         }
