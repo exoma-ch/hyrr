@@ -165,18 +165,35 @@ d="$(setup_repo dv_drift "1999.1.1")"
 # `|| rc=$?` on the assignment: this file runs under `set -e`, so capturing the
 # output of a command expected to FAIL would otherwise abort the whole suite
 # before the assertion ran.
-out="$(cd "$d" && bash scripts/check-release-notes.sh 2>&1)" && rc=0 || rc=$?
+#
+# --strict-gate because the comparison only runs when a release is actually
+# being cut (see below).
+out="$(cd "$d" && bash scripts/check-release-notes.sh --strict-gate 2>&1)" && rc=0 || rc=$?
 if [ "$rc" -ne 0 ] && [ "${out#*1999.1.1}" != "$out" ]; then
-  report "data_version drifting from the submodule fails" pass
+  report "data_version drifting from the submodule fails when cutting" pass
 else
-  report "data_version drifting from the submodule fails (rc=$rc, out: $out)" fail
+  report "data_version drifting from the submodule fails when cutting (rc=$rc, out: $out)" fail
+fi
+
+# BETWEEN releases the manifest still names the LAST released version, whose
+# entry correctly records the data that shipped with it, while the submodule
+# has already moved on for the next one. Comparing those flags a published,
+# correct entry — which is what happened the moment the submodule went
+# 2026.8.1 -> 2026.8.2 with the manifest still at 0.19.0: every push in the
+# repo started failing.
+d="$(setup_repo dv_between "1999.1.1")"
+out="$(cd "$d" && bash scripts/check-release-notes.sh 2>&1)" && rc=0 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  report "a moved submodule does NOT flag an already-released entry (non-strict)" pass
+else
+  report "a moved submodule does NOT flag an already-released entry (rc=$rc, out: $out)" fail
 fi
 
 # No catalog (submodule not checked out) — must WARN and still pass, but the
 # warning has to be visible. A guard that skips silently is what let #606
 # through in the first place.
 d="$(setup_repo dv_nocatalog "__NONE__")"
-out="$(cd "$d" && bash scripts/check-release-notes.sh 2>&1)" && rc=0 || rc=$?
+out="$(cd "$d" && bash scripts/check-release-notes.sh --strict-gate 2>&1)" && rc=0 || rc=$?
 if [ "$rc" -eq 0 ] && [ "${out#*could not verify}" != "$out" ]; then
   report "absent submodule warns loudly and does not block" pass
 else

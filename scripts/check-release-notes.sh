@@ -186,9 +186,19 @@ if check_version:
 # apart from a code change" (#572) — so a wrong value answers the physics
 # question wrongly.
 #
-# Only the entry being cut is checked: historical entries would need their own
-# submodule commit checked out to re-derive, and they are already published.
-if check_version:
+# ONLY when a release is actually being cut (--strict-gate, or an explicit
+# version argument). Between releases the manifest still names the LAST
+# released version, whose entry correctly records the data that shipped with
+# it — while the submodule has already moved on for the NEXT release. Comparing
+# those two flags a published, correct, historical entry.
+#
+# That is not hypothetical: this check shipped without the guard and started
+# failing every push the moment the submodule moved 2026.8.1 -> 2026.8.2 while
+# the manifest still said 0.19.0.
+#
+# During a release PR the manifest IS the version being cut, so the comparison
+# is exactly right — which is where it matters and where the strict gate runs.
+if check_version and (strict or target_version):
     try:
         with open(catalog_path) as f:
             shipped_data_version = json.load(f).get("data_version")
