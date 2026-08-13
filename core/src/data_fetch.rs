@@ -979,7 +979,7 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
 /// file the user carried in. Both drive the same [`TarballVerifier`], so there
 /// is exactly one implementation of the check.
 fn verify_local_tarball(
-    archive: &Path,
+    file: &mut fs::File,
     signature: &minisign_verify::Signature,
     pin: Option<&str>,
     progress: ProgressFn<'_>,
@@ -987,14 +987,14 @@ fn verify_local_tarball(
     let public_key = signing_public_key()?;
     let mut verifier = TarballVerifier::start(signature, &public_key)?;
 
-    let bytes_total = fs::metadata(archive).ok().map(|m| m.len());
+    let bytes_total = file.metadata().ok().map(|m| m.len());
     progress(FetchProgress {
         stage: FetchStage::Verifying,
         bytes_done: 0,
         bytes_total,
     });
 
-    let mut reader = io::BufReader::new(fs::File::open(archive)?);
+    let mut reader = io::BufReader::new(file);
     let mut buf = vec![0u8; 64 * 1024];
     let mut bytes_done: u64 = 0;
     loop {
@@ -1374,7 +1374,23 @@ pub fn extract_tarball_with_progress(
     prefixes: &[&str],
     progress: ProgressFn<'_>,
 ) -> Result<()> {
-    let file = fs::File::open(archive)?;
+    extract_tarball_from_file(fs::File::open(archive)?, dest, prefixes, progress)
+}
+
+/// Extract from an already-open handle rather than a path.
+///
+/// This is what lets the air-gapped install verify and extract **the same
+/// inode**: the offline path opens the user-supplied archive once, streams it
+/// through signature verification, rewinds, and extracts from that same
+/// descriptor. Re-opening by path in between would leave a window in which the
+/// file could be swapped after passing verification — the flock serialises
+/// HYRR against itself, not against an attacker who can write to the media.
+pub fn extract_tarball_from_file(
+    file: fs::File,
+    dest: &Path,
+    prefixes: &[&str],
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     let decoder =
         zstd::stream::Decoder::new(file).map_err(|e| FetchError::Decompress(e.to_string()))?;
     let mut tar = tar::Archive::new(decoder);
@@ -1533,6 +1549,16 @@ fn install_tarball_atomic(
     prefixes: &[&str],
     progress: ProgressFn<'_>,
 ) -> Result<()> {
+    install_tarball_atomic_from_file(fs::File::open(archive)?, prefixes, progress)
+}
+
+/// [`install_tarball_atomic`] from an already-open handle, so a caller that
+/// has just verified a signature can extract the exact bytes it verified.
+fn install_tarball_atomic_from_file(
+    archive: fs::File,
+    prefixes: &[&str],
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     let cache = cache_dir()?;
     let root = cache_root()?;
     let pid = std::process::id();
@@ -1556,7 +1582,7 @@ fn install_tarball_atomic(
         fs::remove_dir_all(&partial)?;
     }
 
-    extract_tarball_with_progress(archive, &partial, prefixes, progress)?;
+    extract_tarball_from_file(archive, &partial, prefixes, progress)?;
 
     // Test-only seam: between partial-dir build and the
     // atomic-rename promotion, give tests a chance to simulate a
@@ -2025,21 +2051,31 @@ pub fn install_from_tarball_with_signature(
     // It is also the rollback defence: a signature alone does not stop an old,
     // legitimately-signed release being replayed. Binding the install to the
     // version this build pins is what does.
-    if let Some(bundle_version) = parse_bundle_version(sig.trusted_comment()) {
-        if bundle_version != DATA_VERSION {
-            return Err(FetchError::VersionMismatch {
-                expected: DATA_VERSION.to_string(),
-                found: bundle_version.to_string(),
-            });
-        }
+    // A signature with no `tag=` is refused rather than waved through. Skipping
+    // the gate when the field is absent would mean the rollback defence quietly
+    // stops applying to exactly the signatures that omit it.
+    let bundle_version =
+        parse_bundle_version(sig.trusted_comment()).ok_or_else(|| FetchError::VersionMismatch {
+            expected: DATA_VERSION.to_string(),
+            found: "unknown (the signature's trusted comment carries no tag=)".to_string(),
+        })?;
+    if bundle_version != DATA_VERSION {
+        return Err(FetchError::VersionMismatch {
+            expected: DATA_VERSION.to_string(),
+            found: bundle_version.to_string(),
+        });
     }
 
-    // Only pin-check when the bundle really is this build's release — which
-    // the gate above has just established.
-    verify_local_tarball(archive, &sig, Some(DATA_TARBALL_SHA256), progress)?;
+    // Open ONCE and keep the descriptor: verification and extraction must see
+    // the same inode. Re-opening by path in between would let an attacker with
+    // write access to the media swap the file after it passed verification —
+    // the flock serialises HYRR against itself, not against them.
+    let mut file = fs::File::open(archive)?;
+    verify_local_tarball(&mut file, &sig, Some(DATA_TARBALL_SHA256), progress)?;
+    io::Seek::rewind(&mut file)?;
 
     let _lock = acquire_lock()?;
-    install_tarball_atomic(archive, &["data"], progress)?;
+    install_tarball_atomic_from_file(file, &["data"], progress)?;
     mark_cache_verified()?;
     Ok(())
 }
@@ -4003,6 +4039,23 @@ mod offline_signature_tests {
     #[test]
     fn a_comment_without_a_tag_yields_no_version() {
         assert_eq!(parse_bundle_version("sha256=abc timestamp=1"), None);
+    }
+
+    /// A signature that omits `tag=` must be REFUSED, not waved through.
+    /// Skipping the gate when the field is absent would mean the rollback
+    /// defence quietly stops applying to exactly the signatures that omit it —
+    /// which is the shape an attacker would choose.
+    #[test]
+    fn a_signature_without_a_tag_is_refused_not_skipped() {
+        // Mirrors the production branch: `None` maps to VersionMismatch.
+        let err = parse_bundle_version("sha256=abc")
+            .ok_or_else(|| FetchError::VersionMismatch {
+                expected: DATA_VERSION.to_string(),
+                found: "unknown (the signature's trusted comment carries no tag=)".to_string(),
+            })
+            .unwrap_err();
+        assert!(matches!(err, FetchError::VersionMismatch { .. }));
+        assert!(err.to_string().contains("unknown"));
     }
 
     /// **Rollback defence.** A signature alone does not stop an old but

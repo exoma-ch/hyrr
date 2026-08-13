@@ -20,6 +20,7 @@ def fetch_data(
     library: str | None = None,
     all_libs: bool = False,
     from_tarball: str | None = None,
+    signature: str | None = None,
     offline_bundle: str | None = None,
     progress: Callable | None = None,
 ) -> None:
@@ -37,9 +38,19 @@ def fetch_data(
     all_libs : bool
         Fetch every library (~400 MB).
     from_tarball : str, optional
-        Install from a local ``.tar.zst`` archive (offline install).
+        Install from a local ``.tar.zst`` archive (air-gapped install).
+        Its minisign signature must sit beside it as
+        ``<path>.minisig``, or be given via ``signature``. A bundle that
+        cannot be authenticated is refused — there is no override.
+    signature : str, optional
+        Signature for ``from_tarball`` when it was not carried next to
+        the archive.
     offline_bundle : str, optional
-        Export the current cache to a portable ``.tar.zst`` tarball.
+        Download the signed data release to this path **and** write its
+        ``.minisig`` beside it, for transfer to an air-gapped machine.
+        Requires network: it fetches the signed upstream artefact rather
+        than repacking the local cache, because a repack cannot be
+        authenticated on the receiving machine (see #614).
     progress : callable, optional
         ``progress(stage, bytes_done, bytes_total)`` callback.
         ``stage`` is one of ``"connecting"``, ``"downloading"``,
@@ -77,6 +88,7 @@ def fetch_data(
         library=library,
         all_libs=all_libs,
         from_tarball=from_tarball,
+        signature=signature,
         offline_bundle=offline_bundle,
         progress=pyo3_cb,
     )

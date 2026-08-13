@@ -816,6 +816,7 @@ def _cmd_download_data(args: argparse.Namespace) -> int:
         library=None,
         offline_bundle=None,
         from_tarball=None,
+        signature=None,
         gc=False,
         keep=2,
     )
