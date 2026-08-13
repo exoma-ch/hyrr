@@ -228,9 +228,52 @@
                 fi
 
                 # ── nucl-parquet submodule ──────────────────────────
+                # Bootstrap from the main clone's object store, not from GitHub.
+                #
+                # git does NOT share submodules across worktrees: a linked
+                # worktree gets its own submodule git dir at
+                # .git/worktrees/<name>/modules/nucl-parquet. So every throwaway
+                # worktree re-downloaded the whole ~800 MB data repo from
+                # scratch. Cloning from the main clone's module dir instead is
+                # network-free and takes ~6s, which also means a new worktree
+                # bootstraps offline.
+                #
+                # Why not `--reference` (alternates, which would also dedupe the
+                # objects on disk)? .gitmodules sets `shallow = true`, and git
+                # refuses to borrow from a shallow repo — "fatal: reference
+                # repository ... is shallow". A local clone has no such
+                # restriction. It repacks rather than hardlinks, so the disk
+                # saving is modest; the fetch is what this removes.
+                #
+                # `protocol.file.allow` is required for local-path submodule
+                # clones (CVE-2022-39253). It is scoped to this one invocation,
+                # and the path is one we derive ourselves from --git-common-dir
+                # — never attacker-controlled .gitmodules content, which is what
+                # that CVE was actually about.
+                #
+                # Both -c overrides are transient: the shared .git/config keeps
+                # the real GitHub URL, so `git submodule sync`/`update` from
+                # anywhere else is unaffected.
                 if [ ! -f "nucl-parquet/data/catalog.json" ]; then
                   echo "[hyrr] initializing nucl-parquet submodule..."
-                  git submodule update --init nucl-parquet 2>/dev/null || true
+                  sm_gitdir="$(git rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+                  sm_common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+                  sm_ref="$sm_common/modules/nucl-parquet"
+                  # Skipped in the main clone, where git-dir == git-common-dir
+                  # and the "reference" would be the destination itself.
+                  if [ -n "$sm_common" ] && [ "$sm_gitdir" != "$sm_common" ] && [ -d "$sm_ref" ]; then
+                    echo "[hyrr] cloning from the main clone (no network): $sm_ref"
+                    git -c protocol.file.allow=always \
+                        -c submodule.nucl-parquet.url="$sm_ref" \
+                        submodule update --init nucl-parquet 2>/dev/null || true
+                  fi
+                  # Network fallback — main clone has no submodule checked out
+                  # yet (fresh clone, CI), or the local clone above failed. git
+                  # cleans up a failed submodule clone, so this starts clean.
+                  if [ ! -f "nucl-parquet/data/catalog.json" ]; then
+                    git submodule update --init nucl-parquet 2>/dev/null || true
+                  fi
+                  unset sm_gitdir sm_common sm_ref
                 fi
 
                 echo "hyrr devshell — python $(python3 --version 2>&1 | cut -d' ' -f2), rustc $(rustc --version | cut -d' ' -f2), node $(node --version)"
