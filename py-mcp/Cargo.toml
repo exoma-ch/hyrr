@@ -20,4 +20,4 @@ crate-type = ["cdylib"]
 # nucl-parquet crate via its `parquet-store` feature, without the `fetch`
 # feature (we no longer use `nucl_parquet::DataDir::ensure_lazy`).
 hyrr-core = { path = "../core", features = ["mcp"] }
-pyo3 = { version = "0.28", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = "0.29", features = ["extension-module", "abi3-py311"] }
