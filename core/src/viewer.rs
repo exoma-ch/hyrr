@@ -487,10 +487,6 @@ mod tests {
         isotope_results.insert("Tc-99m".to_string(), iso("Tc-99m", 43, 99, 1.0e9));
         isotope_results.insert("Mo-99".to_string(), iso("Mo-99", 42, 99, 5.0e9));
         StackResult {
-            // This fixture predates the field (#601); the viewer snapshot
-            // tests do not exercise provenance, so the explicit "unknown"
-            // origin is the honest value rather than a fabricated one.
-            provenance: crate::provenance::Provenance::unknown(),
             layer_results: vec![LayerResult {
                 energy_in: 16.0,
                 energy_out: 12.0,
@@ -511,7 +507,9 @@ mod tests {
             irradiation_time_s: 86400.0,
             cooling_time_s: 86400.0,
             // A fixture is not a real run, so it must not claim provenance it
-            // does not have (#593).
+            // does not have (#593). The viewer snapshot tests do not exercise
+            // provenance either, so "unknown" is the honest value rather than a
+            // fabricated one (#601, #623).
             provenance: crate::provenance::Provenance::unknown(),
         }
     }
