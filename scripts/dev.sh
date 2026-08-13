@@ -53,7 +53,17 @@ if [ ! -d frontend/node_modules ]; then
   (cd frontend && npm install)
 fi
 
-# 5. Dev server
+# 5. Viewer template (ADR 0008)
+# The "Share result" export fetches this as a static asset from public/. The
+# app build stages it automatically; in dev nothing else would, so the button
+# would 404 until someone ran `npm run build:viewer` by hand. Cheap (~2 s) and
+# only when missing.
+if [ ! -f frontend/public/viewer-template.html ]; then
+  echo "==> Building the shareable-viewer template..."
+  (cd frontend && npm run build:viewer)
+fi
+
+# 6. Dev server
 echo "==> Starting vite dev server..."
 PORT_ARG=()
 [ -n "$PORT" ] && PORT_ARG=(--port "$PORT")
