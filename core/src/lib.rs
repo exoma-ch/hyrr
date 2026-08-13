@@ -46,3 +46,4 @@ pub mod trace_schema;
 pub mod types;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod update_check;
+pub mod viewer;

@@ -761,68 +761,6 @@ struct LayerConfig {
 }
 
 #[derive(Debug, Serialize)]
-struct SimulationResultJson {
-    config: serde_json::Value,
-    layers: Vec<LayerResultJson>,
-    timestamp: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct LayerResultJson {
-    layer_index: usize,
-    energy_in: f64,
-    energy_out: f64,
-    #[serde(rename = "delta_E_MeV")]
-    delta_e_mev: f64,
-    #[serde(rename = "heat_kW")]
-    heat_kw: f64,
-    isotopes: Vec<IsotopeResultJson>,
-    depth_profile: Vec<DepthPointJson>,
-    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
-    depth_production_rates: std::collections::HashMap<String, Vec<f64>>,
-    /// Isotopes removed by the negligible-inventory prune (#533) — surfaced so
-    /// the browser JSON payload is never silently filtered.
-    pruned_negligible_count: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct IsotopeResultJson {
-    name: String,
-    #[serde(rename = "Z")]
-    z: u32,
-    #[serde(rename = "A")]
-    a: u32,
-    state: String,
-    half_life_s: Option<f64>,
-    production_rate: f64,
-    #[serde(rename = "saturation_yield_Bq_uA")]
-    saturation_yield_bq_ua: f64,
-    #[serde(rename = "activity_Bq")]
-    activity_bq: f64,
-    source: String,
-    #[serde(rename = "activity_direct_Bq")]
-    activity_direct_bq: f64,
-    #[serde(rename = "activity_ingrowth_Bq")]
-    activity_ingrowth_bq: f64,
-    time_grid_s: Vec<f64>,
-    #[serde(rename = "activity_vs_time_Bq")]
-    activity_vs_time_bq: Vec<f64>,
-    reactions: Vec<String>,
-    decay_notations: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct DepthPointJson {
-    depth_mm: f64,
-    #[serde(rename = "energy_MeV")]
-    energy_mev: f64,
-    #[serde(rename = "dedx_MeV_cm")]
-    dedx_mev_cm: f64,
-    #[serde(rename = "heat_W_cm3")]
-    heat_w_cm3: f64,
-}
-
-#[derive(Debug, Serialize)]
 struct DepthPreviewLayer {
     material: String,
     thickness_mm: f64,
@@ -939,71 +877,20 @@ fn compute_composition(elements: &[(Element, f64)]) -> Vec<(u32, f64)> {
     raw.iter().map(|&(z, w)| (z, w / total)).collect()
 }
 
-fn convert_stack_result(config_json: &str, result: &StackResult) -> SimulationResultJson {
+/// Delegate to the core-owned converter (ADR 0008).
+///
+/// This mapping used to be hand-mirrored here and in
+/// `desktop/src-tauri/src/commands.rs`, and the two had already drifted — the
+/// desktop copy silently dropped `pruned_negligible_count`. `hyrr_core::viewer`
+/// is now the single owner.
+///
+/// `timestamp` stays 0: JS overwrites it with `Date.now()`.
+fn convert_stack_result(
+    config_json: &str,
+    result: &StackResult,
+) -> hyrr_core::viewer::SimulationResultJson {
     let config_val: serde_json::Value = serde_json::from_str(config_json).unwrap_or_default();
-
-    let layers: Vec<LayerResultJson> = result
-        .layer_results
-        .iter()
-        .enumerate()
-        .map(|(idx, lr)| {
-            let mut isotopes: Vec<IsotopeResultJson> = lr
-                .isotope_results
-                .values()
-                .map(|iso| IsotopeResultJson {
-                    name: iso.name.clone(),
-                    z: iso.z,
-                    a: iso.a,
-                    state: iso.state.clone(),
-                    half_life_s: iso.half_life_s,
-                    production_rate: iso.production_rate,
-                    saturation_yield_bq_ua: iso.saturation_yield_bq_ua,
-                    activity_bq: iso.activity_bq,
-                    source: iso.source.clone(),
-                    activity_direct_bq: iso.activity_direct_bq,
-                    activity_ingrowth_bq: iso.activity_ingrowth_bq,
-                    time_grid_s: iso.time_grid_s.clone(),
-                    activity_vs_time_bq: iso.activity_vs_time_bq.clone(),
-                    reactions: iso.reactions.clone(),
-                    decay_notations: iso.decay_notations.clone(),
-                })
-                .collect();
-            isotopes.sort_by(|a, b| {
-                b.activity_bq
-                    .partial_cmp(&a.activity_bq)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-            let depth_profile: Vec<DepthPointJson> = lr
-                .depth_profile
-                .iter()
-                .map(|dp| DepthPointJson {
-                    depth_mm: dp.depth_cm * 10.0,
-                    energy_mev: dp.energy_mev,
-                    dedx_mev_cm: dp.dedx_mev_cm,
-                    heat_w_cm3: dp.heat_w_cm3,
-                })
-                .collect();
-
-            LayerResultJson {
-                layer_index: idx,
-                energy_in: lr.energy_in,
-                energy_out: lr.energy_out,
-                delta_e_mev: lr.delta_e_mev,
-                heat_kw: lr.heat_kw,
-                isotopes,
-                depth_profile,
-                depth_production_rates: lr.depth_production_rates.clone(),
-                pruned_negligible_count: lr.pruned_negligible_count,
-            }
-        })
-        .collect();
-
-    SimulationResultJson {
-        config: config_val,
-        layers,
-        timestamp: 0, // JS will override with Date.now()
-    }
+    hyrr_core::viewer::convert_stack_result(config_val, result, 0)
 }
 
 // ---------------------------------------------------------------------------

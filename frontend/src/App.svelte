@@ -542,7 +542,7 @@
 
 <style>
   /* Theme tokens + document base styles live in lib/styles/tokens.css,
-     imported by both entries (App and the ADR-0006 viewer). */
+     imported by both entries (App and the ADR-0008 viewer). */
 
   main {
     max-width: 1600px;

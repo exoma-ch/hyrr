@@ -11,3 +11,4 @@ pub mod dose;
 pub mod nuclide;
 pub mod tools;
 pub mod transport;
+pub mod viewer_export;

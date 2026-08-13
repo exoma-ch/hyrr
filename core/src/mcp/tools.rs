@@ -163,7 +163,7 @@ impl From<String> for ToolResponse {
 }
 
 /// Base64-encode bytes for an embedded MCP resource blob.
-fn b64(bytes: &[u8]) -> String {
+pub(super) fn b64(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
@@ -809,6 +809,33 @@ pub fn list_tools() -> Vec<Value> {
                 }
             }
         }),
+        serde_json::json!({
+            "name": "export_result_html",
+            "description": format!("Export a simulation as a single self-contained HTML file the recipient can open from disk — no install, no network, no engine (ADR 0008). Intended for sharing a result with someone who cannot reach the gated web app. The artifact is view-only: they can filter, sort and browse, but cannot re-run or re-tune. Takes the same arguments as `simulate`, plus `tier`. Requires a built viewer template (see `template_path`).{SCOPE_SUFFIX}"),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a", "n"], "description": "Beam projectile." },
+                    "energy_mev": { "type": "number", "description": "Beam energy in MeV." },
+                    "current_ma": { "type": "number", "description": "Beam current in mA." },
+                    "layers": { "type": "array", "description": "Target layers (beam traversal order).", "items": layer_schema(false) },
+                    "irradiation_time_s": { "type": "number", "description": "Irradiation time in seconds (default: 86400)." },
+                    "cooling_time_s": { "type": "number", "description": "Cooling time in seconds (default: 86400)." },
+                    "secondary_neutron": { "type": "boolean", "description": "Also model Phase-2 secondary (x,n)-driven neutron activation." },
+                    "activity_floor_bq": activity_floor_schema(),
+                    "tier": {
+                        "type": "string",
+                        "enum": ["A", "B"],
+                        "description": "How much data the artifact carries. \"A\" (default) embeds derived results only — activities, yields, curves, depth profiles — and nothing from the evaluated nuclear-data libraries; emission spectra are omitted and the dose column degrades to a small hardcoded table. \"B\" additionally embeds emission lines and dose constants for the nuclides this run produced, and only those, which makes the gamma spectra viewable. Choose deliberately: the tier is recorded in the file so its contents stay auditable after it has been shared."
+                    },
+                    "template_path": {
+                        "type": "string",
+                        "description": "Path to the built viewer template (frontend/dist-viewer/viewer.html, produced by `npx vite build --config frontend/vite.viewer.config.ts`). Falls back to the HYRR_VIEWER_TEMPLATE environment variable. The template is read at call time rather than compiled in, so core never depends on a frontend build."
+                    }
+                },
+                "required": ["projectile", "layers"]
+            }
+        }),
     ]
 }
 
@@ -853,6 +880,12 @@ pub fn call_tool(
         // table.
         "get_version_info" => tool_get_version_info()?.into(),
         "get_changelog" => tool_get_changelog(arguments)?.into(),
+        // #615 / ADR 0008 — shareable artifact for recipients outside the
+        // access allowlist. Reuses the simulate result cache.
+        "export_result_html" => {
+            let result = cached_sim(db, &*materials, arguments)?;
+            super::viewer_export::tool_export_result_html(db, &*materials, arguments, &result)?
+        }
         _ => return Err(format!("Unknown tool: {}", name)),
     };
     response.text = format!("{}\n\n---\n*Library: {}*\n", response.text, db.library());
