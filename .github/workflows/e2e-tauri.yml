@@ -119,7 +119,7 @@ jobs:
         run: |
           cargo install tauri-cli tauri-driver --locked
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
