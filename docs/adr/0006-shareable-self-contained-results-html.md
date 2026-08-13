@@ -1,7 +1,7 @@
 # ADR 0006 — Shareable self-contained results HTML
 
-- **Status**: proposed (2026-08-13) — **Tier B is blocked on #421**; see
-  "The licensing boundary" below
+- **Status**: proposed (2026-08-13) — Tier A + Tier B in scope; Tier C
+  rejected. See "The licensing boundary" for why Tier B does not wait on #421.
 - **Date**: 2026-08-13
 - **Relates to**: #421 (dual-use / export-control determination), #425 (epic —
   legal & licensing readiness), #565 (refuse to deploy a stale ETH access
@@ -97,17 +97,32 @@ control the Shibboleth gate enforces.
   **Rejected.** It contradicts the licensing rationale for the allowlist
   outright, and no export-shaped framing changes that.
 
-**Decision: implement Tier A now; Tier B is gated on #421.**
+**Decision: implement Tier A and Tier B. Tier B does not wait on #421.**
 
-Tier B is the chosen target, but #421 (dual-use / export-control
-determination) is open, so the determination it depends on does not yet exist.
-The build must therefore keep the emission snapshot behind a **single explicit
-switch** — one flag at export time and one embedded key — so Tier B can be
-enabled by decision rather than by refactor, and so an artifact's tier is
-auditable from the file itself.
+The reasoning (project owner's determination, recorded here so it is reviewable
+rather than implicit):
 
-This ADR does not assert that Tier B is permissible. It asserts that the
-architecture must make the question answerable and the answer enforceable.
+- **The artifact conveys neither the tool nor the reactions.** It cannot
+  re-run, re-tune, or evaluate a different target — no engine, no
+  cross-sections, no stopping tables. What crosses is one run's derived output
+  plus, at Tier B, decay-emission lines for the 113 nuclides that run happened
+  to produce. That is a fixed, run-specific slice, not a capability. The
+  restriction the gate enforces is about *cross-sections for arbitrary
+  reactions*; emission lines for named nuclides are published reference data of
+  a different character.
+- **Sharing is largely *how* #421 gets decided.** #421 requires a written ETH
+  export-control determination "for the full range". Regulators and reviewers
+  cannot assess a tool they cannot open, and they are by definition not on the
+  allowlist. A view-only artifact is the mechanism for showing them what the
+  tool does — an *input* to the determination, not something blocked by it.
+
+**#421 remains open and still governs the full range.** This ADR does not
+settle it; it scopes one artifact narrowly enough to sit outside it. If #421
+lands restrictively on emission data, Tier B is the thing that changes.
+
+The tier switch stays regardless — one flag at export, one key in the payload —
+because it is what makes an artifact's contents **auditable after it has
+left**, which matters whichever way #421 lands.
 
 ### Degrade, don't gate
 
@@ -133,12 +148,35 @@ a stub `DataStore` served from the embedded snapshot rather than Parquet.
   dose-constant rows, and — under Tier B only — the emission rows. Reusing
   `buildSessionFile` avoids inventing a second result format.
 - **Plotly**: the result plots use only `scatter` (22 sites) and `bar` (1), so
-  the viewer builds against the **basic** distribution: 4.4 MB → ~2 MB.
+  the viewer builds against the **basic** distribution: 4.84 MB → 1.12 MB.
 
-Budget: **~2.5 MB raw / ~800 KB gzipped**, of which the result data is 10–30 KB
-(a 1.3 MB result JSON gzips to ~30 KB; every isotope redundantly repeats an
-identical 200-point `time_grid_s`, so deduping it per layer saves ~40% before
-compression).
+### Measured budget
+
+Built and measured against a real run (16 MeV p → havar + Mo-100 + Cu;
+3 layers, 198 isotopes, 200-point grids) — not estimated:
+
+| | raw | gzipped |
+|---|---|---|
+| viewer template (all JS+CSS inlined) | 1.30 MB | 430 KB |
+| Tier A artifact (template + result) | 2.18 MB | **593 KB** |
+| Tier B artifact (+ emissions + dose) | 2.87 MB | **652 KB** |
+
+**Tier B costs ~60 KB gzipped over Tier A** — 7,611 emission lines across 113
+nuclides plus 119 dose constants. That is the entire licensing-relevant
+increment.
+
+Two corrections to earlier estimates, both material:
+
+- **Results do not gzip 40×.** The sizing probe in `core/src/mcp/cache.rs`
+  suggested ~30 KB for a large result; a real 2.11 MB result gzips to **707 KB**
+  (3×). Synthetic probe data is far more repetitive than real float arrays.
+- **Precision, not deduplication, is the lever.** Hoisting the 198 identical
+  `time_grid_s` copies saves 475 KB raw but only 10 KB gzipped — gzip already
+  finds them. Rounding to **4 significant figures** (the UI displays ~4) takes
+  the same result from 707 KB to **187 KB** gzipped. Doing both gives 181 KB.
+
+Where the raw bytes actually live: `depth_production_rates` 46%,
+`activity_vs_time_Bq` 23%, `time_grid_s` 22%, `depth_profile` 5%.
 
 Emission across all three surfaces needs no new infrastructure:
 
@@ -200,6 +238,57 @@ That trick works for a **committed, small, static** file. A vite-generated
 without it, `cargo build` on a clean checkout needs node, vite, and a WASM
 build. This is the main structural cost of including the MCP surface and
 should be settled before that surface is implemented, not during.
+
+## Spike findings
+
+A working spike exists (`frontend/vite.viewer.config.ts`, `src/Viewer.svelte`,
+`src/lib/viewer/`, `scripts/make-viewer.mjs`). It renders the real components
+from an embedded snapshot with **zero network requests**, verified by loading
+the artifact over `file://` and asserting
+`performance.getEntriesByType("resource")` is empty. Filtering, sorting and
+selection all work; 3 plots and 36 traces render.
+
+Four things the build surfaced that are not obvious from reading the code:
+
+1. **Three silent single-file traps, each of which produced a broken artifact
+   with no error at all.**
+   - `String.replace(re, str)` interprets `$&`, `` $` `` and `$'` in the
+     *replacement*. Minified plotly is full of them, so inlining with a string
+     replacement corrupts the bundle. Use a function replacement — in the
+     inliner **and** in the payload substitution.
+   - The inliner must not delete an emitted chunk it failed to inline. Plotly
+     arrives via `await import()`, so its chunk is referenced by no
+     `<script src>`; dropping it yields an artifact whose plots never render.
+     The plugin now errors instead.
+   - Vite leaves a `__VITE_PRELOAD__` marker inside its dynamic-import helper
+     for a later pass to substitute. That pass does not run here, and the
+     surviving identifier makes the helper's promise **never settle** — no
+     rejection, no console error, just permanently absent plots. A single-file
+     bundle has nothing to preload, so the marker is replaced with `void 0`.
+
+2. **The evaluated data contains non-finite values.** 516 emission rows carry
+   NaN energy/intensity. `NaN <= threshold` is `false`, so a naive intensity
+   filter passes them through, and Python's `json.dumps` then emits bare `NaN`
+   — which is not valid JSON and fails at parse time in the browser. The
+   generator must filter on finiteness explicitly.
+
+3. **Tier A's dose column is wrong, not merely absent.** Without embedded dose
+   constants `getDoseConstant` silently falls back to the hardcoded 8-isotope
+   table (`utils/dose-constants.ts:21-24`), which disagrees materially — for
+   ⁹⁹Mo in the reference run, **142 µSv/h against the correct 75.6 µSv/h**.
+   Tier A must therefore either embed the dose rows (a 119-entry table, and a
+   separate question from ENSDF emission lines) or suppress the column
+   outright. Shipping a plausible-but-wrong dose to an external reviewer is the
+   worst of the three options.
+
+4. **`index.html` carries a Cloudflare analytics beacon.** The viewer entry is
+   written from scratch rather than copied, precisely so the artifact inherits
+   no beacon, no preconnect, and no external script.
+
+Also confirmed: the viewer's depth axis spans the **configured** stack
+thickness, not the traversed depth — matching the app, which does this
+deliberately so the two depth plots align (#435). In the reference run the beam
+stops 0.33 mm into a 5 mm Cu backing, so the two differ by 10×.
 
 ## Consequences
 
