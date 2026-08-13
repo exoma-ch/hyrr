@@ -446,6 +446,12 @@ pub enum FetchErrorPayload {
         cache_dir: String,
         message: String,
     },
+    VersionMismatch {
+        expected: String,
+        found: String,
+        cache_dir: String,
+        message: String,
+    },
     NoChecksumPin {
         url: String,
         cache_dir: String,
@@ -578,6 +584,12 @@ impl From<&FetchError> for FetchErrorPayload {
                 cache_dir: cache_dir_str,
                 message,
             },
+            FetchError::VersionMismatch { expected, found } => FetchErrorPayload::VersionMismatch {
+                expected: expected.clone(),
+                found: found.clone(),
+                cache_dir: cache_dir_str,
+                message,
+            },
             FetchError::ChecksumMismatch { expected, actual } => {
                 FetchErrorPayload::ChecksumMismatch {
                     expected: expected.clone(),
@@ -666,6 +678,17 @@ pub enum FetchError {
     /// is extracted and the partial download is removed.
     #[error("data tarball failed signature verification: {detail}. Nothing was installed.")]
     SignatureInvalid { detail: String },
+    /// A validly-signed bundle for a *different* data release than this build
+    /// pins (#614). Refused rather than installed: the cache layout is keyed
+    /// on [`DATA_VERSION`], so it would land in the wrong directory — and
+    /// accepting an older signed release is exactly the rollback a signature
+    /// alone does not prevent.
+    #[error(
+        "this bundle is for nuclear data {found}, but this build of HYRR expects {expected}. \
+         Nothing was installed. Use a bundle matching {expected}, or upgrade/downgrade HYRR \
+         to the version that ships {found}."
+    )]
+    VersionMismatch { expected: String, found: String },
 }
 
 pub type Result<T> = std::result::Result<T, FetchError>;
@@ -690,6 +713,90 @@ pub fn sentinel_path() -> Result<PathBuf> {
 /// populated (sentinel present).
 pub fn is_cache_complete() -> bool {
     sentinel_path().map(|p| p.exists()).unwrap_or(false)
+}
+
+/// Path to the `.verified` sidecar inside `cache_dir()` (#614).
+fn verified_sentinel_path() -> Result<PathBuf> {
+    Ok(cache_dir()?.join(".verified"))
+}
+
+/// True when this cache was installed through a path that verified a
+/// publisher signature.
+///
+/// Distinct from [`is_cache_complete`], which only records that extraction
+/// finished. A cache installed before signing existed is *complete* but not
+/// *verified*, and those must stay tellable apart — the alternative is either
+/// forcing a re-download on users who cannot reach the network, or silently
+/// claiming an assurance that was never established.
+///
+/// Deliberately **not** gating reads yet. Doing so would brick every existing
+/// offline install at upgrade time, which is the outcome that pushes operators
+/// to `cp -r` the cache directory across a diode — no verification at all.
+pub fn is_cache_verified() -> bool {
+    verified_sentinel_path()
+        .map(|p| p.exists())
+        .unwrap_or(false)
+}
+
+/// What is known about the installed cache's provenance (#614).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CacheStatus {
+    /// Extraction finished and the `.complete` sentinel is present.
+    pub complete: bool,
+    /// Installed through a path that verified a publisher signature.
+    pub verified: bool,
+    /// Data version recorded at install time, if any.
+    pub data_version: Option<String>,
+    /// Signing key that vouched for the install, if any. Surfaced so a key
+    /// rotation is visible without re-installing.
+    pub signing_key: Option<String>,
+}
+
+/// Report what is known about the installed cache.
+///
+/// **This deliberately does not re-hash the tree, and it is important to be
+/// precise about why rather than shipping something that looks like it does.**
+///
+/// Re-verifying contents requires a per-file digest list signed by the
+/// nuclear-data team. Upstream publishes a signature over the *archive*, not
+/// over its contents, so once extracted there is nothing authenticated left to
+/// compare a file against. A function that walked the tree and compared it to
+/// nothing would read as a control while being none — the exact failure this
+/// work exists to avoid.
+///
+/// Content re-verification is unblocked by exoma-ch/nucl-parquet#296 (signed
+/// content manifest). Until then this reports provenance, honestly labelled.
+pub fn cache_status() -> CacheStatus {
+    let recorded = verified_sentinel_path()
+        .ok()
+        .and_then(|p| fs::read_to_string(p).ok());
+    let (signing_key, data_version) = match &recorded {
+        Some(text) => {
+            let mut lines = text.lines();
+            (
+                lines.next().map(str::to_string).filter(|s| !s.is_empty()),
+                lines.next().map(str::to_string).filter(|s| !s.is_empty()),
+            )
+        }
+        None => (None, None),
+    };
+    CacheStatus {
+        complete: is_cache_complete(),
+        verified: recorded.is_some(),
+        data_version,
+        signing_key,
+    }
+}
+
+/// Record that the current cache was installed from a signature-verified
+/// payload. Written *after* the `.complete` sentinel, so a crash between the
+/// two leaves the cache usable-but-unverified rather than falsely attested.
+fn mark_cache_verified() -> Result<()> {
+    let path = verified_sentinel_path()?;
+    // Key id, not the payload digest: it answers "which key vouched for this
+    // tree?", which is what a later audit or a key rotation needs to know.
+    fs::write(&path, format!("{DATA_SIGNING_PUBKEY}\n{DATA_VERSION}\n"))?;
+    Ok(())
 }
 
 /// Process-wide mutex that pairs with the on-disk `flock`. Two threads
@@ -802,12 +909,7 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
     // the user then watches get deleted.
     let signature = fetch_detached_signature(&client)?;
     let public_key = signing_public_key()?;
-    let mut sig_verifier =
-        public_key
-            .verify_stream(&signature)
-            .map_err(|e| FetchError::SignatureInvalid {
-                detail: format!("signature is not usable with the pinned key: {e}"),
-            })?;
+    let mut verifier = TarballVerifier::start(&signature, &public_key)?;
 
     let resp = client
         .get(&url)
@@ -838,18 +940,16 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
     // second pass avoids re-reading ~800 MB from disk, and means the
     // digest covers exactly what was written rather than what we can
     // read back afterwards.
-    let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
     loop {
         let n = reader.read(&mut buf)?;
         if n == 0 {
             break;
         }
         io::Write::write_all(&mut file, &buf[..n])?;
-        sha2::Digest::update(&mut hasher, &buf[..n]);
-        // Same chunk, second digest. minisign signs a BLAKE2b prehash, so the
-        // signature can be verified incrementally alongside the SHA-256
-        // without a second pass over ~800 MB and without holding it in RAM.
-        sig_verifier.update(&buf[..n]);
+        // One call, both digests. minisign signs a BLAKE2b prehash, so the
+        // signature verifies incrementally alongside the SHA-256 without a
+        // second pass over ~800 MB and without holding it in RAM.
+        verifier.update(&buf[..n]);
         bytes_done += n as u64;
         progress(FetchProgress {
             stage: FetchStage::Downloading,
@@ -868,29 +968,169 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
         bytes_done,
         bytes_total,
     });
-    // Signature before checksum. Both must pass, but the order matters for
-    // diagnosis: a bad signature means "these bytes are not from the
-    // nuclear-data team", a bad checksum means "these are not the bytes this
-    // build was tested against". Reporting the first question first stops a
-    // substituted-payload attack being misreported as a stale pin.
-    sig_verifier
-        .finalize()
-        .map_err(|e| FetchError::SignatureInvalid {
-            detail: format!("{e} (key {DATA_SIGNING_PUBKEY})"),
-        })?;
+    verifier.finalize(Some(DATA_TARBALL_SHA256))?;
+    Ok(())
+}
 
-    let digest = hex_lower(&sha2::Digest::finalize(hasher));
+/// Verify a tarball already on disk against the pinned key, and return its
+/// digest. Used by the air-gapped install path (#614).
+///
+/// The network path verifies while streaming from HTTP; this streams from the
+/// file the user carried in. Both drive the same [`TarballVerifier`], so there
+/// is exactly one implementation of the check.
+fn verify_local_tarball(
+    file: &mut fs::File,
+    signature: &minisign_verify::Signature,
+    pin: Option<&str>,
+    progress: ProgressFn<'_>,
+) -> Result<String> {
+    let public_key = signing_public_key()?;
+    let mut verifier = TarballVerifier::start(signature, &public_key)?;
 
-    // The trusted comment is covered by minisign's *global* signature, so the
-    // `sha256=` it carries is authenticated — it is the publisher's own claim
-    // about the payload, not GitHub's. Cross-checking it against what we just
-    // computed turns the pin from "whatever the release host served when
-    // someone ran `just repin-data`" into something anchored to the signing
-    // key. A mismatch here means the key holder signed a payload whose
-    // trusted comment disagrees with its own bytes.
-    verify_trusted_comment_digest(signature.trusted_comment(), &digest)?;
+    let bytes_total = file.metadata().ok().map(|m| m.len());
+    progress(FetchProgress {
+        stage: FetchStage::Verifying,
+        bytes_done: 0,
+        bytes_total,
+    });
 
-    verify_tarball_sha256(&digest)
+    let mut reader = io::BufReader::new(file);
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut bytes_done: u64 = 0;
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        verifier.update(&buf[..n]);
+        bytes_done += n as u64;
+        progress(FetchProgress {
+            stage: FetchStage::Verifying,
+            bytes_done,
+            bytes_total,
+        });
+    }
+    verifier.finalize(pin)
+}
+
+/// Streams bytes into a SHA-256 hasher and a minisign signature verifier at
+/// once, so the network fetch and a local-file install share one
+/// implementation of "is this tarball authentic and the one we pinned?".
+///
+/// Deliberately factors the *digest core*, not the whole read loop: the two
+/// call sites differ in where bytes come from (HTTP vs `File`) and in their
+/// progress reporting, and those wrappers do not compose. What must never
+/// diverge is the verification itself — two subtly different implementations
+/// of a security check is how one of them ends up weaker.
+struct TarballVerifier<'a> {
+    hasher: sha2::Sha256,
+    sig: minisign_verify::StreamVerifier<'a>,
+    signature: &'a minisign_verify::Signature,
+}
+
+impl<'a> TarballVerifier<'a> {
+    fn start(
+        signature: &'a minisign_verify::Signature,
+        public_key: &'a minisign_verify::PublicKey,
+    ) -> Result<Self> {
+        let sig =
+            public_key
+                .verify_stream(signature)
+                .map_err(|e| FetchError::SignatureInvalid {
+                    detail: format!("signature is not usable with the pinned key: {e}"),
+                })?;
+        Ok(Self {
+            hasher: <sha2::Sha256 as sha2::Digest>::new(),
+            sig,
+            signature,
+        })
+    }
+
+    fn update(&mut self, buf: &[u8]) {
+        sha2::Digest::update(&mut self.hasher, buf);
+        self.sig.update(buf);
+    }
+
+    /// Verify signature, then the publisher's signed digest claim, then the
+    /// compile-time pin. Returns the computed digest on success.
+    ///
+    /// Order is deliberate. A bad signature means "these bytes are not from
+    /// the nuclear-data team"; a bad checksum means "these are not the bytes
+    /// this build was tested against". Reporting the first question first
+    /// stops a substituted payload being misreported as a stale pin.
+    ///
+    /// `pin` is `None` only where the caller has already established which
+    /// release it is looking at by other means.
+    fn finalize(mut self, pin: Option<&str>) -> Result<String> {
+        self.sig
+            .finalize()
+            .map_err(|e| FetchError::SignatureInvalid {
+                detail: format!("{e} (key {DATA_SIGNING_PUBKEY})"),
+            })?;
+
+        let digest = hex_lower(&sha2::Digest::finalize(self.hasher));
+
+        // The trusted comment is covered by minisign's *global* signature, so
+        // the `sha256=` it carries is authenticated — the publisher's own
+        // claim about the payload, not the release host's.
+        verify_trusted_comment_digest(self.signature.trusted_comment(), &digest)?;
+
+        if let Some(pin) = pin {
+            verify_sha256_against(pin, &digest)?;
+        }
+        Ok(digest)
+    }
+}
+
+/// Version this build's cache layout is pinned to, parsed out of a signature's
+/// authenticated trusted comment (`tag=data-X.Y.Z`).
+///
+/// Pure so the offline path's version gate is testable against the committed
+/// signature fixture without a network or a signing key.
+fn parse_bundle_version(trusted_comment: &str) -> Option<&str> {
+    trusted_comment
+        .split_whitespace()
+        .find_map(|f| f.strip_prefix("tag=data-"))
+}
+
+/// Locate the detached signature for a local archive.
+///
+/// Sibling file (`<archive>.minisig`), matching how upstream publishes it and
+/// how a user copies it onto media — "copy both files" is muscle memory, and
+/// it is the only shape available anyway: minisign's signature is *detached*,
+/// so embedding it would mean repacking the archive and destroying the very
+/// byte-identity the signature is computed over.
+///
+/// `override_path` supports the case where the signature was carried
+/// separately from the payload.
+fn locate_sibling_signature(archive: &Path, override_path: Option<&Path>) -> Result<PathBuf> {
+    if let Some(p) = override_path {
+        if !p.exists() {
+            return Err(FetchError::SignatureUnavailable {
+                detail: format!("signature file not found: {}", p.display()),
+                url: p.display().to_string(),
+            });
+        }
+        return Ok(p.to_path_buf());
+    }
+    let mut name = archive.as_os_str().to_os_string();
+    name.push(".minisig");
+    let sibling = PathBuf::from(name);
+    if !sibling.exists() {
+        return Err(FetchError::SignatureUnavailable {
+            detail: format!(
+                "no signature found next to the archive (looked for {}). A bundle without a \
+                 signature cannot be authenticated, and a stripped signature is \
+                 indistinguishable from a release that never had one — so it is refused \
+                 rather than installed unverified. Re-export on the connected machine with \
+                 `hyrr fetch-data --offline-bundle <path>`, which writes both files, and \
+                 copy BOTH",
+                sibling.display()
+            ),
+            url: sibling.display().to_string(),
+        });
+    }
+    Ok(sibling)
 }
 
 /// Decode the compile-time pinned signing key.
@@ -909,6 +1149,16 @@ fn signing_public_key() -> Result<minisign_verify::PublicKey> {
 fn fetch_detached_signature(
     client: &reqwest::blocking::Client,
 ) -> Result<minisign_verify::Signature> {
+    let text = fetch_detached_signature_text(client)?;
+    minisign_verify::Signature::decode(&text).map_err(|e| FetchError::SignatureUnavailable {
+        detail: format!("could not parse the signature: {e}"),
+        url: signature_url(),
+    })
+}
+
+/// Raw `.minisig` body, so the offline-bundle export can write it verbatim
+/// rather than re-serialising a parsed form.
+fn fetch_detached_signature_text(client: &reqwest::blocking::Client) -> Result<String> {
     let url = signature_url();
     let resp = client
         .get(&url)
@@ -927,13 +1177,9 @@ fn fetch_detached_signature(
             url,
         });
     }
-    let body = resp.text().map_err(|e| FetchError::SignatureUnavailable {
+    resp.text().map_err(|e| FetchError::SignatureUnavailable {
         detail: e.to_string(),
         url: url.clone(),
-    })?;
-    minisign_verify::Signature::decode(&body).map_err(|e| FetchError::SignatureUnavailable {
-        detail: format!("could not parse the signature: {e}"),
-        url,
     })
 }
 
@@ -971,11 +1217,6 @@ fn hex_lower(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
-}
-
-/// Compare a computed digest against the compile-time pin.
-fn verify_tarball_sha256(actual: &str) -> Result<()> {
-    verify_sha256_against(DATA_TARBALL_SHA256, actual)
 }
 
 /// Pin-comparison logic, with the pin injected.
@@ -1133,7 +1374,23 @@ pub fn extract_tarball_with_progress(
     prefixes: &[&str],
     progress: ProgressFn<'_>,
 ) -> Result<()> {
-    let file = fs::File::open(archive)?;
+    extract_tarball_from_file(fs::File::open(archive)?, dest, prefixes, progress)
+}
+
+/// Extract from an already-open handle rather than a path.
+///
+/// This is what lets the air-gapped install verify and extract **the same
+/// inode**: the offline path opens the user-supplied archive once, streams it
+/// through signature verification, rewinds, and extracts from that same
+/// descriptor. Re-opening by path in between would leave a window in which the
+/// file could be swapped after passing verification — the flock serialises
+/// HYRR against itself, not against an attacker who can write to the media.
+pub fn extract_tarball_from_file(
+    file: fs::File,
+    dest: &Path,
+    prefixes: &[&str],
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     let decoder =
         zstd::stream::Decoder::new(file).map_err(|e| FetchError::Decompress(e.to_string()))?;
     let mut tar = tar::Archive::new(decoder);
@@ -1292,6 +1549,16 @@ fn install_tarball_atomic(
     prefixes: &[&str],
     progress: ProgressFn<'_>,
 ) -> Result<()> {
+    install_tarball_atomic_from_file(fs::File::open(archive)?, prefixes, progress)
+}
+
+/// [`install_tarball_atomic`] from an already-open handle, so a caller that
+/// has just verified a signature can extract the exact bytes it verified.
+fn install_tarball_atomic_from_file(
+    archive: fs::File,
+    prefixes: &[&str],
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     let cache = cache_dir()?;
     let root = cache_root()?;
     let pid = std::process::id();
@@ -1315,7 +1582,7 @@ fn install_tarball_atomic(
         fs::remove_dir_all(&partial)?;
     }
 
-    extract_tarball_with_progress(archive, &partial, prefixes, progress)?;
+    extract_tarball_from_file(archive, &partial, prefixes, progress)?;
 
     // Test-only seam: between partial-dir build and the
     // atomic-rename promotion, give tests a chance to simulate a
@@ -1611,10 +1878,73 @@ fn dir_has_any_file(p: &Path) -> Result<bool> {
     Ok(false)
 }
 
-/// Produce a portable tarball of the current cache to `out`. Used by
-/// `hyrr fetch-data --offline-bundle out.tar.zst`. The resulting tarball is
-/// drop-in compatible with `install_from_tarball`.
+/// Produce a portable, **signature-verifiable** bundle at `out`, plus its
+/// `.minisig` sibling. Used by `hyrr fetch-data --offline-bundle out.tar.zst`
+/// on a connected machine; install with `--from` on the isolated one.
+///
+/// Downloads the upstream release tarball and its detached signature and
+/// writes both **verbatim**, rather than repacking the local cache.
+///
+/// Repacking cannot be made verifiable, and it is worth being precise about
+/// why rather than reaching for a weaker substitute:
+///
+/// * A repack is byte-different from the signed artefact (tar ordering,
+///   mtimes, zstd level), so upstream's signature cannot cover it.
+/// * The exporting user holds no signing key, so they cannot sign a
+///   replacement. A manifest signed by nobody, living inside the bundle it
+///   describes, is rewritable by anyone who can rewrite the files — it reads
+///   as a control while being none, which is worse than admitting the gap.
+/// * A throwaway keypair generated here would prove only "a machine holding
+///   this key signed it", which is a tautology, not an assurance.
+///
+/// So the integrity of a repacked tree can only ever rest on the transfer
+/// medium. Carrying the original signed bytes instead means the isolated
+/// machine runs the *identical* verification path as the network fetch, and
+/// the special case disappears rather than acquiring a weaker parallel one.
+///
+/// Known limitation: a content-scanning/CDR gateway that unpacks and repacks
+/// archives in transit will break the signature while leaving the data
+/// intact. Surviving that needs a signed per-file manifest from upstream
+/// (exoma-ch/nucl-parquet#296); see `docs/DATA_INTEGRITY.md`.
 pub fn export_offline_bundle(out: &Path) -> Result<()> {
+    let mut noop = no_op_progress();
+    export_offline_bundle_with_progress(out, &mut noop)
+}
+
+/// Progress-aware [`export_offline_bundle`].
+pub fn export_offline_bundle_with_progress(out: &Path, progress: ProgressFn<'_>) -> Result<()> {
+    if let Some(parent) = out.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Fetch through the normal path: it verifies signature + pin before we
+    // hand anything to the user, so a bundle produced here is known-good at
+    // the moment it is written.
+    fetch_full_tarball_to_with_progress(out, progress)?;
+
+    // The signature travels with it. Without this the isolated machine has
+    // nothing to check against and will (correctly) refuse the install.
+    let client = build_http_client().map_err(|e| FetchError::Network(e.to_string()))?;
+    let sig = fetch_detached_signature_text(&client)?;
+    let mut sig_out = out.as_os_str().to_os_string();
+    sig_out.push(".minisig");
+    fs::write(PathBuf::from(sig_out), sig)?;
+    Ok(())
+}
+
+/// Repack the local cache into a portable tarball — **unauthenticated**.
+///
+/// Retained for the offline-to-offline case (a site mirroring an already
+/// installed cache to a second isolated machine) where no signed upstream
+/// artefact is reachable. `install_from_tarball` will refuse the result,
+/// because it carries no signature and none can be manufactured; the honest
+/// use is `HYRR_DATA` pointing at the extracted tree, with integrity resting
+/// on the transfer medium.
+///
+/// Kept separate from [`export_offline_bundle`] so the two cannot be confused:
+/// one produces a verifiable artefact, the other cannot, and a single function
+/// doing both would silently degrade the guarantee depending on arguments.
+pub fn repack_cache_unverified(out: &Path) -> Result<()> {
     if !is_cache_complete() {
         return Err(FetchError::Io(io::Error::other(
             "cache is not complete; run `hyrr fetch-data` first",
@@ -1645,16 +1975,109 @@ pub fn install_from_tarball(archive: &Path) -> Result<()> {
     install_from_tarball_with_progress(archive, &mut noop)
 }
 
+/// Extract and promote a tarball **without** verifying a signature.
+///
+/// Internal on purpose — there is no public route to it and no environment
+/// variable that reaches it, because an air-gapped bypass is the first thing a
+/// frustrated user pastes from a forum thread.
+///
+/// It exists because extraction, locking, sentinel ordering and merge
+/// semantics are orthogonal to authenticity, and the tests covering them
+/// cannot produce a signed fixture (the signing key is held offline by the
+/// nuclear-data team). Handing those tests a real signed 785 MB release would
+/// test minisign rather than the extractor.
+///
+/// `#[cfg(test)]`-gated rather than merely private: it is then impossible for
+/// this to appear in a shipped binary, so no future refactor, feature flag or
+/// environment variable can route a real user through it.
+#[cfg(test)]
+pub(crate) fn install_tarball_unverified(archive: &Path, progress: ProgressFn<'_>) -> Result<()> {
+    let _lock = acquire_lock()?;
+    install_tarball_atomic(archive, &["data"], progress)
+}
+
 /// Progress-aware variant of [`install_from_tarball`].
 pub fn install_from_tarball_with_progress(archive: &Path, progress: ProgressFn<'_>) -> Result<()> {
+    install_from_tarball_with_signature(archive, None, progress)
+}
+
+/// Install a local tarball, verifying its detached signature first (#614).
+///
+/// This closes the gap where the network path was authenticated and the
+/// air-gapped path was not — which is worse than neither, because it
+/// advertises a guarantee that does not hold exactly where users depend on it
+/// most. Isolated control networks are the norm at accelerator and hospital
+/// sites, so before this the cheapest attack on a HYRR install was handing
+/// someone a USB stick.
+///
+/// `signature` overrides the sibling-file lookup for the case where the
+/// `.minisig` was carried separately.
+///
+/// **Refuses rather than warning** on a missing signature. A stripped
+/// signature and a release that predates signing look identical from here, and
+/// a warning on an isolated network becomes "press enter" within a week. There
+/// is deliberately no bypass flag: an escape hatch is the first thing a
+/// frustrated user pastes from a forum thread.
+pub fn install_from_tarball_with_signature(
+    archive: &Path,
+    signature: Option<&Path>,
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     if !archive.exists() {
         return Err(FetchError::Io(io::Error::new(
             io::ErrorKind::NotFound,
             format!("tarball not found: {}", archive.display()),
         )));
     }
+
+    let sig_path = locate_sibling_signature(archive, signature)?;
+    let sig_text = fs::read_to_string(&sig_path).map_err(|e| FetchError::SignatureUnavailable {
+        detail: e.to_string(),
+        url: sig_path.display().to_string(),
+    })?;
+    let sig = minisign_verify::Signature::decode(&sig_text).map_err(|e| {
+        FetchError::SignatureUnavailable {
+            detail: format!("could not parse the signature: {e}"),
+            url: sig_path.display().to_string(),
+        }
+    })?;
+
+    // Version gate, before the expensive read. `install_tarball_atomic`
+    // unconditionally installs into `~/.hyrr/nucl-parquet/v{DATA_VERSION}/`,
+    // so a validly-signed bundle for a *different* release would populate the
+    // wrong directory and then fail the pin comparison in a way that looks
+    // like tampering. Refusing up front turns that into an actionable message.
+    //
+    // It is also the rollback defence: a signature alone does not stop an old,
+    // legitimately-signed release being replayed. Binding the install to the
+    // version this build pins is what does.
+    // A signature with no `tag=` is refused rather than waved through. Skipping
+    // the gate when the field is absent would mean the rollback defence quietly
+    // stops applying to exactly the signatures that omit it.
+    let bundle_version =
+        parse_bundle_version(sig.trusted_comment()).ok_or_else(|| FetchError::VersionMismatch {
+            expected: DATA_VERSION.to_string(),
+            found: "unknown (the signature's trusted comment carries no tag=)".to_string(),
+        })?;
+    if bundle_version != DATA_VERSION {
+        return Err(FetchError::VersionMismatch {
+            expected: DATA_VERSION.to_string(),
+            found: bundle_version.to_string(),
+        });
+    }
+
+    // Open ONCE and keep the descriptor: verification and extraction must see
+    // the same inode. Re-opening by path in between would let an attacker with
+    // write access to the media swap the file after it passed verification —
+    // the flock serialises HYRR against itself, not against them.
+    let mut file = fs::File::open(archive)?;
+    verify_local_tarball(&mut file, &sig, Some(DATA_TARBALL_SHA256), progress)?;
+    io::Seek::rewind(&mut file)?;
+
     let _lock = acquire_lock()?;
-    install_tarball_atomic(archive, &["data"], progress)
+    install_tarball_atomic_from_file(file, &["data"], progress)?;
+    mark_cache_verified()?;
+    Ok(())
 }
 
 /// Parse a `v{N}.{N}.{N}` directory name into a sortable tuple. Returns
@@ -1982,22 +2405,32 @@ mod integrity_tests {
 
 #[cfg(test)]
 mod tests {
+    /// Extraction-focused tests use the unverified installer: they cover
+    /// locking, sentinel ordering and merge semantics, none of which are
+    /// about authenticity, and no signing key exists to make a fixture
+    /// signable. Verification itself is covered in `signature_tests` and
+    /// `offline_signature_tests`.
+    fn install_unverified(archive: &std::path::Path) -> super::Result<()> {
+        let mut noop = super::no_op_progress();
+        super::install_tarball_unverified(archive, &mut noop)
+    }
+
     use super::*;
     use std::sync::Mutex;
 
     /// Tests in this module must not run concurrently because they all mess
     /// with `$HOME` and the cache root.
-    static SERIAL: Mutex<()> = Mutex::new(());
+    pub(super) static SERIAL: Mutex<()> = Mutex::new(());
 
     /// Set $HOME to a fresh tempdir for the duration of the test.
-    fn isolated_home() -> tempfile::TempDir {
+    pub(super) fn isolated_home() -> tempfile::TempDir {
         let td = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", td.path());
         td
     }
 
     /// Build a minimal v{V} tarball at `out` containing `data/meta/marker`.
-    fn make_test_tarball(out: &Path) {
+    pub(super) fn make_test_tarball(out: &Path) {
         let file = fs::File::create(out).unwrap();
         let encoder = zstd::stream::Encoder::new(file, 0).unwrap().auto_finish();
         let mut tar = tar::Builder::new(encoder);
@@ -2133,7 +2566,7 @@ mod tests {
         make_test_tarball(&archive);
 
         assert!(!is_cache_complete());
-        install_from_tarball(&archive).unwrap();
+        install_unverified(&archive).unwrap();
         assert!(is_cache_complete());
 
         // Sentinel content is the version
@@ -2153,7 +2586,7 @@ mod tests {
         let archive = td.path().join("test.tar.zst");
         make_test_tarball(&archive);
 
-        install_from_tarball(&archive).unwrap();
+        install_unverified(&archive).unwrap();
         let mtime1 = fs::metadata(sentinel_path().unwrap())
             .unwrap()
             .modified()
@@ -2162,7 +2595,7 @@ mod tests {
         // Second call short-circuits — we still call install_from_tarball
         // unconditionally to verify it's safe; the function is allowed to
         // re-extract under the lock, but must not corrupt state.
-        install_from_tarball(&archive).unwrap();
+        install_unverified(&archive).unwrap();
         assert!(is_cache_complete());
         let mtime2 = fs::metadata(sentinel_path().unwrap())
             .unwrap()
@@ -2183,7 +2616,7 @@ mod tests {
         let archive = td.path().join("test.tar.zst");
         make_test_tarball(&archive);
 
-        install_from_tarball(&archive).unwrap();
+        install_unverified(&archive).unwrap();
 
         let root = cache_root().unwrap();
         // Any v{V}.partial-* should be cleaned up
@@ -2200,15 +2633,19 @@ mod tests {
     }
 
     #[test]
-    fn export_offline_bundle_round_trips() {
+    fn repack_cache_unverified_round_trips() {
         let _g = SERIAL.lock().unwrap();
         let td = isolated_home();
         let archive = td.path().join("test.tar.zst");
         make_test_tarball(&archive);
-        install_from_tarball(&archive).unwrap();
+        install_unverified(&archive).unwrap();
 
+        // Covers the *repack* path, which is what this test has always
+        // exercised. `export_offline_bundle` now downloads the signed upstream
+        // artefact instead (verified by the `#[ignore]` live test below), so
+        // it is no longer the function under test here.
         let bundle = td.path().join("offline.tar.zst");
-        export_offline_bundle(&bundle).unwrap();
+        repack_cache_unverified(&bundle).unwrap();
         assert!(bundle.exists());
 
         // Move HOME to a fresh dir, ingest the bundle, verify the marker
@@ -2216,18 +2653,18 @@ mod tests {
         let td2 = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", td2.path());
         assert!(!is_cache_complete());
-        install_from_tarball(&bundle).unwrap();
+        install_unverified(&bundle).unwrap();
         assert!(is_cache_complete());
         let marker = cache_dir().unwrap().join("data/meta/marker");
         assert!(marker.exists());
     }
 
     #[test]
-    fn export_refuses_when_cache_incomplete() {
+    fn repack_refuses_when_cache_incomplete() {
         let _g = SERIAL.lock().unwrap();
         let _td = isolated_home();
         let bundle = std::env::temp_dir().join("offline.tar.zst");
-        let err = export_offline_bundle(&bundle).unwrap_err();
+        let err = repack_cache_unverified(&bundle).unwrap_err();
         assert!(matches!(err, FetchError::Io(_)));
     }
 
@@ -2531,7 +2968,7 @@ mod tests {
         // `install_from_tarball` uses prefix `["data"]` (extract
         // everything under data/…). Post-fix the release-layout tarball
         // normalises through the `data/` prefix, so this succeeds.
-        install_from_tarball(&archive).unwrap();
+        install_unverified(&archive).unwrap();
         assert!(is_cache_complete());
         let data = cache_dir().unwrap().join("data");
         assert!(data.join("meta/abundances.parquet").exists());
@@ -2558,7 +2995,7 @@ mod tests {
         fs::write(stale.join("orphan-marker"), b"x").unwrap();
         assert!(stale.exists());
 
-        install_from_tarball(&archive).unwrap();
+        install_unverified(&archive).unwrap();
 
         assert!(!stale.exists(), "stale partial-99999 was not swept");
         assert!(is_cache_complete());
@@ -2699,8 +3136,8 @@ mod tests {
 
         let archive_ref = &archive;
         let (r1, r2) = std::thread::scope(|s| {
-            let h1 = s.spawn(|| install_from_tarball(archive_ref));
-            let h2 = s.spawn(|| install_from_tarball(archive_ref));
+            let h1 = s.spawn(|| install_unverified(archive_ref));
+            let h2 = s.spawn(|| install_unverified(archive_ref));
             (
                 h1.join().expect("t1 panicked"),
                 h2.join().expect("t2 panicked"),
@@ -2742,7 +3179,7 @@ mod tests {
 
         // Arm the seam, run the interrupted install. We expect Err.
         test_hooks::arm_pre_promote(test_hooks::PrePromoteAction::FailOnce);
-        let interrupted = install_from_tarball(&archive);
+        let interrupted = install_unverified(&archive);
         assert!(interrupted.is_err(), "armed hook did not fire");
         // Hook is single-shot but clear defensively in case of test
         // re-entry.
@@ -2761,7 +3198,7 @@ mod tests {
 
         // Second invocation: clean run. The orphan partial must be
         // swept, the cache promoted, and the sentinel re-asserted.
-        install_from_tarball(&archive).expect("clean re-run failed");
+        install_unverified(&archive).expect("clean re-run failed");
         assert!(is_cache_complete(), "sentinel not written on retry");
         let marker = cache_dir().unwrap().join("data/meta/marker");
         assert!(marker.exists(), "payload missing after recovery");
@@ -2879,7 +3316,7 @@ mod tests {
         make_test_tarball(&archive);
 
         let mut stages: Vec<FetchStage> = Vec::new();
-        install_from_tarball_with_progress(&archive, &mut |p| stages.push(p.stage)).unwrap();
+        install_tarball_unverified(&archive, &mut |p| stages.push(p.stage)).unwrap();
 
         assert!(
             stages.iter().any(|s| matches!(s, FetchStage::Extracting)),
@@ -3355,7 +3792,7 @@ mod tests {
 
         // Populate the cache via install_from_tarball (which doesn't
         // need network).
-        install_from_tarball(&archive).unwrap();
+        install_unverified(&archive).unwrap();
         assert!(is_cache_complete());
 
         let lib_dir = cache_dir().unwrap().join("data/tendl-test");
@@ -3378,7 +3815,7 @@ mod tests {
         make_test_tarball(&archive);
 
         // Install to get a complete cache with tendl-test only.
-        install_from_tarball(&archive).unwrap();
+        install_unverified(&archive).unwrap();
         assert!(is_cache_complete());
 
         // tendl-test exists, but tendl-nonexistent does not.
@@ -3403,7 +3840,7 @@ mod signature_tests {
     use super::*;
 
     /// Verbatim `nucl-parquet-data-2026.8.2.tar.zst.minisig`.
-    const REAL_SIGNATURE: &str = "untrusted comment: signature from minisign secret key\n\
+    pub(super) const REAL_SIGNATURE: &str = "untrusted comment: signature from minisign secret key\n\
 RUT9cED7yeXhJxFaigiCR27bM7KoB6YOIbeHCe3QjgsRO06wewCbcKiz5sV/s9rEZMSFckcIw0lFe03g2qB+itZhC1eve+nUlwg=\n\
 trusted comment: nucl-parquet data 2026.8.2 tag=data-2026.8.2 sha256=c19cd3fd650ee3747f9eb5c3b2c171a199a86bfbb2426c1afa1f589b12be4166\n\
 3UWhi07Z3NGnqV06uJa1I1AnTOqFUVQiUKWZ2adA7vb29UrN/dTO91f+/ESC59VBN0F6P6nEYI1IEhNt+jhmBg==\n";
@@ -3513,5 +3950,192 @@ trusted comment: nucl-parquet data 2026.8.2 tag=data-2026.8.2 sha256=c19cd3fd650
             .find_map(|f| f.strip_prefix("sha256="))
             .expect("digest in trusted comment");
         assert!(signed.eq_ignore_ascii_case(DATA_TARBALL_SHA256));
+    }
+}
+
+/// Air-gapped install-path tests (#614).
+///
+/// The offline path is the one users at isolated sites depend on most, and
+/// until this work it was the *only* unverified way into the cache. These
+/// cover the refusal rules, not the happy path — a bundle that installs is
+/// already covered by the extraction tests.
+#[cfg(test)]
+mod offline_signature_tests {
+    use super::*;
+
+    fn fixture_signature() -> minisign_verify::Signature {
+        minisign_verify::Signature::decode(super::signature_tests::REAL_SIGNATURE).unwrap()
+    }
+
+    /// The core refusal. A bundle with no signature beside it must not
+    /// install — a stripped signature and a pre-signing release are
+    /// indistinguishable from here.
+    #[test]
+    fn a_bundle_without_a_signature_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("bundle.tar.zst");
+        fs::write(&archive, b"not really a tarball").unwrap();
+
+        let err = locate_sibling_signature(&archive, None)
+            .expect_err("an unsigned bundle must be refused, never installed unverified");
+        assert!(matches!(err, FetchError::SignatureUnavailable { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("minisig"),
+            "must name what it looked for: {msg}"
+        );
+        assert!(
+            msg.contains("copy BOTH"),
+            "must be actionable with no network to consult: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_sibling_signature_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("bundle.tar.zst");
+        fs::write(&archive, b"payload").unwrap();
+        let sig = dir.path().join("bundle.tar.zst.minisig");
+        fs::write(&sig, "x").unwrap();
+        assert_eq!(locate_sibling_signature(&archive, None).unwrap(), sig);
+    }
+
+    /// The signature may have been carried separately from the payload.
+    #[test]
+    fn an_explicit_signature_path_overrides_the_sibling() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("bundle.tar.zst");
+        fs::write(&archive, b"payload").unwrap();
+        let elsewhere = dir.path().join("carried-separately.minisig");
+        fs::write(&elsewhere, "x").unwrap();
+        assert_eq!(
+            locate_sibling_signature(&archive, Some(&elsewhere)).unwrap(),
+            elsewhere
+        );
+    }
+
+    #[test]
+    fn an_override_pointing_at_nothing_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("bundle.tar.zst");
+        fs::write(&archive, b"payload").unwrap();
+        let missing = dir.path().join("nope.minisig");
+        assert!(matches!(
+            locate_sibling_signature(&archive, Some(&missing)),
+            Err(FetchError::SignatureUnavailable { .. })
+        ));
+    }
+
+    /// The version gate, read off the real published signature.
+    #[test]
+    fn bundle_version_is_parsed_from_the_signed_trusted_comment() {
+        let sig = fixture_signature();
+        assert_eq!(
+            parse_bundle_version(sig.trusted_comment()),
+            Some("2026.8.2")
+        );
+    }
+
+    #[test]
+    fn a_comment_without_a_tag_yields_no_version() {
+        assert_eq!(parse_bundle_version("sha256=abc timestamp=1"), None);
+    }
+
+    /// A signature that omits `tag=` must be REFUSED, not waved through.
+    /// Skipping the gate when the field is absent would mean the rollback
+    /// defence quietly stops applying to exactly the signatures that omit it —
+    /// which is the shape an attacker would choose.
+    #[test]
+    fn a_signature_without_a_tag_is_refused_not_skipped() {
+        // Mirrors the production branch: `None` maps to VersionMismatch.
+        let err = parse_bundle_version("sha256=abc")
+            .ok_or_else(|| FetchError::VersionMismatch {
+                expected: DATA_VERSION.to_string(),
+                found: "unknown (the signature's trusted comment carries no tag=)".to_string(),
+            })
+            .unwrap_err();
+        assert!(matches!(err, FetchError::VersionMismatch { .. }));
+        assert!(err.to_string().contains("unknown"));
+    }
+
+    /// **Rollback defence.** A signature alone does not stop an old but
+    /// validly-signed release being replayed onto a user; binding the install
+    /// to the version this build pins is what does. The cache layout is keyed
+    /// on `DATA_VERSION`, so a foreign-version bundle would also land in the
+    /// wrong directory.
+    #[test]
+    fn a_foreign_version_bundle_is_refused() {
+        let older = "nucl-parquet data 2026.7.2 tag=data-2026.7.2 sha256=deadbeef";
+        let found = parse_bundle_version(older).unwrap();
+        assert_ne!(
+            found, DATA_VERSION,
+            "fixture must differ from this build's pin for the test to mean anything"
+        );
+        let err = FetchError::VersionMismatch {
+            expected: DATA_VERSION.to_string(),
+            found: found.to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("2026.7.2") && msg.contains(DATA_VERSION));
+        assert!(
+            msg.contains("Nothing was installed"),
+            "must state that the cache is untouched: {msg}"
+        );
+    }
+
+    #[test]
+    fn version_mismatch_has_a_wire_payload() {
+        let err = FetchError::VersionMismatch {
+            expected: "2026.8.2".into(),
+            found: "2026.7.2".into(),
+        };
+        match FetchErrorPayload::from(&err) {
+            FetchErrorPayload::VersionMismatch {
+                expected, found, ..
+            } => {
+                assert_eq!(expected, "2026.8.2");
+                assert_eq!(found, "2026.7.2");
+            }
+            other => panic!("wrong payload variant: {other:?}"),
+        }
+    }
+
+    /// A cache installed before verification existed must read as
+    /// complete-but-unverified, never as verified. Silently claiming an
+    /// assurance that was never established is worse than reporting none.
+    #[test]
+    fn a_legacy_cache_reports_complete_but_not_verified() {
+        let _g = tests::SERIAL.lock().unwrap();
+        let td = tests::isolated_home();
+        let archive = td.path().join("legacy.tar.zst");
+        tests::make_test_tarball(&archive);
+        install_tarball_unverified(&archive, &mut no_op_progress()).unwrap();
+
+        let status = cache_status();
+        assert!(status.complete, "extraction finished");
+        assert!(
+            !status.verified,
+            "nothing verified this tree, so it must not claim otherwise"
+        );
+        assert_eq!(status.signing_key, None);
+        assert!(!is_cache_verified());
+    }
+
+    /// And once a verified install records it, the key is recoverable — so a
+    /// later key rotation is visible without re-installing.
+    #[test]
+    fn a_verified_install_records_the_key_and_version() {
+        let _g = tests::SERIAL.lock().unwrap();
+        let td = tests::isolated_home();
+        let archive = td.path().join("ok.tar.zst");
+        tests::make_test_tarball(&archive);
+        install_tarball_unverified(&archive, &mut no_op_progress()).unwrap();
+        mark_cache_verified().unwrap();
+
+        let status = cache_status();
+        assert!(status.complete && status.verified);
+        assert_eq!(status.signing_key.as_deref(), Some(DATA_SIGNING_PUBKEY));
+        assert_eq!(status.data_version.as_deref(), Some(DATA_VERSION));
+        assert!(is_cache_verified());
     }
 }

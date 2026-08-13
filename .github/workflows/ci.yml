@@ -77,7 +77,7 @@ jobs:
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
-          git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs
+          git sparse-checkout set docs/security data/meta data/stopping data/tendl-2023-iso/xs
       - uses: DeterminateSystems/nix-installer-action@v22
       - uses: nix-community/cache-nix-action@v6
         with:

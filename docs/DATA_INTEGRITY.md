@@ -90,11 +90,81 @@ produce a tarball HYRR will install. Rotation is documented in
 `docs/maintainers/KEY_ROTATION.md` and upstream in
 `nucl-parquet/docs/security/data-signing.md`.
 
-**It does not cover the offline path.** `install_from_tarball()` accepts
-an arbitrary user-supplied file — by design, that is how air-gapped
-installs work — and no pin can apply to a bundle the user produced
-themselves. This is a real gap, tracked separately, and it is called out
-here rather than papered over.
+**It is not a guarantee that survives a repacking gateway.** See below.
+
+## Air-gapped installs (#614)
+
+Isolated control networks are normal at accelerator and hospital sites, so the
+offline path is not an edge case — for some users it is the only path. It is
+verified exactly like the network path.
+
+```bash
+# on a CONNECTED machine — downloads the signed release AND its signature
+hyrr fetch-data --offline-bundle /media/usb/hyrr-data.tar.zst
+
+# copy BOTH files across; then on the ISOLATED machine
+hyrr fetch-data --from /media/usb/hyrr-data.tar.zst
+#   ...or, if the signature travelled separately:
+hyrr fetch-data --from ./hyrr-data.tar.zst --signature /other/media/hyrr-data.tar.zst.minisig
+```
+
+`--offline-bundle` downloads the upstream signed artefact rather than repacking
+your local cache. That is not an implementation detail — it is the only way the
+isolated machine can verify anything:
+
+- a repack is byte-different from the signed archive (tar ordering, mtimes,
+  compression level), so upstream's signature cannot cover it;
+- you hold no signing key, so you cannot sign a replacement;
+- a manifest signed by nobody, inside the bundle it describes, is rewritable by
+  anyone who can rewrite the files — it would read as a control while being
+  none.
+
+**An unsigned bundle is refused, not warned about.** A stripped signature and a
+release that predates signing are indistinguishable from the client, and a
+warning on an isolated network becomes "press enter" within a week. There is
+deliberately **no bypass flag**: an escape hatch is the first thing a frustrated
+user pastes from a forum thread.
+
+**A bundle for a different data version is refused.** The cache layout is keyed
+on the version this build pins, so a foreign bundle would land in the wrong
+directory — and accepting an older, still-validly-signed release is exactly the
+rollback that a signature alone does not prevent.
+
+### Known limitation: content-scanning gateways
+
+Content Disarm & Reconstruction appliances (OPSWAT MetaDefender, Deep CDR and
+similar) are standard at regulated sites. They open an archive in transit, scan
+each entry and **repack** it. The nuclear data arrives intact; the signature
+does not verify, because the bytes are no longer the bytes that were signed.
+
+If that is your environment, the install will refuse a bundle that is in fact
+fine. Surviving it needs a per-file digest list signed by the nuclear-data team,
+which is tracked upstream as
+[exoma-ch/nucl-parquet#296](https://github.com/exoma-ch/nucl-parquet/issues/296).
+Until that lands, transfer the bundle by a route that preserves bytes.
+
+### Mirroring an existing cache
+
+`repack_cache_unverified` still exists for copying an installed cache to a
+second isolated machine where no signed upstream artefact is reachable. The
+result carries **no signature and cannot be given one**, so `--from` will refuse
+it; point `HYRR_DATA` at the extracted tree instead. Its integrity then rests on
+the transfer medium — which is the honest description, and the reason it is a
+separate function rather than a mode of the verified export.
+
+### What an installed cache remembers
+
+A verified install writes a `.verified` sidecar next to `.complete`, recording
+the signing key and data version. A cache installed before this existed reads as
+**complete but not verified**, and reads are deliberately *not* gated on it —
+doing so would brick every existing offline install at upgrade time, which is
+what pushes operators to `cp -r` the cache across a diode with no verification
+at all.
+
+Note this records *provenance*, not a re-check: nothing re-hashes the tree after
+extraction, because upstream signs the archive rather than its contents, so
+there is nothing authenticated left to compare an extracted file against. That
+is the same gap #296 closes.
 
 ## Failure modes you may see
 
@@ -105,6 +175,8 @@ here rather than papered over.
 | `SignatureInvalid` | The bytes are not what the nuclear-data team signed. | Treat as hostile until shown otherwise. Do not retry into the same network path. Report it. |
 | `SignatureUnavailable` | No `.minisig` could be fetched or parsed. | Either the release predates signing (upstream #289) or the signature was stripped — those look identical from here, so it is refused rather than downgraded to hash-only. |
 | `NoSigningKey` | Built without a `data_signing_pubkey`. | Same fix as `NoChecksumPin`. |
+| `VersionMismatch` | The bundle is validly signed but for a different data release than this build pins. | Use a bundle matching the version named in the message, or move HYRR to the version that ships it. Not a bypassable condition — the cache layout is keyed on that version. |
+| build fails: *"the pinned data-signing key does not match upstream"* | `hyrr.json`'s key disagrees with the pinned submodule's published key. | If upstream rotated, confirm the new key **out of band** and update deliberately. Otherwise the key was edited without a matching submodule bump. Do not silence this — it is what stops the trust root being swapped in one PR. |
 | build fails: *"data-tarball pin is stale"* | The submodule was bumped without re-pinning. | `just repin-data` |
 | build fails: *"no `data_signing_pubkey`"* | The key pin was removed. | Restore it from `nucl-parquet/docs/security/data-signing-key.pub` (the key line, not the comment line). |
 | `just repin-data`: *"signature key id != pinned key id"* | The signing key rotated. | Update `data_signing_pubkey` **deliberately**, after confirming the new key out of band. |

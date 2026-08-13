@@ -231,7 +231,86 @@ fn emit_data_signing_pubkey(hyrr_json: &str) {
         );
     }
 
+    // Diff against upstream's own published key. See below for why this is
+    // the single highest-value check in this file.
+    assert_pubkey_matches_upstream(&key);
+
     println!("cargo:rustc-env=HYRR_DATA_SIGNING_PUBKEY={key}");
+}
+
+/// Fail the build if `hyrr.json`'s pinned signing key disagrees with the key
+/// published in the pinned `nucl-parquet` submodule.
+///
+/// **Why this exists.** An adversarial review of the data-integrity design
+/// ranked "a pull request that quietly edits `data_signing_pubkey`" as the
+/// highest-leverage attack on HYRR: one merge silently swaps the trust root
+/// for every user, on every surface, permanently — and every downstream
+/// signature check then passes, because it is checking against the attacker's
+/// key. Verifying signatures against a key nobody re-derives is a closed loop.
+///
+/// This breaks the loop by re-deriving it from the submodule, which is pinned
+/// by commit hash and bumped in a reviewed, separate change. Editing the key
+/// alone now fails the build; editing key *and* submodule together is two
+/// obviously-related changes in one diff, which is what review is for.
+///
+/// Mirrors the `data_version` vs `data_tarball_version` guard above: the same
+/// "two records of the same fact must agree" pattern that already catches a
+/// stale checksum pin.
+///
+/// A missing file is **not** silently tolerated. `docs/security/` is part of
+/// every sparse checkout that fetches data; if it is absent while
+/// `catalog.json` is present, the checkout is misconfigured and the guard
+/// would otherwise be skipped exactly when it matters.
+fn assert_pubkey_matches_upstream(pinned: &str) {
+    let upstream_path = Path::new("../nucl-parquet/docs/security/data-signing-key.pub");
+    println!("cargo:rerun-if-changed=../nucl-parquet/docs/security/data-signing-key.pub");
+
+    let Ok(contents) = std::fs::read_to_string(upstream_path) else {
+        panic!(
+            "core/build.rs: cannot read {} (#614).\n\
+             \n\
+             The nucl-parquet submodule has a `data/catalog.json` (so this is a real data \n\
+             build) but no published signing key to check `hyrr.json::data_signing_pubkey` \n\
+             against. That check is what stops a pull request from silently swapping the \n\
+             trust root, so it is not skipped when the file is missing.\n\
+             \n\
+             Fix: include `docs/security` in the submodule's sparse checkout —\n\
+                 git -C nucl-parquet sparse-checkout add docs/security",
+            upstream_path.display()
+        );
+    };
+
+    // A minisign `.pub` is two lines: an untrusted comment, then the key.
+    // Take the first line that looks like a key and ignore the comment — the
+    // comment is attacker-controllable text and must not influence the match.
+    let Some(upstream) = contents
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("RW") && l.len() >= 40)
+    else {
+        panic!(
+            "core/build.rs: {} contains no minisign public key line (#614). Expected a \
+             base64 line starting `RW`.",
+            upstream_path.display()
+        );
+    };
+
+    if upstream != pinned {
+        panic!(
+            "core/build.rs: the pinned data-signing key does not match upstream (#614).\n\
+             \n\
+               hyrr.json                     : {pinned}\n\
+               nucl-parquet docs/security/…  : {upstream}\n\
+             \n\
+             Either the upstream key rotated and `hyrr.json` needs updating deliberately \n\
+             (confirm the new key out of band first — a rotation announced only through \n\
+             the same channel it protects is not a rotation), or `data_signing_pubkey` was \n\
+             edited without a matching submodule bump.\n\
+             \n\
+             This is the check that stops the trust root being swapped in a single PR. \n\
+             Do not silence it."
+        );
+    }
 }
 
 /// Pack the required nucl-parquet files into an uncompressed tar in OUT_DIR.
