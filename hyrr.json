@@ -3,6 +3,8 @@
   "description": "HYRR project-wide configuration — SSoT for values shared across Rust, TypeScript, Python, CI.",
   "default_library": "tendl-2023-iso",
   "data_tarball_doc": "Integrity pin for the nuclear-data release tarball (#577). See docs/DATA_INTEGRITY.md. Must match the pinned submodule's catalog data version; core/build.rs fails the build otherwise. Re-pin with: just repin-data",
-  "data_tarball_version": "2026.8.1",
-  "data_tarball_sha256": "a5ce01b8f64fdcf45d4ee345979e7e1d6f353ab076010ab1a3b32814cfb5363b"
+  "data_tarball_version": "2026.8.2",
+  "data_tarball_sha256": "c19cd3fd650ee3747f9eb5c3b2c171a199a86bfbb2426c1afa1f589b12be4166",
+  "data_signing_pubkey_doc": "minisign public key the nuclear-data team signs release tarballs with (#594). Trust root: an offline key, NOT the GitHub release. Published at nucl-parquet docs/security/data-signing-key.pub; rotation is documented there and in docs/maintainers/KEY_ROTATION.md. Deliberately a bare base64 key rather than the two-line .pub file, so nothing in the trust decision depends on parsing an untrusted comment.",
+  "data_signing_pubkey": "RWT9cED7yeXhJxlq2a92VniKki0ya98WtOCufzBiOJzPkyXNLXbuRR3j"
 }

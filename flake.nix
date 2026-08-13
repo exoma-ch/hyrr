@@ -22,7 +22,7 @@
     # testing data_version 2026.7.2 while everything else shipped 2026.8.1.
     # flake=false → consumed as a plain source path.
     nucl-parquet = {
-      url = "github:exoma-ch/nucl-parquet/440b6103c971181fccbe5682ad804a88e78aaae5";
+      url = "github:exoma-ch/nucl-parquet/a1b84f8cd5328ff42b2b62691696ce5bd19e90dd";
       flake = false;
     };
   };
