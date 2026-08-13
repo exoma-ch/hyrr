@@ -17,9 +17,12 @@
     # data tests + build.rs (`data/catalog.json` → HYRR_DATA_VERSION) need it as
     # a *fixed input* (a hermetic check can't `git submodule update`). This is
     # the same tree the `nucl-parquet` submodule points at; bump both in
-    # lockstep. flake=false → consumed as a plain source path.
+    # lockstep — `scripts/check-lockfiles.sh` now fails the commit if they
+    # diverge, after #574 bumped the gitlink alone and left the hermetic gates
+    # testing data_version 2026.7.2 while everything else shipped 2026.8.1.
+    # flake=false → consumed as a plain source path.
     nucl-parquet = {
-      url = "github:exoma-ch/nucl-parquet/f4b241d4af7bc2c084845e570da0b7fb7758f507";
+      url = "github:exoma-ch/nucl-parquet/440b6103c971181fccbe5682ad804a88e78aaae5";
       flake = false;
     };
   };
