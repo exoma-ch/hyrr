@@ -119,7 +119,11 @@ fn emit_data_tarball_pin(data_version: &str) {
 
     if data_version == UNKNOWN_VERSION {
         // Case 1 — nothing to check against, and nothing will be fetched.
+        // Both vars must still be *defined*, or `env!()` fails to compile.
+        // Empty means "no pin"; `data_fetch` refuses to install rather than
+        // treating an absent pin as permission to skip verification.
         println!("cargo:rustc-env=HYRR_DATA_TARBALL_SHA256=");
+        println!("cargo:rustc-env=HYRR_DATA_SIGNING_PUBKEY=");
         return;
     }
 
@@ -163,6 +167,54 @@ fn emit_data_tarball_pin(data_version: &str) {
     }
 
     println!("cargo:rustc-env=HYRR_DATA_TARBALL_SHA256={pinned_sha}");
+    emit_data_signing_pubkey(&content);
+}
+
+/// Export the minisign public key the data tarball is verified against (#594).
+///
+/// The trust root for the nuclear data is this key, **not** the GitHub
+/// release: upstream releases are mutable, so the published asset digest is a
+/// convenience rather than a control. Baking the key into the binary is what
+/// makes `just repin-data` stop being a trust decision — the expected hash can
+/// be read out of the signature's authenticated trusted comment instead of
+/// from whatever GitHub currently serves.
+///
+/// Missing key is a **hard build failure** rather than a silent downgrade to
+/// hash-only verification. A build that quietly stopped checking signatures
+/// would be indistinguishable from one that never did, which is exactly the
+/// property signing exists to provide. Removing the check has to be a
+/// deliberate edit to `hyrr.json`, not an oversight.
+fn emit_data_signing_pubkey(hyrr_json: &str) {
+    let Some(key) = extract_json_string(hyrr_json, "data_signing_pubkey") else {
+        panic!(
+            "core/build.rs: hyrr.json has no `data_signing_pubkey` (#594).\n\
+             \n\
+             The data tarball would be installed with no publisher authentication — only \
+             the SHA-256 pin, which cannot tell `the bytes we pinned` from `the bytes the \
+             nuclear-data team published`.\n\
+             \n\
+             Fix: copy the key from nucl-parquet `docs/security/data-signing-key.pub` \
+             (the base64 line, not the `untrusted comment:` line) into hyrr.json."
+        );
+    };
+
+    // Shape check: a minisign key line is base64 and begins with the "Ed"
+    // algorithm marker, which base64-encodes to a leading "RW". Catching a
+    // pasted comment line or a truncated key here beats failing at first
+    // fetch on a user's machine.
+    if !key.starts_with("RW") || key.len() < 40 {
+        panic!(
+            "core/build.rs: `data_signing_pubkey` in hyrr.json does not look like a minisign \
+             public key (#594). Expected a base64 line starting `RW`, got {} chars starting \
+             {:?}.\n\
+             \n\
+             Note this must be the KEY line, not the `untrusted comment:` line above it.",
+            key.len(),
+            key.chars().take(4).collect::<String>()
+        );
+    }
+
+    println!("cargo:rustc-env=HYRR_DATA_SIGNING_PUBKEY={key}");
 }
 
 /// Pack the required nucl-parquet files into an uncompressed tar in OUT_DIR.

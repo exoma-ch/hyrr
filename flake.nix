@@ -25,7 +25,7 @@
     # compared them. The #577 build-time pin guard now does, and fails the
     # build on mismatch, so this can't drift unnoticed again.
     nucl-parquet = {
-      url = "github:exoma-ch/nucl-parquet/440b6103c971181fccbe5682ad804a88e78aaae5";
+      url = "github:exoma-ch/nucl-parquet/a1b84f8cd5328ff42b2b62691696ce5bd19e90dd";
       flake = false;
     };
   };

@@ -1987,6 +1987,7 @@ dependencies = [
  "fs2",
  "guardrails-trace",
  "home",
+ "minisign-verify",
  "nucl-parquet",
  "parquet",
  "regex",

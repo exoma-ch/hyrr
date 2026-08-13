@@ -70,6 +70,11 @@ fs2 = "0.4"
 # rustls's crypto provider and shouldn't be depended on directly. Native-only:
 # wasm32 has no fetch path to verify.
 sha2 = { version = "0.10", default-features = false }
+# Verify the data tarball's minisign signature (#594). Pure Rust, zero
+# transitive dependencies — the whole point of choosing minisign over Sigstore
+# (`sigstore-rs` is 0.x with breaking changes between minors, and signing of
+# *data* artifacts is still rare across Zenodo / HF / IAEA / NNDC / JEFF).
+minisign-verify = "0.2"
 # `home` is the platform-correct way to resolve $HOME for redacting paths
 # at the Tauri/IPC boundary (#173). Pure-Rust, tiny, no transitive
 # baggage. Native-only because wasm32 has no filesystem.

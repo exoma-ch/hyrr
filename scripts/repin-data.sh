@@ -9,24 +9,42 @@
 # submodule to clear the build error.
 #
 # Usage:
-#   scripts/repin-data.sh                  # trust GitHub's published asset digest (fast)
-#   scripts/repin-data.sh --verify-download  # stream the asset and hash it (~800 MB, authoritative)
+#   scripts/repin-data.sh                    # read the digest from the SIGNATURE (default)
+#   scripts/repin-data.sh --github-digest    # trust GitHub's published asset digest
+#   scripts/repin-data.sh --verify-download  # stream the asset and hash it (~800 MB)
 #
-# On trust: the default reads the SHA-256 GitHub records for the release
-# asset. That is a *convenience*, not a security control — anyone who could
-# tamper with the asset could tamper with the API response, and the release
-# is mutable unless Immutable Releases is enabled on the upstream repo. What
-# makes the pin meaningful is that it then lives in git and is reviewed in a
-# PR like any other change. If you are pinning a release you did not cut
-# yourself, or anything feels off, use --verify-download.
+# On trust — this is the part that changed with #594.
+#
+# The default takes the digest from the release's detached `.minisig`, whose
+# *trusted comment* carries `sha256=...` and is covered by minisign's global
+# signature. That makes re-pinning stop being a trust decision: you copy what
+# the holder of the offline signing key claimed, not what the release host
+# currently serves. The signature itself is verified end-to-end against the
+# payload by `core/src/data_fetch.rs` at fetch time; what this script checks
+# is that the signature's key id matches `hyrr.json::data_signing_pubkey` and
+# that its trusted comment names the expected tag.
+#
+# `--github-digest` is the old behaviour, kept for pinning a release cut
+# before upstream #289 added signatures. It is a *convenience*, not a control:
+# anyone who could tamper with the asset could tamper with the API response,
+# and upstream releases are mutable. `--verify-download` hashes the bytes
+# yourself — authoritative about the payload, but silent about who published
+# it, which is exactly the gap the signature closes.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+MODE="signature"
+case "${1:-}" in
+  --verify-download) MODE="download" ;;
+  --github-digest)   MODE="github" ;;
+  "")                ;;
+  *) echo "error: unknown option: $1" >&2; exit 1 ;;
+esac
 VERIFY_DOWNLOAD=0
-[ "${1:-}" = "--verify-download" ] && VERIFY_DOWNLOAD=1
+[ "$MODE" = "download" ] && VERIFY_DOWNLOAD=1
 
 CATALOG="nucl-parquet/data/catalog.json"
 if [ ! -f "$CATALOG" ]; then
@@ -53,8 +71,56 @@ with urllib.request.urlopen(req) as f:
 print(h.hexdigest())
 PY
 )"
+elif [ "$MODE" = "signature" ]; then
+  SIG_URL="https://github.com/exoma-ch/nucl-parquet/releases/download/${TAG}/${ASSET}.minisig"
+  echo "reading the digest from the release signature (${SIG_URL})..."
+  SHA="$(python3 - "$SIG_URL" "$TAG" <<'SIGPY'
+import base64, json, sys, urllib.request
+
+sig_url, tag = sys.argv[1], sys.argv[2]
+req = urllib.request.Request(sig_url, headers={"User-Agent": "hyrr/repin"})
+try:
+    body = urllib.request.urlopen(req).read().decode()
+except Exception as e:
+    sys.exit(
+        f"error: could not fetch {sig_url}: {e}\n"
+        "       A release cut before nucl-parquet #289 has no signature; "
+        "re-run with --github-digest or --verify-download."
+    )
+
+lines = [ln for ln in body.splitlines() if ln.strip()]
+if len(lines) < 4:
+    sys.exit(f"error: malformed .minisig ({len(lines)} lines, expected 4)")
+sig_b64, trusted = lines[1], lines[2]
+if not trusted.startswith("trusted comment:"):
+    sys.exit("error: .minisig has no trusted comment")
+
+# Key id is bytes 2..10 of both blobs. Comparing them here turns a key
+# rotation into a clear message at re-pin time rather than a verification
+# failure on a user's first fetch.
+with open("hyrr.json") as f:
+    pinned_key = json.load(f).get("data_signing_pubkey", "")
+if not pinned_key:
+    sys.exit("error: hyrr.json has no data_signing_pubkey to check the signature against")
+sig_keyid = base64.b64decode(sig_b64)[2:10]
+key_keyid = base64.b64decode(pinned_key)[2:10]
+if sig_keyid != key_keyid:
+    sys.exit(
+        f"error: signature key id {sig_keyid.hex()} != pinned key id {key_keyid.hex()}.\n"
+        "       The signing key rotated - update data_signing_pubkey deliberately."
+    )
+
+fields = trusted.removeprefix("trusted comment:").split()
+digest = next((f.removeprefix("sha256=") for f in fields if f.startswith("sha256=")), None)
+if digest is None:
+    sys.exit("error: trusted comment carries no sha256= field; use --verify-download")
+if f"tag={tag}" not in fields:
+    sys.exit(f"error: the signature's trusted comment is not for {tag}: {trusted}")
+print(digest.lower())
+SIGPY
+)"
 else
-  echo "reading GitHub's published asset digest (use --verify-download to hash it yourself)..."
+  echo "reading GitHub's published asset digest (NOT a security control; see header)..."
   SHA="$(python3 - "$TAG" "$ASSET" <<'PY'
 import json, sys, urllib.request
 tag, asset = sys.argv[1], sys.argv[2]

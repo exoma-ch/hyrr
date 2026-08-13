@@ -73,6 +73,26 @@ pub const DATA_VERSION: &str = env!("HYRR_DATA_VERSION");
 /// what makes that trust decision safe.
 pub const DATA_TARBALL_SHA256: &str = env!("HYRR_DATA_TARBALL_SHA256");
 
+/// minisign public key the data tarball's signature is checked against (#594).
+///
+/// This is the *publisher authenticity* control, and it answers a different
+/// question from [`DATA_TARBALL_SHA256`]:
+///
+/// * the **pin** says "these are the bytes this build was tested against"
+/// * the **signature** says "these bytes came from the nuclear-data team"
+///
+/// Only the second survives a re-pin. `just repin-data` reads GitHub's
+/// published asset digest, and upstream releases are *mutable*
+/// (`immutable: false`), so that digest is a convenience rather than a
+/// control. The signature moves the trust root off the release host entirely
+/// and onto an offline key — the same custody model as the Tauri updater key,
+/// deliberately a *separate* key so a compromise of one does not imply the
+/// other.
+///
+/// Empty only on a build with no `nucl-parquet` submodule, which also has no
+/// checksum pin and refuses to install anything at all.
+pub const DATA_SIGNING_PUBKEY: &str = env!("HYRR_DATA_SIGNING_PUBKEY");
+
 /// GitHub Releases base URL for nucl-parquet data tarballs.
 ///
 /// This is the SSoT for the release host. All other call sites (Tauri
@@ -123,6 +143,18 @@ pub fn release_url_for(version: &str) -> String {
         "{RELEASE_BASE}/data-{version}/{filename}",
         filename = tarball_filename_for(version),
     )
+}
+
+/// Detached-signature URL for the current [`DATA_VERSION`] — the tarball URL
+/// with `.minisig` appended, which is where nucl-parquet's release workflow
+/// publishes it (upstream #289 / PR #290).
+pub fn signature_url() -> String {
+    signature_url_for(DATA_VERSION)
+}
+
+/// Detached-signature URL for an arbitrary version.
+pub fn signature_url_for(version: &str) -> String {
+    format!("{}.minisig", release_url_for(version))
 }
 
 /// Human-readable cache-root pattern for diagnostics / UX, e.g.
@@ -393,6 +425,27 @@ pub enum FetchErrorPayload {
         cache_dir: String,
         message: String,
     },
+    /// Publisher-authenticity failures (#594). `signature_url` is carried
+    /// separately from `url` so a recovery card can say which of the two
+    /// artefacts was the problem.
+    NoSigningKey {
+        url: String,
+        cache_dir: String,
+        message: String,
+    },
+    SignatureUnavailable {
+        detail: String,
+        signature_url: String,
+        cache_dir: String,
+        message: String,
+    },
+    SignatureInvalid {
+        detail: String,
+        url: String,
+        signature_url: String,
+        cache_dir: String,
+        message: String,
+    },
     NoChecksumPin {
         url: String,
         cache_dir: String,
@@ -504,6 +557,27 @@ impl From<&FetchError> for FetchErrorPayload {
                 message,
             },
             FetchError::NoHome => FetchErrorPayload::NoHome { message },
+            FetchError::NoSigningKey => FetchErrorPayload::NoSigningKey {
+                url,
+                cache_dir: cache_dir_str,
+                message,
+            },
+            FetchError::SignatureUnavailable {
+                detail,
+                url: sig_url,
+            } => FetchErrorPayload::SignatureUnavailable {
+                detail: detail.clone(),
+                signature_url: sig_url.clone(),
+                cache_dir: cache_dir_str,
+                message,
+            },
+            FetchError::SignatureInvalid { detail } => FetchErrorPayload::SignatureInvalid {
+                detail: detail.clone(),
+                url,
+                signature_url: signature_url(),
+                cache_dir: cache_dir_str,
+                message,
+            },
             FetchError::ChecksumMismatch { expected, actual } => {
                 FetchErrorPayload::ChecksumMismatch {
                     expected: expected.clone(),
@@ -567,6 +641,31 @@ pub enum FetchError {
          existing data directory."
     )]
     NoChecksumPin,
+    /// No signing key was compiled in, so publisher authenticity cannot be
+    /// established. Refused for the same reason as [`FetchError::NoChecksumPin`]:
+    /// a build that quietly stopped checking signatures is indistinguishable
+    /// from one that never did.
+    #[error(
+        "this build has no pinned data-signing public key, so the download's publisher \
+         cannot be verified. Refusing to install. Rebuild with \
+         `git submodule update --init --recursive`, or point HYRR_DATA at an existing \
+         data directory."
+    )]
+    NoSigningKey,
+    /// The detached `.minisig` could not be fetched or parsed.
+    ///
+    /// Deliberately *not* silently downgraded to hash-only verification. A
+    /// release without a signature is either older than upstream #289 or has
+    /// had its signature stripped, and those are indistinguishable from here.
+    #[error(
+        "could not obtain the data tarball's signature from {url}: {detail}. Nothing was \
+         installed."
+    )]
+    SignatureUnavailable { detail: String, url: String },
+    /// The signature did not verify against [`DATA_SIGNING_PUBKEY`]. Nothing
+    /// is extracted and the partial download is removed.
+    #[error("data tarball failed signature verification: {detail}. Nothing was installed.")]
+    SignatureInvalid { detail: String },
 }
 
 pub type Result<T> = std::result::Result<T, FetchError>;
@@ -696,6 +795,20 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
     });
 
     let client = build_http_client().map_err(|e| FetchError::Network(e.to_string()))?;
+
+    // Signature first, deliberately. It is ~380 bytes, and fetching it before
+    // the ~800 MB payload means a missing key, an unavailable `.minisig`, or a
+    // key-id mismatch fails in milliseconds instead of after a long download
+    // the user then watches get deleted.
+    let signature = fetch_detached_signature(&client)?;
+    let public_key = signing_public_key()?;
+    let mut sig_verifier =
+        public_key
+            .verify_stream(&signature)
+            .map_err(|e| FetchError::SignatureInvalid {
+                detail: format!("signature is not usable with the pinned key: {e}"),
+            })?;
+
     let resp = client
         .get(&url)
         .send()
@@ -733,6 +846,10 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
         }
         io::Write::write_all(&mut file, &buf[..n])?;
         sha2::Digest::update(&mut hasher, &buf[..n]);
+        // Same chunk, second digest. minisign signs a BLAKE2b prehash, so the
+        // signature can be verified incrementally alongside the SHA-256
+        // without a second pass over ~800 MB and without holding it in RAM.
+        sig_verifier.update(&buf[..n]);
         bytes_done += n as u64;
         progress(FetchProgress {
             stage: FetchStage::Downloading,
@@ -751,8 +868,98 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
         bytes_done,
         bytes_total,
     });
-    let digest = sha2::Digest::finalize(hasher);
-    verify_tarball_sha256(&hex_lower(&digest))
+    // Signature before checksum. Both must pass, but the order matters for
+    // diagnosis: a bad signature means "these bytes are not from the
+    // nuclear-data team", a bad checksum means "these are not the bytes this
+    // build was tested against". Reporting the first question first stops a
+    // substituted-payload attack being misreported as a stale pin.
+    sig_verifier
+        .finalize()
+        .map_err(|e| FetchError::SignatureInvalid {
+            detail: format!("{e} (key {DATA_SIGNING_PUBKEY})"),
+        })?;
+
+    let digest = hex_lower(&sha2::Digest::finalize(hasher));
+
+    // The trusted comment is covered by minisign's *global* signature, so the
+    // `sha256=` it carries is authenticated — it is the publisher's own claim
+    // about the payload, not GitHub's. Cross-checking it against what we just
+    // computed turns the pin from "whatever the release host served when
+    // someone ran `just repin-data`" into something anchored to the signing
+    // key. A mismatch here means the key holder signed a payload whose
+    // trusted comment disagrees with its own bytes.
+    verify_trusted_comment_digest(signature.trusted_comment(), &digest)?;
+
+    verify_tarball_sha256(&digest)
+}
+
+/// Decode the compile-time pinned signing key.
+fn signing_public_key() -> Result<minisign_verify::PublicKey> {
+    if DATA_SIGNING_PUBKEY.is_empty() {
+        return Err(FetchError::NoSigningKey);
+    }
+    minisign_verify::PublicKey::from_base64(DATA_SIGNING_PUBKEY).map_err(|e| {
+        FetchError::SignatureInvalid {
+            detail: format!("the pinned public key in hyrr.json is not a valid minisign key: {e}"),
+        }
+    })
+}
+
+/// Fetch and parse the detached `.minisig` for the current release.
+fn fetch_detached_signature(
+    client: &reqwest::blocking::Client,
+) -> Result<minisign_verify::Signature> {
+    let url = signature_url();
+    let resp = client
+        .get(&url)
+        .send()
+        .map_err(|e| FetchError::SignatureUnavailable {
+            detail: e.to_string(),
+            url: url.clone(),
+        })?;
+    if !resp.status().is_success() {
+        return Err(FetchError::SignatureUnavailable {
+            detail: format!(
+                "HTTP {} — a release older than nucl-parquet #289 has no signature, and a \
+                 stripped signature looks identical from here",
+                resp.status().as_u16()
+            ),
+            url,
+        });
+    }
+    let body = resp.text().map_err(|e| FetchError::SignatureUnavailable {
+        detail: e.to_string(),
+        url: url.clone(),
+    })?;
+    minisign_verify::Signature::decode(&body).map_err(|e| FetchError::SignatureUnavailable {
+        detail: format!("could not parse the signature: {e}"),
+        url,
+    })
+}
+
+/// Check the authenticated trusted comment's `sha256=` against the digest we
+/// computed over the downloaded bytes.
+///
+/// A comment without a `sha256=` field is accepted: upstream's format is not
+/// ours to mandate, and the signature over the payload already establishes
+/// authenticity on its own. This is a cross-check that strengthens the pin,
+/// not a second gate that upstream could break by reformatting a comment.
+fn verify_trusted_comment_digest(trusted_comment: &str, actual: &str) -> Result<()> {
+    let Some(signed) = trusted_comment
+        .split_whitespace()
+        .find_map(|f| f.strip_prefix("sha256="))
+    else {
+        return Ok(());
+    };
+    if !signed.eq_ignore_ascii_case(actual) {
+        return Err(FetchError::SignatureInvalid {
+            detail: format!(
+                "the signed trusted comment claims sha256={signed}, but the downloaded bytes \
+                 hash to {actual}"
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Lowercase hex, without pulling a crate for four lines.
@@ -3183,5 +3390,128 @@ mod tests {
         // because it would try to fetch from GitHub. The point is
         // established: the sentinel check alone isn't sufficient,
         // the library directory must also exist.
+    }
+}
+
+/// Publisher-authenticity tests (#594).
+///
+/// The `.minisig` below is the **real** signature nucl-parquet published for
+/// `data-2026.8.2` (upstream #289 / PR #290), committed as a fixture. That is
+/// what lets these run offline while still exercising the actual key.
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+
+    /// Verbatim `nucl-parquet-data-2026.8.2.tar.zst.minisig`.
+    const REAL_SIGNATURE: &str = "untrusted comment: signature from minisign secret key\n\
+RUT9cED7yeXhJxFaigiCR27bM7KoB6YOIbeHCe3QjgsRO06wewCbcKiz5sV/s9rEZMSFckcIw0lFe03g2qB+itZhC1eve+nUlwg=\n\
+trusted comment: nucl-parquet data 2026.8.2 tag=data-2026.8.2 sha256=c19cd3fd650ee3747f9eb5c3b2c171a199a86bfbb2426c1afa1f589b12be4166\n\
+3UWhi07Z3NGnqV06uJa1I1AnTOqFUVQiUKWZ2adA7vb29UrN/dTO91f+/ESC59VBN0F6P6nEYI1IEhNt+jhmBg==\n";
+
+    #[test]
+    fn the_pinned_public_key_decodes() {
+        signing_public_key().expect("hyrr.json's data_signing_pubkey must be a valid minisign key");
+    }
+
+    /// The published signature must actually be usable with the key we pinned.
+    /// A key-id mismatch — the shape a key rotation takes — fails here rather
+    /// than after an ~800 MB download on a user's machine.
+    fn real_signature() -> minisign_verify::Signature {
+        minisign_verify::Signature::decode(REAL_SIGNATURE).expect("fixture must parse")
+    }
+
+    #[test]
+    fn the_published_signature_matches_the_pinned_key() {
+        let pk = signing_public_key().unwrap();
+        pk.verify_stream(&real_signature())
+            .expect("pinned key must be able to verify the published signature");
+    }
+
+    /// **The pin is anchored to the signing key, not to GitHub.**
+    ///
+    /// `just repin-data` reads GitHub's asset digest, and upstream releases
+    /// are mutable — so that digest is a convenience, not a control. This
+    /// asserts that what we pinned in `hyrr.json` is what the *key holder*
+    /// signed. It runs offline, so a re-pin that drifted from the signature
+    /// is caught in CI rather than at a user's first fetch.
+    #[test]
+    fn the_committed_pin_equals_the_publishers_signed_claim() {
+        let sig = real_signature();
+        let signed = sig
+            .trusted_comment()
+            .split_whitespace()
+            .find_map(|f| f.strip_prefix("sha256="))
+            .expect("upstream's trusted comment carries the digest");
+        assert!(
+            signed.eq_ignore_ascii_case(DATA_TARBALL_SHA256),
+            "hyrr.json pins {DATA_TARBALL_SHA256} but the publisher signed {signed}"
+        );
+    }
+
+    /// Tampering must be caught. Feeds the real signature bytes that are not
+    /// the payload it covers.
+    #[test]
+    fn a_tampered_payload_fails_verification() {
+        let pk = signing_public_key().unwrap();
+        let sig = real_signature();
+        let mut v = pk.verify_stream(&sig).unwrap();
+        v.update(b"this is emphatically not 785 MB of nuclear data");
+        assert!(
+            v.finalize().is_err(),
+            "a payload the key did not sign must be refused"
+        );
+    }
+
+    /// An empty payload is still a payload — the streaming verifier must not
+    /// treat "no bytes fed" as success.
+    #[test]
+    fn an_empty_payload_fails_verification() {
+        let pk = signing_public_key().unwrap();
+        let sig = real_signature();
+        assert!(pk.verify_stream(&sig).unwrap().finalize().is_err());
+    }
+
+    #[test]
+    fn trusted_comment_digest_agrees() {
+        assert!(verify_trusted_comment_digest("tag=x sha256=ABCD", "abcd").is_ok());
+    }
+
+    #[test]
+    fn trusted_comment_digest_disagreeing_is_refused() {
+        let err = verify_trusted_comment_digest("tag=x sha256=aaaa", "bbbb")
+            .expect_err("a comment that contradicts the bytes must be refused");
+        assert!(matches!(err, FetchError::SignatureInvalid { .. }));
+        assert!(err.to_string().contains("aaaa"));
+    }
+
+    /// Upstream's comment format is not ours to mandate: the signature over
+    /// the payload already establishes authenticity, so a comment without a
+    /// digest field is a cross-check we simply skip — not a second gate that
+    /// upstream could break by reformatting.
+    #[test]
+    fn trusted_comment_without_a_digest_is_not_an_error() {
+        assert!(verify_trusted_comment_digest("timestamp:1234 file:x.tar.zst", "abcd").is_ok());
+    }
+
+    /// Live end-to-end: fetch the real `.minisig` and confirm it is present,
+    /// parses, and matches the pinned key. Opt-in — CI must not depend on
+    /// GitHub being reachable.
+    ///
+    /// ```text
+    /// cargo test --manifest-path core/Cargo.toml -- --ignored live_signature
+    /// ```
+    #[test]
+    #[ignore = "requires network"]
+    fn live_signature_is_published_and_matches_the_pin() {
+        let client = build_http_client().unwrap();
+        let sig = fetch_detached_signature(&client).expect("release must publish a .minisig");
+        let pk = signing_public_key().unwrap();
+        pk.verify_stream(&sig).expect("key id must match");
+        let signed = sig
+            .trusted_comment()
+            .split_whitespace()
+            .find_map(|f| f.strip_prefix("sha256="))
+            .expect("digest in trusted comment");
+        assert!(signed.eq_ignore_ascii_case(DATA_TARBALL_SHA256));
     }
 }
