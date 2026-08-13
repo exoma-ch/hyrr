@@ -64,53 +64,6 @@ pub struct LayerConfig {
     pub density_g_cm3: Option<f64>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct SimulationResult {
-    pub config: serde_json::Value,
-    pub layers: Vec<LayerResultData>,
-    pub timestamp: u64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct LayerResultData {
-    pub layer_index: usize,
-    pub energy_in: f64,
-    pub energy_out: f64,
-    pub delta_E_MeV: f64,
-    pub heat_kW: f64,
-    pub isotopes: Vec<IsotopeResultData>,
-    pub depth_profile: Vec<DepthPointData>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub depth_production_rates: HashMap<String, Vec<f64>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct IsotopeResultData {
-    pub name: String,
-    pub Z: u32,
-    pub A: u32,
-    pub state: String,
-    pub half_life_s: Option<f64>,
-    pub production_rate: f64,
-    pub saturation_yield_Bq_uA: f64,
-    pub activity_Bq: f64,
-    pub source: String,
-    pub activity_direct_Bq: f64,
-    pub activity_ingrowth_Bq: f64,
-    pub time_grid_s: Vec<f64>,
-    pub activity_vs_time_Bq: Vec<f64>,
-    pub reactions: Vec<String>,
-    pub decay_notations: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DepthPointData {
-    pub depth_mm: f64,
-    pub energy_MeV: f64,
-    pub dedx_MeV_cm: f64,
-    pub heat_W_cm3: f64,
-}
-
 // ---------------------------------------------------------------------------
 // Depth preview types
 // ---------------------------------------------------------------------------
@@ -561,73 +514,21 @@ fn compute_composition(elements: &[(Element, f64)]) -> Vec<(u32, f64)> {
     raw.iter().map(|&(z, w)| (z, w / total)).collect()
 }
 
-fn convert_stack_result(config_json: &str, result: &StackResult) -> SimulationResult {
+/// Delegate to the core-owned converter (ADR 0008).
+///
+/// This mapping used to be hand-mirrored here and in `wasm/src/lib.rs`, and the
+/// two had drifted: this copy silently dropped `pruned_negligible_count`, so
+/// desktop users never saw that the negligible-inventory prune (#533) had
+/// filtered isotopes. Routing through `hyrr_core::viewer` fixes that as a side
+/// effect of removing the duplicate.
+fn convert_stack_result(
+    config_json: &str,
+    result: &StackResult,
+) -> hyrr_core::viewer::SimulationResultJson {
     let config_val: serde_json::Value = serde_json::from_str(config_json).unwrap_or_default();
-
-    let layers: Vec<LayerResultData> = result
-        .layer_results
-        .iter()
-        .enumerate()
-        .map(|(idx, lr)| {
-            let mut isotopes: Vec<IsotopeResultData> = lr
-                .isotope_results
-                .values()
-                .map(|iso| IsotopeResultData {
-                    name: iso.name.clone(),
-                    Z: iso.z,
-                    A: iso.a,
-                    state: iso.state.clone(),
-                    half_life_s: iso.half_life_s,
-                    production_rate: iso.production_rate,
-                    saturation_yield_Bq_uA: iso.saturation_yield_bq_ua,
-                    activity_Bq: iso.activity_bq,
-                    source: iso.source.clone(),
-                    activity_direct_Bq: iso.activity_direct_bq,
-                    activity_ingrowth_Bq: iso.activity_ingrowth_bq,
-                    time_grid_s: iso.time_grid_s.clone(),
-                    activity_vs_time_Bq: iso.activity_vs_time_bq.clone(),
-                    reactions: iso.reactions.clone(),
-                    decay_notations: iso.decay_notations.clone(),
-                })
-                .collect();
-            isotopes.sort_by(|a, b| {
-                b.activity_Bq
-                    .partial_cmp(&a.activity_Bq)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-            let depth_profile: Vec<DepthPointData> = lr
-                .depth_profile
-                .iter()
-                .map(|dp| DepthPointData {
-                    depth_mm: dp.depth_cm * 10.0,
-                    energy_MeV: dp.energy_mev,
-                    dedx_MeV_cm: dp.dedx_mev_cm,
-                    heat_W_cm3: dp.heat_w_cm3,
-                })
-                .collect();
-
-            LayerResultData {
-                layer_index: idx,
-                energy_in: lr.energy_in,
-                energy_out: lr.energy_out,
-                delta_E_MeV: lr.delta_e_mev,
-                heat_kW: lr.heat_kw,
-                isotopes,
-                depth_profile,
-                depth_production_rates: lr.depth_production_rates.clone(),
-            }
-        })
-        .collect();
-
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-
-    SimulationResult {
-        config: config_val,
-        layers,
-        timestamp,
-    }
+    hyrr_core::viewer::convert_stack_result(config_val, result, timestamp)
 }

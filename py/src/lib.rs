@@ -400,12 +400,13 @@ fn make_py_progress(progress_obj: Py<PyAny>) -> impl FnMut(FetchProgress) {
 /// filesystem walk with no progress wiring upstream — the callback is
 /// ignored for that mode.
 #[pyfunction]
-#[pyo3(signature = (library=None, all_libs=false, offline_bundle=None, from_tarball=None, progress=None))]
+#[pyo3(signature = (library=None, all_libs=false, offline_bundle=None, from_tarball=None, signature=None, progress=None))]
 fn py_fetch_data(
     library: Option<&str>,
     all_libs: bool,
     offline_bundle: Option<&str>,
     from_tarball: Option<&str>,
+    signature: Option<&str>,
     progress: Option<Py<PyAny>>,
 ) -> PyResult<()> {
     let active = [
@@ -432,13 +433,23 @@ fn py_fetch_data(
     };
 
     if let Some(path) = from_tarball {
-        return data_fetch::install_from_tarball_with_progress(&PathBuf::from(path), &mut *cb)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
+        // `signature` overrides the sibling `<archive>.minisig` lookup, for
+        // when the two were carried separately onto the isolated machine.
+        let sig = signature.map(PathBuf::from);
+        return data_fetch::install_from_tarball_with_signature(
+            &PathBuf::from(path),
+            sig.as_deref(),
+            &mut *cb,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
     }
     if let Some(path) = offline_bundle {
-        // `export_offline_bundle` has no progress-aware variant — it's a
-        // pure filesystem walk with no network step. Ignore the callback.
-        return data_fetch::export_offline_bundle(&PathBuf::from(path))
+        // Since #614 this downloads the *signed* upstream artefact and writes
+        // it alongside its `.minisig`, rather than repacking the local cache —
+        // a repack cannot be authenticated on the isolated machine, because
+        // the exporting user holds no signing key. So it is a network
+        // operation now and does report progress.
+        return data_fetch::export_offline_bundle_with_progress(&PathBuf::from(path), &mut *cb)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e}")));
     }
     if all_libs {

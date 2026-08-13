@@ -53,11 +53,23 @@ MCP_OUT="$(mktemp)"
 PY_OUT="$(mktemp)"
 trap 'rm -f "$DESKTOP_OUT" "$MCP_OUT" "$PY_OUT"' EXIT
 
-# Canonicalize each JSON-RPC response line:
-#  1. Sort keys recursively (HashMap iteration order is non-deterministic)
-#  2. Normalize server.version (each entry point has its own CARGO_PKG_VERSION)
+# Canonicalize each JSON-RPC response line by sorting keys recursively
+# (HashMap iteration order is non-deterministic).
+#
+# The version field is deliberately NOT normalized any more (#603).
+#
+# It used to be, with the rationale "each entry point has its own
+# CARGO_PKG_VERSION". That was the topology bug written down as if it were a
+# law of nature — and because the one guard that compares entry points blanked
+# this exact field, #599 (the wheel reporting 0.1.0 for four releases) could
+# not be caught here. Every entry point now reads `hyrr_core::VERSION`, so the
+# versions genuinely agree and comparing them is a real assertion.
+#
+# The old substitution was also global: it blanked EVERY "version" key in every
+# response, including the nuclear-data library version — so a data-version
+# divergence between entry points would have been invisible too.
 normalize() {
-  jq -c --sort-keys '.' | sed 's/"version":"[^"]*"/"version":"<normalized>"/g'
+  jq -c --sort-keys '.'
 }
 
 run_through() {

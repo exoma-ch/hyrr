@@ -145,6 +145,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(resolve_data_dir, m)?)?;
     m.add_function(wrap_pyfunction!(ensure_data, m)?)?;
     m.add_function(wrap_pyfunction!(default_library, m)?)?;
-    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    // hyrr_core::VERSION, NOT this crate's: py-mcp/Cargo.toml is inert
+    // (release-please does not bump it) and reading it shipped "0.1.0" to
+    // every user for four releases (#599 / #603).
+    m.add("__version__", hyrr_core::VERSION)?;
     Ok(())
 }

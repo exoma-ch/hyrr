@@ -6,19 +6,22 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "npm run build:viewer && vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:suppliers-fresh": "node scripts/check-suppliers-fresh.mjs"
+    "check:suppliers-fresh": "node scripts/check-suppliers-fresh.mjs",
+    "build:viewer": "vite build --config vite.viewer.config.ts && node scripts/stage-viewer-template.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@sveltejs/vite-plugin-svelte": "^7.1.0",
-    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/svelte": "^5.3.1",
-    "jsdom": "^29.1.1",
+    "@types/node": "^26.2.0",
+    "jsdom": "^30.0.1",
+    "plotly.js-basic-dist-min": "^3.7.0",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^6.0.3",
@@ -38,7 +41,7 @@
     "html2canvas": "^1.4.1",
     "hyparquet": "^1.7.0",
     "hyparquet-compressors": "^1.1.1",
-    "hyparquet-writer": "^0.15.1",
+    "hyparquet-writer": "^0.16.5",
     "hyrr-wasm": "file:src/lib/compute/hyrr-wasm-pkg",
     "lucide-svelte": "^1.0.1",
     "plotly.js-dist-min": "^3.5.1"

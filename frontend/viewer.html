@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HYRR — shared result</title>
+    <!--
+      Standalone results viewer (ADR 0008).
+
+      Deliberately NOT a copy of index.html: no analytics beacon, no preconnect,
+      no external script of any kind. The artifact leaves the institution, so it
+      must be inert — everything it needs is inlined at build time.
+    -->
+    <meta name="robots" content="noindex, nofollow" />
+  </head>
+  <body>
+    <script>
+      // Match the app: apply the saved/preferred theme before first paint.
+      (function () {
+        var t = null;
+        try { t = localStorage.getItem("hyrr-theme"); } catch (e) { /* file:// */ }
+        if (t === "light" || t === "dark") {
+          document.documentElement.setAttribute("data-theme", t);
+        } else {
+          var m = window.matchMedia("(prefers-color-scheme: light)").matches;
+          document.documentElement.setAttribute("data-theme", m ? "light" : "dark");
+        }
+      })();
+    </script>
+
+    <!--
+      The result payload. Replaced by the generator; the placeholder below keeps
+      the template a valid, openable document on its own.
+    -->
+    <script type="application/json" id="hyrr-snapshot">__HYRR_SNAPSHOT__</script>
+
+    <div id="app"></div>
+    <noscript>
+      <h1>HYRR — shared result</h1>
+      <p>This is a static snapshot of a HYRR simulation result. JavaScript is required to display it.</p>
+    </noscript>
+    <script type="module" src="/src/viewer.ts"></script>
+  </body>
+</html>

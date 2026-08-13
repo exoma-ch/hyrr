@@ -66,7 +66,7 @@ impl JsonRpcResponse {
 
 /// MCP server info.
 const SERVER_NAME: &str = "hyrr";
-const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+const SERVER_VERSION: &str = crate::VERSION;
 
 /// MCP protocol revisions this server can speak on the wire.
 ///
