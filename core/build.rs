@@ -25,6 +25,23 @@ use std::path::Path;
 
 fn main() {
     // --- DATA_VERSION from nucl-parquet submodule ---
+    //
+    // The nuclear-data version is deliberately WELDED to the build (#606).
+    // `hyrr-mcp==0.19.0` therefore implies exactly one data tree, and new data
+    // can only arrive via a new release.
+    //
+    // That coupling is a feature, not an oversight, and it is the reason to
+    // resist "let data float so users get new evaluations sooner": a floating
+    // data dir would silently change the physics under a pinned binary, and a
+    // result defended months later could no longer be reproduced from the
+    // version alone. Cross-section evaluations move yields by tens of percent
+    // on some channels — far more than a code point-release — so the data
+    // version is the load-bearing half of provenance.
+    //
+    // Consequence to keep in mind: because data cannot change without a
+    // release, a *data* release upstream is only reachable through a *software*
+    // release here, which is why there is no separate "new data available"
+    // check. The existing update notice covers it.
     let catalog = Path::new("../nucl-parquet/data/catalog.json");
     println!("cargo:rerun-if-changed=../nucl-parquet/data/catalog.json");
 

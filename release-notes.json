@@ -5,7 +5,7 @@
     {
       "version": "0.19.0",
       "date": "2026-08-06",
-      "data_version": "2026.7.2",
+      "data_version": "2026.8.1",
       "entries": [
         {
           "summary": "Long-lived, low-yield isotopes are no longer silently dropped from the inventory prune (#533).",

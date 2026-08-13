@@ -38,6 +38,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ARTIFACT="$ROOT/release-notes.json"
 MANIFEST="$ROOT/.release-please-manifest.json"
+# The nuclear data version actually shipped, derived from the pinned submodule
+# rather than trusted from the hand-written artifact (#606).
+CATALOG="$ROOT/nucl-parquet/data/catalog.json"
 
 strict=0
 target_version=""
@@ -64,11 +67,11 @@ fi
 
 # Delegate the structural checks to python3 — the schema is small enough that
 # hand-coding the shape check is clearer than pulling in jsonschema.
-python3 - "$ARTIFACT" "$MANIFEST" "$target_version" "$strict" <<'PY'
+python3 - "$ARTIFACT" "$MANIFEST" "$target_version" "$strict" "$CATALOG" <<'PY'
 import json
 import sys
 
-artifact_path, manifest_path, target_version, strict_str = sys.argv[1:5]
+artifact_path, manifest_path, target_version, strict_str, catalog_path = sys.argv[1:6]
 strict = strict_str == "1"
 
 VALID_IMPACTS = {
@@ -171,6 +174,47 @@ if check_version:
             # Locally on main we're often between releases; a manifest ahead
             # of the artifact is normal there. Warn but don't block.
             print(f"::warning::{msg}", file=sys.stderr)
+
+# --- data_version matches the data that actually ships (#606) ---
+#
+# `data_version` is a DERIVABLE fact — the pinned nucl-parquet submodule's
+# catalog.json says which data tree the build stamps in (core/build.rs ->
+# HYRR_DATA_VERSION). Hand-entering it and never checking is how 0.19.0 came
+# to claim `2026.7.2` while actually shipping `2026.8.1`, two data releases
+# newer. That field is the one place data-version history reaches an agent —
+# get_changelog exposes it precisely so a caller "can tell a data-only change
+# apart from a code change" (#572) — so a wrong value answers the physics
+# question wrongly.
+#
+# Only the entry being cut is checked: historical entries would need their own
+# submodule commit checked out to re-derive, and they are already published.
+if check_version:
+    try:
+        with open(catalog_path) as f:
+            shipped_data_version = json.load(f).get("data_version")
+    except (FileNotFoundError, json.JSONDecodeError):
+        # The submodule is not always present (some CI jobs check out without
+        # it). Skip loudly rather than silently: a guard that quietly passes is
+        # exactly what let this through.
+        print(
+            f"::warning::{catalog_path} unavailable — could not verify "
+            f"`data_version` for `{check_version}` against the pinned submodule",
+            file=sys.stderr,
+        )
+        shipped_data_version = None
+
+    if shipped_data_version:
+        entry = next((r for r in releases if r.get("version") == check_version), None)
+        if entry is not None:
+            claimed = entry.get("data_version")
+            if claimed != shipped_data_version:
+                errors.append(
+                    f"releases[{check_version}].data_version is `{claimed}` but the "
+                    f"pinned nucl-parquet submodule ships `{shipped_data_version}`. "
+                    "This value is derivable — read it from nucl-parquet/data/catalog.json "
+                    "rather than typing it. An agent uses it to tell a data change "
+                    "apart from a code change (#572/#606)."
+                )
 
 if errors:
     for e in errors:
