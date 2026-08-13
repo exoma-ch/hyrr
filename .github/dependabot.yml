@@ -49,16 +49,6 @@ updates:
       - "/desktop/src-tauri"
     schedule:
       interval: "weekly"
-    # arrow/parquet are pinned to whatever the nucl-parquet SUBMODULE uses —
-    # it is a path dependency, so a version skew puts two majors of both in
-    # every dependent's graph, with arrow types crossing the boundary compiled
-    # against different majors. core/Cargo.toml says so explicitly. A bump here
-    # is only correct once nucl-parquet moves, so dependabot must not propose
-    # one: #619 bumped them 54 -> 59, broke the build on `parquet::format`, and
-    # would have regenerated every week.
-    ignore:
-      - dependency-name: "arrow"
-      - dependency-name: "parquet"
     groups:
       cargo:
         patterns:
