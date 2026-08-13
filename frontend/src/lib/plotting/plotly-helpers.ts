@@ -46,11 +46,32 @@ export function darkLayout(
 }
 
 /** Default Plotly config (no logo, responsive). */
-export const PLOTLY_CONFIG = {
+export const PLOTLY_CONFIG: Record<string, any> = {
   responsive: true,
   displaylogo: false,
   modeBarButtonsToRemove: ["lasso2d", "select2d"] as string[],
 };
+
+/**
+ * A `<div>` that Plotly has rendered into.
+ *
+ * Plotly attaches an event emitter to the bound element on first render, but
+ * the DOM lib only knows it as an `HTMLDivElement`. Narrow with `asPlotlyDiv`
+ * at the call site rather than typing the `bind:this` target, which Svelte
+ * requires to stay an `HTMLDivElement`.
+ */
+export type PlotlyDiv = HTMLDivElement & {
+  on(event: string, handler: (ev: any) => void): void;
+  removeAllListeners?(event: string): void;
+};
+
+/**
+ * Narrow a bound plot `<div>` to its Plotly-augmented form.
+ *
+ * Purely a type-level assertion — callers must still guard on `el.on` before
+ * attaching listeners, since the emitter only exists after Plotly renders.
+ */
+export const asPlotlyDiv = (el: HTMLDivElement): PlotlyDiv => el as PlotlyDiv;
 
 /** Color palette for multi-trace plots. */
 export const TRACE_COLORS = [
