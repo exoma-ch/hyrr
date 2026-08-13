@@ -98,13 +98,16 @@
           ]
         },
         {
-          "summary": "New: export a simulation result as a single self-contained HTML file that opens in any browser with no install, no server and no data fetch (#616).",
+          "summary": "New: export a simulation result as a single self-contained HTML file that opens in any browser with no install, no server and no data fetch. Available from the web app, the desktop app, and as the MCP tool `export_result_html` (#616, #624).",
           "impact": "ux",
           "silent": false,
-          "affected": [],
-          "guidance": "Additive — nothing existing changes. Intended for sharing a result with a colleague who does not have HYRR: the plots, tables and the run's provenance travel inside the file itself.",
+          "affected": [
+            "export_result_html"
+          ],
+          "guidance": "Additive — nothing existing changes. Intended for sharing a result with someone who cannot reach HYRR at all: the plots, tables and the run's provenance travel inside the file itself, and the recipient can filter and sort but cannot re-run. Choose the tier deliberately: \"A\" embeds derived results only, \"B\" also embeds emission lines and dose constants for the nuclides the run produced. The tier is recorded in the file, so what was shared stays auditable afterwards.",
           "refs": [
-            616
+            616,
+            624
           ]
         }
       ]

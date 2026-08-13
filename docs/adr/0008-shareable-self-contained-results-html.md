@@ -1,7 +1,8 @@
 # ADR 0008 — Shareable self-contained results HTML
 
-- **Status**: proposed (2026-08-13) — Tier A + Tier B in scope; Tier C
-  rejected. See "The licensing boundary" for why Tier B does not wait on #421.
+- **Status**: accepted (2026-08-13) — implemented on all three surfaces.
+  Tier A + Tier B shipped; Tier C rejected. See "The licensing boundary" for
+  why Tier B does not wait on #421.
 - **Date**: 2026-08-13
 - **Relates to**: #421 (dual-use / export-control determination), #425 (epic —
   legal & licensing readiness), #565 (refuse to deploy a stale ETH access
@@ -178,22 +179,35 @@ Two corrections to earlier estimates, both material:
 Where the raw bytes actually live: `depth_production_rates` 46%,
 `activity_vs_time_Bq` 23%, `time_grid_s` 22%, `depth_profile` 5%.
 
-Emission across all three surfaces needs no new infrastructure:
+Emission across all three surfaces needs no new infrastructure, and the
+template needs no per-surface delivery path at all:
 
-- **Web** — reuse `triggerDownload` (`plotting/csv-export.ts:14`).
-- **Tauri** — `dialog.save()` + `writeTextFile`; permissions already granted
-  (`capabilities/default.json:11-13`), pattern proven at
+- **Web** — `Header ▸ Save ▸ "Share result…"` → blob download.
+- **Tauri** — the same menu entry → `dialog.save()` + `writeTextFile`;
+  permissions already granted (`capabilities/default.json`), pattern proven at
   `BugReportModal.svelte:319-343`.
-- **MCP** — `include_str!` the built template and substitute one token. This is
-  exactly how `release_notes.rs:46` already ships `release-notes.json`, so
-  `core/` gains **no templating engine** — the deliberate absence noted in
-  Context is preserved.
+- **MCP** — `export_result_html` returns the HTML as a `text/html`
+  `ToolResource`. The transport is mime-agnostic, so this reuses the same code
+  path the Parquet resources already take.
+
+**Template delivery is one mechanism, not three.** `npm run build` runs
+`build:viewer` first, which stages the built template into `public/`. From
+there it is an ordinary static asset: served on the web, and bundled into the
+desktop app through `frontendDist`. A single
+`fetch(BASE_URL + "viewer-template.html")` works on both, and the staged copy
+is gitignored so a stale template cannot ship. Only MCP reads it from disk,
+because it has no origin to fetch from.
 
 ### The MCP template must live in the leaf crate, not in `core`
 
-The viewer template becomes a build input to a Rust crate. **Where** it is
-`include_str!`d is not a detail — putting it in `core/` creates a build-graph
-cycle:
+**Resolved differently than first proposed, and better: nothing `include_str!`s
+the template at all.** It is a `&str` argument to
+`hyrr_core::viewer::render_html`, read at call time. That removes the question
+of *which crate* embeds it, keeps ~1.3 MB out of every consumer of core, and
+lets the template change without recompiling anything.
+
+The original analysis stands as the reason not to embed it. Putting it in
+`core/` would create a build-graph cycle:
 
 ```text
 core  →  needs frontend/dist/viewer.html
@@ -234,10 +248,11 @@ That trick works for a **committed, small, static** file. A vite-generated
 3. **give `hyrr-mcp` a `build.rs`** that emits a stub when the template is
    absent, so a plain `cargo build` never requires a frontend build.
 
-(3) is the compatibility floor regardless of which of (1)/(2) is chosen —
-without it, `cargo build` on a clean checkout needs node, vite, and a WASM
-build. This is the main structural cost of including the MCP surface and
-should be settled before that surface is implemented, not during.
+None of those three were needed. As a runtime argument the template is not a
+build input at all: `cargo build` on a clean checkout needs no node, no vite
+and no WASM, and the hermetic Rust checks are untouched. The MCP tool resolves
+it from its `template_path` argument or `HYRR_VIEWER_TEMPLATE`, and reports how
+to build one rather than emitting a half-artifact when neither is set.
 
 ## Spike findings
 
@@ -289,6 +304,46 @@ Also confirmed: the viewer's depth axis spans the **configured** stack
 thickness, not the traversed depth — matching the app, which does this
 deliberately so the two depth plots align (#435). In the reference run the beam
 stops 0.33 mm into a 5 mm Cu backing, so the two differ by 10×.
+
+## As built
+
+All three surfaces ship the export, each routed through the single
+Rust-owned builder in `core/src/viewer.rs`.
+
+| | entry point | save |
+|---|---|---|
+| Web | Header ▸ Save ▸ "Share result…" | blob download |
+| Desktop | same menu entry | `dialog.save()` + `writeTextFile` |
+| MCP | `export_result_html` | `text/html` `ToolResource` |
+
+`core/src/viewer.rs` owns the frontend wire types, `convert_stack_result`,
+snapshot construction and `render_html`. `build_snapshot` takes the **wire**
+result rather than a `StackResult`, because that is the form the browser
+already holds; callers holding a `StackResult` convert first. One entry point,
+so the tier gate cannot diverge per surface.
+
+Closing the duplication fixed a live bug: the desktop copy of
+`convert_stack_result` silently dropped `pruned_negligible_count`, so desktop
+users never saw that the negligible-inventory prune (#533) had filtered
+isotopes.
+
+Two guards exist because the failure they prevent is silent rather than loud:
+
+- **Emissions and dose constants are arguments, not lookups.** Only
+  `ParquetDataStore` implements `DatabaseProtocol::get_emissions`;
+  `EmbeddedDataStore` and `InMemoryDataStore` inherit the empty default. A
+  builder that fetched for itself would emit Tier A on two of three surfaces
+  while labelling the artifact Tier B.
+- **A Tier B request with no emission data is refused, not downgraded.** An
+  artifact whose payload claims spectra it does not contain is worse than no
+  artifact.
+
+Verified end to end rather than compiled: a real 16 MeV p → havar+Mo-100+Cu
+run exported from the built web app produced a 2.97 MB artifact that opens
+from `file://` with 3 plots, 36 traces, 58 rows, **zero network requests** and
+the correct ENSDF doses (⁹⁹ᵐTc 211, ⁹⁹Mo 75.6 µSv/h). The MCP tool produced
+the same for the same run. The desktop branch is covered by `export.test.ts`
+rather than asserted, since a Tauri binary cannot be driven here.
 
 ## Consequences
 
