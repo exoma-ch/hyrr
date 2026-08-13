@@ -12,7 +12,7 @@
     "forceConsistentCasingInFileNames": true,
     "verbatimModuleSyntax": false,
     "allowImportingTsExtensions": true,
-    "types": ["@testing-library/jest-dom"]
+    "types": ["@testing-library/jest-dom", "vite/client", "node"]
   },
   "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.svelte"]
 }
