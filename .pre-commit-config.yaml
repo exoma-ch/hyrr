@@ -112,7 +112,11 @@ repos:
         name: check lockfiles in sync
         entry: scripts/check-lockfiles.sh
         language: system
-        files: (pyproject\.toml|uv\.lock|wasm/Cargo\.(toml|lock))$
+        # `^nucl-parquet$` is the submodule gitlink — a submodule bump stages
+        # that bare path, and bumping it without flake.lock is exactly the
+        # drift the nucl-parquet lockstep check catches (#574). flake.lock is
+        # listed for the other direction.
+        files: (^nucl-parquet$|^flake\.lock$|pyproject\.toml|uv\.lock|wasm/Cargo\.(toml|lock))$
         pass_filenames: false
 
   # #572 — impact-classified release-notes structural check. Runs whenever the
