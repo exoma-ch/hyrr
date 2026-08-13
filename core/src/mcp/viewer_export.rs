@@ -114,7 +114,10 @@ fn parse_tier(args: &Value) -> Result<SnapshotTier, String> {
 ///
 /// Bounded by the run, not by whatever the store happens to have cached — so a
 /// Tier B artifact carries a fixed, run-specific slice.
-fn collect_evaluated(db: &dyn DatabaseProtocol, result: &crate::types::StackResult) -> EvaluatedData {
+fn collect_evaluated(
+    db: &dyn DatabaseProtocol,
+    result: &crate::types::StackResult,
+) -> EvaluatedData {
     let mut emissions: BTreeMap<String, Vec<EmissionLineJson>> = BTreeMap::new();
     let mut dose_constants: BTreeMap<String, DoseConstantEntry> = BTreeMap::new();
 
@@ -247,7 +250,10 @@ mod tests {
         } else {
             resolve_template(&serde_json::json!({})).unwrap_err()
         };
-        assert!(err.contains("vite.viewer.config.ts"), "unhelpful error: {err}");
+        assert!(
+            err.contains("vite.viewer.config.ts"),
+            "unhelpful error: {err}"
+        );
     }
 
     #[test]
