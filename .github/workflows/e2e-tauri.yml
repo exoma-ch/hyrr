@@ -70,6 +70,7 @@ jobs:
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
           git sparse-checkout set \
+            docs/security \
             clients/rs \
             data/meta \
             data/stopping \

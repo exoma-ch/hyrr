@@ -82,7 +82,7 @@ jobs:
         run: |
           git submodule update --init --depth 1 --filter=blob:none nucl-parquet
           cd nucl-parquet
-          git sparse-checkout set data/meta data/stopping data/tendl-2023-iso/xs data/hi-xs-prod/xs data/endfb-8.0/xs
+          git sparse-checkout set docs/security data/meta data/stopping data/tendl-2023-iso/xs data/hi-xs-prod/xs data/endfb-8.0/xs
 
       - uses: actions/setup-node@v6
         with:

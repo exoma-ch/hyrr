@@ -48,6 +48,7 @@ jobs:
           cd nucl-parquet
           git sparse-checkout set --no-cone \
             'clients/rs/nucl-parquet/' \
+            'docs/security/' \
             'data/catalog.json' \
             'data/meta/' \
             'data/stopping/' \
