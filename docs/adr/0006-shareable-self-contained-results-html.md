@@ -151,9 +151,55 @@ Emission across all three surfaces needs no new infrastructure:
   `core/` gains **no templating engine** — the deliberate absence noted in
   Context is preserved.
 
-The viewer template becomes a build input to the Rust crate for the MCP path.
-That coupling is the main structural cost of including MCP and should be
-weighed at implementation time.
+### The MCP template must live in the leaf crate, not in `core`
+
+The viewer template becomes a build input to a Rust crate. **Where** it is
+`include_str!`d is not a detail — putting it in `core/` creates a build-graph
+cycle:
+
+```text
+core  →  needs frontend/dist/viewer.html
+      →  needs `npm run build`
+      →  needs hyrr-wasm  →  wasm/  →  core
+```
+
+`core` is depended on by `wasm`, `hyrr-mcp`, `desktop/src-tauri`, `py`, and
+`py-mcp` (there is no cargo workspace; each crate is standalone with path
+deps). So `include_str!` in `core` would also embed ~2.5 MB into **every**
+consumer — the WASM bundle, the PyO3 wheel, the desktop binary — none of which
+need a viewer. Feature-gating behind `mcp` fixes the bloat but not the cycle.
+
+**Decision: the template lives in `hyrr-mcp/`, a leaf crate.** Nothing depends
+on `hyrr-mcp`, so the graph stays a DAG:
+
+```text
+core  →  wasm  →  frontend  →  hyrr-mcp
+```
+
+The hermetic build is the remaining cost, and the existing `include_str!`
+precedent shows why. `flake.nix:133` builds core with
+`craneLib.cleanCargoSource ./core`, which **strips every non-Rust file**;
+`release-notes.json` survives only because `provisionSiblings`
+(`flake.nix:118-123`) materialises it in the sandbox from a pure Nix input:
+
+> "`core/src/release_notes.rs` also `include_str!`s `../../release-notes.json`
+> (#572) — a COMPILE-time read, so its absence breaks the build outright, not
+> just a test."
+
+That trick works for a **committed, small, static** file. A vite-generated
+2.5 MB template is none of those, so the MCP surface must pick one of:
+
+1. **commit the built template** — a pure Nix input like `release-notes.json`,
+   at the cost of a large generated artifact in git that must be regenerated
+   in lockstep (a stale one silently ships a wrong-version viewer);
+2. **generate it at release time** in CI and attach it to the build;
+3. **give `hyrr-mcp` a `build.rs`** that emits a stub when the template is
+   absent, so a plain `cargo build` never requires a frontend build.
+
+(3) is the compatibility floor regardless of which of (1)/(2) is chosen —
+without it, `cargo build` on a clean checkout needs node, vite, and a WASM
+build. This is the main structural cost of including the MCP surface and
+should be settled before that surface is implemented, not during.
 
 ## Consequences
 
@@ -200,4 +246,6 @@ weighed at implementation time.
 - `frontend/src/lib/scheduler/sim-scheduler.svelte.ts:172-181` — emissions
   lazy-load, the snapshot seam
 - `core/src/release_notes.rs:46` — `include_str!` precedent for the MCP path
+- `flake.nix:105-135` — `cleanCargoSource` strips non-Rust files;
+  `provisionSiblings` is the workaround that makes the precedent work
 - `core/src/config_codec.rs:42-63` — codec caps that rule out the URL route
