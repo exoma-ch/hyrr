@@ -374,6 +374,38 @@
               doInstallCargoArtifacts = false;
             });
 
+          # py-mcp is the crate PUBLISHED TO PyPI as the `hyrr-mcp` wheel, and
+          # until #581 it was the one crate `nix flake check` never built — the
+          # widest-distribution artifact with the narrowest hermetic coverage.
+          # Its Cargo.lock was only committed in #576; before that there was
+          # nothing to build `--locked` against. `check-lockfiles.sh` proves the
+          # lock *resolves*; this proves the crate *compiles* from it.
+          #
+          # Same shape as py-bindings above: both are PyO3 `cdylib` extension
+          # modules, so both need the extension-module link workaround (each in
+          # its own derivation, outside any workspace) and the core sibling
+          # provisioned. Deliberately `cargo check`, not a full build — the real
+          # wheel is built by maturin in release-hyrr-mcp.yml, so a second full
+          # build here would be redundant; what's missing is the `--locked`
+          # compile on every PR.
+          py-mcp-bindings =
+            let
+              pyMcpArgs = {
+                src = craneLib.cleanCargoSource ./py-mcp;
+                pname = "hyrr-mcp-py";
+                version = "0.0.0";
+                strictDeps = true;
+                preConfigure = provisionCoreSibling;
+                nativeBuildInputs = with pkgs; [ pkg-config python ];
+                PYO3_PYTHON = "${python}/bin/python3.12";
+              };
+            in
+            craneLib.mkCargoDerivation (pyMcpArgs // {
+              cargoArtifacts = craneLib.buildDepsOnly pyMcpArgs;
+              buildPhaseCargoCommand = "cargo check --release --offline";
+              doInstallCargoArtifacts = false;
+            });
+
           # ── WASM compute backend (crane, wasm32 compile) ───────────────
           # The artifact the frontend imports (#251). Compiles hyrr-wasm for
           # wasm32 — the hermetic gate against the #457-class breakage (wasm
