@@ -10,7 +10,7 @@
 
 ## Context
 
-#613 (ADR 0006 lineage) authenticated the **network** fetch: a minisign
+#613 authenticated the **network** fetch: a minisign
 signature over the release tarball, verified against a key pinned in
 `hyrr.json`. The **air-gapped** path was left accepting any file handed to it.
 
@@ -151,7 +151,8 @@ walking the tree and comparing it to nothing — which would repeat the exact
 - Issue #614 — this design, with the four consolidated reviews
 - Issue #594 — parent; its P1 is superseded here
 - Issue #577 / #592 — the SHA-256 pin, retained as the rollback defence
-- Issue #613 / ADR 0006 — the network-path signature this extends
+- Issue #613 — the network-path signature this extends (no ADR of its own;
+  ADR 0006 is the unrelated ureq / OS-trust-store decision)
 - exoma-ch/nucl-parquet#289, #290 — upstream signing
 - exoma-ch/nucl-parquet#296 — signed content manifest (unblocks the CDR case)
 - Debian `Release`/`InRelease`, Nix `narinfo`, OSTree signed commits — prior art

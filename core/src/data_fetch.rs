@@ -457,6 +457,13 @@ pub enum FetchErrorPayload {
         cache_dir: String,
         message: String,
     },
+    /// #578. Carries the env var names so a UI can name the escape hatch
+    /// without hard-coding it.
+    TlsTrustStore {
+        detail: String,
+        cacert_env_vars: Vec<String>,
+        message: String,
+    },
 }
 
 impl FetchErrorPayload {
@@ -604,6 +611,11 @@ impl From<&FetchError> for FetchErrorPayload {
                 cache_dir: cache_dir_str,
                 message,
             },
+            FetchError::TlsTrustStore(detail) => FetchErrorPayload::TlsTrustStore {
+                detail: detail.clone(),
+                cacert_env_vars: CACERT_ENV_VARS.iter().map(|s| s.to_string()).collect(),
+                message,
+            },
         }
     }
 }
@@ -689,6 +701,12 @@ pub enum FetchError {
          to the version that ships {found}."
     )]
     VersionMismatch { expected: String, found: String },
+    /// The configured TLS trust roots could not be used (#578). Distinct from
+    /// [`FetchError::Network`] because the remedy is entirely different: this
+    /// is a local configuration problem the user can fix, not a transport
+    /// failure to retry.
+    #[error("TLS trust store error: {0}")]
+    TlsTrustStore(String),
 }
 
 pub type Result<T> = std::result::Result<T, FetchError>;
@@ -846,19 +864,128 @@ fn acquire_lock() -> Result<CacheLock> {
     })
 }
 
-/// Build a configured reqwest client for cache fetches.
+/// Environment overrides for the TLS trust roots, highest precedence first.
+///
+/// `HYRR_CACERT` is ours and wins. `SSL_CERT_FILE` is the de-facto standard
+/// that curl, Python and Go already honour, so an institution that has
+/// already exported it for other tools gets HYRR working for free.
+///
+/// Why an explicit override at all, when the platform verifier reads the OS
+/// store? Because it only consults `SSL_CERT_FILE` on Linux/BSD — on macOS
+/// and Windows it goes to the native APIs. The override is what makes the
+/// escape hatch behave the same on all three (#578).
+pub const CACERT_ENV_VARS: [&str; 2] = ["HYRR_CACERT", "SSL_CERT_FILE"];
+
+/// Decide which roots to trust for the data fetch.
+///
+/// Default is the **OS trust store** via `rustls-platform-verifier`. This is
+/// the whole point of #578: HYRR previously compiled Mozilla's root list into
+/// the binary, so behind a TLS-inspecting institutional proxy the download
+/// failed and the standard remedy — "install our CA into the system trust
+/// store" — did nothing. Accelerator sites run exactly that setup.
+///
+/// If one of [`CACERT_ENV_VARS`] names a PEM bundle, those roots are used
+/// *instead* (not in addition). Replacing rather than merging is deliberate:
+/// an operator who points HYRR at a specific CA bundle is stating what they
+/// trust, and silently unioning the platform store back in would defeat that.
+///
+/// **Fails closed.** A bundle that exists but yields zero usable certificates
+/// is an error, never a silent fall-back to the platform store or to webpki.
+/// A typo'd `SSL_CERT_FILE` must not quietly downgrade a deliberate trust
+/// decision — that is the failure mode a trust-store feature exists to
+/// prevent.
+fn tls_root_certs() -> Result<ureq::tls::RootCerts> {
+    tls_root_certs_from(|k| std::env::var_os(k))
+}
+
+/// [`tls_root_certs`] with the environment injected, so the policy — which is
+/// security-relevant and must fail closed — is testable without mutating
+/// process-global state from parallel tests.
+fn tls_root_certs_from(
+    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<ureq::tls::RootCerts> {
+    use ureq::tls::{Certificate, RootCerts};
+
+    for var in CACERT_ENV_VARS {
+        let Some(raw) = lookup(var) else {
+            continue;
+        };
+        if raw.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(&raw);
+        let pem = fs::read(&path).map_err(|e| {
+            FetchError::TlsTrustStore(format!(
+                "{var} points at {} which could not be read: {e}",
+                path.display()
+            ))
+        })?;
+
+        let certs: Vec<Certificate<'static>> = ureq::tls::parse_pem(&pem)
+            .filter_map(|item| match item {
+                Ok(ureq::tls::PemItem::Certificate(c)) => Some(c),
+                // Private keys in a CA bundle are not an error; they are just
+                // not roots. A malformed block is skipped here and caught by
+                // the emptiness check below, so a bundle that is *entirely*
+                // junk fails loudly rather than half-succeeding.
+                _ => None,
+            })
+            .collect();
+
+        if certs.is_empty() {
+            return Err(FetchError::TlsTrustStore(format!(
+                "{var} points at {} but it contains no usable certificates. \
+                 Refusing to fall back to the system or bundled roots — an \
+                 explicit trust setting must not silently downgrade. Check \
+                 the file is PEM (`-----BEGIN CERTIFICATE-----`), not DER.",
+                path.display()
+            )));
+        }
+        return Ok(RootCerts::Specific(std::sync::Arc::new(certs)));
+    }
+
+    Ok(RootCerts::PlatformVerifier)
+}
+
+/// Build the HTTP agent for cache fetches.
 ///
 /// - `User-Agent`: GitHub increasingly rate-limits UA-less clients.
-/// - `connect_timeout(30s)`: a half-open TCP socket on flaky Wi-Fi
+/// - `timeout_connect(30s)`: a half-open TCP socket on flaky Wi-Fi
 ///   would otherwise hang the splash until the App.svelte wall clock
 ///   fires (5 min) with no progress.
-/// - No read timeout: a slow-but-progressing 400 MB download on a
+/// - No read/global timeout: a slow-but-progressing 400 MB download on a
 ///   rural DSL line should not be killed mid-stream.
-fn build_http_client() -> reqwest::Result<reqwest::blocking::Client> {
-    reqwest::blocking::Client::builder()
+/// - Roots from [`tls_root_certs`] — the OS store by default.
+fn build_http_client() -> Result<ureq::Agent> {
+    let tls = ureq::tls::TlsConfig::builder()
+        .root_certs(tls_root_certs()?)
+        .build();
+
+    Ok(ureq::Agent::config_builder()
         .user_agent(concat!("hyrr/", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .tls_config(tls)
         .build()
+        .new_agent())
+}
+
+/// Agent for the background update check (`update_check.rs`).
+///
+/// Same trust-root policy as the data fetch — an institutional CA configured
+/// once must work for both — but with a hard global timeout, because this runs
+/// on a detached background thread and must never linger.
+pub(crate) fn build_update_check_agent() -> Result<ureq::Agent> {
+    let tls = ureq::tls::TlsConfig::builder()
+        .root_certs(tls_root_certs()?)
+        .build();
+
+    Ok(ureq::Agent::config_builder()
+        .user_agent(concat!("hyrr-update-check/", env!("CARGO_PKG_VERSION")))
+        .timeout_connect(Some(crate::update_check::CHECK_TIMEOUT))
+        .timeout_global(Some(crate::update_check::CHECK_TIMEOUT))
+        .tls_config(tls)
+        .build()
+        .new_agent())
 }
 
 /// Drop guard that removes `path` when it goes out of scope. Used so
@@ -901,7 +1028,7 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
         bytes_total: None,
     });
 
-    let client = build_http_client().map_err(|e| FetchError::Network(e.to_string()))?;
+    let client = build_http_client()?;
 
     // Signature first, deliberately. It is ~380 bytes, and fetching it before
     // the ~800 MB payload means a missing key, an unavailable `.minisig`, or a
@@ -911,14 +1038,22 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
     let public_key = signing_public_key()?;
     let mut verifier = TarballVerifier::start(&signature, &public_key)?;
 
-    let resp = client
+    let mut resp = client
         .get(&url)
-        .send()
+        .call()
         .map_err(|e| FetchError::Network(e.to_string()))?;
     if !resp.status().is_success() {
         return Err(FetchError::HttpStatus(resp.status().as_u16()));
     }
-    let bytes_total = resp.content_length();
+    // ureq exposes headers rather than a typed accessor. GitHub redirects to a
+    // signed S3 URL and it is *that* response's Content-Length we want — ureq
+    // follows the cross-host 302 and reports the final one (verified against
+    // the real 785 MB asset, #579).
+    let bytes_total: Option<u64> = resp
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok());
 
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent)?;
@@ -933,7 +1068,7 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
     // 64 KiB chunks balance syscall overhead against responsiveness — at
     // 100 Mbit/s a chunk fills in ~5 ms which is well under the 100 ms
     // throttle window the desktop closure enforces.
-    let mut reader = io::BufReader::new(resp);
+    let mut reader = io::BufReader::new(resp.body_mut().as_reader());
     let mut buf = vec![0u8; 64 * 1024];
     let mut bytes_done: u64 = 0;
     // Hash as the bytes stream past. Doing it here rather than in a
@@ -1146,9 +1281,7 @@ fn signing_public_key() -> Result<minisign_verify::PublicKey> {
 }
 
 /// Fetch and parse the detached `.minisig` for the current release.
-fn fetch_detached_signature(
-    client: &reqwest::blocking::Client,
-) -> Result<minisign_verify::Signature> {
+fn fetch_detached_signature(client: &ureq::Agent) -> Result<minisign_verify::Signature> {
     let text = fetch_detached_signature_text(client)?;
     minisign_verify::Signature::decode(&text).map_err(|e| FetchError::SignatureUnavailable {
         detail: format!("could not parse the signature: {e}"),
@@ -1158,11 +1291,11 @@ fn fetch_detached_signature(
 
 /// Raw `.minisig` body, so the offline-bundle export can write it verbatim
 /// rather than re-serialising a parsed form.
-fn fetch_detached_signature_text(client: &reqwest::blocking::Client) -> Result<String> {
+fn fetch_detached_signature_text(client: &ureq::Agent) -> Result<String> {
     let url = signature_url();
-    let resp = client
+    let mut resp = client
         .get(&url)
-        .send()
+        .call()
         .map_err(|e| FetchError::SignatureUnavailable {
             detail: e.to_string(),
             url: url.clone(),
@@ -1177,10 +1310,12 @@ fn fetch_detached_signature_text(client: &reqwest::blocking::Client) -> Result<S
             url,
         });
     }
-    resp.text().map_err(|e| FetchError::SignatureUnavailable {
-        detail: e.to_string(),
-        url: url.clone(),
-    })
+    resp.body_mut()
+        .read_to_string()
+        .map_err(|e| FetchError::SignatureUnavailable {
+            detail: e.to_string(),
+            url: url.clone(),
+        })
 }
 
 /// Check the authenticated trusted comment's `sha256=` against the digest we
@@ -4137,5 +4272,247 @@ mod offline_signature_tests {
         assert_eq!(status.signing_key.as_deref(), Some(DATA_SIGNING_PUBKEY));
         assert_eq!(status.data_version.as_deref(), Some(DATA_VERSION));
         assert!(is_cache_verified());
+    }
+}
+
+#[cfg(test)]
+mod tls_trust_tests {
+    use super::*;
+    use std::ffi::OsString;
+    use ureq::tls::RootCerts;
+
+    /// A syntactically valid PEM CERTIFICATE block. `parse_pem` base64-decodes
+    /// the block; it does not validate X.509 structure, which is rustls's job
+    /// at handshake time. That is fine for testing the *policy* — which roots
+    /// get selected — which is what this module decides.
+    fn pem_block(body: &str) -> String {
+        format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n")
+    }
+
+    fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |k: &str| {
+            pairs
+                .iter()
+                .find(|(kk, _)| *kk == k)
+                .map(|(_, v)| OsString::from(*v))
+        }
+    }
+
+    /// The default, and the entire point of #578: trust the OS store, not a
+    /// root list compiled into the binary.
+    #[test]
+    fn default_is_the_platform_trust_store() {
+        let roots = tls_root_certs_from(env_of(&[])).expect("no env is not an error");
+        assert!(
+            matches!(roots, RootCerts::PlatformVerifier),
+            "without an override HYRR must consult the OS trust store, so that \
+             `install our CA into the system store` is an effective remedy"
+        );
+    }
+
+    /// An empty env var must read as unset, not as "an override pointing at
+    /// nothing" — otherwise `SSL_CERT_FILE=` in a shell profile would hard-fail
+    /// every fetch.
+    #[test]
+    fn empty_env_var_is_treated_as_unset() {
+        let roots = tls_root_certs_from(env_of(&[("HYRR_CACERT", ""), ("SSL_CERT_FILE", "")]))
+            .expect("empty vars must not error");
+        assert!(matches!(roots, RootCerts::PlatformVerifier));
+    }
+
+    #[test]
+    fn a_pem_bundle_replaces_the_platform_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ca.pem");
+        // Two blocks — institutional bundles routinely carry a chain.
+        let pem = format!("{}{}", pem_block("QUJDRA=="), pem_block("RUZHSA=="));
+        fs::write(&path, pem).unwrap();
+
+        let roots =
+            tls_root_certs_from(env_of(&[("HYRR_CACERT", path.to_str().unwrap())])).unwrap();
+        match roots {
+            RootCerts::Specific(certs) => assert_eq!(certs.len(), 2, "both roots must load"),
+            other => panic!("expected Specific roots, got {other:?}"),
+        }
+    }
+
+    /// THE security property. A bundle that yields no certificates must be an
+    /// error — never a silent fall-back to the platform or bundled roots. A
+    /// typo'd path must not quietly downgrade a deliberate trust decision.
+    #[test]
+    fn an_empty_bundle_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.pem");
+        fs::write(&path, "# no certificates here\n").unwrap();
+
+        let err = tls_root_certs_from(env_of(&[("HYRR_CACERT", path.to_str().unwrap())]))
+            .expect_err("an empty trust bundle must fail closed, not fall back");
+        assert!(matches!(err, FetchError::TlsTrustStore(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("no usable certificates"), "got: {msg}");
+        assert!(msg.contains("HYRR_CACERT"), "must name the offending var");
+    }
+
+    /// DER mistaken for PEM is the common operator error; it must be caught
+    /// rather than silently ignored.
+    #[test]
+    fn a_der_file_fails_closed_with_a_pem_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ca.der");
+        fs::write(&path, [0x30u8, 0x82, 0x01, 0x0a]).unwrap();
+
+        let err =
+            tls_root_certs_from(env_of(&[("SSL_CERT_FILE", path.to_str().unwrap())])).unwrap_err();
+        assert!(err.to_string().contains("PEM"), "hint the likely cause");
+    }
+
+    #[test]
+    fn an_unreadable_path_fails_closed() {
+        let err = tls_root_certs_from(env_of(&[(
+            "HYRR_CACERT",
+            "/definitely/not/a/real/ca-bundle.pem",
+        )]))
+        .expect_err("a missing bundle must not silently fall back");
+        assert!(matches!(err, FetchError::TlsTrustStore(_)));
+    }
+
+    /// Ours wins, so a user can override a site-wide `SSL_CERT_FILE` without
+    /// unsetting it.
+    #[test]
+    fn hyrr_cacert_takes_precedence_over_ssl_cert_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let ours = dir.path().join("ours.pem");
+        let theirs = dir.path().join("theirs.pem");
+        fs::write(&ours, pem_block("QUJDRA==")).unwrap();
+        fs::write(
+            &theirs,
+            format!("{}{}", pem_block("RUZHSA=="), pem_block("SUpLTA==")),
+        )
+        .unwrap();
+
+        let roots = tls_root_certs_from(env_of(&[
+            ("HYRR_CACERT", ours.to_str().unwrap()),
+            ("SSL_CERT_FILE", theirs.to_str().unwrap()),
+        ]))
+        .unwrap();
+        match roots {
+            RootCerts::Specific(certs) => {
+                assert_eq!(
+                    certs.len(),
+                    1,
+                    "HYRR_CACERT (1 cert) must win over SSL_CERT_FILE (2)"
+                )
+            }
+            other => panic!("expected Specific, got {other:?}"),
+        }
+    }
+
+    /// Documents the footgun called out in `core/Cargo.toml`.
+    ///
+    /// Selecting `RootCerts::PlatformVerifier` without ureq's
+    /// `platform-verifier` feature is a **runtime `panic!`**, not a compile
+    /// error (ureq `tls/rustls.rs:183`). Be precise about what this test can
+    /// and cannot promise:
+    ///
+    /// * It **does** pin that the default policy selects the platform arm, and
+    ///   that both agents construct. If someone changes the policy to webpki,
+    ///   this fails.
+    /// * It **cannot** prove the feature is enabled. `rustls-platform-verifier`
+    ///   is ureq's dependency, not ours, so there is nothing for core to name
+    ///   in a compile-time assertion; and ureq only builds the connector — and
+    ///   so only reaches the panic — on the first actual connection, which a
+    ///   unit test must not make.
+    ///
+    /// The real protection is therefore the pinned feature list in
+    /// `core/Cargo.toml` plus its comment. This test is the tripwire for the
+    /// half of the hazard that *is* reachable offline.
+    #[test]
+    fn platform_verifier_is_the_selected_arm_and_agents_construct() {
+        // `tls_root_certs_from(env_of(&[]))` is hermetic, but `build_*_agent()`
+        // read the REAL process env — and the nix build sandbox sets
+        // SSL_CERT_FILE to a nonexistent path on purpose, to catch code that
+        // silently trusts ambient system certs. This crate correctly FAILS
+        // CLOSED on an unreadable bundle (see "Fail closed" in ADR 0006), so
+        // inheriting that env makes the test assert the sandbox's policy
+        // rather than ours. Clear the overrides for the duration instead.
+        let _g = tests::SERIAL.lock().unwrap();
+        let _env = ClearedCacertEnv::new();
+
+        assert!(matches!(
+            tls_root_certs_from(env_of(&[])).unwrap(),
+            RootCerts::PlatformVerifier
+        ));
+        build_http_client().expect("data-fetch agent must construct");
+        build_update_check_agent().expect("update-check agent must construct");
+    }
+
+    /// Restores the CA-cert override variables on drop, so a panicking
+    /// assertion above cannot leak a cleared env into the next test.
+    struct ClearedCacertEnv(Vec<(&'static str, Option<OsString>)>);
+
+    impl ClearedCacertEnv {
+        fn new() -> Self {
+            let saved: Vec<_> = CACERT_ENV_VARS
+                .iter()
+                .map(|k| (*k, std::env::var_os(k)))
+                .collect();
+            for (k, _) in &saved {
+                std::env::remove_var(k);
+            }
+            Self(saved)
+        }
+    }
+
+    impl Drop for ClearedCacertEnv {
+        fn drop(&mut self) {
+            for (k, v) in self.0.drain(..) {
+                match v {
+                    Some(v) => std::env::set_var(k, v),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    /// Live end-to-end check that a real TLS handshake succeeds against the
+    /// **OS trust store** — the one thing a unit test cannot prove, since the
+    /// `platform-verifier` panic arm is only reachable on a real connection.
+    ///
+    /// Opt-in, because CI must not depend on GitHub being reachable:
+    ///
+    /// ```text
+    /// cargo test --manifest-path core/Cargo.toml -- --ignored live_tls
+    /// ```
+    #[test]
+    #[ignore = "requires network"]
+    fn live_tls_handshake_uses_the_platform_store() {
+        let agent = build_http_client().expect("agent");
+        let mut resp = agent
+            .get(&release_url())
+            .call()
+            .expect("TLS handshake against the OS trust store must succeed");
+        assert!(resp.status().is_success(), "status {}", resp.status());
+        // Read one chunk to prove the stream is real, not just the headers.
+        let mut buf = [0u8; 4];
+        let n = std::io::Read::read(&mut resp.body_mut().as_reader(), &mut buf).unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(&buf, &[0x28, 0xB5, 0x2F, 0xFD], "zstd frame magic");
+    }
+
+    /// The wire payload must name the escape hatch, so a Tauri recovery card
+    /// can tell the user what to set without hard-coding var names.
+    #[test]
+    fn payload_names_the_escape_hatch() {
+        let err = FetchError::TlsTrustStore("boom".into());
+        let payload = FetchErrorPayload::from(&err);
+        match payload {
+            FetchErrorPayload::TlsTrustStore {
+                cacert_env_vars, ..
+            } => {
+                assert!(cacert_env_vars.contains(&"HYRR_CACERT".to_string()));
+                assert!(cacert_env_vars.contains(&"SSL_CERT_FILE".to_string()));
+            }
+            other => panic!("wrong payload variant: {other:?}"),
+        }
     }
 }
