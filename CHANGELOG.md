@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0](https://github.com/exoma-ch/hyrr/compare/v0.19.0...v0.20.0) (2026-08-14)
+
+
+### Features
+
+* **ci:** verify what actually deployed and what actually published ([#401](https://github.com/exoma-ch/hyrr/issues/401)) ([#600](https://github.com/exoma-ch/hyrr/issues/600)) ([66c1cd8](https://github.com/exoma-ch/hyrr/commit/66c1cd8ebb095c493e2b558a970f2aa74e7ce340))
+* **core:** fetch over ureq with the OS trust store (closes [#578](https://github.com/exoma-ch/hyrr/issues/578), [#579](https://github.com/exoma-ch/hyrr/issues/579)) ([#602](https://github.com/exoma-ch/hyrr/issues/602)) ([9bd943d](https://github.com/exoma-ch/hyrr/commit/9bd943de74f6e74fd9f875c731297e08b246c121))
+* **core:** record nuclear-data provenance in simulation results ([#601](https://github.com/exoma-ch/hyrr/issues/601)) ([924cc7a](https://github.com/exoma-ch/hyrr/commit/924cc7a7d104500abd01e5884780a07149709f1e))
+* **data:** verify the air-gapped install path, and anchor the signing key (closes [#614](https://github.com/exoma-ch/hyrr/issues/614)) ([#618](https://github.com/exoma-ch/hyrr/issues/618)) ([7b3a86a](https://github.com/exoma-ch/hyrr/commit/7b3a86a2aa230bc3098b7f0c5831e2ed954d185c))
+* **data:** verify the nuclear-data tarball's minisign signature (closes [#594](https://github.com/exoma-ch/hyrr/issues/594)) ([#613](https://github.com/exoma-ch/hyrr/issues/613)) ([eeb4f30](https://github.com/exoma-ch/hyrr/commit/eeb4f3083bd9a9b7fdff354bd14a88237de0ea85))
+* **data:** verify the signed content manifest, surviving repacking gateways (closes [#621](https://github.com/exoma-ch/hyrr/issues/621)) ([#622](https://github.com/exoma-ch/hyrr/issues/622)) ([9f2278f](https://github.com/exoma-ch/hyrr/commit/9f2278f1b8dbf4f09a15aec698dbd4ca13603ca2))
+* **frontend:** shareable self-contained results HTML — ADR 0006 + working spike ([#616](https://github.com/exoma-ch/hyrr/issues/616)) ([7a7e108](https://github.com/exoma-ch/hyrr/commit/7a7e108c5f7268b92845756735cb1ea493b2f6ea))
+* land the shareable results export on web, desktop and MCP ([#624](https://github.com/exoma-ch/hyrr/issues/624)) ([be60325](https://github.com/exoma-ch/hyrr/commit/be60325038bb6d07b5599a0554a423895f1222e7))
+
+
+### Bug Fixes
+
+* **core:** main is broken again — duplicate provenance in the viewer fixture ([#625](https://github.com/exoma-ch/hyrr/issues/625)) ([6264a0a](https://github.com/exoma-ch/hyrr/commit/6264a0a226b235451ef5e0c6da708c8308afe453))
+* **core:** main's test build is broken — viewer fixture predates provenance ([#623](https://github.com/exoma-ch/hyrr/issues/623)) ([ba0e505](https://github.com/exoma-ch/hyrr/commit/ba0e5053030425764b43ed2cb5892416c5da2212))
+* **data:** realign the nucl-parquet flake pin with the submodule + gate it; bootstrap worktrees offline ([#617](https://github.com/exoma-ch/hyrr/issues/617)) ([ccc7ce1](https://github.com/exoma-ch/hyrr/commit/ccc7ce15af9729fad646e9f1b6dde94645c72e04))
+* **deps:** resolve npm audit advisories in workspace and worker lockfiles ([#609](https://github.com/exoma-ch/hyrr/issues/609)) ([45bdf39](https://github.com/exoma-ch/hyrr/commit/45bdf39dd24fd952c01c3582e03db471aa679b4a))
+* **frontend:** clear svelte-check errors and correct CONTRIBUTING ([#612](https://github.com/exoma-ch/hyrr/issues/612)) ([69b3892](https://github.com/exoma-ch/hyrr/commit/69b38925d613c947f3b61297d8702330fe3b8268))
+* **mcp:** one version identity across every entry point ([#599](https://github.com/exoma-ch/hyrr/issues/599)) ([#604](https://github.com/exoma-ch/hyrr/issues/604)) ([c4e3575](https://github.com/exoma-ch/hyrr/commit/c4e35755f9f6814d4e23cb6b73d9db191b4ca40c))
+* **release:** correct 0.19.0's data_version and verify it against the submodule ([#607](https://github.com/exoma-ch/hyrr/issues/607)) ([06710f1](https://github.com/exoma-ch/hyrr/commit/06710f19f0dfdccafff44b009f7ac4806076365c))
+* **release:** only compare data_version when a release is being cut ([#620](https://github.com/exoma-ch/hyrr/issues/620)) ([b7c2fa2](https://github.com/exoma-ch/hyrr/commit/b7c2fa276e3c607e020f7df9e3a6dca3a368ba56))
+
+
+### Miscellaneous
+
+* **deps:** arrow/parquet 54 -&gt; 59, now that nucl-parquet has moved ([#632](https://github.com/exoma-ch/hyrr/issues/632)) ([03c094f](https://github.com/exoma-ch/hyrr/commit/03c094f43ddee966692794799c03fe5ec2e74ea9))
+* **deps:** batch the CI-exercised action bumps (replaces [#530](https://github.com/exoma-ch/hyrr/issues/530), [#514](https://github.com/exoma-ch/hyrr/issues/514), [#491](https://github.com/exoma-ch/hyrr/issues/491)) ([#626](https://github.com/exoma-ch/hyrr/issues/626)) ([be42ec4](https://github.com/exoma-ch/hyrr/commit/be42ec4e67983ba0ac07f7ff56fabe897489ffaa))
+* **deps:** batch the verified frontend dep bumps ([#627](https://github.com/exoma-ch/hyrr/issues/627)) ([8ab1621](https://github.com/exoma-ch/hyrr/commit/8ab16214112decbba39391d17f9aa65d1c999254))
+* **deps:** bump actions/create-github-app-token from 2 to 3 ([#490](https://github.com/exoma-ch/hyrr/issues/490)) ([cb0614b](https://github.com/exoma-ch/hyrr/commit/cb0614b34148fa8a44d17eabc032ad0c32d77c5e))
+* **deps:** bump actions/setup-python from 6 to 7 ([#629](https://github.com/exoma-ch/hyrr/issues/629)) ([7a94c50](https://github.com/exoma-ch/hyrr/commit/7a94c5017f0bd4bd5eec36f2a45dec1bbcb875b9))
+* **deps:** bump pyo3 0.28 -&gt; 0.29 in py and py-mcp ([#598](https://github.com/exoma-ch/hyrr/issues/598)) ([1a45f80](https://github.com/exoma-ch/hyrr/commit/1a45f80c3310ec06b5adfc011dcf99fd1e47e66e)), closes [#597](https://github.com/exoma-ch/hyrr/issues/597)
+* **deps:** bump the cargo group across 4 directories with 11 updates ([#631](https://github.com/exoma-ch/hyrr/issues/631)) ([045896c](https://github.com/exoma-ch/hyrr/commit/045896c5b9662e1a5f1ed4acaa44f6578ce24dec))
+
+
+### Documentation
+
+* **release-notes:** classify the 0.20.0 entries ahead of the cut ([#610](https://github.com/exoma-ch/hyrr/issues/610)) ([518499d](https://github.com/exoma-ch/hyrr/commit/518499dde65a93bd9cc1f629ae842f43d7ca4bb2))
+* **release-notes:** record the signed content manifest, and date 0.20.0 to its cut day ([#634](https://github.com/exoma-ch/hyrr/issues/634)) ([a4e715f](https://github.com/exoma-ch/hyrr/commit/a4e715f52d597b8e557e17f7587e9fb27b04dd5e)), closes [#622](https://github.com/exoma-ch/hyrr/issues/622) [#621](https://github.com/exoma-ch/hyrr/issues/621)
+
+
+### CI
+
+* add cargo-deny across all six crates ([#596](https://github.com/exoma-ch/hyrr/issues/596)) ([f30e108](https://github.com/exoma-ch/hyrr/commit/f30e1082d65ac62eab87bff0e0e71418304ff7b4))
+* **frontend:** run svelte-check and vitest (closes [#611](https://github.com/exoma-ch/hyrr/issues/611)) ([#633](https://github.com/exoma-ch/hyrr/issues/633)) ([a71ac5d](https://github.com/exoma-ch/hyrr/commit/a71ac5df78dd6bfe2dca371f80f6053290396f78))
+* **nix:** cover py-mcp in nix flake check ([#595](https://github.com/exoma-ch/hyrr/issues/595)) ([efebce6](https://github.com/exoma-ch/hyrr/commit/efebce63766dae0a3dc590e4f377cd3d17e879f1)), closes [#581](https://github.com/exoma-ch/hyrr/issues/581)
+
 ## [0.19.0](https://github.com/exoma-ch/hyrr/compare/v0.18.0...v0.19.0) (2026-08-06)
 
 
