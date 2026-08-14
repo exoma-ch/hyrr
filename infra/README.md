@@ -18,9 +18,11 @@ dev / integration     staging                    PRODUCTION
 | prd | **<https://hyrr.ethz.ch>**  | `w3_hyrrprd`  |
 
 Each instance is its own Apache vhost serving at `/`, so the bundle is built
-with `VITE_BASE_PATH=/`. (This is separate from the GitHub Pages deploy under
-`/hyrr/tst/` + `/hyrr/`, which still runs from `deploy-frontend.yml` /
-`promote-to-prod.yml`.)
+with `VITE_BASE_PATH=/`. (This is separate from GitHub Pages, which now serves
+**only the public landing page** at the `gh-pages` root via
+`deploy-frontend.yml`. The old `/hyrr/tst/` + `/hyrr/` app slots and
+`promote-to-prod.yml` were removed with this ladder in #489 — both URLs 404
+today.)
 
 ### Deploying
 
