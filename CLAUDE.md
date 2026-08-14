@@ -88,12 +88,31 @@ implementation (the pure-Python compute modules are pre-Rust legacy; see below).
 
 ## Release & CI
 
-- `release-please` cuts releases from conventional commits; merging its PR tags
-  + creates the GitHub Release. It also auto-syncs `uv.lock` + `wasm/Cargo.lock`
-  on the release PR (`sync-release-lockfiles` job), but a maintainer must
-  close→reopen the release PR once to run required CI (GITHUB_TOKEN caveat).
-- Every push to `main` deploys to `/hyrr/tst/` (staging). Promotion to prod
-  (`/hyrr/`) is manual `workflow_dispatch` (`promote-to-prod.yml`).
+- `release-please` cuts releases from conventional commits. Merging its PR
+  pushes **two** tags: `v<ver>` (GitHub Release, desktop artifacts) and
+  `hyrr-mcp-v<ver>` — the PyPI wheels publish off the *second*, so a missing
+  second tag ships nothing while everything reports green.
+- Auth is a dedicated GitHub App token (`hyrr-release-bot`), **not**
+  `GITHUB_TOKEN`, so its commits and tags do trigger downstream workflows. The
+  old "close→reopen the release PR once to run required CI" caveat no longer
+  applies.
+- `sync-release-lockfiles` syncs **all eight** lockfiles on the release PR —
+  `uv.lock`, `package-lock.json`, and every crate's `Cargo.lock` (core, hyrr-mcp,
+  py, py-mcp, wasm, desktop/src-tauri). It also re-resolves some transitive deps
+  as a side effect; see #636.
+- Post-release, `scripts/verify-release.sh <ver>` asserts the published world
+  (both tags, `latest.json`, the full PyPI wheel set incl. aarch64, the
+  release-notes entry) — the pre-publish gates cannot see any of that (#401).
+- **Deploys go to ETH webhosting**, not GitHub Pages: `deploy-eth.yml` drives the
+  `ent → tst → prd` ladder (`hyrrent`/`hyrrtst`/`hyrr.ethz.ch`). Push to `main`
+  targets `ent`; `workflow_dispatch` picks the env; `prd` has required-reviewer
+  protection. The job is gated on `vars.CI_DEPLOY_ENABLED == 'true'`, which is
+  currently **unset**, so CI deploys do not run at all today.
+- GitHub Pages serves **only the public landing page** (`deploy-frontend.yml` →
+  `gh-pages` root). The old `/hyrr/tst/` + `/hyrr/` app slots and
+  `promote-to-prod.yml` were removed with the ETH ladder (#489); the mkdocs site
+  is currently published nowhere (#637), though `docs.yml` still validates it on
+  every PR.
 
 ## Conventions
 

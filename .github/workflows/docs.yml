@@ -1,11 +1,13 @@
-# Docs deploy lives in `promote-to-prod.yml` (manual workflow_dispatch):
-# mkdocs builds into `frontend/dist/docs/` and the whole tree ships to the
-# gh-pages branch root, served at https://exoma-ch.github.io/hyrr/docs/.
-# `deploy-frontend.yml` (auto on push to main) only deploys the frontend to
-# /hyrr/tst/ — docs are NOT in the staging slot.
+# PR-time validation ONLY — this workflow publishes nothing.
 #
-# This workflow is PR-time validation only: catches docs breakage before
-# merge so a future promote-to-prod doesn't fail half-way through.
+# WARNING: nothing else publishes the docs either. The deploy used to live in
+# `promote-to-prod.yml`, which was DELETED with the ETH deploy ladder (#489),
+# and `deploy-frontend.yml` then replaced the gh-pages content with the public
+# landing page. https://exoma-ch.github.io/hyrr/docs/ 404s today. Tracked in
+# #637.
+#
+# So a green check here proves the docs BUILD, not that anyone can read them.
+# Do not read this passing as "the docs site is fine".
 name: Validate docs
 
 on:
