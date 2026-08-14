@@ -4,7 +4,7 @@
   "releases": [
     {
       "version": "0.20.0",
-      "date": "2026-08-13",
+      "date": "2026-08-14",
       "data_version": "2026.8.2",
       "entries": [
         {
@@ -61,6 +61,17 @@
             594,
             614,
             577
+          ]
+        },
+        {
+          "summary": "Air-gapped installs now survive a content-scanning gateway: when the byte-signature fails but the data release ships a signed content manifest, the extracted tree is verified file-by-file against it instead of being refused outright.",
+          "impact": "api_change",
+          "silent": false,
+          "affected": [],
+          "guidance": "This only widens what installs — it never widens what is trusted. Content Disarm & Reconstruction appliances (OPSWAT MetaDefender, Deep CDR), standard at hospitals and Tier-1 nuclear sites, repack a .tar.zst in transit: the data arrives intact but the byte-signature no longer matches, and the offline install refused it — roughly 20% of realistic air-gapped deployments. The manifest is signed with the same offline key already pinned as data_signing_pubkey, so no new trust root is introduced. The byte-signature is still tried first and is still authoritative; the manifest is a strictly narrower fallback, and an unsigned manifest, a manifest naming a different data release, or a tree with a missing, altered OR unlisted extra file is refused with nothing promoted into the cache. IMPORTANT: this path is dormant in this release — manifests begin with nucl-parquet data-2026.8.3 and 0.20.0 pins 2026.8.2, so no published release exercises it yet. Absence of a manifest reads as 'no second route available', never as 'no verification needed'.",
+          "refs": [
+            621,
+            622
           ]
         },
         {
