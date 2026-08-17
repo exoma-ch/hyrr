@@ -201,10 +201,12 @@
               git-lfs
             ]
             ++ pkgs.lib.optionals isLinux tauriLibs
+            # No `darwin.apple_sdk.frameworks.*` here: nixpkgs turned those into
+            # throw-stubs when the SDK moved into the Darwin stdenv, so naming
+            # WebKit/AppKit explicitly now *breaks* eval on macOS. Tauri picks
+            # them up from the stdenv-provided SDK.
             ++ pkgs.lib.optionals isDarwin (with pkgs; [
               libiconv
-              darwin.apple_sdk.frameworks.WebKit
-              darwin.apple_sdk.frameworks.AppKit
             ]);
 
             # uv env + native libs for both Rust (webkit/gtk) and Python wheels.
