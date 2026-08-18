@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.1](https://github.com/exoma-ch/hyrr/compare/v0.20.0...v0.20.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* **data:** look for the manifest name upstream actually publishes (closes [#645](https://github.com/exoma-ch/hyrr/issues/645)) ([#646](https://github.com/exoma-ch/hyrr/issues/646)) ([dfa73d4](https://github.com/exoma-ch/hyrr/commit/dfa73d4c5c4a1b49b5b0496c46c677a2fda8b5d9))
+* **flake:** drop removed darwin.apple_sdk framework refs ([#642](https://github.com/exoma-ch/hyrr/issues/642)) ([327bf49](https://github.com/exoma-ch/hyrr/commit/327bf4992e146e51d872a61b977cc3c25bbdb17c))
+
+
+### Documentation
+
+* correct the Release & CI claims that no longer match the repo ([#638](https://github.com/exoma-ch/hyrr/issues/638)) ([3ff53ef](https://github.com/exoma-ch/hyrr/commit/3ff53ef505dea95f3f9e71401b9904c12c4405ba)), closes [#637](https://github.com/exoma-ch/hyrr/issues/637) [#636](https://github.com/exoma-ch/hyrr/issues/636)
+* **release-notes:** add the 0.20.1 entry so the release PR can merge ([#643](https://github.com/exoma-ch/hyrr/issues/643)) ([be37950](https://github.com/exoma-ch/hyrr/commit/be3795084aaadb3632a5875ec69ffdad776af478)), closes [#639](https://github.com/exoma-ch/hyrr/issues/639) [#642](https://github.com/exoma-ch/hyrr/issues/642)
+
 ## [0.20.0](https://github.com/exoma-ch/hyrr/compare/v0.19.0...v0.20.0) (2026-08-14)
 
 
