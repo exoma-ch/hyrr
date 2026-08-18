@@ -14,10 +14,19 @@
 # with VITE_BASE_PATH=/. The remote document root is read from the instance's
 # own ~/conf/servers (authoritative); override with HYRR_ETH_DOCROOT.
 #
-# WHERE THIS RUNS: a host with SSH (:22) reachability to *.ethz.ch and the
-# w3_hyrr<env> key loaded — i.e. your Mac on the ETH network / VPN. vm-dev and
-# GitHub-hosted runners CANNOT reach ETH SSH ("No route to host"); see
-# .github/workflows/deploy-eth.yml.
+# WHERE THIS RUNS: any host that can reach the instances over SSH (:22), either
+#   * directly — your Mac on the ETH network / VPN, or
+#   * via the heimdall ProxyJump aliases (ethz-hyrr{ent,tst,prd}) in ssh_config,
+#     which is how vm-dev reaches them. This file previously said vm-dev CANNOT
+#     ("No route to host"); that was true before the aliases existed and is not
+#     true now — a full ent deploy of 0.20.1 ran from vm-dev through heimdall
+#     (#648). The prefix is auto-detected; see default_ssh_prefix below.
+# Either way the w3_hyrr<env> key must be loaded:
+#   ssh-add ~/.ssh/id_ed25519_ethz ~/.ssh/id_ed25519_eth-hyrr
+#
+# GitHub-hosted runners still cannot deploy, but for an unrelated reason: the
+# bastion rejects the key inside secrets/eth-deploy.sops.env (#641). That is an
+# authorisation problem, not a reachability one — see deploy-eth.yml.
 #
 # Env knobs:
 #   HYRR_ETH_DOCROOT     override remote docroot (skip conf/servers detection)
@@ -52,6 +61,20 @@ env_url()  { case "$1" in prd) echo "https://hyrr.ethz.ch" ;; *) echo "https://h
 # use the matching ssh_config alias — it supplies user, hostname, key and any
 # ProxyJump (the ETH heimdall jump). Otherwise connect directly, which works
 # from a host already on the ETH network / VPN.
+#
+# The prefix DEFAULTS to "ethz-hyrr" when that alias is defined in ssh_config,
+# because the alias is strictly more capable: it carries the heimdall ProxyJump
+# that makes the instances reachable from hosts with no ETH route at all. This
+# repo long documented deploys as Mac-on-VPN-only; that is not true once the
+# aliases exist — a full ent deploy ran from vm-dev through heimdall (#648).
+# Set HYRR_ETH_SSH_PREFIX="" explicitly to force a direct connection.
+default_ssh_prefix() {
+  [ -n "${HYRR_ETH_SSH_PREFIX+set}" ] && return 0   # honour an explicit value, including ""
+  ssh -G ethz-hyrrent 2>/dev/null | grep -qi '^proxyjump ' && HYRR_ETH_SSH_PREFIX="ethz-hyrr"
+  return 0
+}
+default_ssh_prefix
+
 ssh_target() { # ssh_target <env>
   if [ -n "${HYRR_ETH_SSH_PREFIX:-}" ]; then
     echo "${HYRR_ETH_SSH_PREFIX}${1}"
@@ -466,6 +489,69 @@ confirm_prd() {
   [ "$c" = "hyrr-prod" ] || { echo "Aborted."; exit 1; }
 }
 
+# Production may only be deployed from `main`, exactly as GitHub has it (#648).
+#
+# Deliberately BEFORE the build: the frontend build rewrites package-lock.json's
+# `name` field when the checkout directory is not called "hyrr" (true in every
+# git worktree), so asserting cleanliness afterwards would fail for a reason
+# that has nothing to do with what is being shipped.
+#
+# There is NO bypass flag, matching docs/DATA_INTEGRITY.md's reasoning about the
+# offline-install path: "an escape hatch is the first thing a frustrated user
+# pastes from a forum thread". ent and tst stay unrestricted — they exist to
+# deploy work in progress, and gating them would push people back to running
+# rsync by hand, which is worse than an ungated staging rung.
+assert_prd_is_released_main() {
+  local branch dirty local_head remote_head
+
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  if [ "$branch" != "main" ]; then
+    echo "ERROR: prd deploys only from 'main' — you are on '$branch'." >&2
+    echo "       Production must be traceable to what GitHub calls main; a" >&2
+    echo "       feature branch or detached HEAD is not reviewable after the" >&2
+    echo "       fact. Deploy it to ent or tst instead." >&2
+    exit 1
+  fi
+
+  # Tracked modifications only. Untracked files are not shipped by the build,
+  # and the whitelist (gitignored) is materialised from sops on every run.
+  dirty="$(git status --porcelain --untracked-files=no 2>/dev/null)"
+  if [ -n "$dirty" ]; then
+    echo "ERROR: prd deploys only from a clean tree; these are uncommitted:" >&2
+    while IFS= read -r line; do echo "         $line" >&2; done <<< "$dirty"
+    echo "       Whatever you would ship is not on GitHub, so nobody could" >&2
+    echo "       reproduce or review the deployed artifact." >&2
+    exit 1
+  fi
+
+  if ! git fetch --quiet origin main 2>/dev/null; then
+    echo "ERROR: cannot reach origin to confirm main is in sync." >&2
+    echo "       Refusing rather than assuming: an unverified 'in sync' is" >&2
+    echo "       the claim this check exists to make." >&2
+    exit 1
+  fi
+
+  local_head="$(git rev-parse HEAD)"
+  remote_head="$(git rev-parse origin/main)"
+  if [ "$local_head" != "$remote_head" ]; then
+    echo "ERROR: local main is not in sync with origin/main." >&2
+    echo "         local  : $local_head" >&2
+    echo "         origin : $remote_head" >&2
+    if git merge-base --is-ancestor "$local_head" "$remote_head" 2>/dev/null; then
+      echo "       You are BEHIND — pull first ($(git rev-list --count "$local_head..$remote_head") commit(s))." >&2
+    elif git merge-base --is-ancestor "$remote_head" "$local_head" 2>/dev/null; then
+      echo "       You are AHEAD — push and let CI pass first ($(git rev-list --count "$remote_head..$local_head") commit(s))." >&2
+      echo "       Deploying unpushed commits puts code in production that no" >&2
+      echo "       gate has run against." >&2
+    else
+      echo "       The histories have DIVERGED." >&2
+    fi
+    exit 1
+  fi
+
+  echo "=== prd preflight: on main, clean, in sync with origin ($(git rev-parse --short HEAD)) ==="
+}
+
 # ── dispatch ───────────────────────────────────────────────────────
 # Test seam: `HYRR_DEPLOY_ETH_LIB=1 source scripts/deploy-eth.sh` loads the
 # helpers above without running a command, so scripts/tests can exercise them
@@ -510,6 +596,9 @@ case "$CMD" in
   prd)
     # Prod is the canonical, indexable origin — no VITE_ROBOTS override. Always
     # builds fresh so it can't inherit a non-prod build's noindex meta.
+    # State gate runs BEFORE the prompt: refusing an impossible deploy should
+    # not cost the operator a confirmation they then watch fail (#648).
+    assert_prd_is_released_main
     confirm_prd
     HYRR_SKIP_BUILD="" do_build
     do_deploy prd
