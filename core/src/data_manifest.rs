@@ -27,6 +27,15 @@ use serde::{Deserialize, Serialize};
 /// one" failure that this whole line of work exists to avoid.
 pub const SUPPORTED_MANIFEST_VERSION: u32 = 1;
 
+/// First upstream data release to publish a signed content manifest.
+///
+/// Was prose-only until #645, which is part of why the naming bug it fixes
+/// went unnoticed: nothing in code could branch on "should a manifest exist
+/// for this release?", so no test could assert the difference between
+/// *absent because none was published* and *absent because we looked under
+/// the wrong name*. The live test in `data_fetch` guards on this.
+pub const FIRST_MANIFEST_VERSION: &str = "2026.8.3";
+
 /// One file's expected digest and size.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestEntry {
