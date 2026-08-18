@@ -147,10 +147,10 @@ Copy all four release assets if your route may repack, keeping their published
 names — the manifest replaces `.tar.zst` rather than being appended to it:
 
 ```text
-nucl-parquet-data-2026.8.3.tar.zst                   the archive
-nucl-parquet-data-2026.8.3.tar.zst.minisig           its signature
-nucl-parquet-data-2026.8.3.manifest.json             the content manifest
-nucl-parquet-data-2026.8.3.manifest.json.minisig     its signature
+nucl-parquet-data-<V>.tar.zst                   the archive
+nucl-parquet-data-<V>.tar.zst.minisig           its signature
+nucl-parquet-data-<V>.manifest.json             the content manifest
+nucl-parquet-data-<V>.manifest.json.minisig     its signature
 ```
 
 Put all four in one directory and point `install_from_tarball` at the archive;

@@ -447,6 +447,14 @@
               echo "::error::docs uses the legacy v-prefixed tarball name (pre nucl-parquet#151)."
               exit 1
             fi
+            # The manifest (#621) is a sibling asset in the same family, and it
+            # does NOT end in .tar.zst — so the check above cannot see it. Left
+            # uncovered, DATA_INTEGRITY.md could pin a concrete version on the
+            # very asset whose naming #645 got wrong.
+            if grep -RnE 'nucl-parquet-data-[0-9]{4}\.[0-9]+\.[0-9]+\.manifest\.json' docs/; then
+              echo "::error::docs hardcodes a concrete data-manifest version. Use <V> placeholder; SSoT is hyrr_core::data_fetch::manifest_url()."
+              exit 1
+            fi
             grep -q '"https://github.com/exoma-ch/nucl-parquet/releases/download"' core/src/data_fetch.rs || {
               echo "::error::RELEASE_BASE literal in core/src/data_fetch.rs has drifted."
               exit 1
