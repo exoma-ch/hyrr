@@ -157,6 +157,29 @@ pub fn signature_url_for(version: &str) -> String {
     format!("{}.minisig", release_url_for(version))
 }
 
+/// Signed content-manifest URL for the current [`DATA_VERSION`] (#621).
+///
+/// Only meaningful from [`crate::data_manifest::FIRST_MANIFEST_VERSION`]
+/// onward; earlier releases publish no such asset.
+pub fn manifest_url() -> String {
+    manifest_url_for(DATA_VERSION)
+}
+
+/// Signed content-manifest URL for an arbitrary version.
+///
+/// Note the shape: upstream **replaces** `.tar.zst` rather than appending to
+/// it, so this is deliberately not `format!("{}.manifest.json", release_url_for(..))`.
+/// Getting that wrong is #645 — it made the whole CDR fallback dead code.
+pub fn manifest_url_for(version: &str) -> String {
+    format!("{RELEASE_BASE}/data-{version}/nucl-parquet-data-{version}.manifest.json")
+}
+
+/// Signature URL for the content manifest — the manifest URL with `.minisig`
+/// appended (this one really is appended).
+pub fn manifest_signature_url_for(version: &str) -> String {
+    format!("{}.minisig", manifest_url_for(version))
+}
+
 /// Human-readable cache-root pattern for diagnostics / UX, e.g.
 /// `~/.hyrr/nucl-parquet/v2026.5.0/data`. The literal returned here is
 /// always interpolated against the live [`DATA_VERSION`]; callers that
@@ -2306,19 +2329,55 @@ pub fn install_from_tarball_with_signature(
     Ok(())
 }
 
-/// Load and authenticate `<archive>.manifest.json` if present (#621).
+/// Names a signed content manifest may travel under, most canonical first.
+///
+/// Upstream's release workflow publishes the manifest as the tarball name with
+/// `.tar.zst` **replaced**, not appended to:
+///
+/// ```text
+/// nucl-parquet-data-2026.8.3.tar.zst           <- archive
+/// nucl-parquet-data-2026.8.3.manifest.json     <- manifest   (note: no .tar.zst)
+/// nucl-parquet-data-2026.8.3.manifest.json.minisig
+/// ```
+///
+/// Only checking `<archive>.manifest.json` therefore misses every real
+/// release: a user copying the four published assets verbatim, exactly as
+/// `docs/DATA_INTEGRITY.md` instructs, lands a manifest this code would not
+/// see. That reads as "no manifest published" — indistinguishable from a
+/// pre-2026.8.3 release — so the CDR fallback silently does nothing at the
+/// sites it exists for. Fixed in #645; see `live_manifest_asset_name_matches_upstream`.
+///
+/// The appended form is still accepted second: it costs one `exists()` call
+/// and keeps bundles produced by earlier tooling working. Whichever is found
+/// must still carry its own `.minisig` and bind to this build's version, so
+/// accepting both widens where we look, never what we trust.
+fn manifest_candidates(archive: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(name) = archive.file_name().and_then(|n| n.to_str()) {
+        if let Some(stem) = name.strip_suffix(".tar.zst") {
+            out.push(archive.with_file_name(format!("{stem}.manifest.json")));
+        }
+    }
+    let mut appended = archive.as_os_str().to_os_string();
+    appended.push(".manifest.json");
+    out.push(PathBuf::from(appended));
+    out
+}
+
+/// Load and authenticate the signed content manifest beside `archive`, if
+/// present (#621). See [`manifest_candidates`] for the names accepted.
 ///
 /// Returns `Ok(None)` when there simply is no manifest — releases before
 /// upstream's `FIRST_MANIFEST_VERSION` (2026.8.3) have none, so absence is
 /// normal and must not be confused with failure. A manifest that is present
 /// but does not authenticate is an error, never a shrug.
 fn load_sibling_manifest(archive: &Path) -> Result<Option<crate::data_manifest::ContentManifest>> {
-    let mut base = archive.as_os_str().to_os_string();
-    base.push(".manifest.json");
-    let manifest_path = PathBuf::from(base);
-    if !manifest_path.exists() {
+    let Some(manifest_path) = manifest_candidates(archive)
+        .into_iter()
+        .find(|p| p.exists())
+    else {
         return Ok(None);
-    }
+    };
     let mut sig_name = manifest_path.as_os_str().to_os_string();
     sig_name.push(".minisig");
     let sig_path = PathBuf::from(sig_name);
@@ -4879,4 +4938,197 @@ mod manifest_install_tests {
             other => panic!("wrong payload: {other:?}"),
         }
     }
+
+    // --- #645: the name the manifest actually travels under -----------------
+    //
+    // Every test above builds its fixture as `<archive>.manifest.json`, which
+    // is what the code used to look for. Code and tests agreed with each other
+    // and disagreed with upstream, so 22 green tests certified a dead path.
+    // These pin the published shape instead of our own invention.
+
+    /// The canonical case: upstream replaces `.tar.zst`, so the manifest sits
+    /// beside the archive as `nucl-parquet-data-<V>.manifest.json`.
+    ///
+    /// Asserted via the unsigned-manifest refusal: reaching that error proves
+    /// the file was *found*. Before #645 this returned `Ok(None)` — silently
+    /// indistinguishable from a release that publishes no manifest at all.
+    #[test]
+    fn the_manifest_name_upstream_publishes_is_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("nucl-parquet-data-2026.8.3.tar.zst");
+        fs::write(&archive, b"x").unwrap();
+        fs::write(
+            dir.path().join("nucl-parquet-data-2026.8.3.manifest.json"),
+            b"{}",
+        )
+        .unwrap();
+
+        let err = load_sibling_manifest(&archive)
+            .expect_err("the published manifest name must be found, not ignored");
+        assert!(
+            matches!(err, FetchError::SignatureUnavailable { .. }),
+            "{err}"
+        );
+    }
+
+    /// The appended form still works, so bundles assembled by earlier tooling
+    /// (or by anyone following the pre-#645 docs) keep installing.
+    #[test]
+    fn a_manifest_appended_to_the_archive_name_is_still_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("nucl-parquet-data-2026.8.3.tar.zst");
+        fs::write(&archive, b"x").unwrap();
+        fs::write(
+            dir.path()
+                .join("nucl-parquet-data-2026.8.3.tar.zst.manifest.json"),
+            b"{}",
+        )
+        .unwrap();
+
+        let err = load_sibling_manifest(&archive).expect_err("legacy layout must still be found");
+        assert!(
+            matches!(err, FetchError::SignatureUnavailable { .. }),
+            "{err}"
+        );
+    }
+
+    /// With both present the published name wins — the error names which file
+    /// was chosen, so this asserts precedence rather than merely "one of them".
+    #[test]
+    fn the_published_name_wins_when_both_are_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("nucl-parquet-data-2026.8.3.tar.zst");
+        fs::write(&archive, b"x").unwrap();
+        fs::write(
+            dir.path().join("nucl-parquet-data-2026.8.3.manifest.json"),
+            b"{}",
+        )
+        .unwrap();
+        fs::write(
+            dir.path()
+                .join("nucl-parquet-data-2026.8.3.tar.zst.manifest.json"),
+            b"{}",
+        )
+        .unwrap();
+
+        let err = load_sibling_manifest(&archive).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nucl-parquet-data-2026.8.3.manifest.json")
+                && !msg.contains("tar.zst.manifest.json"),
+            "the published name must take precedence: {msg}"
+        );
+    }
+
+    /// An archive not named `*.tar.zst` (users rename downloads) still gets
+    /// the appended candidate, so it degrades rather than breaking.
+    #[test]
+    fn an_oddly_named_archive_still_gets_the_appended_candidate() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("data-bundle");
+        let cands = manifest_candidates(&archive);
+        assert_eq!(cands.len(), 1, "no .tar.zst suffix to strip: {cands:?}");
+        assert!(cands[0].ends_with("data-bundle.manifest.json"));
+    }
+
+    /// Locks the URL shape against `release_url_for(..) + ".manifest.json"`,
+    /// which is the mistake #645 was.
+    #[test]
+    fn the_manifest_url_replaces_the_archive_extension() {
+        let url = manifest_url_for("2026.8.3");
+        assert!(
+            url.ends_with("/data-2026.8.3/nucl-parquet-data-2026.8.3.manifest.json"),
+            "{url}"
+        );
+        assert!(!url.contains(".tar.zst"), "{url}");
+        assert_eq!(
+            manifest_signature_url_for("2026.8.3"),
+            format!("{url}.minisig")
+        );
+    }
+
+    /// Live end-to-end against the real published artefact (#644).
+    ///
+    /// Skips until the pinned data release is new enough to carry a manifest —
+    /// so it can land now and start meaning something the day 2026.8.3 ships,
+    /// rather than depending on someone remembering to write it then.
+    ///
+    /// This is the test that would have caught #645: every other manifest test
+    /// verifies a fixture we built ourselves, so none of them has ever seen an
+    /// artefact produced by upstream's tooling. It checks three things a
+    /// fixture cannot: that the asset exists under the name we derive, that
+    /// upstream's deterministic serialisation round-trips through our parser,
+    /// and that the trusted-comment format `check_binding` matches on is the
+    /// one their signer actually emits.
+    ///
+    /// ```text
+    /// cargo test --manifest-path core/Cargo.toml -- --ignored live_manifest
+    /// ```
+    #[test]
+    #[ignore = "requires network"]
+    fn live_manifest_asset_name_matches_upstream() {
+        use crate::data_manifest::{ContentManifest, FIRST_MANIFEST_VERSION};
+
+        if calver_lt(DATA_VERSION, FIRST_MANIFEST_VERSION) {
+            // A skip must announce itself: a silently-passing live test is
+            // indistinguishable from one that ran, which is the same
+            // "reads as a control, isn't one" shape as #645 itself. Built as a
+            // binding first so the `guardrails-ok` annotation stays on the
+            // macro's own line — rustfmt splits a single-argument `eprintln!`
+            // across lines and carries the comment with it, which the hook
+            // then no longer sees.
+            let why = format!(
+                "skipping: pinned data {DATA_VERSION} predates {FIRST_MANIFEST_VERSION}, \
+                 which is the first release to publish a manifest"
+            );
+            eprintln!("{why}"); // guardrails-ok
+            return;
+        }
+
+        let client = build_http_client().unwrap();
+        let fetch = |url: String| -> String {
+            let mut resp = client
+                .get(&url)
+                .call()
+                .unwrap_or_else(|e| panic!("GET {url} failed: {e}"));
+            assert!(
+                resp.status().is_success(),
+                "HTTP {} for {url} — upstream renamed the asset, or it was never \
+                 published. This is exactly the #645 failure class, and it must \
+                 break a test rather than silently disable the CDR fallback.",
+                resp.status().as_u16()
+            );
+            resp.body_mut().read_to_string().unwrap()
+        };
+
+        let body = fetch(manifest_url_for(DATA_VERSION));
+        let sig_text = fetch(manifest_signature_url_for(DATA_VERSION));
+
+        let sig = minisign_verify::Signature::decode(&sig_text)
+            .expect("upstream's manifest signature must parse");
+        signing_public_key()
+            .unwrap()
+            .verify(body.as_bytes(), &sig, false)
+            .expect("manifest must verify against the pinned offline key");
+
+        let manifest =
+            ContentManifest::parse(&body).expect("upstream's serialisation must round-trip");
+        manifest
+            .check_binding(DATA_VERSION, sig.trusted_comment())
+            .expect("trusted comment must bind to this build's data version");
+
+        assert_eq!(manifest.file_count, manifest.files.len());
+    }
+}
+
+/// Numeric CalVer comparison (`2026.8.2` < `2026.8.3` < `2026.10.0`).
+///
+/// Lexicographic would order `2026.10.0` before `2026.8.0`, which matters the
+/// first time upstream cuts a tenth release in a month.
+#[cfg(test)]
+fn calver_lt(a: &str, b: &str) -> bool {
+    fn parts(v: &str) -> Vec<u64> {
+        v.split('.').map(|p| p.parse().unwrap_or(0)).collect()
+    }
+    parts(a) < parts(b)
 }

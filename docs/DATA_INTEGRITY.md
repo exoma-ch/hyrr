@@ -138,14 +138,26 @@ each entry and **repack** it. The nuclear data arrives intact; the signature
 does not verify, because the bytes are no longer the bytes that were signed.
 
 HYRR handles this with a **second verification route**. If a signed content
-manifest (`<bundle>.manifest.json` + `.minisig`) is carried alongside the
-archive, and the byte-signature fails, the archive is extracted to a staging
-directory and every file is checked against the manifest before anything is
-promoted. That authenticates *contents* rather than framing, so it survives a
-repack.
+manifest is carried alongside the archive, and the byte-signature fails, the
+archive is extracted to a staging directory and every file is checked against
+the manifest before anything is promoted. That authenticates *contents* rather
+than framing, so it survives a repack.
 
-Copy all four files if your route may repack: the archive, its `.minisig`, the
-manifest, and the manifest's `.minisig`.
+Copy all four release assets if your route may repack, keeping their published
+names — the manifest replaces `.tar.zst` rather than being appended to it:
+
+```text
+nucl-parquet-data-<V>.tar.zst                   the archive
+nucl-parquet-data-<V>.tar.zst.minisig           its signature
+nucl-parquet-data-<V>.manifest.json             the content manifest
+nucl-parquet-data-<V>.manifest.json.minisig     its signature
+```
+
+Put all four in one directory and point `install_from_tarball` at the archive;
+the rest are found by name. Renaming the archive is fine — a manifest named
+`<your-name>.manifest.json` beside it is also accepted — but renaming only
+*some* of the four will leave the manifest unfound, and an unfound manifest
+reads as "no second route available" rather than as an error (see below).
 
 Three rules make this a real control rather than a comforting one:
 
