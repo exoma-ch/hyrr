@@ -8,14 +8,27 @@
       "data_version": "2026.8.2",
       "entries": [
         {
-          "summary": "No user-facing change. This release is a macOS developer-environment fix plus documentation corrections; simulation behaviour, tool signatures and nuclear data are identical to 0.20.0.",
+          "summary": "No change to results. This release repairs the air-gapped content-manifest fallback, fixes the macOS developer environment, and corrects documentation; simulation behaviour, tool signatures and nuclear data are identical to 0.20.0.",
           "impact": "internal",
           "silent": false,
           "affected": [],
-          "guidance": "Nothing to re-run and nothing to re-check. If you are comparing results across 0.20.0 and 0.20.1 they should agree exactly: the nuclear data is the same release (2026.8.2, submodule a0249fca) and no compute, tool or codec path was touched. Upgrading is optional unless you develop HYRR on macOS.",
+          "guidance": "Nothing to re-run. If you are comparing results across 0.20.0 and 0.20.1 they should agree exactly: the nuclear data is the same release (2026.8.2, submodule a0249fca) and no compute, tool or codec path was touched. Upgrading matters if you install offline through a content-scanning gateway — see the manifest entry below — and if you develop HYRR on macOS.",
           "refs": [
+            645,
             642,
             638
+          ]
+        },
+        {
+          "summary": "The air-gapped fallback that verifies data against a signed content manifest could never activate: HYRR looked for the manifest under a filename upstream does not publish, so the file was never opened.",
+          "impact": "api_change",
+          "silent": false,
+          "affected": [],
+          "guidance": "No user was affected and nothing needs re-running: the path is dormant on the data this release pins (2026.8.2 publishes no manifest at all), so it could not yet have been reached. This is a repair made before the control is first needed. The detail worth knowing is the failure shape: upstream publishes `nucl-parquet-data-<V>.manifest.json`, while HYRR appended instead, looking for `nucl-parquet-data-<V>.tar.zst.manifest.json`. An operator copying the four published assets exactly as documented would have had their manifest silently ignored, and because a genuinely absent manifest is a legitimate state for older releases, the resulting refusal was indistinguishable from correct behaviour. If you assembled an offline bundle under the old name it still installs; both names are now accepted, and either way the manifest must carry its own signature and bind to this build's data version.",
+          "refs": [
+            645,
+            644,
+            622
           ]
         },
         {
