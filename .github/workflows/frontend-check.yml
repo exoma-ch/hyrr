@@ -112,6 +112,15 @@ jobs:
         working-directory: frontend
         run: npm run check
 
-      - name: vitest
+      - name: vitest (frontend)
         working-directory: frontend
         run: npm test
+
+      # `frontend`'s vitest projects include only `src/**` and `scripts/**`
+      # relative to that directory, so the 11 test files in `packages/compute`
+      # (214 tests — the TS data layer, formula/material resolution, and
+      # `xs-path.test.ts`, the regression guard for the #488 Z-named
+      # cross-section fallback) ran in NO CI job at all until #652. The root
+      # vitest.config.ts covers exactly that gap.
+      - name: vitest (packages)
+        run: npm run test:packages

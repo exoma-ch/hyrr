@@ -131,3 +131,82 @@ fn density_override_with_unknown_compound_via_registry() {
     let res = resolve_material(&db, "NbSn", None, Some(&registry), None).unwrap();
     assert!((res.density - 6.5).abs() < 1e-6);
 }
+
+// ── Catalog resolution (#652, epic #649) ─────────────────────────────────────
+//
+// Regression for the silent zero-mass layer. `o18-gas`, `xe124-gas` and
+// `sr86-carbonate` shipped in packages/compute/src/materials.ts (#68/#106) but
+// were never added to Rust's MATERIAL_CATALOG. The browser sends the bare
+// catalog key, Rust could not parse it as a formula, and because the layer
+// carries a catalog density the density branch returned **Ok with an empty
+// element list** instead of an error:
+//
+//     o18-gas          OK  elements=0     <-- silently produces nothing
+//
+// Key parity with the TS catalog is enforced by
+// scripts/tests/test_material_catalog_parity.sh; this asserts the Rust side
+// actually resolves.
+
+#[test]
+fn every_catalog_entry_resolves_to_non_empty_elements() {
+    let db = db();
+    let mut failures: Vec<String> = vec![];
+
+    for (name, entry) in hyrr_core::materials::MATERIAL_CATALOG.iter() {
+        // Without a density override — the resolver must find the catalog density.
+        match resolve_material(&db, name, None, None, None) {
+            Err(e) => failures.push(format!("{name}: {e}")),
+            Ok(m) => {
+                if m.elements.is_empty() {
+                    failures.push(format!("{name}: resolved Ok but with ZERO elements"));
+                }
+                if m.density <= 0.0 {
+                    failures.push(format!("{name}: non-positive density {}", m.density));
+                }
+            }
+        }
+
+        // With a density override — this is the path the browser actually takes,
+        // and the one that used to mask the failure entirely.
+        match resolve_material(&db, name, None, None, Some(entry.density)) {
+            Err(e) => failures.push(format!("{name} (density_override): {e}")),
+            Ok(m) => {
+                if m.elements.is_empty() {
+                    failures.push(format!(
+                        "{name} (density_override): resolved Ok but with ZERO elements \
+                         — this is the silent zero-mass layer"
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "material catalog resolution failures:\n  - {}",
+        failures.join("\n  - ")
+    );
+}
+
+#[test]
+fn catalog_mass_fractions_sum_to_one() {
+    let mut failures: Vec<String> = vec![];
+    for (name, entry) in hyrr_core::materials::MATERIAL_CATALOG.iter() {
+        let sum: f64 = entry.mass_fractions.values().sum();
+        if (sum - 1.0).abs() > 1e-6 {
+            failures.push(format!(
+                "{name}: mass fractions sum to {sum:.6}, expected 1.0"
+            ));
+        }
+        for sym in entry.mass_fractions.keys() {
+            if !hyrr_core::materials::SYMBOL_TO_Z_MAP.contains_key(sym) {
+                failures.push(format!("{name}: unknown element symbol {sym:?}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "catalog data invariants violated:\n  - {}",
+        failures.join("\n  - ")
+    );
+}

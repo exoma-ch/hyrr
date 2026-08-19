@@ -346,10 +346,24 @@
 
           # Embedded data store: build-time tar (#274) + full simulation through
           # it. Subsumes ci.yml's embedded-data-store job.
+          #
+          # EVERY `#[cfg(feature = "embed-data")]` integration test must be named
+          # here. `rust-test` runs the default feature set, so it compiles these
+          # to nothing; if the target is also missing from this filter it never
+          # runs anywhere. That silently disabled the F-18 production regression
+          # and the #527 beam-stopper regression until #652 caught it — both had
+          # been green-by-vacuum. Adding a new embed-data test means adding a
+          # `--test` here.
           rust-test-embed = craneLib.cargoTest (commonRustArgs // {
             inherit cargoArtifacts;
             cargoExtraArgs = "--features embed-data";
-            cargoTestExtraArgs = "--test embedded_data_store";
+            cargoTestExtraArgs = builtins.concatStringsSep " " [
+              "--test embedded_data_store"
+              "--test f18_production"
+              "--test nb_beam_stopper"
+              "--test compound_stopping"
+              "--test material_registry"
+            ];
           });
 
           # PyO3 binding type-drift gate (#181). `cargo check` (not build/test)

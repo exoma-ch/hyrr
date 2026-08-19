@@ -16,12 +16,38 @@ const liveBaseURL = process.env.PLAYWRIGHT_BASE_URL;
 // `new URL("./", "…/hyrr")` collapses to the origin root.
 const baseURL = liveBaseURL ?? "http://localhost:4173/hyrr/";
 
+const isCI = !!process.env.CI;
+
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "./e2e/results",
+
+  // Retry only on CI (#652). A single flake used to fail the whole run, and
+  // because the full matrix runs at tag time (e2e.yml), a flaky tag build reads
+  // exactly like a real regression — which is part of how #559 stayed red
+  // across releases without anyone being able to tell what was broken.
+  // Locally: no retries, so a flake is visible while you are working on it.
+  retries: isCI ? 2 : 0,
+
+  // There was no reporter here at all; the run's only output came from the
+  // `--reporter` flag e2e.yml happens to pass. Anyone invoking `npx playwright
+  // test` directly got the default line reporter and no HTML trace to open.
+  reporter: [["list"], ["html", { open: "never" }]],
+
+  // Global caps. Individual specs still raise these with `test.setTimeout()`
+  // where they genuinely need to (the @preset-heavy goldens do); the point is
+  // that a hung test now fails in minutes instead of hanging the job.
+  timeout: 120_000,
+  expect: { timeout: 10_000 },
+
   use: {
     baseURL,
     browserName: "chromium",
+    // Keep the artefacts that make a CI failure diagnosable without a local
+    // repro. `on-first-retry` keeps the cost off the happy path.
+    trace: "on-first-retry",
+    screenshot: "only-on-failure",
+    video: isCI ? "retain-on-failure" : "off",
     ...(Object.keys(launchOptions).length ? { launchOptions } : {}),
   },
   ...(liveBaseURL

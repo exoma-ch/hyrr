@@ -1,44 +1,144 @@
 # Testing
 
-## Projectile matrix smoke test (Tier 1 of #148)
+How the suites are wired, and — more importantly — what each one actually
+guarantees. Several of them guarantee less than their names suggest; where that
+is true it is called out, because assuming otherwise is how the bugs in epic
+\#649 shipped.
 
-`core/tests/projectile_matrix.rs` loops every supported `ProjectileType`
-through `compute_stack` against a trivial Cu stack. It exists to catch
-the #137 class of bug where one projectile has a bad lookup key and
-silently breaks the per-projectile compute path.
+## Where the suites run
 
-The matrix currently covers: `p`, `d`, `t`, `h`, `a`, `C-12`, `O-16`,
-`Ne-20`, `Si-28`, `Ar-40`, `Fe-56`. A sibling test asserts that an
-unsupported heavy ion (`Cl-35`) returns a typed
-`StoppingError::NoSourceTable` instead of panicking.
+| Suite | Command | Gated on |
+|---|---|---|
+| Rust (default features) | `nix flake check` → `rust-test` | every PR |
+| Rust (`mcp` feature) | `nix flake check` → `rust-test-mcp` | every PR |
+| Rust (`embed-data` feature) | `nix flake check` → `rust-test-embed` | every PR |
+| Python | `uv run pytest tests/ --ignore=tests/integration` | every PR (`ci.yml`) |
+| Python integration | `uv run pytest tests/integration` | **nothing** — needs `just build-native` |
+| Frontend vitest | `npm test` in `frontend/` | `frontend-check.yml` (**not** a required check) |
+| Packages vitest | `npm run test:packages` at the repo root | `frontend-check.yml` (**not** a required check) |
+| Shell-script tests | `just test-scripts` → `scripts/tests/run-all.sh` | `ci.yml` |
+| Playwright e2e | `npx playwright test` in `frontend/` | PR: `--project=desktop-1280 --grep @smoke` only. Full matrix at `v*` tags |
+
+Two of these deserve emphasis:
+
+- **`frontend-check.yml` is not a required status check.** Its header explains
+  why (a paths filter would block docs-only PRs). A red vitest run is advisory.
+- **The PR e2e gate is 2 tests.** Everything else in `frontend/e2e/` runs only
+  on tag. Issue \#559 is what that costs.
+
+## Rust: the projectile matrix
+
+`core/tests/projectile_matrix.rs` carries **two distinct guarantees**, and the
+difference matters:
+
+- `every_supported_projectile_computes_without_panic` — the **stopping-power**
+  path works for all 11 projectiles (`p`, `d`, `t`, `h`, `a`, `C-12`, `O-16`,
+  `Ne-20`, `Si-28`, `Ar-40`, `Fe-56`). It asserts only that no panic and no
+  `Err` escaped. **It cannot see a silently-empty result** — a `compute_stack`
+  returning `Ok` with zero isotopes passes it. That is the #137 regression guard,
+  nothing more.
+- `light_ion_projectiles_produce_isotopes_on_cu` — the **cross-section** path
+  actually yields products, for `p`/`d`/`t`/`h`/`a` on Cu. This is the guard
+  against the silent-zero class (epic \#649).
+
+Heavy ions are deliberately absent from the production assertion: their data
+lives in `hi-xs-prod`, which no engine can currently address (\#659).
+
+A sibling test asserts an unsupported heavy ion (`Cl-38`) returns a typed
+`StoppingError::NoSourceTable` rather than panicking.
 
 ### Adding a new projectile
 
-When you add a variant to `ProjectileType` (or extend the bundled
-catima set in `nucl-parquet/data/stopping/`), add a row to the
-`PROJECTILES` constant in `core/tests/projectile_matrix.rs`. The test
-will not auto-discover new variants — that's intentional, the matrix
-is the forcing function for coverage.
+Add a row to `PROJECTILES` in `core/tests/projectile_matrix.rs`, and to
+`LIGHT_ION_PROJECTILES` if the default library carries cross-sections for it.
+The lists do not auto-discover `ProjectileType` variants — that is intentional;
+the matrix is the forcing function for coverage.
 
 ### Running locally
 
-The test is `#[ignore]` by default because it needs the bundled
-nucl-parquet data on disk. Run it explicitly:
+These tests are `#[ignore]` by default because they need the bundled
+nucl-parquet data:
 
 ```bash
-HYRR_DATA=../nucl-parquet/data cargo test \
+HYRR_DATA="$PWD/nucl-parquet/data" cargo test --manifest-path core/Cargo.toml \
     --test projectile_matrix -- --include-ignored
 ```
 
-Without `HYRR_DATA`, the test falls back to `../nucl-parquet/data`
-relative to the cargo manifest (the standard sibling-submodule layout).
-If neither path resolves, the test prints a skip message and exits
-green — so a fresh `cargo test` on a checkout without the submodule
-keeps working.
+Without `HYRR_DATA` they fall back to `../nucl-parquet/data` relative to the
+cargo manifest. If neither resolves the test prints a skip message and exits
+green, so a fresh checkout without the submodule still works.
 
-### CI
+## Feature-gated tests: the allow-list trap
 
-CI initialises the nucl-parquet submodule with sparse-checkout for
-`data/meta`, `data/stopping`, and `data/tendl-2023-iso/xs`, then runs
-`cargo test --test projectile_matrix -- --include-ignored` from
-`core/`. See `.github/workflows/ci.yml`.
+`nix flake check` runs three Rust derivations. `rust-test` uses the **default**
+feature set, so anything behind `#[cfg(feature = "...")]` compiles to nothing
+there and must be picked up by a dedicated derivation:
+
+- `rust-test-mcp` enables `--features mcp` and runs the **whole** suite. No
+  target allow-list, so `mcp_*.rs` files cannot be dropped.
+- `rust-test-embed` enables `--features embed-data` and names each target
+  explicitly with `--test`. **That list is an allow-list, and it was incomplete**:
+  four files (`f18_production`, `nb_beam_stopper`, `compound_stopping`,
+  `material_registry` — 10 tests) were gated on `embed-data` but not named, so
+  they ran nowhere. `cargo test --test compound_stopping` on default features
+  prints `running 0 tests` and exits 0, which is why nobody noticed.
+
+`scripts/tests/test_feature_gated_tests_run.sh` now asserts the allow-list is
+complete, and that `rust-test-mcp` never grows one. **Adding a new
+`embed-data`-gated test means adding a `--test` line to `flake.nix`** — the guard
+will tell you if you forget.
+
+## Material catalog parity
+
+The material catalog exists twice — `packages/compute/src/materials.ts` (TS) and
+`core/src/materials.rs` (Rust) — and they must agree. A layer whose `material` is
+a catalog key is sent to Rust **by name**; if Rust's catalog lacks the key it
+cannot parse it as a formula either, and because the layer carries a catalog
+density, `resolve_material` returns **`Ok` with an empty element list** instead
+of an error. The result is a zero-mass layer that silently produces nothing.
+
+That is not hypothetical: `o18-gas`, `xe124-gas` and `sr86-carbonate` shipped on
+the TS side only (\#68/\#106) and resolved to zero elements in Rust.
+
+Guards:
+
+- `scripts/tests/test_material_catalog_parity.sh` — key parity in both
+  directions, plus "exactly one TS `MATERIAL_CATALOG` definition exists" (a
+  second copy diverges silently; there used to be one).
+- `packages/compute/src/materials.test.ts` — schema invariants over every entry
+  (mass fractions sum to 1 ±1e-6, known element symbols, no key colliding with
+  the `Element-Mass` isotope form).
+- `core/tests/material_registry.rs` — every catalog key resolves to non-empty
+  elements, both with and without a density override, plus the same data
+  invariants Rust-side.
+
+## Frontend vs packages
+
+`frontend/vite.config.ts` defines two vitest projects (`node` and `jsdom`) whose
+includes are relative to `frontend/`: `src/**/*.test.ts` and
+`scripts/**/*.test.ts`. That does **not** cover `packages/`.
+
+So the 11 test files in `packages/compute` — 214 tests including
+`xs-path.test.ts`, the regression guard for the \#488 Z-named cross-section
+fallback — ran in no CI job at all. The root `vitest.config.ts` covers exactly
+that gap and is wired into `frontend-check.yml` as `npm run test:packages`.
+
+Keep the two configs' scopes disjoint. The root config cannot run frontend
+modules: they use Svelte 5 runes and need the svelte plugin and `define` block
+that only `frontend/vite.config.ts` supplies.
+
+## Playwright
+
+`frontend/playwright.config.ts` runs Chromium across four viewport projects
+(`desktop-1280`, `iphone-se`, `iphone-14`, `ipad`). Two modes:
+
+- default — builds and previews locally, hits `http://localhost:4173/hyrr/`
+- `PLAYWRIGHT_BASE_URL` set — skips the preview server and runs against a live
+  deploy; `@smoke`-tagged tests are the canonical subset for that
+
+On CI it retries twice and keeps a trace on first retry, a screenshot on
+failure, and video on failure. Locally there are no retries, so a flake stays
+visible.
+
+Note the PR gate only runs `--project=desktop-1280 --grep @smoke`, and only
+`smoke.spec.ts` carries `@smoke`. Expanding that gate is tracked in \#656.
