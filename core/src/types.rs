@@ -64,6 +64,25 @@ impl ProjectileType {
         }
     }
 
+    /// Filename stem used to look this projectile up in a cross-section library.
+    ///
+    /// Light ions keep their short symbol (`p_Cu.parquet`). Heavy ions use
+    /// nucl-parquet's `{symbol_lowercase}{A}` convention — `C-12` becomes
+    /// `c12`, giving `c12_Cu.parquet`.
+    ///
+    /// This exists because [`Self::symbol`] returns the bare element symbol for
+    /// a heavy ion (`"C"`), and the compute path used that to build the lookup
+    /// key — so it searched for `C_Cu.parquet`, which does not exist. Every
+    /// heavy-ion run therefore produced zero isotopes, silently, in every engine
+    /// (#659). `symbol()` has other callers that want the element, so this is a
+    /// separate accessor rather than a change to it.
+    pub fn xs_key(&self) -> String {
+        match self {
+            Self::HeavyIon { symbol, a, .. } => format!("{}{}", symbol.to_lowercase(), a),
+            other => other.symbol().to_string(),
+        }
+    }
+
     /// Parse from string: "p", "d", "t", "h", "a", "C-12", "O-16", etc.
     pub fn from_str(s: &str) -> Option<Self> {
         match s {

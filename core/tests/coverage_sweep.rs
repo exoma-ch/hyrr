@@ -57,15 +57,37 @@ fn data_dir() -> Option<PathBuf> {
     .find(|p| p.join("catalog.json").is_file())
 }
 
-/// Projectiles the charged-particle compute path can actually run.
+/// Light-ion stems the charged compute path takes directly.
+const LIGHT_PROJECTILES: &[&str] = &["p", "d", "t", "h", "a"];
+
+/// Turn a census filename stem into a `ProjectileType`, or `None` if the
+/// charged path cannot run it.
 ///
-/// The census reports filename stems, which include plenty this path cannot
-/// take: `n` (neutron activation goes through `compute_neutron_stack`), `g`
-/// (photonuclear, unsupported), and the lowercase heavy-ion stems `c12`,
-/// `ar40`, `pb208`, … which `ProjectileType::from_str` cannot parse at all —
-/// that mismatch IS #659. Feeding them here would report dozens of typed
-/// errors that say nothing about coverage.
-const CHARGED_PROJECTILES: &[&str] = &["p", "d", "t", "h", "a"];
+/// The census reports stems as they appear on disk. Light ions match
+/// `ProjectileType::from_str` directly; heavy ions are filed as `c12`, `ar40`,
+/// … which `from_str` cannot parse — it wants `C-12`. That mismatch was #659,
+/// and mapping it here lets the sweep cover `hi-xs-prod` too.
+///
+/// `n` (neutron activation goes through `compute_neutron_stack`) and `g`
+/// (photonuclear, unsupported) stay out of scope.
+fn projectile_for_stem(stem: &str) -> Option<ProjectileType> {
+    if LIGHT_PROJECTILES.contains(&stem) {
+        return ProjectileType::from_str(stem);
+    }
+    let digits = stem.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    let symbol = &stem[..stem.len() - digits.len()];
+    if digits.is_empty() || !(1..=2).contains(&symbol.len()) {
+        return None;
+    }
+    let mut sym = symbol.to_string();
+    sym[..1].make_ascii_uppercase();
+    ProjectileType::from_str(&format!("{sym}-{digits}"))
+}
+
+/// Whether the sweep should attempt this census stem at all.
+fn is_sweepable(stem: &str) -> bool {
+    projectile_for_stem(stem).is_some()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
@@ -168,7 +190,7 @@ fn sweep_one(db: &ParquetDataStore, projectile: &str, symbol: &str) -> Outcome {
         .collect();
     let z = material.elements.first().map(|(e, _)| e.z).unwrap_or(0);
 
-    let Some(proj) = ProjectileType::from_str(projectile) else {
+    let Some(proj) = projectile_for_stem(projectile) else {
         return Outcome::TypedError;
     };
     let energies = test_energies(db, projectile, z, &isotopes);
@@ -292,7 +314,7 @@ fn sample_cases(census: &Census) -> Vec<(String, String, String)> {
     //     dark. Other libraries are covered by the nightly full sweep — adding
     //     them here costs a fresh parquet decode per library for little signal.
     for ((library, projectile), targets) in census.coverage() {
-        if library != "tendl-2023-iso" || !CHARGED_PROJECTILES.contains(&projectile.as_str()) {
+        if library != "tendl-2023-iso" || !is_sweepable(&projectile) {
             continue;
         }
         if let Some(first) = targets.iter().find(|t| !t.starts_with('Z')) {
@@ -333,7 +355,7 @@ fn coverage_sweep_finds_no_silently_empty_pairs() {
         census
             .coverage()
             .into_iter()
-            .filter(|((_, proj), _)| CHARGED_PROJECTILES.contains(&proj.as_str()))
+            .filter(|((_, proj), _)| is_sweepable(proj))
             .flat_map(|((lib, proj), targets)| {
                 targets
                     .into_iter()

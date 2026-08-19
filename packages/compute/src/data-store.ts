@@ -17,7 +17,7 @@ import type {
   DecayMode,
 } from "./types";
 import { SYMBOL_TO_Z, Z_TO_SYMBOL } from "./formula";
-import { xsPathCandidates, logMissingXs } from "./xs-path";
+import { xsPathCandidates, logMissingXs, isHeavyIon } from "./xs-path";
 
 // Fallback element-symbol map used when the store is queried before
 // `meta/elements.parquet` has been loaded (or when that file is missing).
@@ -246,7 +246,12 @@ export class DataStore implements DatabaseProtocol {
     // `endfb-8.0:neutron-xs`, ADR-0003 #3). Charged projectiles read from `xs/`.
     // Mirrors the Rust NEUTRON_LIBRARY routing so the browser resolves neutron
     // cross-sections too.
-    const subdir = projectile === "n" ? "neutron-xs" : "xs";
+    // Neutrons and heavy ions are not carried by the charged default library,
+    // so each reads from its own copied subdirectory. Mirrors
+    // `library_for_projectile` in core/src/db.rs (#659); `hi-xs-prod` has been
+    // shipped to the browser all along with nothing routing to it.
+    const subdir =
+      projectile === "n" ? "neutron-xs" : isHeavyIon(projectile) ? "hi-xs-prod" : "xs";
     // Z lookup for the fallback URL: prefer the store's fully-populated map
     // (elements.parquet has every element), fall back to the hardcoded
     // Z=1..118 table for the ensure-called-before-init path.

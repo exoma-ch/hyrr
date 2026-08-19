@@ -7,7 +7,7 @@
  * (the exact failure mode PR #555 fixed on the Rust side).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { xsPathCandidates, logMissingXs } from "./xs-path";
+import { xsPathCandidates, logMissingXs, xsProjectileKey, isHeavyIon } from "./xs-path";
 import { SYMBOL_TO_Z, Z_TO_SYMBOL } from "./formula";
 
 describe("xsPathCandidates (#488)", () => {
@@ -25,10 +25,10 @@ describe("xsPathCandidates (#488)", () => {
     ]);
   });
 
-  it("handles heavy-ion projectile strings verbatim (no re-encoding)", () => {
-    expect(xsPathCandidates("xs", "C-12", 26, "Fe")).toEqual([
-      "xs/C-12_Fe.parquet",
-      "xs/C-12_Z26.parquet",
+  it("re-encodes heavy-ion projectiles to the on-disk filename form (#659)", () => {
+    expect(xsPathCandidates("hi-xs-prod", "C-12", 26, "Fe")).toEqual([
+      "hi-xs-prod/c12_Fe.parquet",
+      "hi-xs-prod/c12_Z26.parquet",
     ]);
   });
 
@@ -100,5 +100,33 @@ describe("element-symbol map covers every Z-named nucl-parquet element (#488)", 
       expect(sym, `Z_TO_SYMBOL missing Z=${z}`).toBeTruthy();
       expect(SYMBOL_TO_Z[sym], `SYMBOL_TO_Z round-trip for ${sym}`).toBe(z);
     }
+  });
+});
+
+describe("xsProjectileKey / isHeavyIon (#659)", () => {
+  it("leaves light-ion keys alone", () => {
+    for (const p of ["p", "d", "t", "h", "a", "n"]) {
+      expect(xsProjectileKey(p)).toBe(p);
+      expect(isHeavyIon(p)).toBe(false);
+    }
+  });
+
+  it("renders heavy ions as nucl-parquet files them", () => {
+    // The real filenames: hi-xs-prod/{c12,o16,ne20,si28,ar40,fe56}_<Sym>.parquet
+    expect(xsProjectileKey("C-12")).toBe("c12");
+    expect(xsProjectileKey("O-16")).toBe("o16");
+    expect(xsProjectileKey("Ne-20")).toBe("ne20");
+    expect(xsProjectileKey("Si-28")).toBe("si28");
+    expect(xsProjectileKey("Ar-40")).toBe("ar40");
+    expect(xsProjectileKey("Fe-56")).toBe("fe56");
+    for (const p of ["C-12", "Fe-56"]) expect(isHeavyIon(p)).toBe(true);
+  });
+
+  it("matches the Rust xs_key convention", () => {
+    // core/src/types.rs ProjectileType::xs_key — both engines must agree or
+    // one of them silently produces nothing, which is exactly what #659 was.
+    expect(xsPathCandidates("hi-xs-prod", "Ar-40", 29, "Cu")[0]).toBe(
+      "hi-xs-prod/ar40_Cu.parquet",
+    );
   });
 });

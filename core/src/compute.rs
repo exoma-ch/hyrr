@@ -301,7 +301,7 @@ fn compute_layer(
                 continue;
             }
 
-            let xs_list = db.get_cross_sections(projectile.symbol(), elem.z, a_target);
+            let xs_list = db.get_cross_sections(&projectile.xs_key(), elem.z, a_target);
             // The dominant silent-zero path: the store returns an empty vector
             // for a missing file, an unreadable file, or a target the library
             // does not cover — with no error anywhere. Emitting here rather than

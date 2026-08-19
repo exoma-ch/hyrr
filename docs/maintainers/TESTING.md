@@ -41,8 +41,11 @@ difference matters:
   actually yields products, for `p`/`d`/`t`/`h`/`a` on Cu. This is the guard
   against the silent-zero class (epic \#649).
 
-Heavy ions are deliberately absent from the production assertion: their data
-lives in `hi-xs-prod`, which no engine can currently address (\#659).
+Both assertions cover all 11 projectiles. Heavy ions were excluded from the
+production one until \#659, because `ProjectileType::symbol()` returns `"C"` for
+C-12 — so the lookup built `C_Cu.parquet` while the file is `c12_Cu.parquet`,
+and every heavy-ion run produced zero silently. `xs_key()` plus
+`library_for_projectile` fixed it.
 
 A sibling test asserts an unsupported heavy ion (`Cl-38`) returns a typed
 `StoppingError::NoSourceTable` rather than panicking.
@@ -107,10 +110,10 @@ Scope is deliberately split, because each case costs a parquet decode:
   tracking issue and a green closes it; nightly-only signal that nobody is paged
   for is how \#559 stayed red across releases.
 
-`n`, `g` and the lowercase heavy-ion stems (`c12`, `ar40`, …) are out of scope:
-neutrons go through `compute_neutron_stack`, photonuclear is unsupported, and
-`ProjectileType::from_str` cannot parse the heavy-ion filenames at all — that
-mismatch is \#659.
+Heavy ions ARE in scope since \#659 — the sweep maps census stems (`c12`) to
+`ProjectileType` and routes them to `hi-xs-prod`, which took the full run from
+1,747 to 3,277 cases. Still out of scope: `n` (neutron activation goes through
+`compute_neutron_stack`) and `g` (photonuclear, unsupported).
 
 Note the classifier is unit-tested separately
 (`classifier_distinguishes_the_three_outcomes`). Constructing a genuinely silent

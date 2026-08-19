@@ -15,8 +15,8 @@
 //!   actually yields products. This is the guard against the silent-zero class
 //!   (epic #649); the test above passes happily on a stack that produced nothing.
 //!
-//! Heavy ions are absent from the production assertion on purpose — their data
-//! lives in `hi-xs-prod`, which no engine can currently address (#659).
+//! Both now cover all 11 projectiles. Heavy ions used to be excluded from the
+//! production assertion because their cross-sections were unreachable (#659).
 
 use hyrr_core::compute::compute_stack;
 use hyrr_core::db::ParquetDataStore;
@@ -81,11 +81,14 @@ const PROJECTILES: &[&str] = &[
     "p", "d", "t", "h", "a", "C-12", "O-16", "Ne-20", "Si-28", "Ar-40", "Fe-56",
 ];
 
-/// The light ions `tendl-2023-iso` actually carries cross-sections for. Heavy
-/// ions are deliberately absent: their data lives in `hi-xs-prod`, which no
-/// engine can currently address (#659), so asserting production for them here
-/// would be red on arrival. Re-fold them in once #659 lands.
-const LIGHT_ION_PROJECTILES: &[&str] = &["p", "d", "t", "h", "a"];
+/// Every projectile that must actually produce isotopes on Cu.
+///
+/// This was light-ions-only while heavy-ion cross-sections were unreachable:
+/// `ProjectileType::symbol()` yielded `"C"` for C-12, so the lookup searched for
+/// `C_Cu.parquet` while the file is `c12_Cu.parquet`, and every heavy-ion run
+/// produced zero silently. Fixed in #659 by `xs_key()` plus per-projectile
+/// library routing, so the full set belongs here now.
+const PRODUCING_PROJECTILES: &[&str] = PROJECTILES;
 
 #[test]
 #[ignore = "requires bundled nucl-parquet data; run with --include-ignored after submodule init"]
@@ -139,25 +142,35 @@ fn every_supported_projectile_computes_without_panic() {
 /// That is the bug class users report as "some elements do not work", so assert
 /// production, not merely absence of failure.
 ///
-/// Reference counts on this stack at the time of writing (tendl-2023-iso, Cu,
-/// 10 MeV): p=11, d=19, t=22, h=27, a=9. The assertion is `>= 1` rather than a
-/// pinned count — pinning belongs in the golden tier (#655), not here.
+/// Reference counts on this stack at the time of writing: light ions on
+/// tendl-2023-iso at 10 MeV give p=11, d=19, t=22, h=27, a=9; heavy ions route
+/// to hi-xs-prod and give C-12=153, O-16=157, Ar-40=188, Fe-56=202. The
+/// assertion is `>= 1` rather than a pinned count — pinning belongs in the
+/// golden tier (#655), not here.
 #[test]
 #[ignore = "requires bundled nucl-parquet data; run with --include-ignored after submodule init"]
-fn light_ion_projectiles_produce_isotopes_on_cu() {
+fn every_projectile_produces_isotopes_on_cu() {
     let Some(mut db) = make_db("tendl-2023-iso") else {
         eprintln!("skipping: no nucl-parquet data dir found (set HYRR_DATA or init the submodule)");
         return;
     };
 
     let mut failures: Vec<String> = vec![];
-    for proj_str in LIGHT_ION_PROJECTILES {
+    for proj_str in PRODUCING_PROJECTILES {
         let Some(proj) = ProjectileType::from_str(proj_str) else {
             failures.push(format!("{proj_str}: from_str returned None"));
             continue;
         };
         let _ = db.load_xs(proj_str, 29);
-        let mut stack = trivial_cu_stack(&db, proj, 10.0);
+        // Heavy ions need a much higher per-particle energy than light ions to
+        // clear the catima table minimum; same rule as the panic sweep above.
+        let energy = if proj.z() <= 2 {
+            10.0
+        } else {
+            50.0 * proj.a() as f64
+        };
+        let _ = db.load_xs(proj_str, 29);
+        let mut stack = trivial_cu_stack(&db, proj, energy);
         match compute_stack(&db, &mut stack, true) {
             Err(e) => failures.push(format!("{proj_str}: {e}")),
             Ok(result) => {
