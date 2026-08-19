@@ -11,8 +11,7 @@
 //! These are **regression baselines**, not accuracy validation. The values are
 //! what this engine currently computes, pinned so that a change to them has to
 //! be deliberate. They are NOT checked against IAEA recommended cross-sections —
-//! that needs the evaluated reference data, which is not in this repo. See the
-//! follow-up issue linked from #655.
+//! that needs the evaluated reference data, which is not in this repo — see #667.
 //!
 //! The *reaction set* is chosen from the IAEA charged-particle monitor
 //! reactions plus the medical routes HYRR exists to model, so when reference
