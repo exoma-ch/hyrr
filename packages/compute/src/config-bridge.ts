@@ -164,10 +164,43 @@ export interface LayerResultData {
   pruned_negligible_count?: number;
 }
 
+/**
+ * Why a result is emptier than it looks (#650, epic #649).
+ *
+ * Mirrors `hyrr_core::types::Diagnostic`. The `kind` discriminant is flattened
+ * onto the object by serde, so a diagnostic is `{ kind, ...fields, severity,
+ * layer_index, message }`.
+ *
+ * This is the channel that lets the UI tell "no cross-section data for this
+ * target" apart from "computed, genuinely zero yield" — previously
+ * indistinguishable, and the cause of the "some elements do not work" reports.
+ */
+export type DiagnosticKind =
+  | "no_cross_section_data"
+  | "empty_isotope_composition";
+
+export interface Diagnostic {
+  kind: DiagnosticKind;
+  severity: "error" | "warning";
+  /** 0-based index into `layers`, when attributable to one layer. */
+  layer_index: number | null;
+  /** Pre-rendered text from Rust, so every surface shows the same wording. */
+  message: string;
+  // Kind-specific fields, flattened by serde:
+  projectile?: string;
+  target_z?: number;
+  target_symbol?: string;
+  target_a?: number;
+  symbol?: string;
+  z?: number;
+}
+
 export interface SimulationResult {
   config: SimulationConfig;
   layers: LayerResultData[];
   timestamp: number;
+  /** Absent on results produced before #650 and on the TS fallback engine. */
+  diagnostics?: Diagnostic[];
 }
 
 // --- Bridge functions ---

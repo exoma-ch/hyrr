@@ -430,6 +430,104 @@ pub struct LayerResult {
     pub pruned_negligible_count: usize,
 }
 
+/// How loudly a [`Diagnostic`] should be presented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DiagnosticSeverity {
+    /// The result is wrong or empty for a reason the user must see. Render at
+    /// error prominence even though `compute_stack` returned `Ok`.
+    Error,
+    /// The result is usable but less complete or less certain than it looks.
+    Warning,
+}
+
+/// A machine-readable reason a result is emptier than it looks (#650, epic #649).
+///
+/// The failure users report as "some elements do not work" is a simulation that
+/// completes successfully and renders nothing. Every path that can produce that
+/// outcome now records *why*, so "no data for this target" is distinguishable
+/// from "computed, genuinely zero yield" at every layer — engine, wire, and UI.
+///
+/// `#[non_exhaustive]` is load-bearing: it forces every consumer's `match` to be
+/// updated when a variant is added, so a new kind cannot ship without a
+/// renderer. `pruned_negligible_count` on [`LayerResult`] is the cautionary
+/// precedent — a diagnostic channel with no forcing function that acquired zero
+/// consumers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum DiagnosticKind {
+    /// No cross-section data for this (projectile, target) pair. The dominant
+    /// cause of a silently empty result: a missing parquet, a target the
+    /// library does not cover, or a naming mismatch.
+    NoCrossSectionData {
+        projectile: String,
+        target_z: u32,
+        target_symbol: String,
+        target_a: u32,
+    },
+    /// The element resolved with no isotopes at all, so it contributes zero
+    /// mass. Hits every element with no naturally-occurring isotopes (Tc, Pm,
+    /// Po, At, Rn, Fr, Ra, Ac, Pa, …) unless enrichment was supplied.
+    EmptyIsotopeComposition { symbol: String, z: u32 },
+}
+
+impl DiagnosticKind {
+    /// Human-readable rendering. Kept as a method rather than a struct field so
+    /// the text cannot drift from the data, and so non-UI surfaces (CLI, MCP)
+    /// get the same wording for free.
+    pub fn message(&self) -> String {
+        match self {
+            Self::NoCrossSectionData {
+                projectile,
+                target_symbol,
+                target_a,
+                ..
+            } => format!(
+                "No cross-section data for {projectile} + {target_symbol}-{target_a} \
+                 in this library — that target isotope produced nothing."
+            ),
+            Self::EmptyIsotopeComposition { symbol, .. } => format!(
+                "{symbol} has no naturally-occurring isotopes, so it contributes no \
+                 target mass. Specify an enrichment to use it as a target."
+            ),
+        }
+    }
+
+    /// Default severity for this kind.
+    pub fn severity(&self) -> DiagnosticSeverity {
+        match self {
+            Self::NoCrossSectionData { .. } => DiagnosticSeverity::Error,
+            Self::EmptyIsotopeComposition { .. } => DiagnosticSeverity::Error,
+        }
+    }
+}
+
+/// A diagnostic attached to a [`StackResult`], optionally scoped to a layer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Diagnostic {
+    #[serde(flatten)]
+    pub kind: DiagnosticKind,
+    pub severity: DiagnosticSeverity,
+    /// 0-based index into `StackResult::layer_results`, when the diagnostic is
+    /// attributable to one layer.
+    pub layer_index: Option<usize>,
+    /// Pre-rendered text, so consumers that cannot match on the enum (JS, the
+    /// shared-results HTML) still show something useful.
+    pub message: String,
+}
+
+impl Diagnostic {
+    pub fn new(kind: DiagnosticKind, layer_index: Option<usize>) -> Self {
+        Self {
+            severity: kind.severity(),
+            message: kind.message(),
+            kind,
+            layer_index,
+        }
+    }
+}
+
 /// Full result for all layers in a stack.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackResult {
@@ -445,6 +543,11 @@ pub struct StackResult {
     /// than inheriting the running build's identity.
     #[serde(default)]
     pub provenance: crate::provenance::Provenance,
+    /// Why this result is emptier than it looks (#650). Empty on a clean run.
+    ///
+    /// `#[serde(default)]` so results serialized before #650 still deserialize.
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// A single radiation emission line for a decaying nuclide (#427).
