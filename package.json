@@ -1,4 +1,6 @@
 {
+  "//name": "Keep this. Without it npm derives the workspace-root name from the DIRECTORY and writes that into package-lock.json, so every `npm install` in a git worktree dirties the tree (#662).",
+  "name": "hyrr",
   "private": true,
   "workspaces": [
     "packages/*",
