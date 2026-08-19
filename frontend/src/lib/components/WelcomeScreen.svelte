@@ -1,6 +1,7 @@
 <script lang="ts">
   import { restoreSerializableConfig } from "../stores/config.svelte";
   import { PRESETS } from "../presets";
+  import { pickLuckyPreset } from "../lucky";
   import type { SimulationConfig } from "../types";
   import logoUrl from "/logo.svg?url";
 
@@ -16,8 +17,9 @@
   }
 
   function feelingLucky() {
-    const idx = Math.floor(Math.random() * PRESETS.length);
-    loadSimConfig(PRESETS[idx].config);
+    // Shared with HeaderBar via lib/lucky.ts — this was duplicated and
+    // untestable (#656).
+    loadSimConfig(pickLuckyPreset().config);
     onstart?.();
   }
 

@@ -3,6 +3,7 @@
   import { resetConfig, getSerializableConfig, restoreSerializableConfig, restoreFromSimConfig, getCurrentProfile } from "../stores/config.svelte";
   import { encodeConfigV2, decodeSerializableFromString } from "../config-url-v2";
   import { PRESETS } from "../presets";
+  import { pickLuckyPreset } from "../lucky";
   import SessionTabs from "./SessionTabs.svelte";
   import HelpModal from "./HelpModal.svelte";
   import { openBugReport } from "../stores/bugreport.svelte";
@@ -67,8 +68,8 @@
   }
 
   function feelingLucky() {
-    const idx = Math.floor(Math.random() * PRESETS.length);
-    restoreFromSimConfig(PRESETS[idx].config);
+    // Shared with WelcomeScreen via lib/lucky.ts (#656).
+    restoreFromSimConfig(pickLuckyPreset().config);
   }
 
   function saveSession(includeResult: boolean) {

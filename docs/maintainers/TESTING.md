@@ -190,5 +190,44 @@ On CI it retries twice and keeps a trace on first retry, a screenshot on
 failure, and video on failure. Locally there are no retries, so a flake stays
 visible.
 
-Note the PR gate only runs `--project=desktop-1280 --grep @smoke`, and only
-`smoke.spec.ts` carries `@smoke`. Expanding that gate is tracked in \#656.
+### Shared fixtures
+
+Import `test`/`expect` from `frontend/e2e/fixtures.ts`, not `@playwright/test`.
+It provides:
+
+- **Strict console capture** — any `console.error`, `console.warn` or
+  `pageerror` fails the test unless allow-listed. Warnings are deliberately not
+  exempt: `logMissingXs` is a warning, and excluding warnings is how that signal
+  was lost.
+- **`CONSOLE_ALLOWLIST`** — typed entries carrying a pattern, ticket, reason and
+  **expiry**. `console-allowlist.spec.ts` fails once an entry is past its
+  expiry, so suppressions get re-reviewed instead of accumulating.
+- **IndexedDB reset** per test, since Playwright reuses a context per worker and
+  history / session / parquet-cache state otherwise leaks between specs.
+- Helpers: `openPreset`, `waitForCompute`, `getIsotopeCount`.
+
+Not every spec has been migrated to the fixture yet — the ones that haven't
+still import `@playwright/test` directly and get no console checking.
+
+### Presets and feeling-lucky
+
+`presets-all.spec.ts` generates one case per entry in `PRESETS`, driven by
+`#preset=<id>`. It replaced five hardcoded `#config=1:<base64>` URLs, three of
+which were corrupt deflate streams (\#559). Generating from the registry means a
+new preset is covered when it is added, not when someone remembers to write a
+spec — which is why the four neutron presets previously had no coverage at all.
+
+There is **no `@preset-heavy` tier**. Ge-68, At-211 and Ac-225 carried it
+because they timed out at 5–13 minutes; via `#preset=` each finishes in ~1.5 s.
+The app was never rendering, so the "slow physics" was a stalled page.
+
+`lucky.spec.ts` clicks both `feelingLucky` call sites. Determinism comes from
+`?seed=<n>` (`src/lib/lucky.ts`), gated to dev and automated browsers so a
+production bundle ignores it. The seed→preset mapping is asserted in
+`lucky.test.ts`, so an RNG change fails there first.
+
+### Gating
+
+PR runs `--project=desktop-1280 --grep @smoke|@preset` — 18 tests, ~29 s,
+covering every preset, both lucky sites and allow-list hygiene. It was 2 tests
+before \#656. The OS/viewport matrix stays at tag time.

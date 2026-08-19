@@ -37,12 +37,21 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             {
               echo 'os=["ubuntu-latest"]'
-              # Smoke = the @smoke-tagged subset on desktop-1280 — the same fast,
-              # stable set deploy-staging-smoke.yml runs. The full spec suite
-              # (incl. the slow @preset-heavy golden tests + every viewport)
-              # runs in the tag-time matrix. (@smoke is a literal grep — no shell
-              # metacharacters — so it's safe to splice into the run line.)
-              echo 'pw=--project=desktop-1280 --grep @smoke'
+              # PR gate (#656). Was `--grep @smoke` = 2 tests, which is why the
+              # "some elements do not work" class shipped: the four neutron
+              # presets and both feeling-lucky call sites had no coverage at all.
+              #
+              # Now @smoke + @preset on one viewport — every fast preset, both
+              # lucky sites, the data-manifest check and allow-list hygiene.
+              # Measured at ~24 s of tests locally, so it stays a gate people
+              # actually run rather than bypass.
+              #
+              # There is no @preset-heavy tier any more: those three timed out
+              # only because their #config= base64 was corrupt (#559), and via
+              # #preset= they finish in ~1.5 s each. The OS/viewport matrix
+              # remains tag-time. The grep is literal — no shell metacharacters —
+              # so splicing it in is safe.
+              echo 'pw=--project=desktop-1280 --grep @smoke|@preset'
               echo 'full=false'
             } >> "$GITHUB_OUTPUT"
           else
