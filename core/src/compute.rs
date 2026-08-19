@@ -286,6 +286,15 @@ fn compute_layer(
             continue;
         }
 
+        // Track whether ANY channel for this element overlaps the energy the
+        // beam actually spans in this layer. Channels tabulated entirely
+        // outside it interpolate to zero and produce nothing, silently (#654
+        // found jendl-5's d + Cu, tabulated 130–200 MeV, run at 20 MeV).
+        let mut elem_saw_xs = false;
+        let mut elem_overlap = false;
+        let mut data_lo = f64::INFINITY;
+        let mut data_hi = f64::NEG_INFINITY;
+
         for (&a_target, &isotope_abundance) in &elem.isotopes {
             let weight = atom_frac * isotope_abundance;
             if weight <= 0.0 {
@@ -313,6 +322,14 @@ fn compute_layer(
                 continue;
             }
             for xs in &xs_list {
+                if let (Some(&lo), Some(&hi)) = (xs.energies_mev.first(), xs.energies_mev.last()) {
+                    elem_saw_xs = true;
+                    data_lo = data_lo.min(lo);
+                    data_hi = data_hi.max(hi);
+                    if hi >= energy_out && lo <= energy_in {
+                        elem_overlap = true;
+                    }
+                }
                 let result = compute_production_rate(
                     &xs.energies_mev,
                     &xs.xs_mb,
@@ -426,6 +443,22 @@ fn compute_layer(
                     );
                 }
             }
+        }
+
+        // Data exists for this element but none of it covers the energy the
+        // beam spans here — every channel interpolates to zero. Without this the
+        // layer just comes back empty (#650 / #654).
+        if elem_saw_xs && !elem_overlap {
+            diagnostics.push(crate::types::Diagnostic::new(
+                crate::types::DiagnosticKind::ReactionOutsideEnergyRange {
+                    symbol: elem.symbol.clone(),
+                    data_min_mev: data_lo,
+                    data_max_mev: data_hi,
+                    beam_min_mev: energy_out,
+                    beam_max_mev: energy_in,
+                },
+                Some(layer_index),
+            ));
         }
     }
 

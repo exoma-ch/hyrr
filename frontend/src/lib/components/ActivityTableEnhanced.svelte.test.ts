@@ -92,6 +92,32 @@ describe("ActivityTableEnhanced — empty state", () => {
     expect(screen.getByText(/no naturally-occurring isotopes/)).toBeTruthy();
   });
 
+  it("renders the out-of-energy-range reason", () => {
+    // Found by the #654 sweep: jendl-5's d + Cu channels are tabulated
+    // 130-200 MeV, so a 20 MeV run produced nothing and explained nothing.
+    render(ActivityTableEnhanced, {
+      props: {
+        result: emptyResult([
+          {
+            kind: "reaction_outside_energy_range",
+            severity: "error",
+            layer_index: 0,
+            message:
+              "Cross-sections for Cu are tabulated from 130.000 to 200.000 MeV, but the beam only spans 19.998-20.000 MeV in this layer — no channel overlaps, so nothing is produced. Try a different beam energy or library.",
+            symbol: "Cu",
+            data_min_mev: 130,
+            data_max_mev: 200,
+            beam_min_mev: 19.998,
+            beam_max_mev: 20,
+          },
+        ]),
+      },
+    });
+
+    expect(screen.getByTestId("diag-reaction_outside_energy_range")).toBeTruthy();
+    expect(screen.getByText(/tabulated from 130/)).toBeTruthy();
+  });
+
   it("distinguishes a genuine zero yield from a data gap", () => {
     // No diagnostics: the data loaded and the reaction really produces nothing.
     // This must NOT claim a data problem — that would be a different lie.

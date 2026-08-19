@@ -180,3 +180,43 @@ fn a_healthy_run_carries_no_diagnostics() {
         result.diagnostics
     );
 }
+
+#[test]
+#[ignore = "requires bundled nucl-parquet data; run with --include-ignored"]
+fn cross_sections_outside_the_beam_energy_are_reported_not_silent() {
+    let Some(dir) = data_dir() else {
+        eprintln!("skipping: no nucl-parquet data dir found");
+        return;
+    };
+    let Ok(db) = ParquetDataStore::new(&dir, "jendl-5") else {
+        eprintln!("skipping: jendl-5 not present");
+        return;
+    };
+
+    // Found by the #654 coverage sweep, which flagged this as the last
+    // silently-empty triple in 1,747. jendl-5 carries d + Cu channels tabulated
+    // from 130 to 200 MeV only. Run a 20 MeV deuteron and every channel
+    // interpolates to zero: the data is there, just not where the beam is — and
+    // before this diagnostic, nothing said so.
+    let mut stack = single_layer_stack(&db, "Cu", "d", 20.0);
+    let result = compute_stack(&db, &mut stack, true).expect("compute succeeds");
+
+    assert_eq!(
+        produced(&result),
+        0,
+        "precondition: jendl-5 d+Cu data starts at 130 MeV, so 20 MeV produces nothing"
+    );
+
+    let found = result.diagnostics.iter().any(|d| {
+        matches!(
+            &d.kind,
+            DiagnosticKind::ReactionOutsideEnergyRange { symbol, data_min_mev, .. }
+                if symbol == "Cu" && *data_min_mev > 100.0
+        )
+    });
+    assert!(
+        found,
+        "expected a ReactionOutsideEnergyRange diagnostic for d + Cu at 20 MeV, got: {:?}",
+        result.diagnostics
+    );
+}

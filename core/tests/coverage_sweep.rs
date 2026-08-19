@@ -78,27 +78,77 @@ enum Outcome {
     TypedError,
 }
 
-/// The energy to test this (projectile, element) at, derived from the
-/// evaluation's own grid: the first point where any channel exceeds 1 mb,
-/// nudged up so the integration window is not degenerate.
+/// Candidate test energies for this (projectile, element), derived from the
+/// evaluation's own grid — never hardcoded.
 ///
-/// Returns `None` when the element has no cross-sections at all — that is the
-/// `NoData` case and needs no energy.
-fn test_energy(db: &ParquetDataStore, projectile: &str, z: u32, isotopes: &[u32]) -> Option<f64> {
-    let mut first_hot: Option<f64> = None;
+/// Returns one energy per channel (where that channel peaks), strongest first,
+/// capped at [`MAX_TEST_ENERGIES`]. Empty means no channel anywhere exceeds
+/// 1 mb: no file, or a dead evaluation.
+///
+/// Two earlier attempts were wrong, and both produced false alarms:
+///
+/// 1. *First point above 1 mb, minimised across channels.* One weak low-energy
+///    channel drags the test to the toe of the curve. ³He + Th came back
+///    "silently empty" that way while producing 11 isotopes at 20 MeV — the
+///    energy was simply far below the Coulomb barrier.
+/// 2. *Global peak.* Fixed ³He + Th but broke the sparse monitor-reaction
+///    libraries, whose few channels peak at very different energies: the
+///    strongest channel's peak can sit where every other channel contributes
+///    nothing, and a thin layer there integrates to zero.
+///
+/// Hence per-channel peaks, accepting the pair if ANY of them produces. A
+/// single energy cannot decide this question.
+fn test_energies(db: &ParquetDataStore, projectile: &str, z: u32, isotopes: &[u32]) -> Vec<f64> {
+    let mut peaks: Vec<(f64, f64)> = Vec::new(); // (xs_mb, energy_mev)
     for &a in isotopes {
         for xs in db.get_cross_sections(projectile, z, a) {
+            let mut best: Option<(f64, f64)> = None;
             for (e, s) in xs.energies_mev.iter().zip(xs.xs_mb.iter()) {
-                if *s > 1.0 {
-                    first_hot = Some(first_hot.map_or(*e, |cur: f64| cur.min(*e)));
-                    break;
+                if best.is_none_or(|(bs, _)| *s > bs) {
+                    best = Some((*s, *e));
                 }
+            }
+            // A channel peaking below 1 mb is dust, not a testable reaction.
+            let Some((peak_xs, peak_e)) = best.filter(|(s, _)| *s > 1.0) else {
+                continue;
+            };
+            peaks.push((peak_xs, peak_e));
+
+            // Also the middle of the channel's grid. Threshold-shaped
+            // evaluations peak in the interior, but the sparse
+            // monitor-reaction libraries carry total-like cross-sections that
+            // decrease monotonically, so their peak IS the grid's first point —
+            // a degenerate test energy where a thin layer integrates to nothing.
+            // endfb-8.1 p+Cu peaks at 12.6 b @ 1.0 MeV and produces nothing
+            // there, yet yields 2 isotopes anywhere from 5 to 25 MeV.
+            let (lo, hi) = (
+                xs.energies_mev.first().copied().unwrap_or(0.0),
+                xs.energies_mev.last().copied().unwrap_or(0.0),
+            );
+            if hi > lo {
+                // Ranked below every real peak so peaks are tried first.
+                peaks.push((peak_xs * 0.5, 0.5 * (lo + hi)));
             }
         }
     }
-    // Sit above the toe of the curve, and stay inside the stopping tables.
-    first_hot.map(|e| (e * 1.5).clamp(1.0, 100.0))
+    peaks.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut out: Vec<f64> = Vec::new();
+    for (_, e) in peaks {
+        let e = e.clamp(1.0, 100.0);
+        if !out.iter().any(|x| (x - e).abs() < 0.5) {
+            out.push(e);
+        }
+        if out.len() == MAX_TEST_ENERGIES {
+            break;
+        }
+    }
+    out
 }
+
+/// How many per-channel peaks to try before declaring a pair unproductive.
+/// Each costs a `compute_stack`, so this trades sweep runtime against false
+/// positives; 5 covers the sparse libraries without doubling the nightly.
+const MAX_TEST_ENERGIES: usize = 5;
 
 fn sweep_one(db: &ParquetDataStore, projectile: &str, symbol: &str) -> Outcome {
     // A fixed density override on purpose. The layer is specified by areal
@@ -121,13 +171,30 @@ fn sweep_one(db: &ParquetDataStore, projectile: &str, symbol: &str) -> Outcome {
     let Some(proj) = ProjectileType::from_str(projectile) else {
         return Outcome::TypedError;
     };
-    let energy = match test_energy(db, projectile, z, &isotopes) {
-        Some(e) => e,
-        // No channel anywhere exceeds 1 mb: either no file, or a dead
-        // evaluation. Both are "no data", and #650's diagnostics say which.
-        None => return Outcome::NoData,
-    };
+    let energies = test_energies(db, projectile, z, &isotopes);
+    // No channel anywhere exceeds 1 mb: either no file, or a dead evaluation.
+    // Both are "no data", and #650's diagnostics say which.
+    if energies.is_empty() {
+        return Outcome::NoData;
+    }
 
+    let mut last = Outcome::NoData;
+    for energy in energies {
+        match sweep_at(db, proj.clone(), &material, energy) {
+            Outcome::Produces => return Outcome::Produces,
+            other => last = other,
+        }
+    }
+    last
+}
+
+/// One (pair, energy) trial.
+fn sweep_at(
+    db: &ParquetDataStore,
+    proj: ProjectileType,
+    material: &hyrr_core::materials::MaterialResolution,
+    energy: f64,
+) -> Outcome {
     let mut stack = TargetStack {
         beam: Beam::new(proj, energy, 0.04),
         layers: vec![Layer {

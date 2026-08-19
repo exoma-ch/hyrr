@@ -177,7 +177,8 @@ export interface LayerResultData {
  */
 export type DiagnosticKind =
   | "no_cross_section_data"
-  | "empty_isotope_composition";
+  | "empty_isotope_composition"
+  | "reaction_outside_energy_range";
 
 export interface Diagnostic {
   kind: DiagnosticKind;
@@ -193,6 +194,10 @@ export interface Diagnostic {
   target_a?: number;
   symbol?: string;
   z?: number;
+  data_min_mev?: number;
+  data_max_mev?: number;
+  beam_min_mev?: number;
+  beam_max_mev?: number;
 }
 
 export interface SimulationResult {

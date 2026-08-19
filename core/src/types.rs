@@ -470,6 +470,20 @@ pub enum DiagnosticKind {
     /// mass. Hits every element with no naturally-occurring isotopes (Tc, Pm,
     /// Po, At, Rn, Fr, Ra, Ac, Pa, …) unless enrichment was supplied.
     EmptyIsotopeComposition { symbol: String, z: u32 },
+    /// Cross-sections exist for this target, but every channel is tabulated
+    /// outside the energy the beam actually spans in this layer, so all of them
+    /// interpolate to zero.
+    ///
+    /// Found by the coverage sweep (#654): jendl-5's d + Cu channels cover
+    /// 130–200 MeV only, so a 20 MeV deuteron run produced nothing and said
+    /// nothing — the data was there, just not where the beam was.
+    ReactionOutsideEnergyRange {
+        symbol: String,
+        data_min_mev: f64,
+        data_max_mev: f64,
+        beam_min_mev: f64,
+        beam_max_mev: f64,
+    },
 }
 
 impl DiagnosticKind {
@@ -491,6 +505,18 @@ impl DiagnosticKind {
                 "{symbol} has no naturally-occurring isotopes, so it contributes no \
                  target mass. Specify an enrichment to use it as a target."
             ),
+            Self::ReactionOutsideEnergyRange {
+                symbol,
+                data_min_mev,
+                data_max_mev,
+                beam_min_mev,
+                beam_max_mev,
+            } => format!(
+                "Cross-sections for {symbol} are tabulated from {data_min_mev:.3} to \
+                 {data_max_mev:.3} MeV, but the beam only spans {beam_min_mev:.3}–\
+                 {beam_max_mev:.3} MeV in this layer — no channel overlaps, so nothing \
+                 is produced. Try a different beam energy or library."
+            ),
         }
     }
 
@@ -499,6 +525,7 @@ impl DiagnosticKind {
         match self {
             Self::NoCrossSectionData { .. } => DiagnosticSeverity::Error,
             Self::EmptyIsotopeComposition { .. } => DiagnosticSeverity::Error,
+            Self::ReactionOutsideEnergyRange { .. } => DiagnosticSeverity::Error,
         }
     }
 }
