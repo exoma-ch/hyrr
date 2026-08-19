@@ -67,13 +67,32 @@ deploy-tst:
     scripts/deploy-staging-manual.sh
 
 # ── ETH webhosting (hyrr.ethz.ch) — promotion ladder: ent → tst → prd ──────────
-# These build + rsync the frontend over SSH and MUST run from a host with ETH
-# SSH reachability (your Mac on VPN/eduroam) — not vm-dev or GitHub runners.
+# These build + rsync the frontend over SSH. They need ETH SSH reachability,
+# which you have EITHER on the ETH network/VPN (direct) OR through the heimdall
+# ProxyJump aliases in ssh_config — the latter works from vm-dev, contrary to
+# what this file and deploy-eth.sh used to claim (#648). deploy-eth.sh picks the
+# aliases up automatically when they define a ProxyJump.
+#
+# Two prerequisites on a host using the aliases:
+#   ssh-add ~/.ssh/id_ed25519_ethz ~/.ssh/id_ed25519_eth-hyrr
+#   sops must be able to decrypt secrets/eth-deploy.sops.env (the whitelist SSoT)
+#
+# GitHub runners still cannot deploy — heimdall rejects the key inside the sops
+# bundle (#641), which is a separate problem from reachability.
 
 # Build + deploy to one ETH instance (ent | tst | prd). prd confirms first.
 [group('deploy')]
 deploy-eth env:
     scripts/deploy-eth.sh {{env}}
+
+# Assert prd's preconditions WITHOUT deploying: on main, clean tree, in sync
+# with origin/main. `just elevate` runs this itself — use this to check first.
+[group('deploy')]
+deploy-eth-preflight:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    HYRR_DEPLOY_ETH_LIB=1 source scripts/deploy-eth.sh
+    assert_prd_is_released_main
 
 # Read-only: dump an instance's remote $HOME + conf/servers + resolved docroot.
 [group('deploy')]
@@ -87,6 +106,8 @@ deploy-eth-ladder:
 
 # Lift to PRODUCTION (https://hyrr.ethz.ch) — rebuilds indexable (noindex only
 # applies to ent/tst), confirms, then deploys. Same source as the tst build.
+# Refuses unless you are on main, clean, and level with origin/main (#648);
+# there is no bypass flag. Run `just deploy-eth-preflight` to check first.
 [group('deploy')]
 elevate:
     scripts/deploy-eth.sh prd

@@ -284,6 +284,120 @@ else
 fi
 rm -f "$gate_dir/Version.json"
 
+# ── prd preflight: only from main, clean, level with origin (#648) ───────────
+#
+# Every case runs against a REAL pair of git repos (a bare "origin" and a
+# clone), because the assertion is entirely about git state — stubbing git
+# would only test the stub. Each case asserts the refusal REASON, not just a
+# non-zero exit: an assertion that rejects everything would pass a
+# rc-only check while being useless.
+
+prd_repo=""
+prd_setup() { # prd_setup — fresh origin+clone, one commit on main
+  local root; root="$(mktemp -d "$work/prd.XXXXXX")"
+  git init --quiet --bare "$root/origin.git"
+  git init --quiet -b main "$root/clone"
+  (
+    cd "$root/clone" || exit 1
+    git config user.email t@t; git config user.name t
+    git config commit.gpgsign false
+    # Must live at scripts/ — deploy-eth.sh resolves REPO_ROOT as its own
+    # dirname/.. and cd's there. Dropped at the top level it would cd OUT of the
+    # clone, git would report branch "unknown", and every case would refuse for
+    # that reason instead of the one under test. Two cases false-passed that way
+    # while this was wrong, which is why each assertion checks the message.
+    mkdir -p scripts
+    cp "$DEPLOY" scripts/deploy-eth.sh
+    echo seed > seed.txt
+    git add -A && git commit --quiet -m init
+    git remote add origin "$root/origin.git"
+    git push --quiet -u origin main
+  ) >/dev/null 2>&1
+  prd_repo="$root/clone"
+}
+
+PRD_RC=0
+PRD_OUT=""
+run_prd() { # run_prd — assert_prd_is_released_main inside the fake clone
+  PRD_OUT="$(cd "$prd_repo" && HYRR_DEPLOY_ETH_LIB=1 bash -c \
+    'source ./scripts/deploy-eth.sh; assert_prd_is_released_main' 2>&1)"
+  PRD_RC=$?
+}
+
+expect_prd_refusal() { # expect_prd_refusal <name> <substring>
+  if [ "$PRD_RC" -ne 0 ] && printf '%s' "$PRD_OUT" | grep -qi -- "$2"; then
+    report "$1" pass
+  else
+    report "$1 (rc=$PRD_RC, out: $(printf '%s' "$PRD_OUT" | tr '\n' ' '))" fail
+  fi
+}
+
+prd_setup
+run_prd
+if [ "$PRD_RC" -eq 0 ]; then
+  report "prd preflight passes on clean main level with origin" pass
+else
+  report "prd preflight passes on clean main level with origin (rc=$PRD_RC, out: $PRD_OUT)" fail
+fi
+
+# A feature branch is refused even when it is otherwise clean and pushed.
+prd_setup
+(cd "$prd_repo" && git checkout --quiet -b feature/x && git push --quiet -u origin feature/x) >/dev/null 2>&1
+run_prd
+expect_prd_refusal "prd refuses a feature branch" "only from 'main'"
+
+# Detached HEAD is the shape a release-tag checkout takes, and it is still not
+# main — production must be traceable to the branch, not to a loose commit.
+prd_setup
+(cd "$prd_repo" && git checkout --quiet --detach HEAD) >/dev/null 2>&1
+run_prd
+expect_prd_refusal "prd refuses a detached HEAD" "only from 'main'"
+
+# Uncommitted tracked changes mean the artifact is not reproducible from GitHub.
+prd_setup
+(cd "$prd_repo" && echo changed > seed.txt) >/dev/null 2>&1
+run_prd
+expect_prd_refusal "prd refuses a dirty tree" "clean tree"
+
+# Untracked files are NOT a reason to refuse: the gitignored whitelist is
+# materialised from sops on every run, so treating them as dirty would make the
+# gate fire on a correct deploy.
+prd_setup
+(cd "$prd_repo" && echo scratch > untracked.txt) >/dev/null 2>&1
+run_prd
+if [ "$PRD_RC" -eq 0 ]; then
+  report "prd tolerates untracked files" pass
+else
+  report "prd tolerates untracked files (rc=$PRD_RC, out: $PRD_OUT)" fail
+fi
+
+# Ahead of origin: the commits have passed no gate, because CI never saw them.
+prd_setup
+(cd "$prd_repo" && echo more >> seed.txt && git commit --quiet -am second) >/dev/null 2>&1
+run_prd
+expect_prd_refusal "prd refuses when ahead of origin" "AHEAD"
+
+# Behind origin: deploying would silently ship an older tree than main.
+prd_setup
+(
+  cd "$prd_repo" || exit 1
+  echo more >> seed.txt && git commit --quiet -am second && git push --quiet origin main
+  git reset --quiet --hard HEAD~1
+) >/dev/null 2>&1
+run_prd
+expect_prd_refusal "prd refuses when behind origin" "BEHIND"
+
+# Diverged: neither ahead nor behind, and the message must not claim either.
+prd_setup
+(
+  cd "$prd_repo" || exit 1
+  echo theirs >> seed.txt && git commit --quiet -am theirs && git push --quiet origin main
+  git reset --quiet --hard HEAD~1
+  echo mine >> seed.txt && git commit --quiet -am mine
+) >/dev/null 2>&1
+run_prd
+expect_prd_refusal "prd refuses diverged histories" "DIVERGED"
+
 if [ "$failed" -eq 0 ]; then
   echo "All deploy-eth verification tests passed."
 else
