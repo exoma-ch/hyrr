@@ -132,8 +132,33 @@ export class DataStore implements DatabaseProtocol {
 
   private initialized = false;
 
-  constructor(baseUrl: string) {
+  /**
+   * Subdirectory holding the selected charged-particle library's cross-sections
+   * (#657). Defaults to `xs`, which is where `copy-frontend-data.sh` puts the
+   * default library, so existing bundles are unaffected.
+   *
+   * Selection only becomes meaningful once more than one charged library is
+   * shipped; `MANIFEST.json` is the source of truth for what actually is. See
+   * `frontend/src/lib/stores/library.svelte.ts`.
+   */
+  private chargedSubdir: string;
+
+  constructor(baseUrl: string, chargedSubdir = "xs") {
     this.baseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+    this.chargedSubdir = chargedSubdir;
+  }
+
+  /** Switch the charged-particle library. Clears the cross-section cache, since
+   *  every cached curve belongs to the previous library. */
+  setChargedSubdir(subdir: string): void {
+    if (subdir === this.chargedSubdir) return;
+    this.chargedSubdir = subdir;
+    this.xsCache.clear();
+  }
+
+  /** The charged-particle subdirectory currently in use. */
+  getChargedSubdir(): string {
+    return this.chargedSubdir;
   }
 
   /** Initialize by loading meta + stopping tables. Must be called before use. */
@@ -251,7 +276,11 @@ export class DataStore implements DatabaseProtocol {
     // `library_for_projectile` in core/src/db.rs (#659); `hi-xs-prod` has been
     // shipped to the browser all along with nothing routing to it.
     const subdir =
-      projectile === "n" ? "neutron-xs" : isHeavyIon(projectile) ? "hi-xs-prod" : "xs";
+      projectile === "n"
+        ? "neutron-xs"
+        : isHeavyIon(projectile)
+          ? "hi-xs-prod"
+          : this.chargedSubdir;
     // Z lookup for the fallback URL: prefer the store's fully-populated map
     // (elements.parquet has every element), fall back to the hardcoded
     // Z=1..118 table for the ensure-called-before-init path.
