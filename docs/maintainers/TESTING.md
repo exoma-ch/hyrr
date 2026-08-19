@@ -68,6 +68,56 @@ Without `HYRR_DATA` they fall back to `../nucl-parquet/data` relative to the
 cargo manifest. If neither resolves the test prints a skip message and exits
 green, so a fresh checkout without the submodule still works.
 
+## Data census and coverage sweep
+
+Two tiers of epic \#649 that answer "does every (library, projectile, target)
+triple actually work?".
+
+**Census** (`core/tests/data_census.rs`, `hyrr_core::census`) reconciles
+`catalog.json`'s claims against the files on disk — 22 libraries, 4,613 files,
+0.05 s. Ragged coverage is never a failure: `tendl-2023-iso` genuinely ships no
+H or He for any projectile and no Li for p or d. Only *contradictions* fail, and
+known upstream ones live in a `KNOWN_PROBLEMS` baseline that itself fails when
+an entry stops reproducing, so it cannot rot into a blanket suppression.
+
+**Sweep** (`core/tests/coverage_sweep.rs`) runs a thin target per triple and
+classifies the outcome:
+
+| outcome | meaning | CI |
+|---|---|---|
+| `Produces` | isotopes came out | pass |
+| `NoData` | nothing produced, and a diagnostic (\#650) explains why | report |
+| `TypedError` | a typed error — loud, therefore fine | report |
+| `SilentlyEmpty` | computed, produced nothing, explained nothing | **fail** |
+
+The test energy is derived **per file** from the evaluation's own grid (the
+first point above 1 mb), never hardcoded. A fixed energy would fail every
+alpha-on-heavy-target row for entirely correct physics — α+Au needs ≥17 MeV
+before any channel exceeds 1 mb, against 3 MeV for α+Li — and a suite that cries
+wolf gets muted.
+
+Scope is deliberately split, because each case costs a parquet decode:
+
+- **PR** — a ~19-case deterministic sample inside `nix flake check` (~9 s):
+  every charged projectile of the default library, plus the elements with no
+  natural isotopes (Tc, Pm, Po, At, Rn, Fr, Ra, Ac, Pa). Those are Z-named on
+  disk (`p_Z43.parquet`), so the sample matches on symbol **or** `Z<n>`.
+- **Nightly + on submodule bump** — `HYRR_SWEEP=full` over every charged triple,
+  via `.github/workflows/coverage-sweep.yml`. A failure opens or updates a
+  tracking issue and a green closes it; nightly-only signal that nobody is paged
+  for is how \#559 stayed red across releases.
+
+`n`, `g` and the lowercase heavy-ion stems (`c12`, `ar40`, …) are out of scope:
+neutrons go through `compute_neutron_stack`, photonuclear is unsupported, and
+`ProjectileType::from_str` cannot parse the heavy-ion filenames at all — that
+mismatch is \#659.
+
+Note the classifier is unit-tested separately
+(`classifier_distinguishes_the_three_outcomes`). Constructing a genuinely silent
+triple from real data is hard now that most failure modes are loud, which is the
+desired state — but it would otherwise leave the headline assertion
+unfalsifiable.
+
 ## Feature-gated tests: the allow-list trap
 
 `nix flake check` runs three Rust derivations. `rust-test` uses the **default**
