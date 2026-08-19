@@ -20,7 +20,7 @@ echo "=== 1/4 Building WASM ==="
 (cd wasm && wasm-pack build --target web --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg)
 
 echo "=== 2/4 Copying nuclear data ==="
-scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet tendl-2023-iso
+scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
 echo "=== 3/4 Building frontend (staging base path) ==="
 (cd frontend && VITE_BASE_PATH=/hyrr/tst/ npm run build)

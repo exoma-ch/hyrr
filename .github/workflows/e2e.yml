@@ -85,8 +85,7 @@ jobs:
 
       - name: Copy nuclear data for frontend
         run: |
-          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
+          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -252,8 +251,7 @@ jobs:
 
       - name: Copy nuclear data for frontend
         run: |
-          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
+          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
       - name: Build WASM compute engine
         run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
@@ -323,8 +321,7 @@ jobs:
 
       - name: Copy nuclear data for frontend
         run: |
-          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
+          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

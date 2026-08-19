@@ -45,7 +45,7 @@ fi
 
 # 3. Nuclear data
 echo "==> Copying nuclear data..."
-scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet tendl-2023-iso
+scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
 # 4. NPM deps
 if [ ! -d frontend/node_modules ]; then

@@ -74,10 +74,12 @@ jobs:
             clients/rs \
             data/meta \
             data/stopping \
-            data/tendl-2023-iso/xs
+            data/tendl-2023-iso/xs \
+            data/hi-xs-prod/xs \
+            data/endfb-8.0/xs
 
       - name: Copy parquet data to frontend public dir
-        run: scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet tendl-2023-iso
+        run: scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
