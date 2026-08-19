@@ -36,6 +36,11 @@ yanked = "warn"
 # reading it. Re-check whenever Tauri is upgraded; if an entry stops matching,
 # cargo-deny says so and it should be deleted rather than left to rot.
 #
+# The decision to keep the Linux desktop target and accept the GTK3 tree — the
+# only entries below that are RUNTIME rather than build-time — is recorded in
+# docs/adr/0009-unmaintained-gtk3-in-the-linux-desktop-build.md. Read that
+# before deleting or widening anything here.
+#
 # Known cost of one shared config across six independent crates: the five that
 # do not depend on Tauri each emit 16 `advisory-not-detected` warnings. They do
 # not fail anything, but they do mean "this ignore is now unused" is no longer
