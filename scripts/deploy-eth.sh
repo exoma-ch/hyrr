@@ -289,11 +289,48 @@ assert_whitelist_entries_sane() {
   fi
 }
 
+# Materialise the whitelist from the encrypted SSoT when it is absent.
+#
+# The plaintext list is gitignored (the repo is PUBLIC), so a fresh checkout or
+# a new worktree has no copy and the deploy refuses. The documented remedy was a
+# hand-run sops | grep | cut | base64 pipeline — four places to get it subtly
+# wrong, and a wrong result is a WRONG GATE rather than an error: fewer entries
+# locks out real users, a mangled entry silently matches nobody.
+#
+# Deriving it removes that step. This cannot weaken anything: it only ever runs
+# when the file is missing, it writes exactly what CI writes from the same
+# ciphertext, and if sops cannot decrypt it stays silent and write_gate's
+# refusal stands. Never printed — personal data.
+materialise_whitelist_from_sops() {
+  [ -f "$WHITELIST_FILE" ] && return 0
+  [ -f "$SOPS_ENV_FILE" ] || return 0
+  command -v sops >/dev/null 2>&1 || return 0
+  local decrypted b64
+  decrypted=$(sops -d "$SOPS_ENV_FILE" 2>/dev/null) || return 0
+  b64=$(printf '%s\n' "$decrypted" | grep '^WHITELIST_B64=' | cut -d= -f2- | tr -d '"'"'"'') || b64=""
+  [ -n "$b64" ] || return 0
+
+  mkdir -p "$(dirname "$WHITELIST_FILE")"
+  # Via a temp file so a decode failure cannot leave a truncated whitelist that
+  # would deploy as a narrower gate than intended.
+  local tmp; tmp="$(mktemp)"
+  if printf '%s' "$b64" | base64 -d > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    chmod 600 "$tmp"
+    mv "$tmp" "$WHITELIST_FILE"
+    echo "note: materialised '$WHITELIST_FILE' from $SOPS_ENV_FILE ($(grep -vcE '^[[:space:]]*#|^[[:space:]]*$' "$WHITELIST_FILE") entries)."
+  else
+    rm -f "$tmp"
+  fi
+}
+
 write_gate() { # write_gate <dir>
+  materialise_whitelist_from_sops
   if [ ! -f "$WHITELIST_FILE" ]; then
     echo "ERROR: whitelist '$WHITELIST_FILE' not found — refusing to deploy ungated" >&2
     echo "       (nuclear-data license). Create it (one eppn/mail per line) or" >&2
     echo "       set HYRR_ETH_WHITELIST." >&2
+    echo "       It is normally derived automatically from $SOPS_ENV_FILE; that" >&2
+    echo "       did not happen, so sops is missing or cannot decrypt here." >&2
     exit 5
   fi
   check_whitelist_fresh
@@ -483,7 +520,25 @@ do_deploy() { # do_deploy <env>
 }
 
 confirm_prd() {
-  if [ "${HYRR_ASSUME_YES:-}" = "1" ] || [ ! -t 0 ]; then return 0; fi
+  if [ "${HYRR_ASSUME_YES:-}" = "1" ]; then return 0; fi
+
+  # No TTY is REFUSED, not waved through. This previously read
+  #   [ "${HYRR_ASSUME_YES:-}" = "1" ] || [ ! -t 0 ] && return 0
+  # so any non-interactive caller — a script, a cron, an agent driving the
+  # shell — deployed production with no confirmation at all. Discovered while
+  # promoting 0.20.1: the prompt simply never appeared and prd shipped.
+  #
+  # Absence of a terminal is not consent. HYRR_ASSUME_YES already exists to say
+  # "I am non-interactive and I mean it", so requiring it here costs deliberate
+  # callers one variable and costs an accidental one a production deploy.
+  if [ ! -t 0 ]; then
+    echo "ERROR: prd deploy requires confirmation and there is no TTY to ask on." >&2
+    echo "       Run it from a terminal, or set HYRR_ASSUME_YES=1 if you are" >&2
+    echo "       deliberately deploying production non-interactively." >&2
+    echo "       (ent and tst never prompt — only prd does.)" >&2
+    exit 1
+  fi
+
   echo "⚠  PRODUCTION deploy → https://hyrr.ethz.ch (user-facing)."
   read -r -p "   Type 'hyrr-prod' to continue: " c
   [ "$c" = "hyrr-prod" ] || { echo "Aborted."; exit 1; }

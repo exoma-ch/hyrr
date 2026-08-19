@@ -398,6 +398,102 @@ prd_setup
 run_prd
 expect_prd_refusal "prd refuses diverged histories" "DIVERGED"
 
+# ── confirm_prd: no TTY must REFUSE, not wave through ────────────────────────
+#
+# The original read `[ "$HYRR_ASSUME_YES" = 1 ] || [ ! -t 0 ] && return 0`, so
+# every non-interactive caller deployed production silently. Found when the
+# 0.20.1 promotion ran from an agent shell and the prompt never appeared.
+# `< /dev/null` is what makes stdin a non-TTY here.
+
+confirm_out=""
+confirm_rc=0
+run_confirm() { # run_confirm [env assignments...]
+  confirm_out="$(env "$@" bash -c '
+    HYRR_DEPLOY_ETH_LIB=1 source "'"$DEPLOY"'"
+    confirm_prd
+    echo CONTINUED' < /dev/null 2>&1)"
+  confirm_rc=$?
+}
+
+run_confirm HYRR_ASSUME_YES=
+if [ "$confirm_rc" -ne 0 ] && printf '%s' "$confirm_out" | grep -q "no TTY"; then
+  report "confirm_prd refuses prd with no TTY and no explicit opt-in" pass
+else
+  report "confirm_prd refuses prd with no TTY (rc=$confirm_rc, out: $confirm_out)" fail
+fi
+
+# It must not merely exit non-zero — it must not have proceeded.
+if printf '%s' "$confirm_out" | grep -q CONTINUED; then
+  report "confirm_prd does not fall through after refusing" fail
+else
+  report "confirm_prd does not fall through after refusing" pass
+fi
+
+# The deliberate non-interactive path still works — CI depends on it.
+run_confirm HYRR_ASSUME_YES=1
+if [ "$confirm_rc" -eq 0 ] && printf '%s' "$confirm_out" | grep -q CONTINUED; then
+  report "confirm_prd allows an explicit HYRR_ASSUME_YES=1" pass
+else
+  report "confirm_prd allows an explicit HYRR_ASSUME_YES=1 (rc=$confirm_rc, out: $confirm_out)" fail
+fi
+
+# ── whitelist is derived from the encrypted SSoT when absent ─────────────────
+#
+# Only the missing-file path is covered here; decrypting for real needs an age
+# key, so the sops call is stubbed. What matters is that an existing file is
+# never overwritten and that failure leaves nothing behind — a truncated
+# whitelist deploys as a NARROWER gate, locking real users out silently.
+
+wl_root="$work/wl"
+run_materialise() { # run_materialise <sops-stdout> [existing-file-content]
+  rm -rf "$wl_root"; mkdir -p "$wl_root/scripts" "$wl_root/secrets"
+  cp "$DEPLOY" "$wl_root/scripts/"
+  printf 'ciphertext\n' > "$wl_root/secrets/eth-deploy.sops.env"
+  if [ $# -ge 2 ]; then
+    mkdir -p "$wl_root/infra/eth-webhosting"
+    printf '%s' "$2" > "$wl_root/infra/eth-webhosting/whitelist.txt"
+  fi
+  local payload="$1"
+  (
+    cd "$wl_root" || exit 1
+    # shellcheck source=/dev/null  # path is built at runtime
+    HYRR_DEPLOY_ETH_LIB=1 source "$wl_root/scripts/deploy-eth.sh"
+    # Stub sops: decrypting for real needs an age key, and the point here is
+    # the file handling, not the crypto. Defined AFTER sourcing so it wins.
+    # shellcheck disable=SC2317,SC2329
+    sops() { printf '%s\n' "$payload"; }
+    materialise_whitelist_from_sops >/dev/null 2>&1
+  ) 2>/dev/null
+}
+
+# Happy path: absent file, decryptable SSoT → derived, with the right contents.
+b64_two="$(printf 'a@ethz.ch\nb@psi.ch\n' | base64 | tr -d '\n')"
+run_materialise "WHITELIST_B64=$b64_two"
+if [ -f "$wl_root/infra/eth-webhosting/whitelist.txt" ] \
+   && [ "$(grep -c . "$wl_root/infra/eth-webhosting/whitelist.txt")" -eq 2 ]; then
+  report "whitelist is derived from the SSoT when absent" pass
+else
+  report "whitelist is derived from the SSoT when absent" fail
+fi
+
+# An existing file is authoritative and must never be clobbered — an operator
+# may be testing a narrower list on purpose.
+run_materialise "WHITELIST_B64=$b64_two" "keepme@ethz.ch"
+if [ "$(cat "$wl_root/infra/eth-webhosting/whitelist.txt")" = "keepme@ethz.ch" ]; then
+  report "an existing whitelist is never overwritten" pass
+else
+  report "an existing whitelist is never overwritten" fail
+fi
+
+# No WHITELIST_B64 in the payload → write nothing, so write_gate still refuses
+# rather than deploying an empty (ungated-by-omission) list.
+run_materialise "SOMETHING_ELSE=x"
+if [ ! -f "$wl_root/infra/eth-webhosting/whitelist.txt" ]; then
+  report "no WHITELIST_B64 leaves no whitelist behind" pass
+else
+  report "no WHITELIST_B64 leaves no whitelist behind" fail
+fi
+
 if [ "$failed" -eq 0 ]; then
   echo "All deploy-eth verification tests passed."
 else
