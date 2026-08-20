@@ -3211,6 +3211,7 @@ mod tests {
             energy_out: 12.0,
             delta_e_mev: 6.0,
             heat_kw: 0.0,
+            provenance: Default::default(),
             depth_profile: vec![],
             isotope_results,
             stopping_power_sources: HashMap::new(),
