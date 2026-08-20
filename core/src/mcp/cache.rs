@@ -1081,6 +1081,32 @@ mod tests {
                 energy_out: 12.0,
                 delta_e_mev: 6.0,
                 heat_kw: 0.42,
+                // Realistic, not Default: this fixture exists to measure the
+                // serialized payload for cache tuning, and an empty provenance
+                // would understate what a real result now carries (#666).
+                provenance: crate::types::LayerProvenance {
+                    density_g_cm3: 8.57,
+                    thickness_cm: 0.1,
+                    areal_density_g_cm2: None,
+                    is_monitor: false,
+                    nist_compound: None,
+                    elements: vec![
+                        crate::types::ElementProvenance {
+                            symbol: "Nb".to_string(),
+                            z: 41,
+                            atom_fraction: 0.6,
+                            isotopes: [(93u32, 1.0)].into_iter().collect(),
+                        },
+                        crate::types::ElementProvenance {
+                            symbol: "Mo".to_string(),
+                            z: 42,
+                            atom_fraction: 0.4,
+                            isotopes: [(92u32, 0.15), (98u32, 0.24), (100u32, 0.1)]
+                                .into_iter()
+                                .collect(),
+                        },
+                    ],
+                },
                 depth_profile,
                 isotope_results,
                 stopping_power_sources: std::collections::HashMap::new(),
