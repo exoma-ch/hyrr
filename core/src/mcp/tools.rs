@@ -3227,6 +3227,7 @@ mod tests {
             irradiation_time_s: 3600.0,
             cooling_time_s: 0.0,
             provenance: crate::provenance::Provenance::unknown(),
+            diagnostics: Vec::new(),
         }
     }
 

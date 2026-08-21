@@ -37,12 +37,34 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             {
               echo 'os=["ubuntu-latest"]'
-              # Smoke = the @smoke-tagged subset on desktop-1280 — the same fast,
-              # stable set deploy-staging-smoke.yml runs. The full spec suite
-              # (incl. the slow @preset-heavy golden tests + every viewport)
-              # runs in the tag-time matrix. (@smoke is a literal grep — no shell
-              # metacharacters — so it's safe to splice into the run line.)
-              echo 'pw=--project=desktop-1280 --grep @smoke'
+              # PR gate (#656). Was `--grep @smoke` = 2 tests, which is why the
+              # "some elements do not work" class shipped: the four neutron
+              # presets and both feeling-lucky call sites had no coverage at all.
+              #
+              # Now @smoke + @preset on one viewport — every fast preset, both
+              # lucky sites, the data-manifest check and allow-list hygiene.
+              # Measured at ~24 s of tests locally, so it stays a gate people
+              # actually run rather than bypass.
+              #
+              # There is no @preset-heavy tier any more: those three timed out
+              # only because their #config= base64 was corrupt (#559), and via
+              # #preset= they finish in ~1.5 s each. The OS/viewport matrix
+              # remains tag-time.
+              #
+              # The `|` here IS a shell metacharacter, so this value must never
+              # be spliced into a `run:` line as a GitHub expression — the
+              # substitution is textual and happens *before* the shell parses,
+              # so `--grep @smoke|@preset` then parses as a pipe into a command
+              # named `@preset`. The consuming step passes it through `env:`
+              # instead: parameter expansion field-splits but does not re-scan
+              # for operators, so the `|` stays literal.
+              #
+              # Note: do not write an empty expression (dollar-brace-brace) in
+              # this block even inside a shell comment. Everything here is part
+              # of the `run:` string, GitHub parses expressions in it before the
+              # shell ever sees a `#`, and an empty one fails the whole
+              # workflow file to parse.
+              echo 'pw=--project=desktop-1280 --grep @smoke|@preset'
               echo 'full=false'
             } >> "$GITHUB_OUTPUT"
           else
@@ -85,8 +107,7 @@ jobs:
 
       - name: Copy nuclear data for frontend
         run: |
-          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
+          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -142,10 +163,17 @@ jobs:
       - name: Run Playwright tests
         working-directory: frontend
         # `pw` is empty on the full (tag) matrix → all projects; on PR it pins
-        # the desktop-1280 project for the single smoke run.
-        run: npx playwright test ${{ needs.config.outputs.pw }} --reporter=list,html
+        # the desktop-1280 project and the @smoke|@preset grep.
+        #
+        # Deliberately unquoted `$PW_ARGS`: we *want* field splitting into
+        # separate argv entries, and expansion results are not re-scanned for
+        # shell operators, so the `|` in the grep survives as a literal. Passing
+        # it via `env:` rather than as an inline expression is what makes that
+        # true — see the `config` job. Never inline it back into the `run:`.
+        run: npx playwright test $PW_ARGS --reporter=list,html
         env:
           CI: "1"
+          PW_ARGS: ${{ needs.config.outputs.pw }}
 
       - name: Upload Playwright report
         if: always()
@@ -252,8 +280,7 @@ jobs:
 
       - name: Copy nuclear data for frontend
         run: |
-          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
+          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
       - name: Build WASM compute engine
         run: wasm-pack build wasm/ --target web --no-opt --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg
@@ -323,8 +350,7 @@ jobs:
 
       - name: Copy nuclear data for frontend
         run: |
-          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-            tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
+          scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

@@ -1,0 +1,115 @@
+name: Coverage sweep (nightly)
+
+# Tier B of epic #649. Sweeps every (library, projectile, target) triple the
+# charged-particle path can run and classifies each as produces / no-data /
+# silently-empty. The PR gate runs a ~19-case sample inside `nix flake check`;
+# this is the full ~1.6k-case run, which is too slow to sit on every PR.
+#
+# It also runs when the nucl-parquet submodule moves, because that is exactly
+# when coverage changes — a data bump is the event this is designed to catch.
+#
+# A red nightly that nobody sees is worthless: #559 sat red across multiple
+# releases because the only signal was a tag-time job. So a failure opens (or
+# updates) a GitHub issue with a stable title, and a subsequent green closes it.
+on:
+  schedule:
+    # 03:17 UTC — off the hour to avoid the scheduler stampede.
+    - cron: "17 3 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "nucl-parquet"
+      - "flake.lock"
+      - "core/src/census.rs"
+      - "core/tests/coverage_sweep.rs"
+      - ".github/workflows/coverage-sweep.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TRACKING_TITLE: "coverage sweep: silently-empty (library, projectile, target) triples"
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      # The full data tree, not a sparse slice — the sweep spans every library
+      # in the catalog. Blob-filtered so this stays about a minute rather than
+      # pulling ~800 MB of history.
+      - name: Init nucl-parquet submodule (full data, blob-filtered)
+        run: git submodule update --init --depth 1 --filter=blob:none nucl-parquet
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: Census (catalog vs disk)
+        env:
+          HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
+        run: |
+          cargo test --manifest-path core/Cargo.toml --test data_census \
+            -- --include-ignored --nocapture
+
+      - name: Full coverage sweep
+        id: sweep
+        env:
+          HYRR_DATA: ${{ github.workspace }}/nucl-parquet/data
+          HYRR_SWEEP: full
+        run: |
+          set -o pipefail
+          cargo test --manifest-path core/Cargo.toml --test coverage_sweep \
+            -- --include-ignored --nocapture 2>&1 | tee sweep.log
+
+      - name: Upload sweep log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-sweep-log
+          path: sweep.log
+          retention-days: 30
+
+      # ── Make a red nightly impossible to miss ────────────────────────────
+      - name: Open or update the tracking issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(git -C nucl-parquet rev-parse --short HEAD 2>/dev/null || echo unknown)"
+          body="$(printf 'The nightly coverage sweep is failing.\n\n'
+                  printf -- '- run: %s/%s/actions/runs/%s\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+                  printf -- '- nucl-parquet: `%s`\n\n' "$sha"
+                  printf 'A triple that computes successfully, produces nothing, and emits no\n'
+                  printf 'diagnostic is the failure class epic #649 exists to prevent. The full\n'
+                  printf 'log is attached to the run as `coverage-sweep-log`.\n\n'
+                  printf 'Half of all reds here will be "the data bumped" — check the\n'
+                  printf 'nucl-parquet SHA above against the previous green run first.\n')"
+          existing="$(gh issue list --state open --search "\"$TRACKING_TITLE\" in:title" \
+                        --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$TRACKING_TITLE" --body "$body" --label bug
+          fi
+
+      - name: Close the tracking issue on green
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing="$(gh issue list --state open --search "\"$TRACKING_TITLE\" in:title" \
+                        --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" \
+              --body "Sweep is green again as of ${GITHUB_SHA}. Closing."
+            gh issue close "$existing" --reason completed
+          fi

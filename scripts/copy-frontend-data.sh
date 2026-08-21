@@ -10,18 +10,39 @@
 # Usage:
 #   scripts/copy-frontend-data.sh <nucl-parquet-data-dir> <frontend-public-dir> [library...]
 #
+# With no library arguments the list is read from
+# scripts/frontend-data-libraries.txt — the SSoT. Callers should almost always
+# omit them: the previous default of "tendl-2023-iso" is why `dev.sh` and
+# `just data` shipped one library while production and CI shipped three, which
+# made the four neutron presets silently produce nothing in dev builds (#651).
+#
 # Libraries are specified as "catalog-name" (→ $DEST/xs/) or
 # "catalog-name:subdir" (→ $DEST/subdir/) for non-default output paths.
 #
-# Example:
-#   scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-#     tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
+# On success writes $DEST/MANIFEST.json describing what was actually populated,
+# so the build and the running app can assert the shape rather than discovering
+# a missing subdirectory as an empty results table.
 set -euo pipefail
 
 NP="${1:?Usage: $0 <nucl-parquet-data-dir> <frontend-public-dir> [library...]}"
 DEST="${2:?Usage: $0 <nucl-parquet-data-dir> <frontend-public-dir> [library...]}"
 shift 2
-LIBRARIES=("${@:-tendl-2023-iso}")
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_LIST="$HERE/frontend-data-libraries.txt"
+
+if [ "$#" -gt 0 ]; then
+  LIBRARIES=("$@")
+else
+  [ -f "$LIB_LIST" ] || { echo "copy-frontend-data: missing $LIB_LIST" >&2; exit 1; }
+  LIBRARIES=()
+  while IFS= read -r line; do
+    line="${line%%#*}"                     # strip comments
+    line="$(echo "$line" | tr -d '[:space:]')"
+    [ -n "$line" ] && LIBRARIES+=("$line")
+  done < "$LIB_LIST"
+  [ "${#LIBRARIES[@]}" -gt 0 ] || { echo "copy-frontend-data: no libraries in $LIB_LIST" >&2; exit 1; }
+fi
 
 # ── Meta (shared across all libraries) ────────────────────────────
 mkdir -p "$DEST/meta/ensdf/emissions"
@@ -59,14 +80,51 @@ cp "$NP/stopping/compounds/"*.parquet "$DEST/stopping/compounds/" 2>/dev/null ||
 
 # ── Cross-section libraries ───────────────────────────────────────
 # Format: "name" → xs/, or "name:subdir" → subdir/
+#
+# A requested library that isn't on disk is a HARD ERROR. It used to be skipped
+# silently (`if [ -d ... ]`), so a sparse checkout missing `endfb-8.0` produced
+# a bundle with no `neutron-xs/` and no complaint — the browser then 404'd every
+# neutron cross-section and rendered an empty table (#651, epic #649).
+manifest_entries=()
 for spec in "${LIBRARIES[@]}"; do
   lib="${spec%%:*}"
-  subdir="${spec#*:}"
-  [ "$subdir" = "$lib" ] && subdir="xs"  # no colon → default to xs/
-  if [ -d "$NP/$lib/xs" ]; then
-    mkdir -p "$DEST/$subdir"
-    cp "$NP/$lib/xs/"*.parquet "$DEST/$subdir/"
+  # Detect the separator explicitly. The old test was `[ "$subdir" = "$lib" ]
+  # && subdir=xs`, which is also true for a `name:name` spec — so
+  # `hi-xs-prod:hi-xs-prod` silently landed in `xs/` next to tendl's files
+  # instead of its own `hi-xs-prod/` directory, in every build including
+  # production (#651).
+  if [[ "$spec" == *:* ]]; then
+    subdir="${spec#*:}"
+  else
+    subdir="xs"
   fi
+
+  if [ ! -d "$NP/$lib/xs" ]; then
+    echo "copy-frontend-data: ERROR: requested library '$lib' has no xs/ dir at $NP/$lib/xs" >&2
+    echo "  Either widen the nucl-parquet sparse-checkout to include data/$lib/xs," >&2
+    echo "  or remove '$spec' from scripts/frontend-data-libraries.txt." >&2
+    exit 1
+  fi
+
+  mkdir -p "$DEST/$subdir"
+  cp "$NP/$lib/xs/"*.parquet "$DEST/$subdir/"
+  count="$(find "$DEST/$subdir" -maxdepth 1 -name '*.parquet' | wc -l | tr -d ' ')"
+  manifest_entries+=("{\"library\":\"$lib\",\"subdir\":\"$subdir\",\"files\":$count}")
 done
 
+# ── Shape descriptor ──────────────────────────────────────────────
+# Not a checksum (data-version pinning lives in hyrr.json, #577/#645) — just
+# "what got populated", so the build can assert the bundle has what the shipped
+# presets need and the app can say so at startup instead of rendering nothing.
+{
+  printf '{\n  "generated_by": "scripts/copy-frontend-data.sh",\n  "libraries": [\n'
+  for i in "${!manifest_entries[@]}"; do
+    sep=","
+    [ "$i" -eq $(( ${#manifest_entries[@]} - 1 )) ] && sep=""
+    printf '    %s%s\n' "${manifest_entries[$i]}" "$sep"
+  done
+  printf '  ]\n}\n'
+} > "$DEST/MANIFEST.json"
+
 echo "copy-frontend-data: done → $DEST (${LIBRARIES[*]})"
+echo "copy-frontend-data: wrote $DEST/MANIFEST.json"

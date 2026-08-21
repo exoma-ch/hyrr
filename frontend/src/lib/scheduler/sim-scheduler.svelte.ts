@@ -9,6 +9,11 @@
 
 import { getConfig, isConfigValid, getLayers } from "../stores/config.svelte";
 import {
+  loadAvailableLibraries,
+  getSelectedLibrary,
+  getSelectedSubdir,
+} from "../stores/library.svelte";
+import {
   setResult,
   setLoading,
   setRunning,
@@ -112,8 +117,13 @@ export async function initDataStore(
   baseUrl: string,
   onProgress?: (msg: string, fraction?: number) => void,
 ): Promise<void> {
+  // Which libraries this bundle actually carries, and which one is selected
+  // (#657). Read before initBackend so the store fetches from the right
+  // subdirectory rather than always `xs/`.
+  await loadAvailableLibraries(baseUrl);
+
   // Initialize the best available backend (Tauri → WASM → TS)
-  const backend = await initBackend(baseUrl, undefined, undefined, onProgress);
+  const backend = await initBackend(baseUrl, undefined, getSelectedLibrary(), onProgress);
   backendReady = true;
 
   // Reuse the WASM backend's already-init'd DataStore when available —
@@ -125,7 +135,7 @@ export async function initDataStore(
     if (existing) {
       dataStore = existing;
     } else {
-      dataStore = new DataStore(baseUrl);
+      dataStore = new DataStore(baseUrl, getSelectedSubdir());
       await dataStore.init(onProgress);
     }
   }

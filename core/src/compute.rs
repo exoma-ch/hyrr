@@ -65,6 +65,10 @@ pub fn compute_stack(
 
     let mut energy_in = beam.energy_mev;
     let mut layer_results = Vec::new();
+    // Reasons this result may be emptier than it looks (#650). Collected across
+    // layers and attached to the StackResult so every binding and the UI can
+    // tell "no data for this target" apart from "genuinely zero yield".
+    let mut diagnostics: Vec<crate::types::Diagnostic> = Vec::new();
 
     // Stage-boundary trace (#159). Once per run — never inside the loop below.
     crate::trace_schema::compute_stack_start(
@@ -97,6 +101,8 @@ pub fn compute_stack(
             area,
             enable_chains,
             stack.current_profile.as_ref(),
+            idx,
+            &mut diagnostics,
         )
         .map_err(|e| e.with_layer_context(idx, material_hint))?;
         // Per-layer boundary (debug — scales with layer count, not iterations).
@@ -123,6 +129,7 @@ pub fn compute_stack(
         irradiation_time_s: irr_time,
         cooling_time_s: cool_time,
         provenance: crate::provenance::Provenance::new(db.library(), db.data_origin()),
+        diagnostics,
     })
 }
 
@@ -139,6 +146,8 @@ fn compute_layer(
     area: f64,
     enable_chains: bool,
     current_profile: Option<&CurrentProfile>,
+    layer_index: usize,
+    diagnostics: &mut Vec<crate::types::Diagnostic>,
 ) -> Result<LayerResult, StoppingError> {
     // Beam already stopped upstream — emit a zero-production layer instead of
     // querying dE/dx at 0 MeV (which trips EnergyOutOfRange under the table_min
@@ -261,14 +270,66 @@ fn compute_layer(
     let proj_za = Projectile::from_type(projectile);
 
     for (elem, atom_frac) in &layer.elements {
+        // An element with no isotopes contributes no target mass and produces
+        // nothing — silently, because `resolve_element` returns Ok with an empty
+        // map when the element has no naturally-occurring isotopes (Tc, Pm, Po,
+        // At, Rn, Fr, Ra, Ac, Pa, …). Say so rather than rendering an empty
+        // table (#650).
+        if elem.isotopes.is_empty() {
+            diagnostics.push(crate::types::Diagnostic::new(
+                crate::types::DiagnosticKind::EmptyIsotopeComposition {
+                    symbol: elem.symbol.clone(),
+                    z: elem.z,
+                },
+                Some(layer_index),
+            ));
+            continue;
+        }
+
+        // Track whether ANY channel for this element overlaps the energy the
+        // beam actually spans in this layer. Channels tabulated entirely
+        // outside it interpolate to zero and produce nothing, silently (#654
+        // found jendl-5's d + Cu, tabulated 130–200 MeV, run at 20 MeV).
+        let mut elem_saw_xs = false;
+        let mut elem_overlap = false;
+        let mut data_lo = f64::INFINITY;
+        let mut data_hi = f64::NEG_INFINITY;
+
         for (&a_target, &isotope_abundance) in &elem.isotopes {
             let weight = atom_frac * isotope_abundance;
             if weight <= 0.0 {
                 continue;
             }
 
-            let xs_list = db.get_cross_sections(projectile.symbol(), elem.z, a_target);
+            let xs_list = db.get_cross_sections(&projectile.xs_key(), elem.z, a_target);
+            // The dominant silent-zero path: the store returns an empty vector
+            // for a missing file, an unreadable file, or a target the library
+            // does not cover — with no error anywhere. Emitting here rather than
+            // inside the store covers every DatabaseProtocol impl uniformly.
+            if xs_list.is_empty() {
+                let d = crate::types::Diagnostic::new(
+                    crate::types::DiagnosticKind::NoCrossSectionData {
+                        projectile: projectile.symbol_string(),
+                        target_z: elem.z,
+                        target_symbol: elem.symbol.clone(),
+                        target_a: a_target,
+                    },
+                    Some(layer_index),
+                );
+                if !diagnostics.contains(&d) {
+                    diagnostics.push(d);
+                }
+                continue;
+            }
             for xs in &xs_list {
+                if let (Some(&lo), Some(&hi)) = (xs.energies_mev.first(), xs.energies_mev.last()) {
+                    elem_saw_xs = true;
+                    data_lo = data_lo.min(lo);
+                    data_hi = data_hi.max(hi);
+                    if hi >= energy_out && lo <= energy_in {
+                        elem_overlap = true;
+                    }
+                }
                 let result = compute_production_rate(
                     &xs.energies_mev,
                     &xs.xs_mb,
@@ -382,6 +443,22 @@ fn compute_layer(
                     );
                 }
             }
+        }
+
+        // Data exists for this element but none of it covers the energy the
+        // beam spans here — every channel interpolates to zero. Without this the
+        // layer just comes back empty (#650 / #654).
+        if elem_saw_xs && !elem_overlap {
+            diagnostics.push(crate::types::Diagnostic::new(
+                crate::types::DiagnosticKind::ReactionOutsideEnergyRange {
+                    symbol: elem.symbol.clone(),
+                    data_min_mev: data_lo,
+                    data_max_mev: data_hi,
+                    beam_min_mev: energy_out,
+                    beam_max_mev: energy_in,
+                },
+                Some(layer_index),
+            ));
         }
     }
 
@@ -751,6 +828,9 @@ pub fn compute_stack_stopping_only(
 
     Ok(StackResult {
         layer_results,
+        // Stopping-only: no cross-section lookup happens on this path, so there
+        // is nothing for a diagnostic to report (#650).
+        diagnostics: Vec::new(),
         irradiation_time_s: stack.irradiation_time_s,
         cooling_time_s: stack.cooling_time_s,
         provenance: crate::provenance::Provenance::new(db.library(), db.data_origin()),
@@ -1081,6 +1161,10 @@ pub fn compute_neutron_stack(
         .collect();
     StackResult {
         layer_results,
+        // TODO(#650 follow-up): the neutron path has its own cross-section
+        // lookup and can go silently empty the same way; wiring it needs the
+        // same treatment as compute_layer.
+        diagnostics: Vec::new(),
         irradiation_time_s,
         cooling_time_s,
         provenance: crate::provenance::Provenance::new(db.library(), db.data_origin()),

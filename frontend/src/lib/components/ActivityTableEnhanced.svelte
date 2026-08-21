@@ -25,6 +25,15 @@
 
   let { result, onisotopeclick }: Props = $props();
 
+  // #650: the engine's reasons this result is empty. Rendered in the tbody's
+  // empty state so "no data for this target" is never mistaken for
+  // "genuinely zero yield". Sorted error-first so the actionable one leads.
+  const emptyDiagnostics = $derived(
+    (result.diagnostics ?? [])
+      .slice()
+      .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1)),
+  );
+
   type SortKey = "name" | "activity" | "activity_eob" | "half_life" | "layer" | "direct" | "daughter" | "rnp" | "rnp_eob" | "dose";
   let sortKey = $state<SortKey>("activity");
   let sortAsc = $state(false);
@@ -528,6 +537,37 @@
             <td class="col-dose" class:dose-approx={row.dose_source === "it-approx"} class:clamped={dose?.clamped ?? false}>{#if dose !== null}{row.dose_source === "it-approx" ? "~" : ""}{dose.text}{:else}&mdash;{/if}</td>
           </tr>
         {/each}
+        {#if rows.length === 0}
+          <!--
+            #650 (epic #649): never render an empty tbody.
+
+            Before this, a run that produced nothing showed "0/0 isotopes" and a
+            blank table — identical whether the cross-section data was missing
+            or the reaction genuinely yields nothing. ComputeErrorCard cannot
+            help: it is gated on `computeError && !result`, and these runs
+            succeed. The engine now says why, so show it.
+          -->
+          <tr class="empty-row">
+            <td colspan="15">
+              {#if emptyDiagnostics.length > 0}
+                <div class="empty-state error" data-testid="diag-empty-state">
+                  <strong>No isotopes produced — here's why:</strong>
+                  <ul>
+                    {#each emptyDiagnostics as d}
+                      <li data-testid={`diag-${d.kind}`}>{d.message}</li>
+                    {/each}
+                  </ul>
+                </div>
+              {:else}
+                <div class="empty-state" data-testid="diag-empty-state">
+                  No products above the reporting threshold for this
+                  configuration. The cross-section data loaded — this reaction
+                  genuinely yields nothing at these energies.
+                </div>
+              {/if}
+            </td>
+          </tr>
+        {/if}
       </tbody>
     </table>
   </div>
@@ -643,6 +683,33 @@
     font-size: 0.65rem;
     color: var(--c-text-subtle);
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Empty state (#650). A run that produced nothing used to render a blank
+     tbody under a "0/0 isotopes" pill, with no way to tell a data gap from a
+     genuine zero yield. */
+  .empty-row td {
+    padding: 1rem 0.75rem;
+  }
+  .empty-state {
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--c-text-subtle);
+    max-width: 60ch;
+  }
+  .empty-state.error {
+    color: var(--c-text);
+  }
+  .empty-state strong {
+    display: block;
+    margin-bottom: 0.35rem;
+  }
+  .empty-state ul {
+    margin: 0;
+    padding-left: 1.1rem;
+  }
+  .empty-state li {
+    margin-bottom: 0.2rem;
   }
 
 

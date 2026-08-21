@@ -1,0 +1,30 @@
+# Nuclear-data libraries shipped to the frontend bundle.
+#
+# SSoT for every caller of scripts/copy-frontend-data.sh — dev.sh, justfile.project,
+# deploy-eth.sh, deploy-staging-manual.sh, e2e.yml, e2e-tauri.yml, tauri-build.yml.
+# Before this file existed each caller spelled the list out itself, and they
+# disagreed: production and CI shipped three libraries while `just data` and
+# `dev.sh` shipped one. The four neutron-activation presets read from
+# `neutron-xs/`, so in a local dev build they silently produced nothing — and
+# "I'm feeling lucky" picks one of them ~40% of the time. That is the bug epic
+# #649 opened on (#651).
+#
+# Format: one entry per line, `name` (→ xs/) or `name:subdir` (→ subdir/).
+# Blank lines and `#` comments ignored.
+#
+# Keep in sync with the sparse-checkout paths in the workflows that fetch
+# nucl-parquet — a library listed here but not checked out fails the copy loudly.
+
+# Charged-particle cross-sections (p/d/t/h/a). The default library.
+tendl-2023-iso
+
+# Heavy-ion production cross-sections (C-12 … Fe-56).
+# NOTE: shipped but not yet reachable — neither engine builds the `{sym}{A}`
+# filename this library uses, so heavy-ion selection yields zero. See #659.
+hi-xs-prod:hi-xs-prod
+
+# Neutron cross-sections (ENDF/B-VIII.0, NJOY-processed). Routed to
+# `neutron-xs/` because `projectile === "n"` overrides the selected library —
+# see NEUTRON_LIBRARY in core/src/db.rs and data-store.ts. Required by the four
+# neutron-activation presets (co60-nact, na24-dt, au198-nact, co60-thermal).
+endfb-8.0:neutron-xs

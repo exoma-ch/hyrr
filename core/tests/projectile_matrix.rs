@@ -5,6 +5,18 @@
 //! catima parquet set is C-12, O-16, Ne-20, Si-28, Ar-40, Fe-56 — anything
 //! outside that (e.g. Cl-35) must produce a typed `StoppingError::NoSourceTable`
 //! rather than panicking.
+//!
+//! Two distinct guarantees live here, and it matters which is which:
+//!
+//! * `every_supported_projectile_computes_without_panic` — the *stopping-power*
+//!   path works for all 11 projectiles. Asserts only that no panic and no `Err`
+//!   escaped. It cannot see a silently-empty result.
+//! * `light_ion_projectiles_produce_isotopes_on_cu` — the *cross-section* path
+//!   actually yields products. This is the guard against the silent-zero class
+//!   (epic #649); the test above passes happily on a stack that produced nothing.
+//!
+//! Both now cover all 11 projectiles. Heavy ions used to be excluded from the
+//! production assertion because their cross-sections were unreachable (#659).
 
 use hyrr_core::compute::compute_stack;
 use hyrr_core::db::ParquetDataStore;
@@ -69,6 +81,15 @@ const PROJECTILES: &[&str] = &[
     "p", "d", "t", "h", "a", "C-12", "O-16", "Ne-20", "Si-28", "Ar-40", "Fe-56",
 ];
 
+/// Every projectile that must actually produce isotopes on Cu.
+///
+/// This was light-ions-only while heavy-ion cross-sections were unreachable:
+/// `ProjectileType::symbol()` yielded `"C"` for C-12, so the lookup searched for
+/// `C_Cu.parquet` while the file is `c12_Cu.parquet`, and every heavy-ion run
+/// produced zero silently. Fixed in #659 by `xs_key()` plus per-projectile
+/// library routing, so the full set belongs here now.
+const PRODUCING_PROJECTILES: &[&str] = PROJECTILES;
+
 #[test]
 #[ignore = "requires bundled nucl-parquet data; run with --include-ignored after submodule init"]
 fn every_supported_projectile_computes_without_panic() {
@@ -109,6 +130,68 @@ fn every_supported_projectile_computes_without_panic() {
     assert!(
         failures.is_empty(),
         "projectile matrix had failures:\n  - {}",
+        failures.join("\n  - ")
+    );
+}
+
+/// The anti-silent-zero forcing function (#652 / epic #649).
+///
+/// `every_supported_projectile_computes_without_panic` only proves `compute_stack`
+/// returned `Ok`. An `Ok` carrying an entirely empty `isotope_results` — which is
+/// exactly what a missing or misnamed cross-section file produces — passes it.
+/// That is the bug class users report as "some elements do not work", so assert
+/// production, not merely absence of failure.
+///
+/// Reference counts on this stack at the time of writing: light ions on
+/// tendl-2023-iso at 10 MeV give p=11, d=19, t=22, h=27, a=9; heavy ions route
+/// to hi-xs-prod and give C-12=153, O-16=157, Ar-40=188, Fe-56=202. The
+/// assertion is `>= 1` rather than a pinned count — pinning belongs in the
+/// golden tier (#655), not here.
+#[test]
+#[ignore = "requires bundled nucl-parquet data; run with --include-ignored after submodule init"]
+fn every_projectile_produces_isotopes_on_cu() {
+    let Some(mut db) = make_db("tendl-2023-iso") else {
+        eprintln!("skipping: no nucl-parquet data dir found (set HYRR_DATA or init the submodule)");
+        return;
+    };
+
+    let mut failures: Vec<String> = vec![];
+    for proj_str in PRODUCING_PROJECTILES {
+        let Some(proj) = ProjectileType::from_str(proj_str) else {
+            failures.push(format!("{proj_str}: from_str returned None"));
+            continue;
+        };
+        let _ = db.load_xs(proj_str, 29);
+        // Heavy ions need a much higher per-particle energy than light ions to
+        // clear the catima table minimum; same rule as the panic sweep above.
+        let energy = if proj.z() <= 2 {
+            10.0
+        } else {
+            50.0 * proj.a() as f64
+        };
+        let _ = db.load_xs(proj_str, 29);
+        let mut stack = trivial_cu_stack(&db, proj, energy);
+        match compute_stack(&db, &mut stack, true) {
+            Err(e) => failures.push(format!("{proj_str}: {e}")),
+            Ok(result) => {
+                let produced: usize = result
+                    .layer_results
+                    .iter()
+                    .map(|l| l.isotope_results.len())
+                    .sum();
+                if produced == 0 {
+                    failures.push(format!(
+                        "{proj_str}: compute_stack returned Ok but produced ZERO isotopes on Cu \
+                         — cross-section lookup silently found nothing"
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "light-ion production matrix had failures:\n  - {}",
         failures.join("\n  - ")
     );
 }

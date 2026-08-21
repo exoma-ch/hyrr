@@ -4,6 +4,9 @@ import { svelteTesting } from "@testing-library/svelte/vite";
 import pkg from "./package.json" with { type: "json" };
 import hyrrConfig from "../hyrr.json" with { type: "json" };
 import { buildVersionInfo } from "./scripts/version-info";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Web base path resolution:
 //   - Tauri bundle  → "./"               (relative; bundled webview)
@@ -81,6 +84,88 @@ function versionPlugin(): Plugin {
   };
 }
 
+/**
+ * Fail the build if the nuclear-data bundle is missing a library we claim to
+ * ship (#651, epic #649).
+ *
+ * `scripts/copy-frontend-data.sh` writes `MANIFEST.json` describing what it
+ * populated, from the SSoT list in `scripts/frontend-data-libraries.txt`. This
+ * asserts the two agree at build time, so "operator forgot to copy the data"
+ * fails here instead of shipping an app whose neutron presets render an empty
+ * results table with no error.
+ *
+ * Every build site runs the copy first (deploy-eth.sh, e2e.yml, e2e-tauri.yml,
+ * deploy-staging-manual.sh, and playwright's webServer), so this is not a new
+ * ordering constraint — it just makes the existing one enforced.
+ */
+function dataManifestPlugin(): Plugin {
+  return {
+    name: "hyrr-data-manifest",
+    // Deliberately NOT `apply: "build"`. The failure this exists to stop —
+    // neutron presets rendering an empty table because `neutron-xs/` was never
+    // populated — is something people hit in `just dev`, so the dev server has
+    // to fail on it too.
+    buildStart() {
+      // ...but never under vitest. `frontend-check.yml` runs `npm test`
+      // without copying nuclear data (the unit suite doesn't need it), and
+      // vitest evaluates this config, so asserting here would fail CI on a job
+      // that is legitimately data-free.
+      if (process.env.VITEST) return;
+
+      const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+      const listPath = join(repoRoot, "scripts", "frontend-data-libraries.txt");
+      const manifestPath = join(
+        repoRoot,
+        "frontend",
+        "public",
+        "data",
+        "parquet",
+        "MANIFEST.json",
+      );
+
+      if (!existsSync(listPath)) return; // not a repo checkout (tarball build)
+
+      const expected = readFileSync(listPath, "utf8")
+        .split("\n")
+        .map((l) => l.replace(/#.*$/, "").trim())
+        .filter(Boolean)
+        .map((spec) => (spec.includes(":") ? spec.split(":")[1] : "xs"));
+
+      if (!existsSync(manifestPath)) {
+        this.error(
+          `nuclear data bundle is missing: ${manifestPath} not found.\n` +
+            "Run `just data` (or scripts/copy-frontend-data.sh) before building — " +
+            "otherwise the app ships without cross-sections and every simulation " +
+            "renders an empty table with no error.",
+        );
+        return;
+      }
+
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        libraries: Array<{ library: string; subdir: string; files: number }>;
+      };
+      const populated = new Map(
+        manifest.libraries.map((l) => [l.subdir, l.files]),
+      );
+
+      const problems: string[] = [];
+      for (const subdir of expected) {
+        const files = populated.get(subdir);
+        if (files === undefined) problems.push(`  missing subdir: ${subdir}/`);
+        else if (files === 0) problems.push(`  empty subdir: ${subdir}/`);
+      }
+
+      if (problems.length > 0) {
+        this.error(
+          "nuclear data bundle does not match scripts/frontend-data-libraries.txt:\n" +
+            problems.join("\n") +
+            "\nRe-run `just data` to repopulate frontend/public/data/parquet.",
+        );
+      }
+    },
+  };
+}
+
 // SEO meta substitution for index.html. The deployed app lives at several
 // origins (GitHub Pages /hyrr/, and the ETH instances hyrr.ethz.ch /
 // hyrrtst.ethz.ch / hyrrent.ethz.ch). To avoid duplicate-content competition,
@@ -105,7 +190,14 @@ export default defineConfig({
   // afterEach hook. Without it, `render()` blows up with
   // `mount(...) is not available on the server` because Vite would
   // serve svelte's SSR build to tests.
-  plugins: [svelte(), svelteTesting(), manifestPlugin(), seoMetaPlugin(), versionPlugin()],
+  plugins: [
+    svelte(),
+    svelteTesting(),
+    manifestPlugin(),
+    seoMetaPlugin(),
+    versionPlugin(),
+    dataManifestPlugin(),
+  ],
   base: resolvedBase,
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),

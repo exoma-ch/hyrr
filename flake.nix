@@ -124,16 +124,35 @@
           install -m644 ${./hyrr.json} ../hyrr.json
           install -m644 ${./release-notes.json} ../release-notes.json
         '';
+        # `cleanCargoSource` keeps Cargo/Rust sources and DROPS everything else,
+        # so `core/tests/golden/fixtures.json` never reached the sandbox and
+        # `golden_values_are_unchanged` failed with "no golden fixtures at
+        # /build/source/tests/golden/fixtures.json" — a test that cannot pass
+        # hermetically no matter what the code does. The fixtures are committed;
+        # only the filter hid them.
+        #
+        # Additive filter rather than a broader `cleanSource`: keeping the
+        # allowance explicit means the next non-Rust test input fails loudly
+        # here instead of being silently absent, which is the failure mode this
+        # replaces. See #589 for the general shape of this hazard.
+        coreSrc = pkgs.lib.cleanSourceWith {
+          src = ./core;
+          name = "hyrr-core-source";
+          filter = path: type:
+            (craneLib.filterCargoSources path type)
+            || (builtins.match ".*/tests/golden/.*\\.json$" path != null);
+        };
+
         # py path-deps ../core, which itself path-deps ../nucl-parquet and reads
         # ../hyrr.json — so the py build sandbox needs all three siblings.
         provisionCoreSibling = ''
           ${provisionSiblings}
-          cp -r ${craneLib.cleanCargoSource ./core} ../core
+          cp -r ${coreSrc} ../core
           chmod -R u+w ../core
         '';
 
         commonRustArgs = {
-          src = craneLib.cleanCargoSource ./core;
+          src = coreSrc;
           pname = "hyrr-core";
           version = "0.0.0";
           strictDeps = true;
@@ -346,10 +365,24 @@
 
           # Embedded data store: build-time tar (#274) + full simulation through
           # it. Subsumes ci.yml's embedded-data-store job.
+          #
+          # EVERY `#[cfg(feature = "embed-data")]` integration test must be named
+          # here. `rust-test` runs the default feature set, so it compiles these
+          # to nothing; if the target is also missing from this filter it never
+          # runs anywhere. That silently disabled the F-18 production regression
+          # and the #527 beam-stopper regression until #652 caught it — both had
+          # been green-by-vacuum. Adding a new embed-data test means adding a
+          # `--test` here.
           rust-test-embed = craneLib.cargoTest (commonRustArgs // {
             inherit cargoArtifacts;
             cargoExtraArgs = "--features embed-data";
-            cargoTestExtraArgs = "--test embedded_data_store";
+            cargoTestExtraArgs = builtins.concatStringsSep " " [
+              "--test embedded_data_store"
+              "--test f18_production"
+              "--test nb_beam_stopper"
+              "--test compound_stopping"
+              "--test material_registry"
+            ];
           });
 
           # PyO3 binding type-drift gate (#181). `cargo check` (not build/test)

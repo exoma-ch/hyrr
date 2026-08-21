@@ -47,9 +47,11 @@ export const MATERIAL_CATALOG: Record<string, CatalogEntry> = {
   },
   "sr86-carbonate": {
     // 86SrCO3 powder. Solid theoretical density ≈ 3.50 g/cm³. Mass
-    // fractions: 86Sr / M_total where M_total = 86 + 12.011 + 3·16 = 146.011.
+    // fractions: 86Sr / M_total where M_total = 86 + 12.011 + 3·15.999 = 146.008.
+    // Carried to 6 dp: the previously shipped 3-dp values summed to 1.0003,
+    // which the catalog schema invariant now rejects (#652).
     density: 3.50,
-    massFractions: { Sr: 0.589, C: 0.0823, O: 0.329 },
+    massFractions: { Sr: 0.589009, C: 0.082263, O: 0.328728 },
   },
 };
 

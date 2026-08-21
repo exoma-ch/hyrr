@@ -643,6 +643,7 @@ mod tests {
             irradiation_time_s: t,
             cooling_time_s: 0.0,
             provenance: crate::provenance::Provenance::unknown(),
+            diagnostics: Vec::new(),
         };
 
         let a = cached_stack(&args, lib, "", || {
@@ -677,6 +678,7 @@ mod tests {
                 irradiation_time_s: 0.0,
                 cooling_time_s: 0.0,
                 provenance: crate::provenance::Provenance::unknown(),
+                diagnostics: Vec::new(),
             })
         };
         for k in 0..(MEM_CAPACITY as u64 + 5) {
@@ -730,6 +732,7 @@ mod tests {
             irradiation_time_s: marker,
             cooling_time_s: 0.0,
             provenance: crate::provenance::Provenance::unknown(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -1121,6 +1124,7 @@ mod tests {
             irradiation_time_s: 3600.0,
             cooling_time_s: 86400.0,
             provenance: crate::provenance::Provenance::unknown(),
+            diagnostics: Vec::new(),
         };
 
         let envelope = DiskEnvelope {

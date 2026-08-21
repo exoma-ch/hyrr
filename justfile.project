@@ -52,7 +52,7 @@ test-integration *args:
 # Copy nuclear data to frontend
 [group('dev')]
 data:
-    scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet tendl-2023-iso
+    scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
 # Re-pin the data-tarball integrity hash after a nucl-parquet submodule bump (#577).
 # Pass --verify-download to hash the asset yourself instead of trusting GitHub's
@@ -123,6 +123,11 @@ verify-deploy env *args:
 [group('deploy')]
 verify-release version *args:
     scripts/verify-release.sh {{version}} {{args}}
+
+# Run the Rust core suite across all three CI feature sets (default | mcp | embed)
+[group('test')]
+test-rust which="all":
+    scripts/test-rust.sh {{which}}
 
 # Run the shell-script tests (release gate + deploy/release verification)
 [group('test')]

@@ -383,6 +383,54 @@ pub static MATERIAL_CATALOG: LazyLock<HashMap<&'static str, CatalogEntry>> = Laz
             nist_compound: None,
         },
     );
+
+    // Gas-target entries (#68), mirrored from packages/compute/src/materials.ts.
+    // These shipped on the TS side only, so the browser sent the bare catalog
+    // name ("o18-gas") to Rust, which could not parse it as a formula and — with
+    // a density_override present from the layer — returned Ok with an EMPTY
+    // element list rather than an error. That is the silent zero-mass layer of
+    // epic #649. `catalog_matches_ts_catalog` below keeps the two in step.
+    //
+    // Densities are STP baselines; operators routinely override for fill
+    // pressure / temperature.
+    let mut o18 = HashMap::new();
+    o18.insert("O", 1.0);
+    m.insert(
+        "o18-gas",
+        CatalogEntry {
+            // 18O2 at STP (1 atm, 273.15 K): M = 32 g/mol, 32/22.414 ≈ 1.428 g/L.
+            density: 1.428e-3,
+            mass_fractions: o18,
+            nist_compound: None,
+        },
+    );
+
+    let mut xe124 = HashMap::new();
+    xe124.insert("Xe", 1.0);
+    m.insert(
+        "xe124-gas",
+        CatalogEntry {
+            // 124Xe at STP: M = 124 g/mol, 124/22.414 ≈ 5.532 g/L.
+            density: 5.532e-3,
+            mass_fractions: xe124,
+            nist_compound: None,
+        },
+    );
+
+    let mut sr86 = HashMap::new();
+    sr86.insert("Sr", 0.589009);
+    sr86.insert("C", 0.082263);
+    sr86.insert("O", 0.328728);
+    m.insert(
+        "sr86-carbonate",
+        CatalogEntry {
+            // 86SrCO3 powder; M_total = 86 + 12.011 + 3*15.999 = 146.008.
+            // 6 dp so the fractions sum to 1 within 1e-6 (#652).
+            density: 3.50,
+            mass_fractions: sr86,
+            nist_compound: None,
+        },
+    );
     m
 });
 
