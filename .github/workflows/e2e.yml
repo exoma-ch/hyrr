@@ -49,8 +49,15 @@ jobs:
               # There is no @preset-heavy tier any more: those three timed out
               # only because their #config= base64 was corrupt (#559), and via
               # #preset= they finish in ~1.5 s each. The OS/viewport matrix
-              # remains tag-time. The grep is literal — no shell metacharacters —
-              # so splicing it in is safe.
+              # remains tag-time.
+              #
+              # The `|` here IS a shell metacharacter, so this value must never
+              # be spliced into a `run:` line via `${{ }}` — GitHub substitutes
+              # textually *before* the shell parses, and `--grep @smoke|@preset`
+              # then parses as a pipe into a command named `@preset`. The
+              # consuming step passes it through `env:` instead: parameter
+              # expansion field-splits but does not re-scan for operators, so
+              # the `|` stays literal.
               echo 'pw=--project=desktop-1280 --grep @smoke|@preset'
               echo 'full=false'
             } >> "$GITHUB_OUTPUT"
@@ -150,10 +157,17 @@ jobs:
       - name: Run Playwright tests
         working-directory: frontend
         # `pw` is empty on the full (tag) matrix → all projects; on PR it pins
-        # the desktop-1280 project for the single smoke run.
-        run: npx playwright test ${{ needs.config.outputs.pw }} --reporter=list,html
+        # the desktop-1280 project and the @smoke|@preset grep.
+        #
+        # Deliberately unquoted `$PW_ARGS`: we *want* field splitting into
+        # separate argv entries, and expansion results are not re-scanned for
+        # shell operators, so the `|` in the grep survives as a literal. Passing
+        # it via `env:` rather than `${{ }}` is what makes that true — see the
+        # `config` job. Never inline it back into the `run:` line.
+        run: npx playwright test $PW_ARGS --reporter=list,html
         env:
           CI: "1"
+          PW_ARGS: ${{ needs.config.outputs.pw }}
 
       - name: Upload Playwright report
         if: always()

@@ -124,6 +124,11 @@ verify-deploy env *args:
 verify-release version *args:
     scripts/verify-release.sh {{version}} {{args}}
 
+# Run the Rust core suite across all three CI feature sets (default | mcp | embed)
+[group('test')]
+test-rust which="all":
+    scripts/test-rust.sh {{which}}
+
 # Run the shell-script tests (release gate + deploy/release verification)
 [group('test')]
 test-scripts:
