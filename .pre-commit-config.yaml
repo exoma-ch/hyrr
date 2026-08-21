@@ -74,6 +74,31 @@ repos:
       - id: yamllint
         args: ["--format", "parsable", "--strict"]
 
+  # GitHub Actions linting. yamllint validates YAML; it cannot see that a
+  # `${{ }}` expression is malformed, because that is a GitHub-level language
+  # embedded in a YAML string.
+  #
+  # An empty expression fails the ENTIRE workflow to parse, and GitHub reports
+  # it as "this run likely failed because of a workflow file issue" — no line,
+  # no job, no log. actionlint pins it to the exact column locally instead.
+  # It bites inside `run:` blocks even in shell comments, since GitHub
+  # evaluates expressions across the whole block before `#` means anything.
+  # Embedded shellcheck is turned off: the dedicated shellcheck hook above
+  # already covers shell, and actionlint's copy only adds info-level notes on
+  # `run:` blocks — including one on a deliberately unquoted expansion in
+  # e2e.yml that must stay unquoted to word-split correctly. Keeping it on
+  # would mean suppressing four notes to gate the one class that matters.
+  #
+  # Note this does NOT subsume scripts/tests/test_workflow_output_splice.sh.
+  # actionlint validates expression *syntax*; it cannot know what a value will
+  # interpolate to, and is completely silent on splicing a metacharacter-
+  # carrying output into a command. Verified in both directions.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint
+        args: ["-shellcheck="]
+
   # Shellcheck (.envrc is a direnv file, not a shell script — skip SC2148)
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.10.0.1

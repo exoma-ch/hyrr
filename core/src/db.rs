@@ -16,6 +16,44 @@ use crate::types::{CrossSectionData, DecayData};
 /// thermal region ~30x.
 pub(crate) const NEUTRON_LIBRARY: &str = "endfb-8.0";
 
+/// Heavy-ion production cross-sections live in their own library; the charged
+/// default (tendl-2023-iso) ships none. Same shape as [`NEUTRON_LIBRARY`] —
+/// see `library_for_projectile`.
+pub(crate) const HEAVY_ION_LIBRARY: &str = "hi-xs-prod";
+
+/// Which library actually serves a given projectile.
+///
+/// Some projectiles are not carried by the user-selected library at all, so the
+/// store overrides it. This generalises what was a lone `if projectile == "n"`
+/// hardcode; heavy ions need exactly the same treatment (#659), and a third
+/// hardcode would have been the point at which this got out of hand.
+///
+/// Heavy-ion keys are `{symbol_lowercase}{A}` — `c12`, `ar40`, `fe56` — which is
+/// how `ProjectileType::xs_key` renders them.
+pub(crate) fn library_for_projectile<'a>(projectile: &str, store_library: &'a str) -> &'a str
+where
+    'static: 'a,
+{
+    if projectile == "n" {
+        NEUTRON_LIBRARY
+    } else if is_heavy_ion_key(projectile) {
+        HEAVY_ION_LIBRARY
+    } else {
+        store_library
+    }
+}
+
+/// `c12`, `ar40`, `fe56`, … — a lowercase element symbol followed by a mass
+/// number. Distinguishes a heavy-ion stem from the light-ion keys (`p`, `d`,
+/// `t`, `h`, `a`) and from `n`/`g`.
+pub(crate) fn is_heavy_ion_key(projectile: &str) -> bool {
+    let digits = projectile.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    let symbol = &projectile[..projectile.len() - digits.len()];
+    !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && (1..=2).contains(&symbol.len())
+}
+
 /// Normalize isomeric state for decay/dose lookups.
 ///
 /// Cross-section data uses `"g"` for ground-state products, but decay
@@ -434,11 +472,7 @@ mod np_store {
             // endfb-8.0 by default, behind this wrapper so it can be made
             // selectable later — #505); the charged default (e.g. tendl-2023-iso)
             // ships no neutron sublibrary. Everything else uses the store library.
-            let lib = if projectile == "n" {
-                super::NEUTRON_LIBRARY
-            } else {
-                self.library.as_str()
-            };
+            let lib = super::library_for_projectile(projectile, self.library.as_str());
             let xs_dir = self.data_root.join(lib).join("xs");
             let resolved = resolve_xs_path(&xs_dir, projectile, target_z, symbol);
 

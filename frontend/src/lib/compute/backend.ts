@@ -9,6 +9,7 @@
  */
 
 import { isTauri } from "../utils/platform";
+import { getSelectedSubdir } from "../stores/library.svelte";
 import { DEFAULT_LIBRARY } from "./data-fetch-meta";
 import { lookupByName } from "./custom-material-registry";
 import { trace, type TraceDump } from "../trace/trace";
@@ -89,7 +90,7 @@ export async function initBackend(
     // Feed data from existing TS DataStore (hyparquet)
     onProgress?.("Loading nuclear data for WASM...", 0.3);
     const { DataStore } = await import("@hyrr/compute");
-    const tsStore = new DataStore(baseUrl);
+    const tsStore = new DataStore(baseUrl, getSelectedSubdir());
     await tsStore.init((msg, frac) => {
       onProgress?.(msg, 0.3 + (frac ?? 0) * 0.5);
     });

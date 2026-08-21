@@ -228,3 +228,78 @@ describe("catalogEntryToMassText (#94)", () => {
     expect(sum).toBeCloseTo(100.0, 1);
   });
 });
+
+// ── Catalog schema invariants (ported from the now-deleted duplicate module) ──
+//
+// These loop over MATERIAL_CATALOG rather than naming entries, so a new catalog
+// entry is checked the moment it is added. They came from
+// frontend/src/lib/compute/materials.ts's test suite, which guarded a *dead*
+// copy of the catalog while the live one here had only hand-picked assertions
+// (#652, epic #649). Rust/TS key parity is enforced separately by
+// scripts/tests/test_material_catalog_parity.sh.
+
+describe("MATERIAL_CATALOG — schema invariants", () => {
+  for (const [name, entry] of Object.entries(MATERIAL_CATALOG)) {
+    describe(`entry "${name}"`, () => {
+      it("mass fractions sum to 1 (±1e-6)", () => {
+        const sum = Object.values(entry.massFractions).reduce((s, v) => s + v, 0);
+        expect(sum).toBeCloseTo(1, 6);
+      });
+
+      it("density is positive", () => {
+        expect(entry.density).toBeGreaterThan(0);
+      });
+
+      it("has non-empty massFractions", () => {
+        expect(Object.keys(entry.massFractions).length).toBeGreaterThan(0);
+      });
+
+      it("each element in massFractions is a known symbol", () => {
+        for (const sym of Object.keys(entry.massFractions)) {
+          expect(SYMBOL_TO_Z).toHaveProperty(sym);
+        }
+      });
+
+      it("at least one element has a tabulated bulk density (sanity)", () => {
+        // Defensive: the resolver needs some natural density fallback if the
+        // entry itself ever loses its own density.
+        const has = Object.keys(entry.massFractions).some(
+          (s) => ELEMENT_DENSITIES[s] !== undefined,
+        );
+        expect(has).toBe(true);
+      });
+    });
+  }
+});
+
+describe("MATERIAL_CATALOG — naming collision safety", () => {
+  it("no catalog key collides with the `Element-Mass` isotope form (e.g. 'zn-68')", () => {
+    // resolveMaterial's free-text path strips `-\d+`; a catalog key shaped like
+    // {1-2 letter symbol}-{1-3 digit mass} would silently reinterpret a user's
+    // isotope input as a catalog material. Alloy designations like `al-6061`
+    // (4-digit) and `inconel-625` (long prefix) do not collide.
+    const forbidden = /^[a-z]{1,2}-\d{1,3}$/;
+    for (const key of Object.keys(MATERIAL_CATALOG)) {
+      expect(
+        key,
+        `catalog key "${key}" collides with Element-Mass isotope input`,
+      ).not.toMatch(forbidden);
+    }
+  });
+});
+
+describe("MATERIAL_CATALOG — every key resolves", () => {
+  const db = mockDb();
+  for (const key of Object.keys(MATERIAL_CATALOG)) {
+    it(`"${key}" resolves to non-empty elements + positive density`, () => {
+      const { elements, density } = resolveMaterial(db, key);
+      expect(density).toBeGreaterThan(0);
+      expect(elements.length).toBeGreaterThan(0);
+    });
+
+    it(`"${key}" is case-insensitive on lookup`, () => {
+      const { density } = resolveMaterial(db, key.toUpperCase());
+      expect(density).toBeGreaterThan(0);
+    });
+  }
+});

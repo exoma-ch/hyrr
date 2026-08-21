@@ -48,10 +48,34 @@ export function xsPathCandidates(
   targetZ: number,
   symbol: string,
 ): string[] {
+  const key = xsProjectileKey(projectile);
   return [
-    `${subdir}/${projectile}_${symbol}.parquet`,
-    `${subdir}/${projectile}_Z${targetZ}.parquet`,
+    `${subdir}/${key}_${symbol}.parquet`,
+    `${subdir}/${key}_Z${targetZ}.parquet`,
   ];
+}
+
+/**
+ * Filename stem for a projectile.
+ *
+ * Light ions are their own key (`p`, `d`, `t`, `h`, `a`, `n`). Heavy ions use
+ * nucl-parquet's `{symbol_lowercase}{A}` form, so `C-12` becomes `c12` and the
+ * file is `c12_Cu.parquet`.
+ *
+ * This function exists because both engines had it wrong, differently: Rust
+ * built `C_Cu.parquet` (from `symbol()`, which drops the mass number) and this
+ * module built `C-12_Cu.parquet`. Neither exists, so every heavy-ion run
+ * produced zero isotopes silently in every engine (#659). Mirrors
+ * `ProjectileType::xs_key` in core.
+ */
+export function xsProjectileKey(projectile: string): string {
+  const m = projectile.match(/^([A-Za-z]{1,2})-(\d+)$/);
+  return m ? `${m[1].toLowerCase()}${m[2]}` : projectile;
+}
+
+/** Whether this projectile's data lives in the heavy-ion production library. */
+export function isHeavyIon(projectile: string): boolean {
+  return /^[A-Za-z]{1,2}-\d+$/.test(projectile);
 }
 
 /**

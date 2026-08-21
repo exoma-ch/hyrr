@@ -180,6 +180,14 @@ pub struct SimulationResultJson {
     pub config: serde_json::Value,
     pub layers: Vec<LayerResultJson>,
     pub timestamp: u64,
+    /// Why this result is emptier than it looks (#650, epic #649). Empty on a
+    /// clean run. Carried on the wire so the browser, the desktop app and the
+    /// shared-results HTML can all distinguish "no data for this target" from
+    /// "computed, genuinely zero yield" — which nothing could do before.
+    ///
+    /// `#[serde(default)]` so viewer artifacts written before #650 still load.
+    #[serde(default)]
+    pub diagnostics: Vec<crate::types::Diagnostic>,
 }
 
 /// The payload embedded in a viewer artifact.
@@ -315,6 +323,7 @@ pub fn convert_stack_result(
         config,
         layers,
         timestamp,
+        diagnostics: result.diagnostics.clone(),
     }
 }
 
@@ -501,6 +510,7 @@ mod tests {
         isotope_results.insert("Tc-99m".to_string(), iso("Tc-99m", 43, 99, 1.0e9));
         isotope_results.insert("Mo-99".to_string(), iso("Mo-99", 42, 99, 5.0e9));
         StackResult {
+            diagnostics: Vec::new(),
             layer_results: vec![LayerResult {
                 energy_in: 16.0,
                 energy_out: 12.0,

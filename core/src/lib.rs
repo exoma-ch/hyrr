@@ -21,6 +21,7 @@
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod bateman;
+pub mod census;
 pub mod chains;
 pub mod compute;
 pub mod config_codec;

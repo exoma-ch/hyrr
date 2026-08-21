@@ -257,3 +257,9 @@ infra/eth-webhosting/
 !/secrets/*.sops.env
 !/secrets/*.sops.yaml
 !/secrets/*.sops.json
+
+# Playwright run artefacts (reporter output + traces/screenshots).
+# `playwright.config.ts` writes these on every run; e2e.yml uploads them as
+# workflow artifacts instead (#652).
+frontend/playwright-report/
+frontend/e2e/results/

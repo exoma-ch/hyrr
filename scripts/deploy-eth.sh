@@ -382,8 +382,7 @@ do_build() {
   (cd wasm && wasm-pack build --target web --out-dir ../frontend/src/lib/compute/hyrr-wasm-pkg)
 
   echo "=== 2/4 Copying nuclear data into frontend/public ==="
-  scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet \
-    tendl-2023-iso hi-xs-prod:hi-xs-prod endfb-8.0:neutron-xs
+  scripts/copy-frontend-data.sh nucl-parquet/data frontend/public/data/parquet
 
   echo "=== 3/4 Installing frontend deps ==="
   (cd frontend && npm install)
