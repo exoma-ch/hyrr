@@ -52,12 +52,18 @@ jobs:
               # remains tag-time.
               #
               # The `|` here IS a shell metacharacter, so this value must never
-              # be spliced into a `run:` line via `${{ }}` — GitHub substitutes
-              # textually *before* the shell parses, and `--grep @smoke|@preset`
-              # then parses as a pipe into a command named `@preset`. The
-              # consuming step passes it through `env:` instead: parameter
-              # expansion field-splits but does not re-scan for operators, so
-              # the `|` stays literal.
+              # be spliced into a `run:` line as a GitHub expression — the
+              # substitution is textual and happens *before* the shell parses,
+              # so `--grep @smoke|@preset` then parses as a pipe into a command
+              # named `@preset`. The consuming step passes it through `env:`
+              # instead: parameter expansion field-splits but does not re-scan
+              # for operators, so the `|` stays literal.
+              #
+              # Note: do not write an empty expression (dollar-brace-brace) in
+              # this block even inside a shell comment. Everything here is part
+              # of the `run:` string, GitHub parses expressions in it before the
+              # shell ever sees a `#`, and an empty one fails the whole
+              # workflow file to parse.
               echo 'pw=--project=desktop-1280 --grep @smoke|@preset'
               echo 'full=false'
             } >> "$GITHUB_OUTPUT"
@@ -162,8 +168,8 @@ jobs:
         # Deliberately unquoted `$PW_ARGS`: we *want* field splitting into
         # separate argv entries, and expansion results are not re-scanned for
         # shell operators, so the `|` in the grep survives as a literal. Passing
-        # it via `env:` rather than `${{ }}` is what makes that true — see the
-        # `config` job. Never inline it back into the `run:` line.
+        # it via `env:` rather than as an inline expression is what makes that
+        # true — see the `config` job. Never inline it back into the `run:`.
         run: npx playwright test $PW_ARGS --reporter=list,html
         env:
           CI: "1"

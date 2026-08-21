@@ -24,6 +24,13 @@
 # and metacharacter-free. This checks only what can be decided statically: an
 # output whose literal `echo 'name=value'` value contains a metacharacter.
 #
+# This is NOT redundant with actionlint (now in .pre-commit-config.yaml).
+# actionlint checks that an expression is *syntactically* valid; it has no
+# view on what the interpolated value will contain, so it reports nothing at
+# all for the bug above. Verified both ways: actionlint is silent on it, and
+# it catches the malformed-expression case this script does not look for.
+# Each covers what the other cannot.
+#
 #   scripts/tests/test_workflow_output_splice.sh   (also: just test-scripts)
 
 set -uo pipefail
@@ -44,6 +51,7 @@ checked=0
 for wf in "$WF_DIR"/*.yml "$WF_DIR"/*.yaml; do
   [ -f "$wf" ] || continue
   wf_name="$(basename "$wf")"
+
 
   # ── 1. Outputs whose literal value carries a metacharacter ────────────────
   # Matches `echo 'name=value'` / `echo "name=value"` — the $GITHUB_OUTPUT
