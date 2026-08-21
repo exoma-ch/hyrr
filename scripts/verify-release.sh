@@ -214,7 +214,21 @@ check_desktop_assets() {
   done
 
   # (b) + (c) walk every entry once.
-  local entries key url sig base missing_url=0 bad_sig=0 wrong_tag=0
+  #
+  # Membership in THIS release's asset URLs, rather than pattern-matching the
+  # URL shape. tauri-action v0 writes browser-download URLs
+  # (…/releases/download/<tag>/<file>); v1 writes API URLs
+  # (…/releases/assets/<id>) — upstream #1315, landing here via #516. An API
+  # URL contains neither the tag nor the filename, so a shape check would have
+  # to be relaxed into meaninglessness to accept it.
+  #
+  # Comparing against the release's own `url` + `apiUrl` set is both
+  # form-agnostic and STRICTER than the basename check it replaces: an asset of
+  # a different release cannot be a member at all, so "carried over from another
+  # release" is caught without a separate tag assertion.
+  local asset_urls entries key url sig missing_url=0 bad_sig=0
+  asset_urls="$(printf '%s' "$assets" | jq -r '.assets[] | .url, .apiUrl' | grep -v '^null$')"
+
   entries="$(jq -r '.platforms | to_entries[] | "\(.key)\t\(.value.url // "")\t\(.value.signature // "")"' "$tmp" 2>/dev/null)"
   if [ -z "$entries" ]; then
     note_fail "latest.json has no platforms block at all"
@@ -224,18 +238,9 @@ check_desktop_assets() {
 
   while IFS=$'\t' read -r key url sig; do
     [ -n "$key" ] || continue
-    base="${url##*/}"
 
-    # A latest.json carried over from another release resolves fine but ships
-    # the WRONG build — and #516 (tauri-action v1) changes this URL form, so
-    # this is live surface, not a hypothetical.
-    case "$url" in
-      */releases/download/"$TAG"/*) : ;;
-      *) note_fail "latest.json ${key} points outside ${TAG}: ${url}"; wrong_tag=$((wrong_tag + 1)) ;;
-    esac
-
-    if [ -z "$base" ] || ! printf '%s\n' "$names" | grep -Fxq "$base"; then
-      note_fail "latest.json ${key} references '${base:-<empty>}', which is not a ${TAG} asset — the updater will 404 and tell the user nothing"
+    if [ -z "$url" ] || ! printf '%s\n' "$asset_urls" | grep -Fxq "$url"; then
+      note_fail "latest.json ${key} points at '${url:-<empty>}', which is not an asset of ${TAG} — the updater will fail and tell the user nothing"
       missing_url=$((missing_url + 1))
     fi
 
@@ -245,7 +250,7 @@ check_desktop_assets() {
     fi
   done <<< "$entries"
 
-  if [ "$missing_url" -eq 0 ] && [ "$bad_sig" -eq 0 ] && [ "$wrong_tag" -eq 0 ]; then
+  if [ "$missing_url" -eq 0 ] && [ "$bad_sig" -eq 0 ]; then
     note_pass "all $(printf '%s\n' "$entries" | grep -c .) latest.json entries resolve to signed ${TAG} assets"
   fi
   rm -f "$tmp"
