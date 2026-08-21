@@ -156,6 +156,7 @@ fn compute_layer(
             energy_out: 0.0,
             delta_e_mev: 0.0,
             heat_kw: 0.0,
+            provenance: crate::types::LayerProvenance::from_layer(layer),
             depth_profile: Vec::new(),
             isotope_results: HashMap::new(),
             stopping_power_sources: HashMap::new(),
@@ -439,6 +440,7 @@ fn compute_layer(
         energy_out,
         delta_e_mev: delta_e,
         heat_kw,
+        provenance: crate::types::LayerProvenance::from_layer(layer),
         depth_profile,
         isotope_results,
         stopping_power_sources: sp_sources,
@@ -779,6 +781,7 @@ fn compute_layer_stopping_only(
             energy_out: 0.0,
             delta_e_mev: 0.0,
             heat_kw: 0.0,
+            provenance: crate::types::LayerProvenance::from_layer(layer),
             depth_profile: Vec::new(),
             isotope_results: HashMap::new(),
             stopping_power_sources: HashMap::new(),
@@ -865,6 +868,10 @@ fn compute_layer_stopping_only(
         energy_out,
         delta_e_mev: energy_in - energy_out,
         heat_kw,
+        // Recorded on the stopping-only path too (#666). It produces no
+        // isotopes, but it does produce a depth/heat profile that is only
+        // interpretable against the composition and density that generated it.
+        provenance: crate::types::LayerProvenance::from_layer(layer),
         depth_profile,
         isotope_results: HashMap::new(),
         stopping_power_sources: sp_sources,
@@ -1094,6 +1101,7 @@ fn compute_neutron_layer(
         energy_out: 0.0,
         delta_e_mev: 0.0,
         heat_kw: 0.0,
+        provenance: crate::types::LayerProvenance::from_layer(layer),
         depth_profile: Vec::new(),
         isotope_results: HashMap::new(),
         stopping_power_sources: HashMap::new(),

@@ -12,6 +12,7 @@
   import PlotActivityCurve from "./lib/components/PlotActivityCurve.svelte";
   import EmissionPlot from "./lib/components/EmissionPlot.svelte";
   import ActivityTableEnhanced from "./lib/components/ActivityTableEnhanced.svelte";
+  import TargetProvenance from "./lib/components/TargetProvenance.svelte";
 
   let error = $state<string | null>(null);
   let snap = $state<ReturnType<typeof getSnapshot> | null>(null);
@@ -59,6 +60,7 @@
     <p class="err">Could not read the embedded result: <code>{error}</code></p>
   {:else if result}
     <div class="flow">
+      <TargetProvenance {result} />
       <IsotopeFilterBar {result} />
       <PlotProductionDepth {result} />
       <PlotActivityCurve {result} />

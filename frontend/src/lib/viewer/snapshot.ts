@@ -20,7 +20,7 @@ export type SnapshotTier = "A" | "B";
 
 export interface ViewerSnapshot {
   schema: "hyrr-viewer";
-  schema_version: 1;
+  schema_version: 1 | 2;
   tier: SnapshotTier;
   hyrr_version?: string;
   generated_at?: string;

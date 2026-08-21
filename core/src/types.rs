@@ -1,7 +1,7 @@
 //! Core data types mirroring the Python/TypeScript data model.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::constants::{ELEMENTARY_CHARGE, LN2};
 use crate::projectile::Projectile;
@@ -316,6 +316,86 @@ pub struct IsotopeResult {
     pub decay_notations: Vec<String>,
 }
 
+/// One element as the engine actually resolved it (#666).
+///
+/// `isotopes` is the resolved abundance vector, which is what distinguishes a
+/// natural target from an enriched one. Carrying only the symbol would make
+/// those two indistinguishable in a shared result while their yields differ by
+/// orders of magnitude.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ElementProvenance {
+    pub symbol: String,
+    pub z: u32,
+    /// Fraction of the layer's atoms that are this element.
+    pub atom_fraction: f64,
+    /// A → fractional abundance, after enrichment is applied.
+    pub isotopes: BTreeMap<u32, f64>,
+}
+
+/// What was actually irradiated, recorded at compute time (#666).
+///
+/// # Why this lives on the result rather than in the exported config
+///
+/// A shared result carries its answers in full and, until this, barely carried
+/// its question: the viewer artifact (ADR 0008) embedded a *material name*
+/// (`"havar"`) and nothing about what that name resolved to. Material names are
+/// resolved through py-materials/MorePET, so the same name can resolve
+/// differently between versions — identical inputs, different outputs, and
+/// nothing in the file to reveal why. That is the failure class #593/#601
+/// closed for nuclear data, left open for the target.
+///
+/// Recording it here, at the moment the layer is computed, is what makes it
+/// *provenance* rather than a second copy of the input: it cannot describe a
+/// layer other than the one that produced these numbers, it cannot be a stale
+/// re-resolution, and every surface (browser, desktop, MCP, plain JSON API)
+/// gets the same fields without three separate mappings to keep in step.
+///
+/// `Default` is the honest empty value for the zero-production early-returns
+/// where no composition was resolved — not a fabricated one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct LayerProvenance {
+    /// Density used for stopping power [g/cm³] — the resolved value, which may
+    /// be a material default rather than anything the caller supplied.
+    pub density_g_cm3: f64,
+    /// Thickness the simulation actually used [cm]. This is `computed_thickness`,
+    /// not the requested one: an areal-density or energy-out spec produces a
+    /// thickness the caller never stated.
+    pub thickness_cm: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub areal_density_g_cm2: Option<f64>,
+    pub is_monitor: bool,
+    /// NIST compound name when ICRU-measured stopping data replaced Bragg
+    /// additivity (#542). Its presence changes the stopping model, so its
+    /// absence has to be distinguishable from its presence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nist_compound: Option<String>,
+    pub elements: Vec<ElementProvenance>,
+}
+
+impl LayerProvenance {
+    /// Snapshot a resolved layer. Reads `computed_thickness`, so it is only
+    /// meaningful after the layer has been computed.
+    pub fn from_layer(layer: &Layer) -> Self {
+        Self {
+            density_g_cm3: layer.density_g_cm3,
+            thickness_cm: layer.computed_thickness,
+            areal_density_g_cm2: layer.areal_density_g_cm2,
+            is_monitor: layer.is_monitor,
+            nist_compound: layer.nist_compound.clone(),
+            elements: layer
+                .elements
+                .iter()
+                .map(|(el, frac)| ElementProvenance {
+                    symbol: el.symbol.clone(),
+                    z: el.z,
+                    atom_fraction: *frac,
+                    isotopes: el.isotopes.iter().map(|(a, ab)| (*a, *ab)).collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
 /// Full result for a single layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerResult {
@@ -323,6 +403,11 @@ pub struct LayerResult {
     pub energy_out: f64,
     pub delta_e_mev: f64,
     pub heat_kw: f64,
+    /// What was irradiated to produce this (#666). `#[serde(default)]` so
+    /// results written before it still deserialize — they land on the empty
+    /// value, which reports "not recorded" rather than inventing a target.
+    #[serde(default)]
+    pub provenance: LayerProvenance,
     pub depth_profile: Vec<DepthPoint>,
     pub isotope_results: HashMap<String, IsotopeResult>,
     pub stopping_power_sources: HashMap<u32, String>,

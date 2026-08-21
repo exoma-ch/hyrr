@@ -22,14 +22,65 @@ db-urls = ["https://github.com/RustSec/advisory-db"]
 # A yanked crate is worth knowing about but is not a vulnerability, and a
 # yank can happen between a PR opening and merging. Warn.
 yanked = "warn"
-# Deliberately empty. When the nightly sweep files an advisory issue, the
-# choice is: upgrade, or add an entry here WITH a reason and a link. A bare
-# id with no justification is how an ignore list rots into a blindfold.
+# When the nightly sweep files an advisory issue, the choice is: upgrade, or
+# add an entry here WITH a reason and a link. A bare id with no justification
+# is how an ignore list rots into a blindfold.
 #
-# ignore = [
-#   { id = "RUSTSEC-0000-0000", reason = "why this is unreachable here + link" },
-# ]
-ignore = []
+# Everything below is `unmaintained`, NOT a vulnerability: no CVE, no known
+# exploit, only "upstream archived the repository". Every entry is transitive
+# through Tauri in desktop/src-tauri; the other five crates are clean, and the
+# entries simply never match there.
+#
+# Triage of #640, 2026-08-19. The sweep had failed four nights running, which
+# is its own hazard — a gate that is red every morning teaches people to stop
+# reading it. Re-check whenever Tauri is upgraded; if an entry stops matching,
+# cargo-deny says so and it should be deleted rather than left to rot.
+#
+# The decision to keep the Linux desktop target and accept the GTK3 tree — the
+# only entries below that are RUNTIME rather than build-time — is recorded in
+# docs/adr/0009-unmaintained-gtk3-in-the-linux-desktop-build.md. Read that
+# before deleting or widening anything here.
+#
+# Known cost of one shared config across six independent crates: the five that
+# do not depend on Tauri each emit 16 `advisory-not-detected` warnings. They do
+# not fail anything, but they do mean "this ignore is now unused" is no longer
+# a signal you can read straight off a clean crate's log — check the
+# desktop/src-tauri job, which is the only one where these IDs are live.
+# Splitting the config per crate was considered and rejected: cargo-deny takes
+# one --config, so it would mean a second file duplicating the license/bans
+# policy, and a drifting duplicate of THAT is a worse failure than log noise.
+ignore = [
+  # ── GTK3 bindings (gtk-rs), via muda/wry ← tauri 2.11.5 ─────────────────
+  # Tauri v2's Linux backend IS GTK3 + webkit2gtk; gtk-rs 0.19+ targets GTK4,
+  # which Tauri does not use. So there is no version to upgrade to — this
+  # resolves when Tauri itself moves, not when we bump anything.
+  # Linux desktop only: macOS and Windows builds never link these, and the
+  # browser, MCP and Python surfaces do not depend on desktop at all.
+  { id = "RUSTSEC-2024-0411", reason = "gdkwayland-sys 0.18.2, unmaintained GTK3 binding via tauri; no GTK3 successor exists — https://rustsec.org/advisories/RUSTSEC-2024-0411" },
+  { id = "RUSTSEC-2024-0412", reason = "gdk 0.18.2, unmaintained GTK3 binding via tauri; no GTK3 successor exists — https://rustsec.org/advisories/RUSTSEC-2024-0412" },
+  { id = "RUSTSEC-2024-0413", reason = "atk 0.18.2, unmaintained GTK3 binding via tauri; no GTK3 successor exists — https://rustsec.org/advisories/RUSTSEC-2024-0413" },
+  { id = "RUSTSEC-2024-0414", reason = "gdkx11-sys 0.18.2, unmaintained GTK3 binding via tauri; no GTK3 successor exists — https://rustsec.org/advisories/RUSTSEC-2024-0414" },
+  { id = "RUSTSEC-2024-0415", reason = "gtk 0.18.2, unmaintained GTK3 binding via tauri; no GTK3 successor exists — https://rustsec.org/advisories/RUSTSEC-2024-0415" },
+  { id = "RUSTSEC-2024-0416", reason = "atk-sys 0.18.2, unmaintained GTK3 binding via tauri; no GTK3 successor exists — https://rustsec.org/advisories/RUSTSEC-2024-0416" },
+  { id = "RUSTSEC-2024-0417", reason = "gdkx11 0.18.2, unmaintained GTK3 binding via tauri; no GTK3 successor exists — https://rustsec.org/advisories/RUSTSEC-2024-0417" },
+  { id = "RUSTSEC-2024-0418", reason = "gdk-sys 0.18.2, unmaintained GTK3 binding via tauri; no GTK3 successor exists — https://rustsec.org/advisories/RUSTSEC-2024-0418" },
+  { id = "RUSTSEC-2024-0419", reason = "gtk3-macros 0.18.2, unmaintained GTK3 binding via tauri; build-time proc-macro — https://rustsec.org/advisories/RUSTSEC-2024-0419" },
+  { id = "RUSTSEC-2024-0420", reason = "gtk-sys 0.18.2, unmaintained GTK3 binding via tauri; no GTK3 successor exists — https://rustsec.org/advisories/RUSTSEC-2024-0420" },
+
+  # ── unic-* via urlpattern ← tauri-utils ← tauri-codegen ← tauri-macros ──
+  # tauri-macros is a proc-macro crate, so this whole subtree runs at COMPILE
+  # time and is not linked into any shipped binary. Resolves when tauri-utils
+  # moves off urlpattern 0.3.
+  { id = "RUSTSEC-2025-0075", reason = "unic-char-range 0.9.0, unmaintained; build-time only via tauri-macros→urlpattern — https://rustsec.org/advisories/RUSTSEC-2025-0075" },
+  { id = "RUSTSEC-2025-0080", reason = "unic-common 0.9.0, unmaintained; build-time only via tauri-macros→urlpattern — https://rustsec.org/advisories/RUSTSEC-2025-0080" },
+  { id = "RUSTSEC-2025-0081", reason = "unic-char-property 0.9.0, unmaintained; build-time only via tauri-macros→urlpattern — https://rustsec.org/advisories/RUSTSEC-2025-0081" },
+  { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version 0.9.0, unmaintained; build-time only via tauri-macros→urlpattern — https://rustsec.org/advisories/RUSTSEC-2025-0098" },
+  { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident 0.9.0, unmaintained; build-time only via tauri-macros→urlpattern — https://rustsec.org/advisories/RUSTSEC-2025-0100" },
+
+  # ── proc-macro-error via glib-macros ← glib ← atk ← gtk ─────────────────
+  # Also a proc-macro, so build-time only. Goes away with the GTK3 tree above.
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 1.0.4, unmaintained; build-time only via glib-macros in the GTK3 tree — https://rustsec.org/advisories/RUSTSEC-2024-0370" },
+]
 
 [bans]
 # "warn", not "deny". Six independent lockfiles plus the Tauri tree guarantee

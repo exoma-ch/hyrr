@@ -117,12 +117,45 @@ export interface DepthPointData {
   heat_W_cm3: number;
 }
 
+/** One element as the engine resolved it (#666). */
+export interface ElementProvenanceData {
+  symbol: string;
+  z: number;
+  atom_fraction: number;
+  /** A -> fractional abundance, after enrichment. This is what distinguishes a
+   *  natural target from an enriched one; symbols alone cannot. */
+  isotopes: Record<string, number>;
+}
+
+/** What was actually irradiated (#666).
+ *
+ *  Optional because the TS fallback engine does not produce it, and because
+ *  results serialized before #666 have no such field — absence means "not
+ *  recorded", never "no target". */
+export interface LayerProvenanceData {
+  density_g_cm3: number;
+  /** The thickness the run USED, which an areal-density or energy-out spec
+   *  makes different from the one the caller stated. */
+  thickness_cm: number;
+  areal_density_g_cm2?: number;
+  is_monitor: boolean;
+  /** Present only when ICRU-measured stopping data replaced Bragg additivity
+   *  (#542) — a different stopping model, so presence is load-bearing. */
+  nist_compound?: string;
+  elements: ElementProvenanceData[];
+}
+
 export interface LayerResultData {
   layer_index: number;
   energy_in: number;
   energy_out: number;
   delta_E_MeV: number;
   heat_kW: number;
+  /** #666 — see LayerProvenanceData. */
+  provenance?: LayerProvenanceData;
+  /** Per-element stopping-power source keyed by Z ("PSTAR" | "ASTAR" |
+   *  "Bragg"), so a depth profile can say which model produced it. */
+  stopping_power_sources?: Record<string, string>;
   isotopes: IsotopeResultData[];
   depth_profile: DepthPointData[];
   depth_production_rates?: Record<string, number[]>;

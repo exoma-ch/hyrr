@@ -45,7 +45,7 @@ pub const SNAPSHOT_PLACEHOLDER: &str = "__HYRR_SNAPSHOT__";
 pub const SNAPSHOT_SCHEMA: &str = "hyrr-viewer";
 
 /// Bumped whenever the payload shape changes incompatibly.
-pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+pub const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 
 /// Significant figures kept for every float in the payload.
 ///
@@ -154,6 +154,18 @@ pub struct LayerResultJson {
     pub delta_e_mev: f64,
     #[serde(rename = "heat_kW")]
     pub heat_kw: f64,
+    /// What was irradiated (#666). Without it a recipient can read every
+    /// activity in the artifact and still not know what target produced them —
+    /// the numbers are unfalsifiable. Embedded in the layer rather than left to
+    /// the opaque `config` blob so it cannot describe a different layer, and so
+    /// all three surfaces emit the same fields.
+    pub provenance: crate::types::LayerProvenance,
+    /// Per-element stopping-power source (PSTAR/ASTAR table vs Bragg
+    /// additivity), keyed by Z. Computed by the engine and previously dropped
+    /// here, which meant the artifact could not say which stopping model
+    /// produced its depth profile.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub stopping_power_sources: HashMap<u32, String>,
     pub isotopes: Vec<IsotopeResultJson>,
     pub depth_profile: Vec<DepthPointJson>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
@@ -289,6 +301,8 @@ pub fn convert_stack_result(
                 energy_out: lr.energy_out,
                 delta_e_mev: lr.delta_e_mev,
                 heat_kw: lr.heat_kw,
+                provenance: lr.provenance.clone(),
+                stopping_power_sources: lr.stopping_power_sources.clone(),
                 isotopes,
                 depth_profile,
                 depth_production_rates: lr.depth_production_rates.clone(),
@@ -492,6 +506,22 @@ mod tests {
                 energy_out: 12.0,
                 delta_e_mev: 4.0,
                 heat_kw: 0.123_456_789,
+                // A real composition, not Default: the snapshot tests assert
+                // this survives to the artifact (#666), and an empty value
+                // would let a dropped field pass unnoticed.
+                provenance: crate::types::LayerProvenance {
+                    density_g_cm3: 10.22,
+                    thickness_cm: 0.05,
+                    areal_density_g_cm2: None,
+                    is_monitor: false,
+                    nist_compound: None,
+                    elements: vec![crate::types::ElementProvenance {
+                        symbol: "Mo".to_string(),
+                        z: 42,
+                        atom_fraction: 1.0,
+                        isotopes: [(98u32, 0.9), (100u32, 0.1)].into_iter().collect(),
+                    }],
+                },
                 depth_profile: vec![DepthPoint {
                     depth_cm: 0.25,
                     energy_mev: 15.987_654_3,
@@ -545,6 +575,69 @@ mod tests {
     fn depth_is_converted_from_cm_to_mm() {
         let wire = convert_stack_result(serde_json::json!({}), &stack(0), 0);
         assert_eq!(wire.layers[0].depth_profile[0].depth_mm, 2.5);
+    }
+
+    /// The target description must reach the artifact (#666). Before this, a
+    /// recipient could read every activity and not know what produced them:
+    /// the material survived only as an unresolved *name* inside the opaque
+    /// `config` blob, and the resolved composition never left the engine.
+    #[test]
+    fn layer_provenance_reaches_the_wire() {
+        let wire = convert_stack_result(serde_json::json!({}), &stack(0), 0);
+        let p = &wire.layers[0].provenance;
+        assert_eq!(p.density_g_cm3, 10.22);
+        assert_eq!(p.thickness_cm, 0.05);
+        assert_eq!(p.elements.len(), 1);
+        assert_eq!(p.elements[0].symbol, "Mo");
+        assert_eq!(p.elements[0].z, 42);
+    }
+
+    /// The isotopic vector is the part that distinguishes a natural target from
+    /// an enriched one. Carrying only symbols would make two runs whose yields
+    /// differ by orders of magnitude look identical in the artifact.
+    #[test]
+    fn provenance_carries_the_resolved_isotopic_vector() {
+        let wire = convert_stack_result(serde_json::json!({}), &stack(0), 0);
+        let iso = &wire.layers[0].provenance.elements[0].isotopes;
+        assert_eq!(iso.get(&98), Some(&0.9));
+        assert_eq!(iso.get(&100), Some(&0.1));
+    }
+
+    /// Serialized, not merely present in the struct — a field the viewer never
+    /// receives is not provenance. Also pins that an absent `nist_compound`
+    /// stays absent rather than serializing as null, since its presence means a
+    /// different stopping model was used.
+    #[test]
+    fn provenance_survives_serialization() {
+        let wire = convert_stack_result(serde_json::json!({}), &stack(0), 0);
+        let v = serde_json::to_value(&wire).unwrap();
+        let p = &v["layers"][0]["provenance"];
+        assert_eq!(p["elements"][0]["symbol"], "Mo");
+        assert_eq!(p["elements"][0]["isotopes"]["98"], 0.9);
+        assert_eq!(p["density_g_cm3"], 10.22);
+        assert!(
+            p.get("nist_compound").is_none(),
+            "an unset nist_compound must be absent, not null: {p}"
+        );
+    }
+
+    /// Computed by the engine and previously discarded by this conversion, so
+    /// the artifact could not say whether its depth profile came from a
+    /// PSTAR/ASTAR table or from Bragg additivity.
+    #[test]
+    fn stopping_power_sources_reach_the_wire() {
+        let mut s = stack(0);
+        s.layer_results[0]
+            .stopping_power_sources
+            .insert(42, "PSTAR".to_string());
+        let wire = convert_stack_result(serde_json::json!({}), &s, 0);
+        assert_eq!(
+            wire.layers[0]
+                .stopping_power_sources
+                .get(&42)
+                .map(String::as_str),
+            Some("PSTAR")
+        );
     }
 
     #[test]
