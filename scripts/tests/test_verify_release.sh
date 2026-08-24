@@ -97,10 +97,23 @@ DESKTOP_DIRECT=("HYRR_0.19.0_x64.dmg" "HYRR_0.19.0_aarch64.dmg")
 
 # assets.json listing latest.json + every payload (each with its .sig) + the
 # direct downloads. Extra args are appended verbatim, so a case can drop one.
+# Assets carry BOTH url forms, because verify-release matches latest.json
+# against them rather than against a URL pattern: tauri-action v0 emits the
+# browser-download URL and v1 emits the API one (#516).
+asset_entry() { # asset_entry <name> <id>
+  printf '{"name":"%s","url":"https://github.com/exoma-ch/hyrr/releases/download/v0.19.0/%s","apiUrl":"https://api.github.com/repos/exoma-ch/hyrr/releases/assets/%s"}' "$1" "$1" "$2"
+}
+
 assets_json() { # assets_json [payload...]
-  local out='{"name":"latest.json"}' f
-  for f in "$@"; do out="${out},{\"name\":\"${f}\"},{\"name\":\"${f}.sig\"}"; done
-  for f in "${DESKTOP_DIRECT[@]}"; do out="${out},{\"name\":\"${f}\"}"; done
+  local out f i=100
+  out="$(asset_entry latest.json 99)"
+  for f in "$@"; do
+    out="${out},$(asset_entry "$f" "$i")"; i=$((i + 1))
+    out="${out},$(asset_entry "${f}.sig" "$i")"; i=$((i + 1))
+  done
+  for f in "${DESKTOP_DIRECT[@]}"; do
+    out="${out},$(asset_entry "$f" "$i")"; i=$((i + 1))
+  done
   printf '{"assets":[%s]}' "$out"
 }
 
@@ -274,7 +287,25 @@ reset_fixtures
 sed 's#/download/v0.19.0/#/download/v0.18.0/#g' "$FIXTURES/latest.json" \
   > "$FIXTURES/latest.json.tmp" && mv "$FIXTURES/latest.json.tmp" "$FIXTURES/latest.json"
 run_verify 0.19.0
-expect "latest.json pointing at another tag fails" 1 "points outside v0.19.0"
+expect "latest.json pointing at another tag fails" 1 "is not an asset of v0.19.0"
+
+# tauri-action v1 writes API URLs (.../releases/assets/<id>) instead of
+# browser-download URLs (upstream #1315, arriving via #516). They carry neither
+# the tag nor the filename, so this must be accepted on identity with the
+# release's own assets rather than on URL shape.
+reset_fixtures
+python3 - "$FIXTURES/latest.json" "$FIXTURES/assets.json" <<'PYX'
+import json, sys
+lj, aj = sys.argv[1], sys.argv[2]
+assets = {a["name"]: a for a in json.load(open(aj))["assets"]}
+d = json.load(open(lj))
+for entry in d["platforms"].values():
+    name = entry["url"].rsplit("/", 1)[-1]
+    entry["url"] = assets[name]["apiUrl"]      # the v1 form
+json.dump(d, open(lj, "w"))
+PYX
+run_verify 0.19.0
+expect "tauri-action v1 API-form URLs are accepted" 0 "entries resolve to signed"
 
 # The direct-download bundles are invisible to latest.json, so they need their
 # own assertion — a macOS user landing on the release page finds nothing.
