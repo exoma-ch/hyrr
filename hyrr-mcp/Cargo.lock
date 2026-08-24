@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "hyrr-core"
-version = "0.20.1"
+version = "0.21.0"
 dependencies = [
  "arrow",
  "base64",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "hyrr-mcp"
-version = "0.20.1"
+version = "0.21.0"
 dependencies = [
  "hyrr-core",
 ]

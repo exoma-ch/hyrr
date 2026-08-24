@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0](https://github.com/exoma-ch/hyrr/compare/v0.20.1...v0.21.0) (2026-08-21)
+
+
+### Features
+
+* **deploy:** gate prd on main, clean, and level with origin ([#648](https://github.com/exoma-ch/hyrr/issues/648)) ([49e8b71](https://github.com/exoma-ch/hyrr/commit/49e8b7148e8c07d295cd05577879f6d718acbeb3))
+* **release:** verify the desktop artifacts actually reached the release ([#664](https://github.com/exoma-ch/hyrr/issues/664)) ([102c008](https://github.com/exoma-ch/hyrr/commit/102c00895f94d36f46cfddc0ae6a19cbde29a60c)), closes [#647](https://github.com/exoma-ch/hyrr/issues/647)
+* **viewer:** record what was irradiated, so a shared result can be checked ([#671](https://github.com/exoma-ch/hyrr/issues/671)) ([f1ca28e](https://github.com/exoma-ch/hyrr/commit/f1ca28e19e5811706fe0648c67d6f16ac8a685d5)), closes [#666](https://github.com/exoma-ch/hyrr/issues/666)
+
+
+### Bug Fixes
+
+* **build:** name the npm workspace root so installs stop dirtying worktrees ([#662](https://github.com/exoma-ch/hyrr/issues/662)) ([be5bd90](https://github.com/exoma-ch/hyrr/commit/be5bd90f5d82bdd67f8562bc0472db1f96971031)), closes [#648](https://github.com/exoma-ch/hyrr/issues/648)
+* **deploy:** refuse a prd deploy with no TTY, and derive the whitelist ([#663](https://github.com/exoma-ch/hyrr/issues/663)) ([f00c077](https://github.com/exoma-ch/hyrr/commit/f00c0776a1d8e304e4e2c0c1fb258c9792171a2e)), closes [#648](https://github.com/exoma-ch/hyrr/issues/648)
+
+
+### Miscellaneous
+
+* **deps:** triage the 16 unmaintained advisories behind the nightly sweep (closes [#640](https://github.com/exoma-ch/hyrr/issues/640)) ([#665](https://github.com/exoma-ch/hyrr/issues/665)) ([f7970d4](https://github.com/exoma-ch/hyrr/commit/f7970d4b856805139610008f4a05f3c39a5d5e3e))
+
+
+### Documentation
+
+* **release-notes:** add the 0.21.0 entry so the release PR can merge ([#674](https://github.com/exoma-ch/hyrr/issues/674)) ([1247bac](https://github.com/exoma-ch/hyrr/commit/1247bac5e55757e583b79a38ddba3508a70c7abc)), closes [#660](https://github.com/exoma-ch/hyrr/issues/660)
+
 ## [0.20.1](https://github.com/exoma-ch/hyrr/compare/v0.20.0...v0.20.1) (2026-08-18)
 
 
