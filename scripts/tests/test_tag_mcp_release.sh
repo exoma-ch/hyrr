@@ -57,22 +57,20 @@ if [ "$method" = "POST" ]; then
     */git/refs)
       ref="${fields[ref]:-}"
       sha="${fields[sha]:-}"
-      # --input - form (preflight builds its payloads with jq)
-      if [ -z "$ref" ] && [ ! -t 0 ]; then
-        body="$(cat)"
-        ref="$(jq -r '.ref // empty' <<<"$body" 2>/dev/null)"
-        sha="$(jq -r '.sha // empty' <<<"$body" 2>/dev/null)"
-      fi
       echo "POST $path $ref $sha" >> "$FIXTURES/post.log"
       case "$ref" in
         refs/tags/preflight-676-*)
           [ -f "$FIXTURES/deny_workflow_ref" ] && {
-            echo '{"message":"Resource not accessible by integration","status":"403"}'
+            echo 'gh: Resource not accessible by integration (HTTP 403)'
+            exit 1
+          }
+          [ -f "$FIXTURES/break_workflow_ref" ] && {
+            echo 'gh: connection reset by peer'
             exit 1
           }
           ;;
         *) [ -f "$FIXTURES/deny_create" ] && {
-          echo '{"message":"Resource not accessible by integration","status":"403"}'
+          echo 'gh: Resource not accessible by integration (HTTP 403)'
           exit 1
         } ;;
       esac
@@ -83,9 +81,6 @@ if [ "$method" = "POST" ]; then
       printf '{"ref":"%s","object":{"sha":"%s","type":"commit"}}\n' "$ref" "$sha"
       exit 0
       ;;
-    */git/blobs) echo '{"sha":"b0bb0b"}' ;;
-    */git/trees) cat >> "$FIXTURES/tree.log"; echo '{"sha":"7ee7ee"}' ;;
-    */git/commits) cat > /dev/null; echo '{"sha":"c0ffee1234567890"}' ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -99,14 +94,16 @@ if [ "$method" = "DELETE" ]; then
   exit 0
 fi
 
-if [ "$path" = "repos/$GITHUB_REPOSITORY" ]; then
-  echo '{"default_branch":"main"}'
-  exit 0
-fi
-
 case "$path" in
-  */git/refs/heads/*) printf '{"object":{"sha":"%s","type":"commit"}}\n' "$TIP_SHA" ;;
-  */git/commits/*) echo '{"tree":{"sha":"7ee700"}}' ;;
+  # preflight: the most recent commit touching .github/workflows/, whose
+  # parent is the commit it aims at.
+  *"commits?path=.github/workflows"*)
+    if [ -f "$FIXTURES/no_workflow_history" ]; then
+      echo '[]'
+    else
+      printf '[{"sha":"%s","parents":[{"sha":"%s"}]}]\n' "$TIP_SHA" "$REL_SHA_ENV"
+    fi
+    ;;
   */git/ref/tags/*)
     tag="${path##*/git/ref/tags/}"
     [ -f "$FIXTURES/refs/$tag" ] || exit 1
@@ -147,7 +144,8 @@ export TAG_MCP_POLL_INTERVAL=0
 REL_SHA="9fd188a929073d0cd76bf2b3f202ea5aaac0f5aa"
 OTHER_SHA="aedc4d3bf058dded721fffc0825c02d75a09a71a"
 TIP_SHA="$OTHER_SHA"
-export TIP_SHA
+REL_SHA_ENV="$REL_SHA"
+export TIP_SHA REL_SHA_ENV
 
 # new_case <name> — fresh fixture dir, exported as $FIXTURES
 new_case() {
@@ -342,7 +340,7 @@ fi
 # installation token cannot read its own permissions.
 new_case preflight-allowed
 if run_tagger preflight \
-  && grep -q 'can create a tag on a workflow-touching commit' "$FIXTURES/out.txt" \
+  && grep -q 'can tag a commit across a workflow change' "$FIXTURES/out.txt" \
   && grep -q 'DELETE.*preflight-676-' "$FIXTURES/delete.log"; then
   report "preflight passes, and cleans up its probe tag, when tagging is allowed" pass
 else
@@ -363,15 +361,37 @@ else
   cat "$FIXTURES/out.txt"
 fi
 
-# The probe must aim at a path under .github/workflows/, or it measures nothing.
-new_case preflight-probes-a-workflow-path
-run_tagger preflight
-if grep -q 'refs/tags/preflight-676-' "$FIXTURES/post.log" \
-  && grep -q '_preflight_676.yml' "$FIXTURES/tree.log"; then
-  report "preflight probes with a real .github/workflows/ path" pass
+# A broken probe must NOT read as "refused" — the first version of this
+# preflight silently reported "skipped" against the real API while its stubbed
+# tests were green, which is the exact failure mode this file exists to catch.
+new_case preflight-inconclusive
+: > "$FIXTURES/break_workflow_ref"
+if run_tagger preflight \
+  && grep -q 'could not be completed' "$FIXTURES/out.txt" \
+  && ! grep -q 'cannot create a tag' "$FIXTURES/out.txt"; then
+  report "preflight distinguishes a broken probe from a refused one" pass
 else
-  report "preflight probes with a real .github/workflows/ path" fail
-  cat "$FIXTURES/post.log" "$FIXTURES/tree.log" 2>/dev/null
+  report "preflight distinguishes a broken probe from a refused one" fail
+  cat "$FIXTURES/out.txt"
+fi
+
+# The probe must aim at the parent of a workflow-touching commit — i.e. a
+# commit that is not the tip and whose workflow tree differs from it.
+new_case preflight-aims-correctly
+run_tagger preflight
+if grep -q "refs/tags/preflight-676-${REL_SHA:0:12} ${REL_SHA}" "$FIXTURES/post.log"; then
+  report "preflight aims at the parent of the last workflow-touching commit" pass
+else
+  report "preflight aims at the parent of the last workflow-touching commit" fail
+  cat "$FIXTURES/post.log" 2>/dev/null
+fi
+
+new_case preflight-no-history
+: > "$FIXTURES/no_workflow_history"
+if run_tagger preflight && grep -q 'preflight skipped' "$FIXTURES/out.txt"; then
+  report "preflight is a no-op on a repo with no workflow history" pass
+else
+  report "preflight is a no-op on a repo with no workflow history" fail
 fi
 
 # ── usage ─────────────────────────────────────────────────────────────────

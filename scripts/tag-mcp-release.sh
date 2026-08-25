@@ -136,12 +136,6 @@ fi
 }
 
 # ── Git ref plumbing ──────────────────────────────────────────────────────
-# The default branch is what GitHub compares a ref creation against when it
-# decides whether an App is "creating or updating" a workflow file.
-default_branch() {
-  gh api "repos/${REPO}" 2>/dev/null | jq -r '.default_branch // "main"'
-}
-
 # resolve_sha <tag> -> the COMMIT sha the tag names, or exit 1 if it does not
 # exist. Annotated tags are dereferenced: release-please creates lightweight
 # tags today, but a tag object pointing at the right commit must not read as
@@ -260,61 +254,55 @@ cmd_create() {
 #
 # It cannot be answered by reading permissions — an installation token cannot
 # introspect its own installation, and doing it with an App JWT would mean
-# signing one in bash. So ask GitHub the same question behaviourally, using
-# the exact shape that fails: build (in the object database only) a commit
-# that adds a file under .github/workflows/, then try to point a ref at it.
-# Blobs, trees and commits are not refs, so creating them is never checked;
-# the ref creation is, and it is refused with 403 for precisely the credential
-# that would fail at release time. The probe tag — if it is created at all —
-# is deleted immediately, and the objects are unreferenced and get collected.
+# signing one in bash. So ask GitHub the same question behaviourally, by
+# performing the exact operation that fails at release time: point a tag ref at
+# a commit whose .github/workflows/** differs from the default branch's tip.
+#
+# Such a commit already exists and costs one API call to find: the PARENT of
+# the most recent commit that touched .github/workflows/**. That commit is by
+# construction not the tip (it is strictly older) and its workflow tree is by
+# construction different from the tip's (its child changed exactly that). No
+# blobs, trees or commits are fabricated — an earlier version of this built a
+# synthetic commit and it failed against the real API while the stubbed tests
+# passed, which is the same "green over a wrong world" this file is about.
+#
+# The probe tag matches no workflow trigger and is deleted either way.
 #
 # A warning, not a gate: a release only hits the wall if a workflow-touching
 # PR merges in the second between the Release publishing and the tag being
 # created. Rare — but the cost of it happening is that nothing reaches PyPI.
 cmd_preflight() {
-  local tip tree blob newtree commit ref out rc
-  tip="$(gh api "repos/${REPO}/git/refs/heads/$(default_branch)" 2>/dev/null |
-    jq -r '.object.sha // empty')"
-  if [ -z "$tip" ]; then
-    echo "  · preflight skipped: cannot read the default branch tip"
+  local target ref out rc
+  target="$(gh api "repos/${REPO}/commits?path=.github/workflows&per_page=1" 2>/dev/null |
+    jq -r '.[0].parents[0].sha // empty')"
+  if [ -z "$target" ]; then
+    echo "  · preflight skipped: no commit touching .github/workflows/ has a parent to aim at"
     return 0
   fi
-  tree="$(gh api "repos/${REPO}/git/commits/${tip}" 2>/dev/null | jq -r '.tree.sha // empty')"
-  blob="$(gh api -X POST "repos/${REPO}/git/blobs" \
-    -f content="# tag-mcp-release.sh preflight (#676) — never referenced" \
-    -f encoding=utf-8 2>/dev/null | jq -r '.sha // empty')"
-  if [ -z "$tree" ] || [ -z "$blob" ]; then
-    echo "  · preflight skipped: cannot build the probe objects"
-    return 0
-  fi
-  newtree="$(jq -nc --arg t "$tree" --arg b "$blob" \
-    '{base_tree: $t, tree: [{path: ".github/workflows/_preflight_676.yml",
-                             mode: "100644", type: "blob", sha: $b}]}' |
-    gh api -X POST "repos/${REPO}/git/trees" --input - 2>/dev/null | jq -r '.sha // empty')"
-  [ -n "$newtree" ] || {
-    echo "  · preflight skipped: cannot build the probe tree"
-    return 0
-  }
-  commit="$(jq -nc --arg t "$newtree" --arg p "$tip" \
-    '{message: "preflight (#676)", tree: $t, parents: [$p]}' |
-    gh api -X POST "repos/${REPO}/git/commits" --input - 2>/dev/null | jq -r '.sha // empty')"
-  [ -n "$commit" ] || {
-    echo "  · preflight skipped: cannot build the probe commit"
-    return 0
-  }
 
-  ref="refs/tags/preflight-676-${commit:0:12}"
-  out="$(gh api -X POST "repos/${REPO}/git/refs" -f ref="$ref" -f sha="$commit" 2>&1)"
+  ref="refs/tags/preflight-676-${target:0:12}"
+  # A leftover from an interrupted run would make the create a no-op that
+  # looks like a pass, so clear it first.
+  gh api -X DELETE "repos/${REPO}/git/${ref}" > /dev/null 2>&1
+
+  out="$(gh api -X POST "repos/${REPO}/git/refs" -f ref="$ref" -f sha="$target" 2>&1)"
   rc=$?
   if [ "$rc" -eq 0 ]; then
     gh api -X DELETE "repos/${REPO}/git/${ref}" > /dev/null 2>&1
-    note_pass "the release credential can create a tag on a workflow-touching commit"
+    note_pass "the release credential can tag a commit across a workflow change (${target:0:12})"
     return 0
   fi
 
   echo "$out" >&2
-  echo "::warning::The release credential cannot create a tag on a commit that touches .github/workflows/**. If any such PR merges to the default branch between this release publishing and its hyrr-mcp-v* tag being created, the tag creation is refused, the MCP wheels never publish, and every other signal stays green. That is #676. Grant the hyrr-release-bot App the 'workflows' permission to close it."
-  echo "  ! release-bot cannot tag across a workflow change (#676) — see the warning above"
+  case "$out" in
+    *"Resource not accessible by integration"* | *"403"*)
+      echo "::warning::The release credential cannot create a tag on a commit whose .github/workflows/** differs from the default branch tip. If any workflow-touching PR merges between a release publishing and its hyrr-mcp-v* tag being created, the tag is refused, the MCP wheels never publish, and every other signal stays green. That is #676, and it cost 0.21.0 its wheels. Grant the hyrr-release-bot App the 'workflows' permission to close it."
+      echo "  ! release-bot cannot tag across a workflow change (#676) — see the warning above"
+      ;;
+    *)
+      echo "::warning::preflight could not be completed (see the error above); this says nothing about whether the release can be tagged."
+      ;;
+  esac
   # Deliberately exit 0: this is the pre-publish heads-up, not a gate. The
   # release-time failure is the gate, and assert-tag-parity is the net.
   return 0
