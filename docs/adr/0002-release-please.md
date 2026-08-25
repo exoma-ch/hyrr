@@ -102,6 +102,15 @@ ref created over the API by this App token *does* fire `on: push: tags:`
 workflows (three tags, three listener runs), so nothing here re-introduces the
 GITHUB_TOKEN problem #571 rejected.
 
+One caveat, recorded because it bounds what any check here can promise: the
+refusal is **not a pure function of the commit**. With the installation's
+permissions unchanged throughout, the identical `POST /git/refs` at the
+identical commit was refused at 21:00 and accepted at 21:12 on 2026-08-25.
+Whatever state that reflects is not visible from the API. It is why
+`preflight` reports a refusal loudly but reports a non-refusal without
+claiming anything, and why the design leans on the after-the-fact assertions
+rather than on a pre-flight verdict.
+
 Since no credential-preserving route exists, the design attacks the race and
 the silence instead:
 
@@ -118,10 +127,10 @@ the silence instead:
    both tags on the same commit, so a half-tagged release cannot stay green —
    which is what let 0.21.0 hide.
 6. **Recover in one click.** `workflow_dispatch` with `retag: v0.21.0`.
-7. **Warn before the fact.** The release PR runs `preflight`, which builds an
-   unreferenced commit touching `.github/workflows/` and tries to point a ref
-   at it — the same shape that fails at release time — and warns if the
-   credential is refused.
+7. **Warn before the fact.** The release PR runs `preflight`, which tries to
+   point a throwaway ref at the parent of the most recent workflow-touching
+   commit — the same shape that fails at release time — and warns if the
+   credential is refused. One-sided by construction: see the caveat above.
 
 The permanent fix is #676's option 1: grant `hyrr-release-bot` the `workflows`
 permission. It is the only thing that makes the refused case succeed. It is

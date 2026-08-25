@@ -127,9 +127,12 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+      # The default branch, NOT `ref: inputs.retag`. Recovery is aimed at
+      # releases cut before this script existed, whose trees do not contain it;
+      # and the script needs no tree anyway — it resolves everything the tag
+      # names through the API.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.retag }}
           submodules: false
           persist-credentials: false
       - name: Re-create the hyrr-mcp-v* tag

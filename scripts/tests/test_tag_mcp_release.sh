@@ -338,13 +338,18 @@ fi
 # The pre-publish heads-up: can the release credential point a ref at a commit
 # that touches .github/workflows/**? Measured behaviourally, because an
 # installation token cannot read its own permissions.
+# A success must NOT read as a guarantee — the check is not a pure function of
+# the commit (see the ONE-SIDED note in the script), so claiming "you are fine"
+# would be manufacturing the false reassurance this PR removes.
 new_case preflight-allowed
 if run_tagger preflight \
-  && grep -q 'can tag a commit across a workflow change' "$FIXTURES/out.txt" \
+  && grep -q 'no refusal observed' "$FIXTURES/out.txt" \
+  && grep -q 'not a guarantee' "$FIXTURES/out.txt" \
+  && ! grep -q '✓' "$FIXTURES/out.txt" \
   && grep -q 'DELETE.*preflight-676-' "$FIXTURES/delete.log"; then
-  report "preflight passes, and cleans up its probe tag, when tagging is allowed" pass
+  report "preflight reports a non-refusal without claiming the release is safe" pass
 else
-  report "preflight passes, and cleans up its probe tag, when tagging is allowed" fail
+  report "preflight reports a non-refusal without claiming the release is safe" fail
   cat "$FIXTURES/out.txt"
 fi
 

@@ -268,9 +268,19 @@ cmd_create() {
 #
 # The probe tag matches no workflow trigger and is deleted either way.
 #
-# A warning, not a gate: a release only hits the wall if a workflow-touching
-# PR merges in the second between the Release publishing and the tag being
-# created. Rare — but the cost of it happening is that nothing reaches PyPI.
+# ONE-SIDED, deliberately. A refusal is real and worth acting on. A success is
+# NOT a guarantee: the check is not a pure function of the commit. Measured on
+# 2026-08-25, with the installation's permissions unchanged throughout, the
+# identical POST /git/refs at the identical commit was refused at 21:00 and
+# accepted at 21:12. So this reports a refusal loudly and reports a success
+# without claiming anything — a check that can falsely reassure is the failure
+# mode this whole file exists to delete, and it does not get to introduce a
+# fresh one.
+#
+# A warning, not a gate, even when refused: a release only hits the wall if a
+# workflow-touching PR merges in the second between the Release publishing and
+# the tag being created. Rare — but the cost of it happening is that nothing
+# reaches PyPI.
 cmd_preflight() {
   local target ref out rc
   target="$(gh api "repos/${REPO}/commits?path=.github/workflows&per_page=1" 2>/dev/null |
@@ -289,7 +299,9 @@ cmd_preflight() {
   rc=$?
   if [ "$rc" -eq 0 ]; then
     gh api -X DELETE "repos/${REPO}/git/${ref}" > /dev/null 2>&1
-    note_pass "the release credential can tag a commit across a workflow change (${target:0:12})"
+    # Not note_pass: see the ONE-SIDED note above. No refusal was observed;
+    # that is not the same as "the release will be taggable".
+    echo "  · preflight: no refusal observed at ${target:0:12} (not a guarantee — #676)"
     return 0
   fi
 
