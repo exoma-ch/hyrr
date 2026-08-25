@@ -1,0 +1,43 @@
+# Line-ending normalization (#677).
+#
+# The repo had no .gitattributes, so on GitHub's Windows runners — where Git
+# for Windows ships `core.autocrlf=true` — every text file was checked out with
+# CRLF. Most consumers didn't care. The vite plugin that validates the
+# nuclear-data bundle did: it stripped comments with `/#.*$/`, and a JS `.`
+# does not match `\r`, so on CRLF the strip silently became a no-op and the
+# build demanded library subdirectories named after its own comment prose. The
+# Windows desktop job died on it and v0.21.0 shipped with no `.exe`/`.msi` and
+# no `windows-x86_64` entry in `latest.json`.
+#
+# The parser is now CRLF-proof and unit-tested for it. This file removes the
+# input: every checkout, on every platform, gets LF. That matters beyond the one
+# parser — `scripts/*.sh` runs under bash on the Windows runners, and a stray
+# `\r` in a shell script is its own class of confusing failure.
+#
+# Pinning `eol=lf` (not just `text=auto`) is deliberate: normalizing only in the
+# index still hands Windows a CRLF working tree, which is exactly what broke.
+
+* text=auto eol=lf
+
+# Data and asset formats — never touch these. `text=auto` heuristics are good
+# but a mangled parquet shard or a corrupted signature is not worth the risk.
+*.parquet   binary
+*.png       binary
+*.ico       binary
+*.icns      binary
+*.zip       binary
+*.xlsx      binary
+*.dat       binary
+*.sig       binary
+*.wasm      binary
+
+# CSV is data, not source. `tests/data/mock_current_profile.csv` is emitted by
+# Python's csv.writer (CRLF by default) and `sample_current_profile.csv` is a
+# download users open in Excel, so CRLF is the friendlier wire format. Both
+# readers already accept either — `current-profile-csv.ts` splits on /\r?\n/ —
+# so normalizing here would only start a perpetual diff against the generator.
+*.csv       -text
+
+# Generated lockfiles: keep them out of diffs and merge negotiations.
+*.lock          linguist-generated
+package-lock.json linguist-generated
