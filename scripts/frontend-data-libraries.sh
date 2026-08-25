@@ -43,7 +43,18 @@ read_frontend_data_libraries() {
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
     entry="${line%%#*}"        # comments run to end of line
-    entry="${entry//$'\r'/}"   # CRLF checkouts (Windows CI)
+
+    # Strip a UTF-8 BOM on the first line. JS `.trim()` treats U+FEFF as
+    # whitespace and would drop it silently, but POSIX `[[:space:]]` does not —
+    # so without this the two parsers disagree over an invisible byte, which is
+    # exactly the #677 shape. Explicit on both sides so it cannot drift.
+    [ "$lineno" -eq 1 ] && entry="${entry#$'\xef\xbb\xbf'}"
+
+    # No CR deletion here: `[[:space:]]` already covers a trailing \r, so the
+    # trim below handles CRLF. Deleting *every* \r (as this used to) would also
+    # silently splice a CR-only file's lines together into one bogus entry,
+    # where the TS twin sees an interior CR and rejects it. Trimming leaves an
+    # interior CR in place, so both parsers reject it identically.
 
     # Trim, do NOT squash. This function used to run `tr -d '[:space:]'`, which
     # deletes *interior* whitespace too — and that is quietly dangerous now that

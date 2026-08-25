@@ -36,14 +36,29 @@ describe("parseLibraryList", () => {
   it.each([
     ["LF", (s: string) => s],
     ["CRLF", (s: string) => s.replace(/\n/g, "\r\n")],
-    ["CR", (s: string) => s.replace(/\n/g, "\r")],
-  ])("gives identical results for %s line endings", (_label, rewrite) => {
+    ["CRLF with a UTF-8 BOM", (s: string) => `﻿${s.replace(/\n/g, "\r\n")}`],
+  ])("gives identical results for %s", (_label, rewrite) => {
     const specs = parseLibraryList(rewrite(realList));
     expect(specs.map((s) => `${s.library}:${s.subdir}`)).toEqual([
       "tendl-2023-iso:xs",
       "hi-xs-prod:hi-xs-prod",
       "endfb-8.0:neutron-xs",
     ]);
+  });
+
+  it("strips a UTF-8 BOM rather than folding it into the first library name", () => {
+    expect(parseLibraryList("﻿tendl-2023-iso\n")[0].library).toBe("tendl-2023-iso");
+  });
+
+  // Not lenience for its own sake — parity. Git does not produce CR-only files,
+  // and the bash twin's `read` cannot split on a lone CR, so accepting them
+  // here would mean the two parsers disagree about what the list says. The
+  // interior CR survives into the entry and fails validation on both sides.
+  // See scripts/tests/test_frontend_data_libraries.sh invariant 3.
+  it("rejects a CR-only file, matching the bash reader", () => {
+    expect(() => parseLibraryList("tendl-2023-iso\rendfb-8.0:neutron-xs\r")).toThrow(
+      /malformed entry/,
+    );
   });
 
   it("rejects prose instead of silently treating it as a library", () => {

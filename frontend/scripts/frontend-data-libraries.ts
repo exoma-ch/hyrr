@@ -57,9 +57,20 @@ export function parseLibraryList(
 ): LibrarySpec[] {
   const specs: LibrarySpec[] = [];
 
-  // Split on any line terminator. Never trust the checkout's line endings:
-  // `core.autocrlf=true` is the default on GitHub's Windows runners.
-  const lines = text.split(/\r\n|\r|\n/);
+  // A UTF-8 BOM is stripped explicitly rather than left to `.trim()`. JS treats
+  // U+FEFF as whitespace so trim() would eat it silently, but POSIX
+  // `[[:space:]]` does not — so the bash twin would reject a BOM'd first entry
+  // that this side quietly accepted. That is precisely the #677 shape: two
+  // parsers disagreeing over a byte you cannot see. Handle it deliberately, on
+  // both sides, and it cannot drift.
+  const body = text.replace(/^﻿/, "");
+
+  // Split on LF and CRLF, and NOT on a lone CR. Git does not produce CR-only
+  // files, and `read` in the bash twin cannot split on them either — so
+  // accepting them here would be lenience the other parser doesn't share. An
+  // interior CR then survives into the entry and fails validation on both
+  // sides, which is the outcome we want: loud, and identical in both languages.
+  const lines = body.split(/\r?\n/);
 
   for (let i = 0; i < lines.length; i++) {
     // Comments run to end of line. Split on the literal `#` rather than a

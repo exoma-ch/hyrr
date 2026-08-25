@@ -28,9 +28,18 @@ LIST="$ROOT/scripts/frontend-data-libraries.txt"
 
 failed=0
 ran=0
+skipped=0
+# "skip" is distinct from "pass" on purpose. A check that quietly reports PASS
+# when it did not actually run is worse than no check: it reads as coverage in
+# the log while asserting nothing. Skips are counted and reprinted in the
+# summary so a runner change that disables one is visible.
 report() {
   ran=$((ran + 1))
-  if [ "$2" = "pass" ]; then echo "PASS: $1"; else echo "FAIL: $1" >&2; failed=1; fi
+  case "$2" in
+    pass) echo "PASS: $1" ;;
+    skip) echo "SKIP: $1"; skipped=$((skipped + 1)) ;;
+    *)    echo "FAIL: $1" >&2; failed=1 ;;
+  esac
 }
 
 [ -f "$LIST" ] || { echo "FAIL: missing $LIST" >&2; exit 1; }
@@ -105,18 +114,25 @@ else
   report "every copying workflow sparse-checks-out every library" "pass"
 fi
 
-# ── 3. The bash and TypeScript readers agree, under LF and CRLF ──────────────
+# ── 3. The bash and TypeScript readers agree, byte for byte ──────────────────
 #
 # scripts/copy-frontend-data.sh writes the bundle; frontend/vite.config.ts
 # asserts the bundle matches. If they parse the SSoT differently the build
 # either rejects a correct bundle or waves through an incomplete one. They did
 # differ — but only on CRLF, so it surfaced solely on GitHub's Windows runners,
 # as a data error naming subdirectories after this file's own comment prose
-# (#677). Compare both readers on both line endings; CRLF is not hypothetical,
-# it is what `core.autocrlf=true` hands every Windows checkout.
+# (#677).
+#
+# Comparing only the real list at rest is not enough: it is LF and BOM-free, so
+# it exercises exactly the one input that never broke. The divergences worth
+# catching are all invisible-byte cases, so the fixtures below are written as
+# explicit bytes and both readers are compared on *failure* too — "both reject
+# it" is as much a parity requirement as "both accept it", and a reader that
+# accepts what the other rejects is how a bad bundle gets built in the first
+# place.
 check_parser_parity() {
   command -v node >/dev/null 2>&1 || {
-    report "bash and TS readers agree (SKIPPED: no node)" "pass"
+    report "bash and TS readers agree (SKIPPED: no node)" "skip"
     return
   }
   # Importing the .ts directly needs Node's type stripping: opt-in behind
@@ -135,45 +151,64 @@ check_parser_parity() {
       break
     fi
     if [ "$candidate" = "--experimental-strip-types" ]; then
-      report "bash and TS readers agree (SKIPPED: node cannot import TypeScript)" "pass"
+      report "bash and TS readers agree (SKIPPED: node cannot import TypeScript)" "skip"
       return
     fi
   done
 
-  local bash_repr ts_repr crlf tmp mismatch=0
-  bash_repr=""
-  for spec in "${LIBRARY_SPECS[@]}"; do
-    bash_repr="$bash_repr$(frontend_data_library "$spec"):$(frontend_data_subdir "$spec")
-"
-  done
-
+  local tmp mismatch=0 name file b t
   tmp="$(mktemp -d)"
-  # Byte-identical apart from line endings.
-  cp "$LIST" "$tmp/lf.txt"
-  crlf="$tmp/crlf.txt"
-  sed 's/$/\r/' "$LIST" > "$crlf"
 
-  for variant in lf crlf; do
-    local file="$tmp/$variant.txt"
+  # The real list, plus the same list rewritten CRLF — the #677 input.
+  cp "$LIST" "$tmp/ssot-lf.txt"
+  sed 's/$/\r/' "$LIST" > "$tmp/ssot-crlf.txt"
+
+  # Byte-exact fixtures. printf, not a heredoc, so the CR and BOM bytes are
+  # unambiguous and survive any future reformatting of this file.
+  printf 'tendl\nendfb-8.0:neutron-xs\n'            > "$tmp/lf.txt"
+  printf 'tendl\r\nendfb-8.0:neutron-xs\r\n'        > "$tmp/crlf.txt"
+  printf 'tendl\rendfb-8.0:neutron-xs\r'            > "$tmp/cr-only.txt"
+  printf '\xef\xbb\xbftendl\n'                      > "$tmp/bom.txt"
+  printf '\xef\xbb\xbf# hdr: prose\ntendl\n'        > "$tmp/bom-comment.txt"
+  printf '\xef\xbb\xbftendl\r\n'                    > "$tmp/bom-crlf.txt"
+  printf 'tendl:\n'                                 > "$tmp/trailing-colon.txt"
+  printf 'tendl#c\n'                                > "$tmp/hash-no-space.txt"
+  printf '\ttendl\t\n'                              > "$tmp/tabs.txt"
+  printf 'tendl'                                    > "$tmp/no-final-newline.txt"
+  printf 'ten\rdl\n'                                > "$tmp/interior-cr.txt"
+  printf '   \n\t\n'                                > "$tmp/whitespace-only.txt"
+  printf 'Format: one entry per line\n'             > "$tmp/prose-with-colon.txt"
+  printf 'tendl:../../etc\n'                        > "$tmp/traversal.txt"
+
+  for file in "$tmp"/*.txt; do
+    name="$(basename "$file" .txt)"
+
+    if read_frontend_data_libraries "$file" >/dev/null 2>&1; then
+      b=""
+      for spec in "${LIBRARY_SPECS[@]}"; do
+        b="$b$(frontend_data_library "$spec"):$(frontend_data_subdir "$spec") "
+      done
+    else
+      b="REJECTED"
+    fi
+
     # SC2016: the `${s.library}` below is a JS template literal evaluated by
     # node, not a shell expansion — single quotes are exactly right here.
     # shellcheck disable=SC2016
-    if ! ts_repr="$(node ${NODE_TS+"${NODE_TS[@]}"} -e '
+    t="$(node ${NODE_TS+"${NODE_TS[@]}"} -e '
       const { parseLibraryList } = await import(process.argv[1]);
       const { readFileSync } = await import("node:fs");
-      for (const s of parseLibraryList(readFileSync(process.argv[2], "utf8")))
-        console.log(`${s.library}:${s.subdir}`);
-    ' "$ROOT/frontend/scripts/frontend-data-libraries.ts" "$file" 2>&1)"; then
-      report "TS reader parses the $variant list" "fail"
-      echo "  $ts_repr" >&2
-      mismatch=1
-      continue
-    fi
+      try {
+        const out = parseLibraryList(readFileSync(process.argv[2], "utf8"))
+          .map((s) => `${s.library}:${s.subdir} `).join("");
+        process.stdout.write(out);
+      } catch { process.stdout.write("REJECTED"); }
+    ' "$ROOT/frontend/scripts/frontend-data-libraries.ts" "$file" 2>/dev/null)"
 
-    if [ "$(printf '%s\n' "$ts_repr")" != "$(printf '%s' "$bash_repr")" ]; then
-      report "bash and TS readers agree on $variant" "fail"
-      echo "  bash: $(printf '%s' "$bash_repr" | tr '\n' ' ')" >&2
-      echo "  ts:   $(printf '%s\n' "$ts_repr" | tr '\n' ' ')" >&2
+    if [ "$b" != "$t" ]; then
+      report "bash and TS readers agree on '$name'" "fail"
+      echo "    bash: $b" >&2
+      echo "    ts:   $t" >&2
       mismatch=1
     fi
   done
@@ -181,14 +216,18 @@ check_parser_parity() {
   rm -rf "$tmp"
 
   if [ "$mismatch" -eq 0 ]; then
-    report "bash and TS readers agree on the SSoT list (LF and CRLF)" "pass"
+    report "bash and TS readers agree on all 16 parser fixtures" "pass"
   fi
 }
 check_parser_parity
 
 echo
 if [ "$failed" -eq 0 ]; then
-  echo "All $ran check(s) passed."
+  if [ "$skipped" -gt 0 ]; then
+    echo "$((ran - skipped))/$ran check(s) passed, $skipped SKIPPED (see SKIP lines above)."
+  else
+    echo "All $ran check(s) passed."
+  fi
 else
   echo "Some checks FAILED." >&2
 fi
