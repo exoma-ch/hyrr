@@ -7,7 +7,9 @@
 - **Relates to**: #421 (dual-use / export-control determination), #425 (epic —
   legal & licensing readiness), #565 (refuse to deploy a stale ETH access
   whitelist), #539 / ADR-0004 (config codec — what is *not* reusable here),
-  #550 (`.hyrr.json` v3 self-contained round-trip — the payload precedent)
+  #550 (`.hyrr.json` v3 self-contained round-trip — the payload precedent),
+  and #681 (σ(E) over MCP raised against this tier line — rejected; see
+  "Alternatives considered")
 
 ## Context
 
@@ -379,6 +381,56 @@ rather than asserted, since a Tauri binary cannot be driven here.
   lands restrictively.
 - **Ship the whole app as one file (Tier C).** See above — rejected on
   licensing, not on size.
+
+### σ(E) over MCP, bounded by the run (raised 2026-08-26 in #681 — rejected)
+
+Proposed as the better fix for #681: rather than annotate the outward referral
+to `nucl-parquet-mcp`, remove the need for it by adding a run-bounded
+`get_cross_section_curve` to hyrr-mcp — σ(E) for the channels a run produced,
+bounded the way `produced_nuclides()` bounds Tier B, on the argument that "why
+is this yield shaped like that" is *result interpretation* rather than data
+exploration.
+
+The reasoning is sound about **the question** and wrong about **the boundary**.
+Recorded here rather than left implicit, because the next person to have the
+idea should find the answer instead of re-deriving it — or worse, drifting into
+it one tool at a time.
+
+- **It is the category this ADR already rejected.** Tier C was refused because
+  it "would require cross-sections", and Tier B's justification rests on the
+  contrast: *"the restriction the gate enforces is about cross-sections for
+  arbitrary reactions; emission lines for named nuclides are published
+  reference data of a different character."* σ(E) is not a wider surface than
+  the tiers considered — it is the one they named as restricted. #421 is still
+  open and still governs.
+- **"Bounded by the run" is not a bound when the caller chooses the run.**
+  Tier B's bound holds because the *sender* fixes the run and the *recipient*
+  is a third party outside the gate: one artifact is one fixed slice. Over MCP
+  the caller both chooses the run and receives the data, so the bound is
+  self-selected. Worse, `produced_nuclides()` would only filter *which residual
+  channels* are returned — `DatabaseProtocol::get_cross_sections` returns each
+  channel's full library energy grid, and `list_reaction_channels` needs no
+  simulation at all. The run restricts almost nothing about the data that comes
+  back, so the Tier B gate does not transfer even though it can be called.
+- **The tool surface already sits on this line, deliberately.** ADR 0001 renamed
+  hyrr's tool away from `get_cross_sections` "to avoid collision with
+  `nucl-parquet-mcp`", and `core/src/mcp/tools.rs` calls
+  `db.get_cross_sections` exactly once, internally: only peak σ and energy range
+  escape. Raw evaluated *decay* data does leave via `get_nuclide_data` — which
+  is precisely Tier B's category. The surface is coherent with the tier line
+  today, and this would be the first crossing.
+- **It would not remove the hand-off anyway.** EXFOR, coincidences, β-spectra,
+  abundances, and σ(E) for any target *not* in the run all still refer outward.
+  Annotating the referral is required either way, which makes this purely
+  additive scope — and additive scope carrying an unresolved licensing question
+  is exactly what should not ride along on a fix.
+
+**What was implemented instead (#681):** every outward referral names the live
+library and data release, read from the same pin `get_version_info` prints, and
+states the consequence of a mismatch. See the follow-up issue for the narrower
+idea worth keeping — σ(E) *restricted to the energy window the beam actually
+traversed in a layer* is a derived, genuinely run-bounded quantity, and does not
+raise this question.
 
 ## References
 

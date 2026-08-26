@@ -334,7 +334,10 @@ fn handle_request(
         "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
 
         "tools/list" => {
-            let tool_list = tools::list_tools();
+            // The live library id, so every outward referral in a description
+            // names the data this server actually computed against (#681) —
+            // same injection as `server_instructions` above.
+            let tool_list = tools::list_tools(db.library());
             let result = serde_json::json!({
                 "tools": tool_list
             });
