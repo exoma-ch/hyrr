@@ -17,7 +17,10 @@
 # made the four neutron presets silently produce nothing in dev builds (#651).
 #
 # Libraries are specified as "catalog-name" (→ $DEST/xs/) or
-# "catalog-name:subdir" (→ $DEST/subdir/) for non-default output paths.
+# "catalog-name:subdir" (→ $DEST/subdir/) for non-default output paths. Parsing
+# and validation live in scripts/frontend-data-libraries.sh, whose TypeScript
+# twin (frontend/scripts/frontend-data-libraries.ts) the vite build uses to
+# check the result — see #677 for what happens when the two disagree.
 #
 # On success writes $DEST/MANIFEST.json describing what was actually populated,
 # so the build and the running app can assert the shape rather than discovering
@@ -31,17 +34,29 @@ shift 2
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_LIST="$HERE/frontend-data-libraries.txt"
 
+# One parser per language, shared by every bash caller. Previously this loop was
+# copy-pasted here, in the guard test, and (in TypeScript) in the vite plugin —
+# and the TS copy drifted, rejecting a complete bundle on Windows and shipping
+# v0.21.0 without a Windows installer (#677).
+# shellcheck source=scripts/frontend-data-libraries.sh
+. "$HERE/frontend-data-libraries.sh"
+
 if [ "$#" -gt 0 ]; then
+  # Explicit overrides get the same grammar check as the SSoT file. `subdir`
+  # becomes a path segment under $DEST, so an unvalidated one (`../../etc`) is
+  # a write outside the destination, and the tests/ callers that pass explicit
+  # libraries should fail the same way the list does.
+  for spec in "$@"; do
+    if ! [[ "$spec" =~ $FRONTEND_DATA_LIBRARY_RE ]]; then
+      echo "copy-frontend-data: ERROR: malformed library argument '$spec'" >&2
+      echo "  Expected 'name' or 'name:subdir'." >&2
+      exit 1
+    fi
+  done
   LIBRARIES=("$@")
 else
-  [ -f "$LIB_LIST" ] || { echo "copy-frontend-data: missing $LIB_LIST" >&2; exit 1; }
-  LIBRARIES=()
-  while IFS= read -r line; do
-    line="${line%%#*}"                     # strip comments
-    line="$(echo "$line" | tr -d '[:space:]')"
-    [ -n "$line" ] && LIBRARIES+=("$line")
-  done < "$LIB_LIST"
-  [ "${#LIBRARIES[@]}" -gt 0 ] || { echo "copy-frontend-data: no libraries in $LIB_LIST" >&2; exit 1; }
+  read_frontend_data_libraries "$LIB_LIST" || exit 1
+  LIBRARIES=("${LIBRARY_SPECS[@]}")
 fi
 
 # ── Meta (shared across all libraries) ────────────────────────────
@@ -87,17 +102,14 @@ cp "$NP/stopping/compounds/"*.parquet "$DEST/stopping/compounds/" 2>/dev/null ||
 # neutron cross-section and rendered an empty table (#651, epic #649).
 manifest_entries=()
 for spec in "${LIBRARIES[@]}"; do
-  lib="${spec%%:*}"
-  # Detect the separator explicitly. The old test was `[ "$subdir" = "$lib" ]
-  # && subdir=xs`, which is also true for a `name:name` spec — so
-  # `hi-xs-prod:hi-xs-prod` silently landed in `xs/` next to tendl's files
-  # instead of its own `hi-xs-prod/` directory, in every build including
-  # production (#651).
-  if [[ "$spec" == *:* ]]; then
-    subdir="${spec#*:}"
-  else
-    subdir="xs"
-  fi
+  # Resolved by the shared helpers so bash and the vite plugin can never
+  # disagree about where a spec lands. Note the separator is detected
+  # explicitly: the original test was `[ "$subdir" = "$lib" ] && subdir=xs`,
+  # which is also true for a `name:name` spec — so `hi-xs-prod:hi-xs-prod`
+  # silently landed in `xs/` next to tendl's files instead of its own
+  # `hi-xs-prod/` directory, in every build including production (#651).
+  lib="$(frontend_data_library "$spec")"
+  subdir="$(frontend_data_subdir "$spec")"
 
   if [ ! -d "$NP/$lib/xs" ]; then
     echo "copy-frontend-data: ERROR: requested library '$lib' has no xs/ dir at $NP/$lib/xs" >&2
