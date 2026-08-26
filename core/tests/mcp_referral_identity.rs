@@ -9,8 +9,8 @@
 //! referral in `list_reaction_channels` is where it is stated.
 //!
 //! The two servers resolve their data **independently** — upstream reads
-//! `$NUCL_PARQUET_DATA`, HYRR reads `--data-dir` > `HYRR_DATA` > the submodule
-//! > `~/.hyrr/nucl-parquet`. Nothing on either side compares them. So an agent
+//! `$NUCL_PARQUET_DATA`; HYRR tries `--data-dir`, then `HYRR_DATA`, then the
+//! submodule, then `~/.hyrr/nucl-parquet`. Nothing compares them. So an agent
 //! that follows an unqualified referral can read σ(E) from a different library
 //! or a different data release than the simulation used, reconcile the two,
 //! and report a discrepancy — or an agreement — that is an artefact of the
