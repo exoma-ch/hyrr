@@ -516,6 +516,26 @@
               echo "::error::release-hyrr-mcp.yml has only $COUNT submodule-init steps — need ≥3."
               exit 1
             fi
+            # #676. The hyrr-mcp-v* tag is the one the PyPI wheels publish off,
+            # and it must be created through the REST API at the commit the v*
+            # tag names. `git push` of that tag is rejected outright whenever
+            # the ref would "create or update" a workflow file, because the
+            # hyrr-release-bot App token has no `workflows` permission — and
+            # the rejection is easy to miss, since the GitHub Release still
+            # publishes and the next release-please run still reports success.
+            RP=.github/workflows/release-please.yml
+            if grep -qE 'git (tag|push)[^|]*hyrr-mcp' "$RP"; then
+              echo "::error::release-please.yml creates the hyrr-mcp-v* tag with git again. Use scripts/tag-mcp-release.sh (REST API, pinned to the release commit) — see #676."
+              exit 1
+            fi
+            grep -q 'tag-mcp-release.sh create' "$RP" || {
+              echo "::error::release-please.yml no longer creates the hyrr-mcp-v* tag via scripts/tag-mcp-release.sh (#676)."
+              exit 1
+            }
+            grep -q 'tag-mcp-release.sh assert --latest' "$RP" || {
+              echo "::error::release-please.yml lost the every-push both-tags-exist drift check (#676). Without it a missing hyrr-mcp-v* tag is invisible: every other signal stays green."
+              exit 1
+            }
           '';
         };
       });
