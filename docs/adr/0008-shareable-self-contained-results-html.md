@@ -427,9 +427,10 @@ it one tool at a time.
 
 **What was implemented instead (#681):** every outward referral names the live
 library and data release, read from the same pin `get_version_info` prints, and
-states the consequence of a mismatch. See the follow-up issue for the narrower
-idea worth keeping — σ(E) *restricted to the energy window the beam actually
-traversed in a layer* is a derived, genuinely run-bounded quantity, and does not
+states the consequence of a mismatch. #682 keeps the narrower idea worth
+keeping — σ(E) *restricted to the energy window the beam actually traversed in
+a layer* is a derived, genuinely run-bounded quantity (the window comes from
+geometry and beam energy, not from a caller-supplied `(Z, A)`), and does not
 raise this question.
 
 ## References

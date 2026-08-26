@@ -92,6 +92,25 @@ than physics.",
     )
 }
 
+/// Append the referral to a response body, exactly once and identically on
+/// every branch (#681).
+///
+/// The referral is repeated in the response, not only in the tool description:
+/// a client may have read `tools/list` many turns ago, or cached it, and the
+/// turn that returns the summary is the turn the agent decides in.
+///
+/// A helper rather than two call sites because the two branches of
+/// `tool_list_reaction_channels` end their bodies with different trailing
+/// whitespace, and hand-rolling the join at each produced a different number of
+/// blank lines depending on whether the lookup found anything.
+fn append_cross_section_referral(output: &mut String, library: &str) {
+    while output.ends_with('\n') {
+        output.pop();
+    }
+    output.push_str(&cross_section_referral(library));
+    output.push('\n');
+}
+
 /// Outward referral to upstream's per-element stopping lookup (#681).
 ///
 /// Deliberately **not** the same string as [`cross_section_referral`]: PSTAR /
@@ -1618,7 +1637,7 @@ fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Resul
         // upstream, and exactly when it must not silently land on a different
         // library or release (#488 — a Z-named target resolves to nothing here
         // while upstream has data for it).
-        output.push_str(&cross_section_referral(db.library()));
+        append_cross_section_referral(&mut output, db.library());
         return Ok(output);
     }
 
@@ -1643,12 +1662,7 @@ fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Resul
         output.push_str(&format!("Peak cross-section: {:.3} mb\n\n", peak));
     }
 
-    // Repeated in the response, not just the description (#681). A client may
-    // have read `tools/list` many turns ago, or cached it; this is the turn in
-    // which the agent decides whether to follow the referral, so the identity
-    // has to be in front of it here.
-    output.push_str(cross_section_referral(db.library()).trim_start_matches('\n'));
-    output.push('\n');
+    append_cross_section_referral(&mut output, db.library());
 
     Ok(output)
 }

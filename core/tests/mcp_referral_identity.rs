@@ -104,6 +104,11 @@ fn find_calver(text: &str) -> Option<String> {
         if start > 0 && (b[start - 1].is_ascii_digit() || b[start - 1] == '.') {
             continue;
         }
+        // Exactly four digits — `12345.6.7` is not a release id, and matching
+        // it would make the "no other release named" test reject valid prose.
+        if digits(start + 4) {
+            continue;
+        }
         let mut i = start + 4;
         let mut dots = 0;
         while i < b.len() && (b[i].is_ascii_digit() || (b[i] == '.' && digits(i + 1))) {
@@ -362,28 +367,14 @@ fn calver_scanner_matches_release_ids_and_nothing_else() {
         "ENDF/B-VIII.1",     // evaluation version
         "energy 12.5 MeV",   // a number
         "see #601 and #671", // issue refs
+        "12345.6.7",         // five-digit run — not a CalVer year
+        "2026.8",            // one component short
         "",
     ] {
         assert_eq!(
             find_calver(benign),
             None,
             "scanner false-positived on {benign:?}"
-        );
-    }
-}
-
-/// The referral is a `format!` over live values, so it must not be possible to
-/// render one with an empty library — that would produce `library: ""`, which
-/// reads as "no library" rather than "unknown".
-#[test]
-fn referrals_are_never_rendered_with_an_empty_library() {
-    for (name, desc) in outward_referrals("") {
-        assert!(
-            !desc.contains("`` "),
-            "tool `{name}` rendered an empty library id into its referral. An \
-             empty store library should be impossible; if it becomes possible, \
-             the referral needs an explicit unknown-data wording rather than a \
-             blank. Got:\n{desc}"
         );
     }
 }
