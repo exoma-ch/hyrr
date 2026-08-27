@@ -4,6 +4,7 @@ import { svelteTesting } from "@testing-library/svelte/vite";
 import pkg from "./package.json" with { type: "json" };
 import hyrrConfig from "../hyrr.json" with { type: "json" };
 import { buildVersionInfo } from "./scripts/version-info";
+import { readLibraryList } from "./scripts/frontend-data-libraries";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -125,11 +126,13 @@ function dataManifestPlugin(): Plugin {
 
       if (!existsSync(listPath)) return; // not a repo checkout (tarball build)
 
-      const expected = readFileSync(listPath, "utf8")
-        .split("\n")
-        .map((l) => l.replace(/#.*$/, "").trim())
-        .filter(Boolean)
-        .map((spec) => (spec.includes(":") ? spec.split(":")[1] : "xs"));
+      // Parsed by the shared reader, not inline here. This used to strip
+      // comments with `/#.*$/`, which is a no-op on a CRLF checkout — so
+      // Windows CI rejected a complete bundle for want of subdirectories named
+      // after this file's own prose, and v0.21.0 shipped with no Windows
+      // installer (#677). The parser now normalizes line endings and throws on
+      // anything that isn't a well-formed entry.
+      const expected = readLibraryList(listPath).map((l) => l.subdir);
 
       if (!existsSync(manifestPath)) {
         this.error(

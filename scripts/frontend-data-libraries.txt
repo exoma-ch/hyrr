@@ -10,7 +10,19 @@
 # #649 opened on (#651).
 #
 # Format: one entry per line, `name` (→ xs/) or `name:subdir` (→ subdir/).
-# Blank lines and `#` comments ignored.
+# Blank lines and `#` comments ignored. Names are restricted to letters, digits,
+# dot, dash and underscore — anything else is rejected with a line number rather
+# than treated as a library.
+#
+# TWO parsers read this file and must agree:
+#   scripts/frontend-data-libraries.sh          (bash — writes the bundle)
+#   frontend/scripts/frontend-data-libraries.ts (TS — the vite build checks it)
+# They disagreed once, on CRLF checkouts only, so it showed up solely on
+# Windows CI: the build rejected a complete bundle and demanded subdirectories
+# named after the prose in this very header, and v0.21.0 shipped with no
+# Windows installer. `scripts/tests/test_frontend_data_libraries.sh` now asserts
+# the two agree under both line endings (#677). If you edit this header, note
+# that the comment text is itself parser input — that is how it went wrong.
 #
 # Keep in sync with the sparse-checkout paths in the workflows that fetch
 # nucl-parquet — a library listed here but not checked out fails the copy loudly.

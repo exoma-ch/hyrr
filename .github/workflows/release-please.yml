@@ -19,17 +19,49 @@ name: Release Please
 # otherwise the required `lint` lockfile-sync gate fails). It checks out and
 # pushes with the same App token so its lockfile commit also triggers the PR's
 # CI (Refs: #445).
+#
+# The second tag (hyrr-mcp-v*) is created by scripts/tag-mcp-release.sh over
+# the REST API, not by `git tag && git push`, and the checkout that puts that
+# script on disk is hoisted to the TOP of the job. Both details are about the
+# same thing: an App without the `workflows` permission may only point a ref at
+# a commit whose .github/workflows/** matches the default branch's tip, so
+# every second between the Release publishing and the tag being created is a
+# second in which some unrelated PR can merge a workflow change and make the
+# tag impossible. 0.21.0 lost that race by 3 seconds and shipped no wheels
+# while reporting success. Hoisting the checkout takes the exposure from ~32s
+# to ~1s; the script's header has the measurements (#676).
 
 on:
   push:
     branches: [main]
+  # Recovery path for #676: if the hyrr-mcp-v* tag is missing for a release
+  # that already published, re-create it here rather than by hand. It matters
+  # that it is created with the App token — GITHUB_TOKEN's tags do not fire
+  # workflows at all (ADR 0002, #571), so a tag created with it would be a
+  # missing tag wearing a disguise.
+  #
+  # Caveat, stated plainly: if the reason the tag is missing is the 403 (main
+  # moved onto a workflow-touching commit and the App has no `workflows`
+  # permission), this will hit the same wall — the script says so and prints
+  # the one-line PAT command that does work. Grant the permission and this
+  # path covers every case.
+  workflow_dispatch:
+    inputs:
+      retag:
+        description: "Re-create the hyrr-mcp-v* tag for this v* tag (e.g. v0.21.0). Does nothing else."
+        type: string
+        default: ""
 
 permissions:
   contents: write
   pull-requests: write
+  # For the post-tag "did it actually trigger?" check, which lists
+  # release-hyrr-mcp.yml's runs with GITHUB_TOKEN (#676).
+  actions: read
 
 jobs:
   release-please:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -37,6 +69,17 @@ jobs:
       version: ${{ steps.release.outputs.version }}
       pr: ${{ steps.release.outputs.pr }}
     steps:
+      # FIRST, before release-please runs. This is not cosmetic: the tag step
+      # below races any merge to main, and the old ordering put a 12s
+      # fetch-depth:0 checkout between the Release being published and the tag
+      # being asked for. Nothing here needs history or credentials — only
+      # scripts/ on disk — so it is a shallow, credential-free checkout that
+      # happens while there is nothing to lose (#676).
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+          persist-credentials: false
+
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
@@ -50,23 +93,87 @@ jobs:
           manifest-file: .release-please-manifest.json
           config-file: release-please-config.json
 
-      # When a release is created for the root package, also push a
-      # hyrr-mcp-v* tag so release-hyrr-mcp.yml fires and publishes the
-      # MCP wheel to PyPI. Both artifacts share the same version number.
-      - uses: actions/checkout@v7
-        if: ${{ steps.release.outputs.release_created == 'true' }}
-        with:
-          fetch-depth: 0
-          # App token so the hyrr-mcp-v* tag push triggers release-hyrr-mcp.yml.
-          token: ${{ steps.app-token.outputs.token }}
-
+      # When a release is created for the root package, also create the
+      # hyrr-mcp-v* tag so release-hyrr-mcp.yml fires and publishes the MCP
+      # wheel to PyPI. Both tags name the same commit and the same version.
+      # Immediately after the release step, with no intervening work.
       - name: Tag hyrr-mcp release
         if: ${{ steps.release.outputs.release_created == 'true' }}
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           TAG: ${{ steps.release.outputs.tag_name }}
-        run: |
-          git tag "hyrr-mcp-${TAG}"
-          git push origin "hyrr-mcp-${TAG}"
+        run: bash scripts/tag-mcp-release.sh create "$TAG"
+
+      # Separate step, separate credential: listing workflow runs needs
+      # `actions: read`, which the hyrr-release-bot installation does not have
+      # (contents:write + pull_requests:write + metadata:read). GITHUB_TOKEN
+      # can read; it just must not be the thing that CREATES the tag.
+      - name: The tag must have triggered the MCP publish workflow
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: bash scripts/tag-mcp-release.sh assert-trigger "$TAG" --wait 300
+
+  # ── Manual recovery (workflow_dispatch with `retag`) ────────────────────
+  # Same code path as the release-time step, same credential, so a tag created
+  # here behaves identically — including firing release-hyrr-mcp.yml.
+  retag:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.retag != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+      # The default branch, NOT `ref: inputs.retag`. Recovery is aimed at
+      # releases cut before this script existed, whose trees do not contain it;
+      # and the script needs no tree anyway — it resolves everything the tag
+      # names through the API.
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Re-create the hyrr-mcp-v* tag
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ inputs.retag }}
+        run: bash scripts/tag-mcp-release.sh create "$TAG"
+      - name: The tag must have triggered the MCP publish workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.retag }}
+        run: bash scripts/tag-mcp-release.sh assert-trigger "$TAG" --wait 300
+
+  # ── The drift check (#676) ──────────────────────────────────────────────
+  # What made 0.21.0 dangerous was not that a step failed — it was that
+  # everything downstream of the failure stayed green. The GitHub Release
+  # published, `Release` succeeded, and the NEXT release-please run also
+  # reported success, because with no release to cut the tag step's `if:` was
+  # false and there was nothing left to fail. The missing tag was invisible
+  # until someone went looking for the wheels.
+  #
+  # So: on every push to main, re-check the published world. If the latest
+  # release is missing its hyrr-mcp-v* tag — or has one pointing at a commit
+  # that is not the release — main goes red and stays red. Reads only; the
+  # default GITHUB_TOKEN is enough.
+  assert-tag-parity:
+    needs: [release-please, retag]
+    if: ${{ always() && needs.release-please.result != 'failure' && needs.retag.result != 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: The latest release must have BOTH of its tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/tag-mcp-release.sh assert --latest
 
   # When release-please opens/updates a release PR, it bumps the version in
   # pyproject.toml + wasm/Cargo.toml but leaves uv.lock and wasm/Cargo.lock
@@ -148,6 +255,17 @@ jobs:
       # prevent.
       - name: Verify release-notes.json has an entry for the release version
         run: bash scripts/check-release-notes.sh --strict-gate
+      # #676 — while "don't release yet" is still an option, say whether the
+      # release credential can even create the second tag. It cannot if the App
+      # lacks `workflows` AND a workflow-touching commit lands on main between
+      # the Release publishing and the tag being created. A warning rather than
+      # a gate: the race is rare, and whether to grant the App that permission
+      # is a maintainer decision, not something a lockfile job should force.
+      - name: Can the release bot still tag across a workflow change?
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: bash scripts/tag-mcp-release.sh preflight
       - name: Commit & push if changed
         run: |
           LOCKS=(uv.lock core/Cargo.lock hyrr-mcp/Cargo.lock py/Cargo.lock py-mcp/Cargo.lock wasm/Cargo.lock desktop/src-tauri/Cargo.lock package-lock.json)

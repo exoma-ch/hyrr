@@ -57,6 +57,87 @@ fix: β spectrum dips       →  creates/updates "Release v0.9.0" PR
 
 Both tags point at the same commit and share the same version number.
 
+#### How the second tag is created (amended 2026-08-25, #676)
+
+`hyrr-mcp-v{VERSION}` is created by `scripts/tag-mcp-release.sh` through
+`POST /repos/{owner}/{repo}/git/refs`, at the commit the `v{VERSION}` tag
+names, immediately after the release step. It used to be `git tag && git push`
+from a `fetch-depth: 0` checkout that ran *after* the release was published.
+
+On 0.21.0 that push was rejected:
+
+```text
+! [remote rejected] hyrr-mcp-v0.21.0 -> hyrr-mcp-v0.21.0
+  (refusing to allow a GitHub App to create or update workflow
+   `.github/workflows/tauri-build.yml` without `workflows` permission)
+```
+
+The obvious reading — "the release tree touched `.github/workflows/`" — is
+wrong. The run checked out `9fd188a`, the correct release commit, which
+changes no workflow file. It was a **race**:
+
+| time | event |
+| --- | --- |
+| 22:34:39 | release-please publishes the Release; `main` is at `9fd188a` |
+| 22:34:42 | #672 merges — the one commit editing `tauri-build.yml` — `main` becomes `aedc4d3` |
+| 22:35:11 | the tag step (after a 12 s checkout) asks for a ref at `9fd188a`, which is no longer the tip and whose workflow tree now differs from it. Refused. |
+
+**The rule, measured against this installation rather than assumed** (#676
+asked for exactly that): a GitHub App without `workflows` may create or move a
+ref only where doing so does not change `.github/workflows/**` relative to the
+default branch's tip. On a fresh non-tip commit that edits a workflow file,
+with the `hyrr-release-bot` token, every route is refused:
+
+| route | result |
+| --- | --- |
+| `git push` of the tag | remote rejected, message above |
+| `POST /git/refs` | 403 Resource not accessible by integration |
+| `POST /releases` (`tag_name` + `target_commitish`) | 403 |
+| create at the tip, then force-`PATCH` onto the commit | 403 |
+
+At the tip, all four succeed. So **#676's option 3 does not hold** — the REST
+ref API is subject to the same check and merely reports it as a bare 403.
+Separately confirmed, because it is the other half of the requirement: a tag
+ref created over the API by this App token *does* fire `on: push: tags:`
+workflows (three tags, three listener runs), so nothing here re-introduces the
+GITHUB_TOKEN problem #571 rejected.
+
+One caveat, recorded because it bounds what any check here can promise: the
+refusal is **not a pure function of the commit**. With the installation's
+permissions unchanged throughout, the identical `POST /git/refs` at the
+identical commit was refused at 21:00 and accepted at 21:12 on 2026-08-25.
+Whatever state that reflects is not visible from the API. It is why
+`preflight` reports a refusal loudly but reports a non-refusal without
+claiming anything, and why the design leans on the after-the-fact assertions
+rather than on a pre-flight verdict.
+
+Since no credential-preserving route exists, the design attacks the race and
+the silence instead:
+
+1. **Shrink the window.** The checkout is hoisted above `release-please`, and
+   the ref is created over the API (no working tree, no credentialed
+   checkout), so the tag is asked for ~1 s after the Release rather than ~32 s.
+   A smaller target, not an eliminated one.
+2. **Anchor on the release.** The commit comes from the `v*` tag, never from
+   `main`, so the MCP tag can never name a commit that was not released.
+3. **Read back.** Both tags are re-read from the API after the create; a 201
+   is a claim, the ref listing is the fact.
+4. **Assert the trigger.** `release-hyrr-mcp.yml` must have a run for the tag.
+5. **Detect drift.** Every push to `main` re-checks that the latest release has
+   both tags on the same commit, so a half-tagged release cannot stay green —
+   which is what let 0.21.0 hide.
+6. **Recover in one click.** `workflow_dispatch` with `retag: v0.21.0`.
+7. **Warn before the fact.** The release PR runs `preflight`, which tries to
+   point a throwaway ref at the parent of the most recent workflow-touching
+   commit — the same shape that fails at release time — and warns if the
+   credential is refused. One-sided by construction: see the caveat above.
+
+The permanent fix is #676's option 1: grant `hyrr-release-bot` the `workflows`
+permission. It is the only thing that makes the refused case succeed. It is
+also a real privilege increase — the release bot could then rewrite CI — so it
+is left as a maintainer decision, and `preflight` keeps saying so until it is
+made.
+
 ### Branch strategy
 
 GitHub Flow: feature branches → PR to `main` (protected) → release-please

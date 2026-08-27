@@ -96,6 +96,16 @@ implementation (the pure-Python compute modules are pre-Rust legacy; see below).
   `GITHUB_TOKEN`, so its commits and tags do trigger downstream workflows. The
   old "close→reopen the release PR once to run required CI" caveat no longer
   applies.
+- The App installation has `contents:write` + `pull_requests:write` +
+  `metadata:read` and **no `workflows`** — so it may only point a ref at a
+  commit whose `.github/workflows/**` matches the default branch tip's. That
+  makes the `hyrr-mcp-v*` tag a race: if a workflow-touching PR merges between
+  the Release publishing and the tag being created, every route (`git push`,
+  `POST /git/refs`, `POST /releases`, force-`PATCH`) is refused with a 403 and
+  no wheel publishes. It happened on 0.21.0. `scripts/tag-mcp-release.sh` owns
+  the create + read-back + trigger assertion; `preflight` warns on the release
+  PR; `assert --latest` runs on every push to main; recovery is
+  `gh workflow run release-please.yml -f retag=v<ver>`. See ADR 0002 and #676.
 - `sync-release-lockfiles` syncs **all eight** lockfiles on the release PR —
   `uv.lock`, `package-lock.json`, and every crate's `Cargo.lock` (core, hyrr-mcp,
   py, py-mcp, wasm, desktop/src-tauri). It also re-resolves some transitive deps
