@@ -17,7 +17,12 @@ import type {
   DecayMode,
 } from "./types";
 import { SYMBOL_TO_Z, Z_TO_SYMBOL } from "./formula";
-import { xsPathCandidates, logMissingXs, isHeavyIon } from "./xs-path";
+import {
+  xsPathCandidates,
+  logMissingXs,
+  logAuthGateIntercepted,
+  isHeavyIon,
+} from "./xs-path";
 
 // Fallback element-symbol map used when the store is queried before
 // `meta/elements.parquet` has been loaded (or when that file is missing).
@@ -82,9 +87,31 @@ export interface DecayEmissionLine {
   shell?: string;
 }
 
+/**
+ * Thrown when the service worker refuses to serve a cached response because
+ * it detected an auth-gate interception (#684). Distinguished from a plain
+ * 404 so `ensureCrossSections` can log the actual remedy — "sign in and
+ * refresh" — instead of #488's "no cross-section data" message, which is the
+ * coverage-gap look-alike that made the underlying issue so hard to spot.
+ *
+ * The marker lives on `X-Hyrr-Cache-Guard: auth-gate`, set by
+ * `frontend/public/sw.js`. See `sw.test.ts` for the coverage.
+ */
+export class AuthGateInterceptedError extends Error {
+  constructor(public readonly url: string) {
+    super(`Auth-gate intercepted for ${url}. Sign in and refresh. (#684)`);
+    this.name = "AuthGateInterceptedError";
+  }
+}
+
 async function fetchParquet(url: string): Promise<ArrayBuffer> {
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
+  if (!response.ok) {
+    if (response.headers.get("X-Hyrr-Cache-Guard") === "auth-gate") {
+      throw new AuthGateInterceptedError(url);
+    }
+    throw new Error(`Failed to fetch ${url}: ${response.status}`);
+  }
   return response.arrayBuffer();
 }
 
@@ -287,14 +314,33 @@ export class DataStore implements DatabaseProtocol {
     const targetZ = this.symbolToZ.get(symbol) ?? SYMBOL_TO_Z[symbol] ?? 0;
     const candidates = xsPathCandidates(subdir, projectile, targetZ, symbol);
 
+    let authGateHit = false;
     for (const relPath of candidates) {
       try {
         const rows = await readParquetRows(`${this.baseUrl}/${relPath}`);
         this.xsCache.set(key, rows);
         return;
-      } catch {
+      } catch (err) {
+        // Track auth-gate interception separately from a plain 404, so the
+        // log at the end can steer the user to the actual remedy ("sign in
+        // and refresh") instead of #488's misleading "no cross-section
+        // data" message. Do NOT cache empty on this path — the file exists
+        // on the server, we just weren't allowed to fetch it, and next
+        // reload should retry. (#684)
+        if (err instanceof AuthGateInterceptedError) {
+          authGateHit = true;
+          continue;
+        }
         // Try next candidate.
       }
+    }
+
+    if (authGateHit) {
+      // Leave xsCache empty (no `.set()`) so the next call retries the
+      // fetch — the poisoned SW entry has been evicted by now, and if the
+      // session is valid the retry will succeed.
+      logAuthGateIntercepted(projectile, targetZ, symbol);
+      return;
     }
 
     // Both candidates 404'd. Cache empty so hasCrossSections returns false,
