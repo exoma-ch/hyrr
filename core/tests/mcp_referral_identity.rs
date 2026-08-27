@@ -216,29 +216,57 @@ fn the_referral_states_the_consequence_not_just_the_versions() {
         "the referral must say a mismatch makes any comparison an ARTEFACT, \
          not merely that the versions differ. Got:\n{desc}"
     );
-    assert!(
-        lower.contains("independent"),
-        "the referral must say the other server resolves its data \
-         independently — that is WHY a mismatch is possible at all. Got:\n{desc}"
-    );
 }
 
-/// The referral must also name the tool it refers to and the argument shape,
-/// or an agent has to guess both. Upstream keys on `element`, not `(Z, A)`.
+/// The description-side referral is held in context for the WHOLE session by
+/// every client — including the many that never drill into a cross-section,
+/// and the ones with no `nucl-parquet-mcp` connected at all.
+///
+/// So it buys only what qualifies the numbers regardless: the identity and the
+/// consequence. The operational half (tool name, required `library` argument,
+/// `element` keying) belongs in the response, where it is paid per call by a
+/// caller who actually asked.
+///
+/// The budget is a real assertion, not decoration: the first version of this
+/// referral ran to ~570 characters of always-resident text, and the natural
+/// pressure on a string like this is to grow. If a future change genuinely
+/// needs more room here, raise the number deliberately and say why.
 #[test]
-fn the_referral_is_actionable() {
+fn the_description_side_referral_stays_within_its_context_budget() {
+    const BUDGET: usize = 400;
+    for (name, desc) in outward_referrals("tendl-2023-iso") {
+        let Some(start) = desc.find("DEEPER DATA:") else {
+            continue;
+        };
+        let block = referral_block(&desc);
+        assert!(
+            block.chars().count() <= BUDGET,
+            "tool `{name}`'s always-resident referral is {} chars, over the \
+             {BUDGET}-char budget. Operational detail belongs in the response \
+             (`cross_section_referral_full`), not here. Block starts at byte \
+             {start}:\n{block}",
+            block.chars().count(),
+        );
+    }
+}
+
+/// HYRR cannot see the client's tool list, so the description must not order an
+/// agent to call a server it may not have. An agent told confidently to use a
+/// tool it lacks is an agent invited to invent one.
+#[test]
+fn the_description_side_referral_hedges_on_availability() {
     let referrals = outward_referrals("tendl-2023-iso");
     let (_, desc) = referrals
         .iter()
         .find(|(name, _)| name == "list_reaction_channels")
         .expect("list_reaction_channels must carry the outward referral");
-    for needle in ["get_cross_sections", "library", "element"] {
-        assert!(
-            desc.contains(needle),
-            "the referral must mention `{needle}` so it can be acted on \
-             without guessing. Got:\n{desc}"
-        );
-    }
+    let block = referral_block(desc).to_lowercase();
+    assert!(
+        block.contains("if your client has"),
+        "the description must hedge that nucl-parquet-mcp is a SEPARATE server \
+         the client may not have connected, rather than instructing a call \
+         into the void. Got:\n{block}"
+    );
 }
 
 // ─── The identity on the response side ──────────────────────────────────────
@@ -260,10 +288,6 @@ fn list_reaction_channels_response_carries_the_identity() {
 
     let body = body_without_footer(&out.text);
     assert!(
-        body.contains("get_cross_sections"),
-        "the response should carry the referral, got:\n{body}"
-    );
-    assert!(
         body.contains(data_version()),
         "the response referral must name the live data release `{}` in the \
          body — not merely in the footer, which is stripped here. Got:\n{body}",
@@ -274,6 +298,23 @@ fn list_reaction_channels_response_carries_the_identity() {
         "the response referral must name the live library `{}` in the body, \
          got:\n{body}",
         db.library(),
+    );
+
+    // The operational half lives HERE rather than in the description, so that
+    // a caller who never drills down never pays for it. Which means the
+    // response is the only place these can be asserted.
+    for needle in ["get_cross_sections", "library", "element"] {
+        assert!(
+            body.contains(needle),
+            "the response referral must mention `{needle}` so the hand-off can \
+             be acted on without guessing — upstream takes `library` as a \
+             REQUIRED argument and keys on `element`, not (Z, A). Got:\n{body}"
+        );
+    }
+    assert!(
+        body.to_lowercase().contains("independent"),
+        "the response referral must say the other server resolves its data \
+         independently — that is WHY a mismatch is possible at all. Got:\n{body}"
     );
 }
 

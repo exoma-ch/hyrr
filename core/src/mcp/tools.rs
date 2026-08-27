@@ -50,7 +50,8 @@ fn data_release() -> &'static str {
     crate::data_fetch::data_version()
 }
 
-/// Outward referral to `nucl-parquet-mcp`'s `get_cross_sections` (#681).
+/// Outward referral to `nucl-parquet-mcp`, in the form every session pays for
+/// (#681).
 ///
 /// # Why the referral has to name the data, not just the tool
 ///
@@ -73,26 +74,52 @@ fn data_release() -> &'static str {
 /// no release id to compare against. See exoma-ch/nucl-parquet — until that
 /// lands, stating it is the only control available.
 ///
-/// The library id is not merely informative: `get_cross_sections` takes
-/// `library` as a **required** argument, so without this the agent has to
-/// guess a required parameter. Its key is `element`, not `(Z, A)` — its answer
-/// mixes every target isotope of the element, while this summary is for one.
-fn cross_section_referral(library: &str) -> String {
+/// # Why this half is deliberately terse
+///
+/// This string lands in a tool **description**, which every client holds in
+/// context for the whole session — including the many who never drill into a
+/// cross-section and the ones whose client has no `nucl-parquet-mcp` connected
+/// at all. HYRR cannot see the client's tool list, so the pointer is hedged
+/// rather than imperative: an agent told confidently to call a tool it does not
+/// have is an agent invited to invent one.
+///
+/// The identity and the consequence earn their place here because they qualify
+/// the numbers whether or not the agent ever goes looking. Everything
+/// *operational* — the tool name, the required `library` argument, the
+/// `element` keying — lives in [`cross_section_referral_full`], paid only by
+/// callers who actually asked.
+fn cross_section_referral_brief(library: &str) -> String {
     format!(
-        "\n\nDEEPER DATA: for full σ(E) curves use nucl-parquet-mcp's \
-`get_cross_sections` — pass `library: \"{library}\"`, and note it keys on \
-`element` (every target isotope of it), not on this (target_z, target_a). \
-THIS ANSWER WAS COMPUTED AGAINST library `{library}`, nucl-parquet data \
-release `{release}`; that server resolves its own data directory and release \
-independently and nothing compares the two. If it is serving a different \
-release, the curves you read are not the ones behind these numbers, so any \
-agreement or discrepancy between them is an artefact of the mismatch rather \
-than physics.",
+        "\n\nDEEPER DATA: full σ(E) curves live in nucl-parquet-mcp, if your \
+client has that server. COMPUTED AGAINST library `{library}`, nucl-parquet \
+data release `{release}` — curves from a server serving anything else are not \
+the ones behind these numbers, so comparing them yields an artefact of the \
+mismatch rather than physics.",
         release = data_release(),
     )
 }
 
-/// Append the referral to a response body, exactly once and identically on
+/// The referral as a **response** carries it: the brief form plus what an agent
+/// needs to actually make the call (#681).
+///
+/// Paid per call rather than per session, so it can afford to be operational.
+/// `get_cross_sections` takes `library` as a **required** argument — without
+/// this the agent has to guess a required parameter — and keys on `element`,
+/// not `(Z, A)`, so its answer mixes every target isotope of the element while
+/// this summary is for one.
+fn cross_section_referral_full(library: &str) -> String {
+    format!(
+        "{brief} To use it: call `get_cross_sections` with \
+`library: \"{library}\"`, and confirm that server reports data release \
+`{release}` — it resolves its own data directory independently and nothing \
+compares the two. Note it keys on `element` (every target isotope of that \
+element), not on this (target_z, target_a).",
+        brief = cross_section_referral_brief(library),
+        release = data_release(),
+    )
+}
+
+/// Append the full referral to a response body, exactly once and identically on
 /// every branch (#681).
 ///
 /// The referral is repeated in the response, not only in the tool description:
@@ -107,7 +134,7 @@ fn append_cross_section_referral(output: &mut String, library: &str) {
     while output.ends_with('\n') {
         output.pop();
     }
-    output.push_str(&cross_section_referral(library));
+    output.push_str(&cross_section_referral_full(library));
     output.push('\n');
 }
 
@@ -588,7 +615,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "list_reaction_channels",
-            "description": format!("List all production channels (residual nuclei) for a given projectile on a target isotope, with peak cross-section and energy range per channel. Returns a summary.{referral}{SCOPE_SUFFIX}", referral = cross_section_referral(library)),
+            "description": format!("List all production channels (residual nuclei) for a given projectile on a target isotope, with peak cross-section and energy range per channel. Returns a summary.{referral}{SCOPE_SUFFIX}", referral = cross_section_referral_brief(library)),
             "inputSchema": {
                 "type": "object",
                 "properties": {
