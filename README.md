@@ -88,7 +88,7 @@ See [docs/adr/0001-mcp-single-ssot-and-install-channels.md](docs/adr/0001-mcp-si
 
 Agent-driven irradiation analysis via the Model Context Protocol. All entry points share the same Rust codepath (`core/src/mcp/`) — adding a tool means editing one file and every surface picks it up on next build.
 
-Tools: `simulate`, `list_materials`, `list_reaction_channels`, `get_decay_data`, `compare_simulations`, `get_stack_energy_budget`, `get_stopping_power`, `get_isotope_production_curve`. Every response footer carries `*Library: <id>*` so agents see which nuclear data fed the calculation.
+Tools: `simulate`, `list_materials`, `list_reaction_channels`, `get_decay_data`, `compare_simulations`, `get_stack_energy_budget`, `get_stopping_power`, `get_isotope_production_curve`. Every response footer carries `*Library: <id> · data release: <ver>*` so agents see which nuclear data fed the calculation — a library id alone does not identify it, since the same library at two data releases is two different sets of numbers (#681). Referrals to `nucl-parquet-mcp` for deeper data carry the same pair: the two servers resolve their data independently and nothing compares them.
 
 ## Desktop App
 

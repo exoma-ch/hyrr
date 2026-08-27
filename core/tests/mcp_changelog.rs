@@ -46,7 +46,7 @@ fn call(name: &str, args: Value) -> String {
 
 #[test]
 fn tools_list_advertises_get_changelog_with_since_version() {
-    let tools = list_tools();
+    let tools = list_tools("tendl-2023-iso");
     let entry = tools
         .iter()
         .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("get_changelog"))

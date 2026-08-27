@@ -81,6 +81,13 @@ Layer schemas use a flat `enrichment: [{element, A, fraction}]` shape
 `*Library: <id>*` so agents see which nuclear data fed the calculation
 without trusting an invisible default.
 
+**Amended 2026-08-26 (#681): the footer is now
+`*Library: <id> · data release: <ver>*`.** A library id alone does not
+identify the data — the same library at two data releases is two different
+sets of numbers — so the control this ADR introduced only half worked. The
+same pair is carried by every outward referral to `nucl-parquet-mcp`, which
+previously named the tool without naming the data.
+
 ## Alternatives considered
 
 ### Code home
