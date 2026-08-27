@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.1](https://github.com/exoma-ch/hyrr/compare/v0.21.0...v0.21.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* **ci:** make the data-library parsers agree on CRLF checkouts ([#678](https://github.com/exoma-ch/hyrr/issues/678)) ([ec01580](https://github.com/exoma-ch/hyrr/commit/ec015808190193f46c2a77ad572c4df9c3a086ff)), closes [#651](https://github.com/exoma-ch/hyrr/issues/651) [#670](https://github.com/exoma-ch/hyrr/issues/670) [#677](https://github.com/exoma-ch/hyrr/issues/677)
+* **mcp:** make the hand-off to nucl-parquet-mcp name the data, not just the tool ([#683](https://github.com/exoma-ch/hyrr/issues/683)) ([dfd5901](https://github.com/exoma-ch/hyrr/commit/dfd5901a88847e87b5aba29fdaf993601a34565f)), closes [#681](https://github.com/exoma-ch/hyrr/issues/681)
+* **release:** accept tauri-action v1's latest.json URLs, then take the bump ([#672](https://github.com/exoma-ch/hyrr/issues/672)) ([aedc4d3](https://github.com/exoma-ch/hyrr/commit/aedc4d3bf058dded721fffc0825c02d75a09a71a)), closes [#516](https://github.com/exoma-ch/hyrr/issues/516)
+* **release:** stop the MCP tag from failing silently — and correct why it fails ([#676](https://github.com/exoma-ch/hyrr/issues/676)) ([#679](https://github.com/exoma-ch/hyrr/issues/679)) ([2ea8939](https://github.com/exoma-ch/hyrr/commit/2ea8939c78f45bc307f21a19833ff7d4ff7887b5))
+* **sw:** stop caching SSO login pages as parquet data (closes [#684](https://github.com/exoma-ch/hyrr/issues/684)) ([#685](https://github.com/exoma-ch/hyrr/issues/685)) ([c21cc78](https://github.com/exoma-ch/hyrr/commit/c21cc78607f1beda99004bf831bc2794c7c53922))
+
+
+### Documentation
+
+* **release-notes:** add the 0.21.1 entry so the release PR can merge ([#690](https://github.com/exoma-ch/hyrr/issues/690)) ([adab0c5](https://github.com/exoma-ch/hyrr/commit/adab0c510d5ffaec7e2267a1860811da78713f03)), closes [#675](https://github.com/exoma-ch/hyrr/issues/675)
+
 ## [0.21.0](https://github.com/exoma-ch/hyrr/compare/v0.20.1...v0.21.0) (2026-08-21)
 
 
