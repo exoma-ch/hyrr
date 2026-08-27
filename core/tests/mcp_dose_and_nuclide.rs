@@ -53,7 +53,7 @@ fn server_instructions_state_scope_and_library() {
 
 #[test]
 fn tools_list_surfaces_scope_suffix_on_production_tools() {
-    let tools = list_tools();
+    let tools = list_tools("tendl-2023-iso");
     // Every simulation-touching tool must carry the (p,x)-only scope suffix
     // so a client scanning tools/list can see the caveat per-tool too, not
     // just in the server instructions string.
@@ -84,7 +84,7 @@ fn tools_list_surfaces_scope_suffix_on_production_tools() {
 
 #[test]
 fn tools_list_includes_new_mcp_surface() {
-    let tools = list_tools();
+    let tools = list_tools("tendl-2023-iso");
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     for expected in ["get_nuclide_data", "get_dose_constant", "get_dose_rate"] {
         assert!(

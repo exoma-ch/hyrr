@@ -72,7 +72,7 @@ fn parse_json_block(text: &str) -> Value {
 
 #[test]
 fn tools_list_includes_activity_at_and_dose_rate_at() {
-    let tools = list_tools();
+    let tools = list_tools("tendl-2023-iso");
     let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
     for expected in ["get_activity_at", "get_dose_rate_at"] {
         assert!(
@@ -88,7 +88,7 @@ fn activity_at_description_names_the_no_cache_key_invariant() {
     // not part of the cache key — otherwise a downstream reader might assume
     // caching keys on it and query patterns get pessimized. Load-bearing
     // per the issue's cache-key discipline pitfall.
-    let tools = list_tools();
+    let tools = list_tools("tendl-2023-iso");
     let t = tools
         .iter()
         .find(|t| t["name"] == "get_activity_at")

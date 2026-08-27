@@ -32,6 +32,127 @@ active library ships a neutron sublibrary — the default `tendl-2023-iso` does 
 not. Units: activity [Bq], half-life [s], energy [MeV], cross-section [mb], \
 dose constant k [µSv·m²·MBq⁻¹·h⁻¹].";
 
+/// The nuclear-data release this server computed against, as an agent-facing
+/// identifier (#681).
+///
+/// Read from [`crate::data_fetch::data_version`] — the same `HYRR_DATA_VERSION`
+/// constant `get_version_info` prints and [`crate::provenance::Provenance`]
+/// stamps into every result. Never a literal: a hardcoded release id would
+/// keep reporting the version that was current when someone typed it, which is
+/// precisely the false attribution #593 exists to prevent.
+///
+/// Note this identifies the release the build is **pinned to**, not a read of
+/// the loaded directory's `catalog.json`. A run against `--data-dir` /
+/// `HYRR_DATA` pointing at some other release therefore reports the pin — the
+/// same limitation `Provenance` carries, and why `data_source` records
+/// `LocalDirectory` there rather than claiming a verified tarball.
+fn data_release() -> &'static str {
+    crate::data_fetch::data_version()
+}
+
+/// Outward referral to `nucl-parquet-mcp`, in the form every session pays for
+/// (#681).
+///
+/// # Why the referral has to name the data, not just the tool
+///
+/// The two servers resolve their data **independently** — `nucl-parquet-mcp`
+/// reads `$NUCL_PARQUET_DATA` (or its own search path), HYRR reads
+/// `--data-dir` > `HYRR_DATA` > the submodule > `~/.hyrr/nucl-parquet`. Neither
+/// side compares them. So an agent can simulate against one release and read
+/// σ(E) from another, reconcile the two, and report a discrepancy — or an
+/// agreement — that is an artefact of the mismatch, with no error at any step.
+/// #593 / #601 / #671 established that a result carries the data that produced
+/// it; this is the one place HYRR hands an agent onward, and it used to drop
+/// exactly that identity.
+///
+/// # Why stating rather than checking
+///
+/// Checking would mean HYRR querying the other server, re-introducing the
+/// coupling this split exists to avoid. It is also not currently possible:
+/// upstream's `list_libraries` reports each library's own evaluation version
+/// (`2023-iso`), never the catalog's `data_version` (`2026.8.x`), so there is
+/// no release id to compare against. See exoma-ch/nucl-parquet — until that
+/// lands, stating it is the only control available.
+///
+/// # Why this half is deliberately terse
+///
+/// This string lands in a tool **description**, which every client holds in
+/// context for the whole session — including the many who never drill into a
+/// cross-section and the ones whose client has no `nucl-parquet-mcp` connected
+/// at all. HYRR cannot see the client's tool list, so the pointer is hedged
+/// rather than imperative: an agent told confidently to call a tool it does not
+/// have is an agent invited to invent one.
+///
+/// The identity and the consequence earn their place here because they qualify
+/// the numbers whether or not the agent ever goes looking. Everything
+/// *operational* — the tool name, the required `library` argument, the
+/// `element` keying — lives in [`cross_section_referral_full`], paid only by
+/// callers who actually asked.
+fn cross_section_referral_brief(library: &str) -> String {
+    format!(
+        "\n\nDEEPER DATA: full σ(E) curves live in nucl-parquet-mcp, if your \
+client has that server. COMPUTED AGAINST library `{library}`, nucl-parquet \
+data release `{release}` — curves from a server serving anything else are not \
+the ones behind these numbers, so comparing them yields an artefact of the \
+mismatch rather than physics.",
+        release = data_release(),
+    )
+}
+
+/// The referral as a **response** carries it: the brief form plus what an agent
+/// needs to actually make the call (#681).
+///
+/// Paid per call rather than per session, so it can afford to be operational.
+/// `get_cross_sections` takes `library` as a **required** argument — without
+/// this the agent has to guess a required parameter — and keys on `element`,
+/// not `(Z, A)`, so its answer mixes every target isotope of the element while
+/// this summary is for one.
+fn cross_section_referral_full(library: &str) -> String {
+    format!(
+        "{brief} To use it: call `get_cross_sections` with \
+`library: \"{library}\"`, and confirm that server reports data release \
+`{release}` — it resolves its own data directory independently and nothing \
+compares the two. Note it keys on `element` (every target isotope of that \
+element), not on this (target_z, target_a).",
+        brief = cross_section_referral_brief(library),
+        release = data_release(),
+    )
+}
+
+/// Append the full referral to a response body, exactly once and identically on
+/// every branch (#681).
+///
+/// The referral is repeated in the response, not only in the tool description:
+/// a client may have read `tools/list` many turns ago, or cached it, and the
+/// turn that returns the summary is the turn the agent decides in.
+///
+/// A helper rather than two call sites because the two branches of
+/// `tool_list_reaction_channels` end their bodies with different trailing
+/// whitespace, and hand-rolling the join at each produced a different number of
+/// blank lines depending on whether the lookup found anything.
+fn append_cross_section_referral(output: &mut String, library: &str) {
+    while output.ends_with('\n') {
+        output.pop();
+    }
+    output.push_str(&cross_section_referral_full(library));
+    output.push('\n');
+}
+
+/// Outward referral to upstream's per-element stopping lookup (#681).
+///
+/// Deliberately **not** the same string as [`cross_section_referral`]: PSTAR /
+/// ASTAR tables are `shared/` in the catalog, identical across every library,
+/// so naming a library here would imply a dependence that does not exist. The
+/// release still matters — the tables can change between data releases.
+fn stopping_power_referral() -> String {
+    format!(
+        " Values here come from nucl-parquet data release `{}`; that server \
+resolves its own release independently, so confirm it matches before \
+comparing dE/dx numbers.",
+        data_release(),
+    )
+}
+
 /// Description block for the `activity_floor_bq` argument (#567 / #130).
 ///
 /// Applied at the tool layer as a reporting filter — never inside compute.
@@ -85,7 +206,9 @@ fn parse_activity_floor(args: &Value) -> Result<f64, String> {
 /// Includes the actual loaded library id so a client can distinguish
 /// `tendl-2023-iso` (charged-particle only, isomeric split) from
 /// `tendl-2025` (charged-particle only, no isomeric split) from any future
-/// library shipping neutron cross-sections. Load-bearing: the "downstream
+/// library shipping neutron cross-sections — and, since #681, the data
+/// release alongside it, because the same library id at two releases is two
+/// different sets of numbers. Load-bearing: the "downstream
 /// layers behind a beam stop = 0 activation" caveat prevents an agent from
 /// silently reporting a water-coolant layer behind a target as safe.
 pub fn server_instructions(library: &str) -> String {
@@ -95,7 +218,11 @@ Simulates radio-isotope production in stacked target assemblies from a \
 charged-particle beam. Rust physics core (∫σ/dEdx integration, Bateman \
 chains, PSTAR/ASTAR stopping) with per-decay ENSDF emission data and dose \
 constants.\n\n\
-Active nuclear data library: `{library}`. Supported projectiles: p (proton), \
+Active nuclear data library: `{library}`, nucl-parquet data release \
+`{release}`. Both identify this answer's data — quote them alongside any \
+number you report, and when you carry a result to another tool or server, \
+carry them with it: nothing downstream compares data releases for you \
+(#681). Supported projectiles: p (proton), \
 d (deuteron), t (tritium), h (³He / helion), a (alpha). Cross-sections are \
 looked up in the active library's projectile sublibrary — check \
 `list_reaction_channels` before assuming a channel is data-backed.\n\n\
@@ -131,7 +258,8 @@ Version-awareness (#572): `get_changelog(since_version?)` returns \
 impact-classified release notes with `impact`+`silent`+`affected`+`guidance` \
 per entry — use it to decide whether earlier results need to be re-run, not \
 just what changed in the commit log.\n\n\
-Every tool response is suffixed with the active library id."
+Every tool response is suffixed with the active library id and data release.",
+        release = data_release()
     )
 }
 
@@ -355,7 +483,14 @@ fn layer_schema(require_thickness: bool) -> Value {
 }
 
 /// List all available MCP tools.
-pub fn list_tools() -> Vec<Value> {
+///
+/// `library` is the id the live store is reading (`db.library()`), threaded in
+/// so every outward referral can name the data this server actually computed
+/// against (#681). It is a parameter rather than a constant for the same
+/// reason `server_instructions` takes one: the active library is runtime
+/// state, and a description that hardcoded a default would misdescribe any
+/// server started with `--library`.
+pub fn list_tools(library: &str) -> Vec<Value> {
     vec![
         serde_json::json!({
             "name": "simulate",
@@ -480,7 +615,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "list_reaction_channels",
-            "description": format!("List all production channels (residual nuclei) for a given projectile on a target isotope, with peak cross-section and energy range per channel. Returns a summary — for full σ(E) curves, use nucl-parquet-mcp's get_cross_sections.{SCOPE_SUFFIX}"),
+            "description": format!("List all production channels (residual nuclei) for a given projectile on a target isotope, with peak cross-section and energy range per channel. Returns a summary.{referral}{SCOPE_SUFFIX}", referral = cross_section_referral_brief(library)),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -519,7 +654,7 @@ pub fn list_tools() -> Vec<Value> {
         }),
         serde_json::json!({
             "name": "get_stopping_power",
-            "description": "Material-level linear stopping power dE/dx [MeV/cm] at given energies, via Bragg additivity. Distinct from nucl-parquet-mcp's per-element PSTAR/ASTAR lookup.",
+            "description": format!("Material-level linear stopping power dE/dx [MeV/cm] at given energies, via Bragg additivity. Distinct from nucl-parquet-mcp's per-element PSTAR/ASTAR lookup.{referral}", referral = stopping_power_referral()),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -863,9 +998,16 @@ pub fn list_tools() -> Vec<Value> {
 
 /// Call an MCP tool by name.
 ///
-/// Every response is suffixed with `*Library: <id>*` so the agent can see
-/// which nuclear data library fed the calculation (rather than having to
-/// trust a hidden default).
+/// Every response is suffixed with `*Library: <id> · data release: <ver>*` so
+/// the agent can see which nuclear data fed the calculation (rather than
+/// having to trust a hidden default).
+///
+/// ADR 0001 introduced the `*Library:*` half for exactly that reason. #681
+/// added the release: a library id alone does not identify the data, because
+/// `tendl-2023-iso` at one data release and at the next are different numbers
+/// under the same name. Carrying both makes every response —
+/// not just the ones that point outward — self-qualifying, so an agent
+/// comparing two answers can tell whether they are even comparable.
 pub fn call_tool(
     db: &dyn DatabaseProtocol,
     materials: &mut MaterialRegistry,
@@ -910,7 +1052,12 @@ pub fn call_tool(
         }
         _ => return Err(format!("Unknown tool: {}", name)),
     };
-    response.text = format!("{}\n\n---\n*Library: {}*\n", response.text, db.library());
+    response.text = format!(
+        "{}\n\n---\n*Library: {} · data release: {}*\n",
+        response.text,
+        db.library(),
+        data_release(),
+    );
     Ok(response)
 }
 
@@ -1512,6 +1659,12 @@ fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Resul
 
     if xs_list.is_empty() {
         output.push_str("No cross-section data found. Data may need to be loaded first.\n");
+        // The referral matters MORE on the empty branch, not less: "this
+        // library has no such channel" is exactly when an agent goes looking
+        // upstream, and exactly when it must not silently land on a different
+        // library or release (#488 — a Z-named target resolves to nothing here
+        // while upstream has data for it).
+        append_cross_section_referral(&mut output, db.library());
         return Ok(output);
     }
 
@@ -1535,6 +1688,8 @@ fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Resul
         let peak = xs.xs_mb.iter().cloned().fold(0.0_f64, f64::max);
         output.push_str(&format!("Peak cross-section: {:.3} mb\n\n", peak));
     }
+
+    append_cross_section_referral(&mut output, db.library());
 
     Ok(output)
 }
@@ -3343,7 +3498,7 @@ mod tests {
 
     #[test]
     fn get_version_info_is_listed_in_tools() {
-        let names: Vec<String> = list_tools()
+        let names: Vec<String> = list_tools("tendl-2023-iso")
             .iter()
             .filter_map(|t| t.get("name").and_then(|v| v.as_str()).map(String::from))
             .collect();
