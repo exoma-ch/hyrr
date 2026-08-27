@@ -38,36 +38,72 @@ function isImmutable(url) {
 }
 
 /**
- * Guard against caching an auth-gate response under an immutable-asset key (#684).
+ * Auth-gate signal for a fresh fetch (#684).
  *
  * The ETH deploys sit behind SWITCH AAI (Shibboleth). When a session lapses
  * mid-fetch, the origin 302s to `wayf.switch.ch`. `fetch()` follows redirects
  * transparently, so the SW never sees the 302 — it sees the WAYF login HTML as
- * a genuine 200. Under the previous cache-first policy that HTML was written to
- * Cache Storage under the parquet's key, indistinguishable from real data;
- * every later request served it back without revalidating (the whole point of
- * the immutable strategy) so hyparquet failed to parse and the app emitted
- * #488's "no cross-section data" message. Only a manual "Clear site data" fixed
- * it. The same trap catches the WASM bundle, pyodide, and every other
+ * a genuine 200. Verified live: `https://hyrr.ethz.ch/data/parquet/…` returns
+ * `status=200, redirects=2, final=wayf.switch.ch` unauthenticated. Under the
+ * previous cache-first policy that HTML was written to Cache Storage under
+ * the parquet's key, indistinguishable from real data; every later request
+ * served it back without revalidating (the whole point of the immutable
+ * strategy) so hyparquet failed to parse and the app emitted #488's "no
+ * cross-section data" message. Only a manual "Clear site data" fixed it.
+ * The same trap catches the WASM bundle, pyodide, and every other
  * IMMUTABLE_PATTERNS entry — the fix belongs at the caching boundary, not per
  * asset type.
  *
- * Primary check: `response.redirected` is `true` whenever `fetch()` followed at
- * least one redirect, so this catches SSO, captive portals, and corporate
- * proxies without knowing anything about the login page's content. Belt-and-
- * braces: content sniffing catches (a) same-origin gates that rewrite in place
- * without a redirect (rare, but cheap to defend against) and (b) already-
- * poisoned cache entries whose `.redirected` flag was lost round-tripping
- * through `Cache.put`/`Cache.match` — some engines preserve it, some don't,
- * and the Content-Type header is preserved on every engine.
+ * Sole signal: `response.redirected`. Any auth interception must redirect
+ * (SSO, captive portal, corp proxy), and the SPA fallback that both `vite
+ * preview` and the static-hosting deploy use for missing paths does NOT
+ * redirect — it returns `index.html` inline as a direct 200. Content-type
+ * sniffing on that non-redirected 200 was a first-pass idea and it is
+ * actively harmful: `ensureCrossSections` probes a symbol-form parquet first
+ * and falls back to the Z-form (#488) for high-Z targets, so on any
+ * SPA-fallback host the first candidate for `p_Ra.parquet` is a 200
+ * `text/html` — misclassifying that as an auth gate turns the intended
+ * fall-through into a spurious "sign in and refresh" for every high-Z
+ * target on every deploy. Caught by `e2e` on the presets suite before this
+ * landed.
  */
-function isPoisonedResponse(response) {
+function isAuthGateResponse(response) {
+  return response.redirected;
+}
+
+/**
+ * Read-side signal: is a *cached* entry poisoned?
+ *
+ * Sniffs `Content-Type: text/html` because `response.redirected` is not
+ * reliably preserved through `Cache.put`/`Cache.match` across engines, but
+ * headers are. Evicting SPA-fallback `text/html` entries left in the cache
+ * by the pre-fix SW is fine collateral: the next fetch just goes to the
+ * network, which — post-fix — no longer writes text/html into the cache, so
+ * a cache entry that survived pre-fix disappears at most once per key and
+ * then stays gone.
+ */
+function isPoisonedCachedEntry(response) {
   if (response.redirected) return true;
   const contentType = response.headers.get("Content-Type") || "";
-  // Immutable-pattern URLs are parquet, wasm, gzip, or JS — never HTML.
-  // A `text/html` body is a strong signal the origin swapped in a login page.
   if (/^\s*text\/html\b/i.test(contentType)) return true;
   return false;
+}
+
+/**
+ * Write-side gate: is a fresh response safe to store under an immutable key?
+ *
+ * Broader than `isAuthGateResponse` — a non-redirected `text/html` reply is
+ * SPA fallback (or some other misconfiguration) and does not belong in the
+ * immutable cache either, or we permanently pin the app shell under a
+ * parquet key. Unlike the auth-gate case we still *return* it unchanged: the
+ * caller's parquet parse will fail exactly as it does today (no code change),
+ * fall through to the next candidate, and produce no console noise.
+ */
+function isCacheableImmutableResponse(response) {
+  if (response.redirected) return false;
+  const contentType = response.headers.get("Content-Type") || "";
+  if (/^\s*text\/html\b/i.test(contentType)) return false;
+  return true;
 }
 
 self.addEventListener("install", (event) => {
@@ -122,29 +158,29 @@ async function cacheFirst(request) {
     // landed will still be `text/html`; evict it and fall through to fetch,
     // so the browser self-heals on the first request after the update
     // instead of waiting for a version bump / manual cache clear (#684).
-    if (!isPoisonedResponse(cached)) return cached;
+    if (!isPoisonedCachedEntry(cached)) return cached;
     await cache.delete(request);
     // fall through — try the network again
   }
 
   const response = await fetch(request);
-  if (response.ok && !isPoisonedResponse(response)) {
+  if (response.ok && isCacheableImmutableResponse(response)) {
     cache.put(request, response.clone());
     return response;
   }
-  if (response.ok) {
-    // Response is OK but poisoned. Refusing to cache is only half the fix —
-    // we mustn't return the login HTML either, or hyparquet will parse it as
-    // parquet and the caller will emit #488's "no cross-section data" message,
-    // exactly the coverage-gap look-alike this issue is about. Surface a real
-    // error so downstream code sees the failure it needs to. The custom
-    // `X-Hyrr-Cache-Guard` header is what `packages/compute/src/data-store.ts`
-    // keys on to distinguish "auth-gate intercepted, refresh after signing in"
-    // from an actual missing file (#684).
+  if (response.ok && isAuthGateResponse(response)) {
+    // Real auth-gate interception: fetch followed a redirect. Refusing to
+    // cache is only half the fix — we mustn't return the login HTML either,
+    // or hyparquet will parse it as parquet and the caller will emit #488's
+    // "no cross-section data" message, exactly the coverage-gap look-alike
+    // this issue is about. Surface a real error so downstream code sees the
+    // failure it needs to. The custom `X-Hyrr-Cache-Guard` header is what
+    // `packages/compute/src/data-store.ts` keys on to distinguish "auth-gate
+    // intercepted, refresh after signing in" from an actual missing file.
     return new Response(
-      `Service worker refused to cache a redirected/HTML response for ` +
-        `${request.url}. Likely an auth-gate interception (e.g. Shibboleth WAYF ` +
-        `on the ETH deploys). Sign in and refresh. (#684)`,
+      `Service worker refused to cache a redirected response for ${request.url}. ` +
+        `Likely an auth-gate interception (e.g. Shibboleth WAYF on the ETH ` +
+        `deploys). Sign in and refresh. (#684)`,
       {
         status: 502,
         statusText: "Bad Gateway (auth-gate intercepted)",
@@ -155,6 +191,14 @@ async function cacheFirst(request) {
       },
     );
   }
+  // Non-cacheable but not an auth gate — e.g. non-redirected `text/html`
+  // from an SPA-fallback host serving the app shell for a missing parquet
+  // path (vite preview, GitHub Pages, ETH static hosting). Pass through
+  // unchanged: hyparquet's parse will fail, the caller's two-candidate
+  // probe (#488) falls through to the next path, and the console stays
+  // clean. Do NOT synthesise a 502 here — that would fire a spurious
+  // "sign in and refresh" for every high-Z target on every deploy, which
+  // is the false positive `e2e` caught.
   return response;
 }
 

@@ -247,22 +247,42 @@ describe("sw.js — cache poisoning guard (#684)", () => {
       expect(body).toContain("#684");
     });
 
-    it("does not cache a same-origin text/html response even if not redirected", async () => {
-      // Belt-and-braces: a hypothetical gate that rewrites in place without
-      // a redirect would still be caught by the Content-Type sniff. Cheap
-      // insurance — real SSO always redirects, but this closes the gap
-      // against captive portals that rewrite transparently.
+    it("passes a non-redirected text/html response through unchanged — SPA fallback", async () => {
+      // e2e regression (#684 review): `vite preview` and every static-hosting
+      // deploy answer a missing parquet path with the app-shell HTML at 200
+      // and no redirect. The first-pass fix synthesised a 502 for that
+      // response too, which fired a spurious "sign in and refresh" for
+      // every high-Z target on every deploy — the `ensureCrossSections`
+      // probe deliberately tries the symbol-form first (`p_Ra.parquet`)
+      // knowing high-Z elements only exist under the Z-form (#488), so the
+      // first candidate reliably hits the SPA fallback.
+      //
+      // Correct behaviour: don't cache (or we permanently pin the shell
+      // under a parquet key), but return the response unchanged. The
+      // caller's parquet parse fails, its two-candidate probe falls through
+      // to `p_Z88.parquet`, and the console stays clean.
       const { handlers, caches, fetchMock, cacheName } = loadSw();
+      const appShellHtml = "<!doctype html><html><body>App shell</body></html>";
       fetchMock.mockResolvedValue(
-        new Response("<html>gate</html>", {
+        new Response(appShellHtml, {
           status: 200,
-          headers: { "Content-Type": "text/html" },
+          headers: { "Content-Type": "text/html; charset=utf-8" },
         }),
       );
 
       const response = await driveFetchExpectResponse(handlers, new Request(parquetUrl));
 
-      expect(response.status).toBe(502);
+      // Load-bearing: NOT 502. A 502 here is the false positive that the
+      // browser console-logs and the e2e allow-list gate catches.
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toContain("text/html");
+      expect(response.headers.get("X-Hyrr-Cache-Guard")).toBeNull();
+      // The body must be the original response so hyparquet parse fails the
+      // same way it did pre-fix — no synthetic error page swapped in.
+      expect(await response.text()).toBe(appShellHtml);
+      // Still not cached — that's the actual fix. A permanently cached SPA
+      // shell under an immutable parquet key is what we've always needed
+      // to prevent.
       expect(caches.peek(cacheName)?.has(parquetUrl)).toBe(false);
     });
 

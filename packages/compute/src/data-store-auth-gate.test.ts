@@ -39,9 +39,16 @@ function installFetch(handlers: StubHandlers): ReturnType<typeof vi.fn> {
   return fetchMock;
 }
 
+/**
+ * The exact response `frontend/public/sw.js` synthesises for a real auth-gate
+ * interception — the SW returns this 502 *only* when `response.redirected` is
+ * true (see `isAuthGateResponse` there). The DataStore tests below key on
+ * `X-Hyrr-Cache-Guard: auth-gate`, so they transitively exercise the redirect
+ * arm of the SW, not the (removed) content-type sniff.
+ */
 function authGateResponse(url: string): Response {
   return new Response(
-    `Service worker refused to cache a redirected/HTML response for ${url}. (#684)`,
+    `Service worker refused to cache a redirected response for ${url}. (#684)`,
     {
       status: 502,
       statusText: "Bad Gateway (auth-gate intercepted)",
@@ -53,8 +60,22 @@ function authGateResponse(url: string): Response {
   );
 }
 
+/** A 404 — the response for a genuine missing-file (the pre-existing #488 arm). */
 function notFoundResponse(): Response {
   return new Response("", { status: 404 });
+}
+
+/**
+ * A 200 `text/html` app-shell response — what the SW now passes through
+ * unchanged for a non-redirected SPA fallback (see the #684 review). Used to
+ * pin that a hyparquet parse failure on this response does NOT get
+ * mis-classified as an auth gate.
+ */
+function spaFallbackResponse(): Response {
+  return new Response(
+    "<!doctype html><html><body>App shell</body></html>",
+    { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } },
+  );
 }
 
 describe("DataStore.ensureCrossSections — auth-gate path (#684)", () => {
@@ -138,6 +159,33 @@ describe("DataStore.ensureCrossSections — auth-gate path (#684)", () => {
     expect(msg.toLowerCase()).not.toContain("sign in");
     // Real 404: cache empty so hasCrossSections is decisive.
     expect(store.hasCrossSections("p", 29)).toBe(false);
+  });
+
+  it("classifies an SPA-fallback 200 text/html as missing data, not an auth gate", async () => {
+    // The scenario `e2e` caught before this landed: on a static-hosting or
+    // `vite preview` deploy, a missing parquet path returns the app shell
+    // at 200 with no redirect. The SW passes it through unchanged (see
+    // `isCacheableImmutableResponse` in sw.js). The DataStore's fetch
+    // succeeds, hyparquet parse fails, the ensure loop catches, and *if*
+    // every candidate fails the loop must land on #488's "no cross-section
+    // data" message — never "sign in and refresh".
+    installFetch({
+      "/xs/p_Cu.parquet": () => Promise.resolve(spaFallbackResponse()),
+      "/xs/p_Z29.parquet": () => Promise.resolve(spaFallbackResponse()),
+    });
+
+    const store = new DataStore("https://example.com/data/parquet");
+    await store.ensureCrossSections("p", "Cu");
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [msg] = warnSpy.mock.calls[0];
+    // Missing-data arm, not auth-gate. Both would render as "silently empty
+    // results" to the user, but the remedies (switch library vs sign in)
+    // are opposite.
+    expect(msg).toContain("no cross-section data");
+    expect(msg).toContain("#488");
+    expect(msg.toLowerCase()).not.toContain("sign in");
+    expect(msg).not.toContain("#684");
   });
 
   it("exports AuthGateInterceptedError as a distinct type callers can catch", () => {
