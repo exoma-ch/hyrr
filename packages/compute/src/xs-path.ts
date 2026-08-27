@@ -97,3 +97,25 @@ export function logMissingXs(
       `(#488)`,
   );
 }
+
+/**
+ * Emit a distinct one-line warning when the service worker rejected a
+ * cross-section fetch as an auth-gate interception (#684). Kept separate from
+ * `logMissingXs` so the user (and support triage) can tell "you need to sign
+ * in" apart from "this library really doesn't cover that target" — the two
+ * look identical without this, since the fetch's downstream failure mode is
+ * the same. Browser-only: `NodeDataStore` never sees the SW so it never emits
+ * this.
+ */
+export function logAuthGateIntercepted(
+  projectile: string,
+  targetZ: number,
+  symbol: string,
+): void {
+  console.warn(
+    `[DataStore] auth-gate intercepted cross-section fetch for ${projectile} ` +
+      `on ${symbol} (Z=${targetZ}). The service worker refused the response ` +
+      `to avoid caching an SSO login page as data. Sign in to the origin and ` +
+      `refresh — the next attempt will retry the fetch. (#684)`,
+  );
+}

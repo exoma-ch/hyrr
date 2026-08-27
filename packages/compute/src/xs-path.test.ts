@@ -7,7 +7,13 @@
  * (the exact failure mode PR #555 fixed on the Rust side).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { xsPathCandidates, logMissingXs, xsProjectileKey, isHeavyIon } from "./xs-path";
+import {
+  xsPathCandidates,
+  logMissingXs,
+  logAuthGateIntercepted,
+  xsProjectileKey,
+  isHeavyIon,
+} from "./xs-path";
 import { SYMBOL_TO_Z, Z_TO_SYMBOL } from "./formula";
 
 describe("xsPathCandidates (#488)", () => {
@@ -58,6 +64,38 @@ describe("logMissingXs (#488)", () => {
     expect(msg).toContain("{proj}_Z{Z}.parquet");
     // Explicit issue-ref hook so downstream reports point back at the bug.
     expect(msg).toContain("#488");
+  });
+});
+
+describe("logAuthGateIntercepted (#684)", () => {
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  beforeEach(() => warnSpy.mockClear());
+  afterEach(() => warnSpy.mockClear());
+
+  it("names the actual remedy — not the coverage-gap look-alike", () => {
+    // Load-bearing: this distinct message is the only cue support triage has
+    // to tell "you need to sign in" apart from "this library doesn't cover
+    // that target". Both used to render as #488's "no cross-section data"
+    // message, which is exactly what made #684 hard to diagnose in the first
+    // place. If the message stops naming the remedy, the whole surfacing
+    // added in this PR is worthless.
+    logAuthGateIntercepted("p", 29, "Cu");
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [msg] = warnSpy.mock.calls[0];
+    // Identifies the target so an operator can correlate to their symptom.
+    expect(msg).toContain("Cu");
+    expect(msg).toContain("29");
+    expect(msg).toContain("p");
+    // Names the actual remedy — this is the whole point of a distinct log.
+    expect(msg.toLowerCase()).toContain("sign in");
+    expect(msg.toLowerCase()).toContain("refresh");
+    // Issue-ref hook so a user pasting this into a report lands on the right
+    // thread, not #488.
+    expect(msg).toContain("#684");
+    // Must NOT say "no cross-section data" — that phrase is #488's message
+    // and is the misdiagnosis this log exists to prevent.
+    expect(msg).not.toContain("no cross-section data");
   });
 });
 
