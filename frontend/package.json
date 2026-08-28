@@ -44,6 +44,6 @@
     "hyparquet-writer": "^0.16.5",
     "hyrr-wasm": "file:src/lib/compute/hyrr-wasm-pkg",
     "lucide-svelte": "^1.0.1",
-    "plotly.js-dist-min": "^3.5.1"
+    "plotly.js-dist-min": "^4.0.0"
   }
 }
