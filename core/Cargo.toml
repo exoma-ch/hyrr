@@ -84,7 +84,7 @@ ts-rs = { version = "12", features = ["serde-json-impl"], optional = true }
 #                        rather than a user's first run.
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "gzip"] }
 tar = "0.4"
-zstd = "0.13"
+zstd = "0.14"
 fs2 = "0.4"
 # SHA-256 for the data-tarball integrity pin (#577). Pure Rust (RustCrypto),
 # no C toolchain — deliberately not `ring`, which is only in the graph as
