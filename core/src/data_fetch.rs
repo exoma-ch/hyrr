@@ -1947,13 +1947,16 @@ fn fetch_full_tarball_with_seam(out: &Path, progress: ProgressFn<'_>) -> Result<
 /// fetched and every neutron / heavy-ion run returned empty out of the box
 /// with no diagnostic. Fetching them here keeps the cost to disk space —
 /// the tarball is the same ~727 MB either way — but closes the silent-empty
-/// hole.
+/// hole on the cold-cache path.
+///
+/// **Warm caches from before this fix** short-circuit
+/// `data_dir::resolve()` before they ever reach `ensure_library`, so the
+/// resolvers hand off the pre-#709 cache directly to the transport. Those
+/// are healed by [`try_heal_routed_libraries_in_managed_cache`], which the
+/// MCP entry points call on the resolved path.
 ///
 /// On a warm cache (sentinel present) where the requested library **and
-/// every routed lib** are already extracted, returns immediately. If any
-/// required subtree is absent (an old cache from before this fix, or the
-/// bundled-resources-on-installer case), re-fetches and merges the missing
-/// libraries into the cache.
+/// every routed lib** are already extracted, returns immediately.
 pub fn ensure_library(library: &str) -> Result<()> {
     let mut noop = no_op_progress();
     ensure_library_with_progress(library, &mut noop)
@@ -1977,11 +1980,159 @@ pub fn ensure_library_with_progress(library: &str, progress: ProgressFn<'_>) -> 
     let mut prefixes: Vec<&str> = MANDATORY_PREFIXES.to_vec();
     prefixes.extend(lib_prefixes.iter().map(String::as_str));
     install_tarball_atomic(&tmp, &prefixes, progress)?;
+
+    // Post-extract sanity check: refuse to leave the sentinel over a
+    // cache that still doesn't cover the routed libs. Without this, a
+    // release that (for whatever reason) shipped without one of the
+    // routed subtrees would re-download the full 727 MB tarball on
+    // every call — `warm_cache_covers` would keep returning false and
+    // the fetch would keep failing to close the gap. Better to surface
+    // that once as an error than to loop silently.
+    let missing = missing_required_libraries(library)?;
+    if !missing.is_empty() {
+        return Err(FetchError::Extract(format!(
+            "release data-{DATA_VERSION} extracted successfully but is missing library subtree(s): {} \
+             — this is a data-release problem, not a fetch problem. \
+             Report at https://github.com/exoma-ch/nucl-parquet/issues.",
+            missing.join(", ")
+        )));
+    }
     Ok(())
 }
 
-/// The libraries `ensure_library(library)` must extract: the caller's
-/// requested one, plus [`NEUTRON_LIBRARY`] and [`HEAVY_ION_LIBRARY`] so
+/// Best-effort routed-library healer for the **managed cache only**
+/// (#709). Runs during MCP data-dir resolution, after
+/// [`crate::data_dir::resolve`] returns the managed-cache path.
+///
+/// The problem: 0.21.0 / 0.21.1 populated the managed cache with only the
+/// charged library. [`crate::db::library_for_projectile`] silently routes
+/// `n` to `endfb-8.0` and heavy ions to `hi-xs-prod`, so those runs read
+/// an empty subtree and every call returned an empty table with no
+/// diagnostic. The resolvers in `hyrr-mcp/src/main.rs` and
+/// `py-mcp/src/lib.rs` see `is_cache_complete() == true`, return the
+/// managed-cache path immediately, and never reach [`ensure_library`] —
+/// so the cold-cache fix above cannot heal an existing user by itself.
+///
+/// This function closes that: on each MCP boot, if the managed cache is
+/// missing a routed lib, fetch and merge just those in. Existing users
+/// upgrade transparently on their next launch.
+///
+/// **Eager**, not lazy per-request. A lazy variant (fetch on the first
+/// `n` / heavy-ion tool call) would push a network I/O and a cache-write
+/// into a request/response hot path already holding a stack-cache lock
+/// (#708), and would race with concurrent tool calls that all trip the
+/// same miss. Eager keeps the cost bounded to one one-shot repair at
+/// startup — the same place a cold-cache boot already pays it.
+///
+/// **Never fatal.** A failed repair fetch returns `Ok(Warned{…})` so
+/// the MCP keeps running — an offline user with a working proton-only
+/// cache stayed offline before #709 and must keep working after. Only
+/// [`crate::db::library_for_projectile`]'s routed projectiles will
+/// surface empty; the charged path is unaffected. The caller is
+/// responsible for surfacing the warning to stderr (the printing lives
+/// in the MCP-crate boundary rather than here so the debug-print
+/// guardrail doesn't have to allowlist `core/`).
+///
+/// **Managed-cache-only.** Callers must have confirmed the resolved data
+/// dir is the managed cache before invoking; a user-supplied `--data-dir`
+/// / `HYRR_DATA` / `NUCL_PARQUET_DATA` / sibling checkout is out of scope.
+/// The helper [`resolved_is_managed_cache`] does that check.
+pub fn try_heal_routed_libraries_in_managed_cache() -> Result<HealOutcome> {
+    let missing = missing_routed_libraries()?;
+    if missing.is_empty() {
+        return Ok(HealOutcome::AlreadyPresent);
+    }
+    // `ensure_library` extracts the requested lib PLUS both routed libs.
+    // Passing `NEUTRON_LIBRARY` picks the same union we need.
+    let mut noop = no_op_progress();
+    match ensure_library_with_progress(NEUTRON_LIBRARY, &mut noop) {
+        Ok(()) => Ok(HealOutcome::Repaired {
+            added: missing.iter().map(|s| s.to_string()).collect(),
+        }),
+        Err(e) => Ok(HealOutcome::Warned {
+            missing: missing.iter().map(|s| s.to_string()).collect(),
+            error: e.to_string(),
+        }),
+    }
+}
+
+/// Outcome of [`try_heal_routed_libraries_in_managed_cache`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HealOutcome {
+    /// The managed cache already carried every routed lib; no fetch ran.
+    AlreadyPresent,
+    /// The named libraries were fetched and merged in.
+    Repaired { added: Vec<String> },
+    /// The repair fetch failed. Callers should surface `warning_message`
+    /// to the user and keep running with the pre-repair cache — routed
+    /// lookups will surface empty until the user reconciles, but the
+    /// charged path is unaffected. See [`HealOutcome::warning_message`].
+    Warned { missing: Vec<String>, error: String },
+}
+
+impl HealOutcome {
+    /// Formatted user-facing warning for [`HealOutcome::Warned`]. The MCP
+    /// callers `eprintln!` this into their startup diagnostic stream —
+    /// living here keeps the wording consistent across `hyrr-mcp` and
+    /// `py-mcp` without duplicating it, while the printing itself stays
+    /// in the caller so `core/` doesn't have to allowlist an eprintln.
+    pub fn warning_message(&self) -> Option<String> {
+        match self {
+            HealOutcome::Warned { missing, error } => Some(format!(
+                "hyrr: WARNING: nuclear-data cache is missing the routed library(s) \
+                 [{}] and the one-time repair fetch failed: {error}\n\
+                 hyrr:          Neutron and heavy-ion simulations will silently \
+                 return EMPTY until this is resolved (#709). Charged-particle runs \
+                 (p/d/t/3He/alpha) are unaffected.\n\
+                 hyrr:          Fix options:\n\
+                 hyrr:            * restore network and restart, OR\n\
+                 hyrr:            * `hyrr fetch-data --library endfb-8.0` and \
+                 `hyrr fetch-data --library hi-xs-prod` manually, OR\n\
+                 hyrr:            * point at a fresh install via --data-dir / HYRR_DATA.",
+                missing.join(", ")
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// Does the resolved data dir point at the managed cache
+/// (`~/.hyrr/nucl-parquet/v{DATA_VERSION}/data`) — i.e. the only path
+/// [`try_heal_routed_libraries_in_managed_cache`] is allowed to touch?
+///
+/// Returns false for `--data-dir`, `HYRR_DATA`, `NUCL_PARQUET_DATA`, a
+/// sibling checkout, or a legacy `~/.hyrr/nucl-parquet/data` without the
+/// version suffix. Those are user-supplied paths and the user decides
+/// what's in them; the healer is not entitled to alter them.
+pub fn resolved_is_managed_cache(resolved: &Path) -> bool {
+    let Ok(managed) = cache_dir().map(|c| c.join("data")) else {
+        return false;
+    };
+    // Canonicalise both sides so a `..`-relative or symlink-normalised
+    // form doesn't sneak past; fall back to the literal path if
+    // canonicalise fails (e.g. the resolved path was returned by a
+    // caller with `HYRR_DATA` and doesn't exist yet).
+    let norm = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    norm(resolved) == norm(&managed)
+}
+
+/// Which of `[NEUTRON_LIBRARY, HEAVY_ION_LIBRARY]` are absent from the
+/// managed cache today. Empty means the cache covers routing.
+fn missing_routed_libraries() -> Result<Vec<&'static str>> {
+    if !is_cache_complete() {
+        // Nothing to repair on top of a cache that hasn't been populated
+        // yet — a cold-cache boot goes through `ensure_library`.
+        return Ok(Vec::new());
+    }
+    let data = cache_dir()?.join("data");
+    Ok([NEUTRON_LIBRARY, HEAVY_ION_LIBRARY]
+        .into_iter()
+        .filter(|lib| !data.join(lib).exists())
+        .collect())
+}
+
+/// The libraries [`ensure_library`] must extract: the caller's requested
+/// one, plus [`NEUTRON_LIBRARY`] and [`HEAVY_ION_LIBRARY`] so
 /// `library_for_projectile`'s neutron / heavy-ion overrides resolve to
 /// something on disk (#709). Deduplicated so a caller that already asked
 /// for a routed lib doesn't get a duplicate prefix into the extractor.
@@ -1993,6 +2144,18 @@ fn required_libraries(library: &str) -> Vec<&str> {
         }
     }
     libs
+}
+
+/// The libraries [`ensure_library`] promised to extract for `library`
+/// but that don't exist under the cache's `data/` dir. Empty means the
+/// extraction actually produced every required subtree.
+fn missing_required_libraries(library: &str) -> Result<Vec<String>> {
+    let data = cache_dir()?.join("data");
+    Ok(required_libraries(library)
+        .iter()
+        .filter(|lib| !data.join(lib).exists())
+        .map(|s| s.to_string())
+        .collect())
 }
 
 /// Warm-cache short-circuit gate for [`ensure_library_with_progress`]: the
@@ -2920,6 +3083,45 @@ mod tests {
             h.set_mode(0o644);
             h.set_cksum();
             tar.append_data(&mut h, path, *payload).unwrap();
+        }
+        tar.finish().unwrap();
+    }
+
+    /// [`make_release_layout_tarball`] plus root-level entries for the
+    /// routed neutron and heavy-ion libraries. Exercises the #709 fix
+    /// against the actual GitHub-release framing (no `data/` prefix in
+    /// the archive; entries land under `<dest>/data/…` only after
+    /// `normalise_entry_path` runs), which is what a real user's cache
+    /// heal would go through end-to-end.
+    pub(super) fn make_release_layout_tarball_with_routing(out: &Path) {
+        let file = fs::File::create(out).unwrap();
+        let encoder = zstd::stream::Encoder::new(file, 0).unwrap().auto_finish();
+        let mut tar = tar::Builder::new(encoder);
+        let mut h_root = tar::Header::new_gnu();
+        h_root.set_size(0);
+        h_root.set_mode(0o755);
+        h_root.set_entry_type(tar::EntryType::Directory);
+        h_root.set_cksum();
+        tar.append_data(&mut h_root, "./", std::io::empty())
+            .unwrap();
+        // Const-driven so a flip of NEUTRON_LIBRARY / HEAVY_ION_LIBRARY
+        // is not silent here. Root-level (`./<lib>/…`), NOT `data/<lib>/…`.
+        let neutron_path = format!("./{NEUTRON_LIBRARY}/xs/n_Fe.parquet");
+        let heavy_path = format!("./{HEAVY_ION_LIBRARY}/xs/c12_Al.parquet");
+        let entries: [(&str, &[u8]); 6] = [
+            ("./meta/abundances.parquet", b"abundances"),
+            ("./stopping/PSTAR.parquet", b"pstar"),
+            ("./catalog.json", b"{\"data_version\":\"test\"}"),
+            ("./tendl-test/xs/p_Cu.parquet", b"xs-p-cu"),
+            (neutron_path.as_str(), b"n-marker"),
+            (heavy_path.as_str(), b"hi-marker"),
+        ];
+        for (path, payload) in entries.iter() {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(payload.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            tar.append_data(&mut h, *path, *payload).unwrap();
         }
         tar.finish().unwrap();
     }
@@ -4368,6 +4570,204 @@ mod tests {
         // because it would try to fetch from GitHub. The point is
         // established: the sentinel check alone isn't sufficient,
         // the library directory must also exist.
+    }
+
+    /// **Regression for #709 — the release-tarball framing.** The real
+    /// GitHub release ships root-level entries (`./endfb-8.0/…`), not
+    /// `data/endfb-8.0/…`. The routing fix must survive that framing:
+    /// use the release-layout fixture end-to-end and verify the routed
+    /// subtrees land at `<cache>/data/{lib}/…` after `normalise_entry_path`.
+    #[test]
+    fn ensure_library_extracts_routed_libs_from_release_layout_tarball() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("release.tar.zst");
+        make_release_layout_tarball_with_routing(&archive);
+
+        test_hooks::arm_fetch_source(archive.clone());
+        ensure_library("tendl-test").unwrap();
+        let cd = cache_dir().unwrap();
+        assert!(is_cache_complete());
+        assert!(cd.join("data/tendl-test/xs/p_Cu.parquet").exists());
+        assert!(
+            cd.join(format!("data/{NEUTRON_LIBRARY}/xs/n_Fe.parquet"))
+                .exists(),
+            "#709: real-layout release tarball must yield the routed neutron subtree"
+        );
+        assert!(
+            cd.join(format!("data/{HEAVY_ION_LIBRARY}/xs/c12_Al.parquet"))
+                .exists(),
+            "#709: real-layout release tarball must yield the routed heavy-ion subtree"
+        );
+        test_hooks::clear_fetch_source();
+    }
+
+    /// **Nit #1 defence.** If a release ever ships without one of the
+    /// routed subtrees, `ensure_library` must error out — not merrily
+    /// re-write the sentinel and let the next call re-download 727 MB
+    /// forever. Simulate that with a tarball that only has `tendl-test`
+    /// and no `endfb-8.0`/`hi-xs-prod`, expect a fetch error naming the
+    /// missing libs.
+    #[test]
+    fn ensure_library_errors_if_release_lacks_a_routed_lib() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("broken-release.tar.zst");
+        // Base fixture has meta/marker + tendl-test/xs only. No routed libs.
+        make_test_tarball(&archive);
+
+        test_hooks::arm_fetch_source(archive.clone());
+        let err = ensure_library("tendl-test")
+            .expect_err("release without routed libs must fail loudly, not silently succeed");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(NEUTRON_LIBRARY) || msg.contains(HEAVY_ION_LIBRARY),
+            "diagnostic must name the missing routed lib(s): {msg}"
+        );
+        test_hooks::clear_fetch_source();
+    }
+
+    /// **Regression for #709 — the healer path.** The reviewer's own
+    /// managed cache on 0.21.1 held only `tendl-2023-iso`; `data_dir::resolve`
+    /// short-circuited on `is_cache_complete()`, `ensure_library` never
+    /// ran, and neutron / heavy-ion runs kept returning empty. This test
+    /// puts the cache in exactly that shape and asserts
+    /// `try_heal_routed_libraries_in_managed_cache` extracts the missing
+    /// routed subtrees on the next boot — the actual upgrade experience.
+    #[test]
+    fn try_heal_routed_libraries_repairs_a_pre_709_managed_cache() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+
+        // Step 1: put the managed cache in pre-#709 shape (charged lib
+        // only, `.complete` set — this is what a 0.21.1 install left
+        // on disk).
+        let pre = td.path().join("pre.tar.zst");
+        make_test_tarball(&pre);
+        install_unverified(&pre).unwrap();
+        assert!(is_cache_complete());
+        let cd = cache_dir().unwrap();
+        assert!(!cd.join(format!("data/{NEUTRON_LIBRARY}")).exists());
+        assert!(!cd.join(format!("data/{HEAVY_ION_LIBRARY}")).exists());
+
+        // Step 2: arm the fetch seam with the release-layout fixture
+        // (routing-aware, root-level entries — the real release shape).
+        let repair = td.path().join("repair.tar.zst");
+        make_release_layout_tarball_with_routing(&repair);
+        test_hooks::arm_fetch_source(repair.clone());
+
+        let outcome = try_heal_routed_libraries_in_managed_cache().unwrap();
+        match outcome {
+            HealOutcome::Repaired { ref added } => {
+                assert!(added.iter().any(|s| s == NEUTRON_LIBRARY));
+                assert!(added.iter().any(|s| s == HEAVY_ION_LIBRARY));
+            }
+            other => panic!("expected Repaired, got {other:?}"),
+        }
+        assert!(cd.join(format!("data/{NEUTRON_LIBRARY}")).exists());
+        assert!(cd.join(format!("data/{HEAVY_ION_LIBRARY}")).exists());
+        // Charged lib survives.
+        assert!(cd.join("data/tendl-test/xs/p_Cu.parquet").exists());
+        test_hooks::clear_fetch_source();
+    }
+
+    /// **The offline-preservation invariant.** A user on 0.21.1 who
+    /// never had network access has a proton-only cache but a working
+    /// hyrr-mcp. After #709 lands they upgrade, boot the MCP — the
+    /// healer sees the routed libs are missing, tries to fetch (armed
+    /// with a broken fetcher via the test seam) and fails. The MCP
+    /// must NOT crash and the charged-particle path must still work.
+    /// The healer returns `Warned` and writes to stderr.
+    #[test]
+    fn try_heal_routed_libraries_warns_but_does_not_error_when_fetch_fails() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let pre = td.path().join("pre.tar.zst");
+        make_test_tarball(&pre);
+        install_unverified(&pre).unwrap();
+
+        // Arm the seam with a source that does not exist — the copy
+        // step will fail with EEXIST/ENOENT, and the healer must
+        // fold that into a Warned outcome, not propagate as Err.
+        let broken = td.path().join("does-not-exist.tar.zst");
+        test_hooks::arm_fetch_source(broken);
+
+        let outcome = try_heal_routed_libraries_in_managed_cache().unwrap();
+        match outcome {
+            HealOutcome::Warned {
+                ref missing,
+                ref error,
+            } => {
+                assert!(missing.iter().any(|s| s == NEUTRON_LIBRARY));
+                assert!(missing.iter().any(|s| s == HEAVY_ION_LIBRARY));
+                assert!(!error.is_empty());
+            }
+            ref other => panic!("expected Warned, got {other:?}"),
+        }
+        // Warning message is available for the MCP callers to eprintln.
+        let msg = outcome
+            .warning_message()
+            .expect("Warned outcome must yield a diagnostic string");
+        assert!(msg.contains(NEUTRON_LIBRARY));
+        assert!(msg.contains(HEAVY_ION_LIBRARY));
+        assert!(
+            msg.contains("silently return EMPTY"),
+            "diagnostic must call the failure mode by name so the user knows why"
+        );
+        // Charged-particle path still works (subtree intact, sentinel
+        // still present — the failed repair did NOT delete anything).
+        assert!(is_cache_complete());
+        assert!(cache_dir().unwrap().join("data/tendl-test").exists());
+        test_hooks::clear_fetch_source();
+    }
+
+    /// **Managed-cache-only invariant.** `resolved_is_managed_cache`
+    /// must say `true` for the exact path `data_dir::resolve` hands
+    /// back, and `false` for a user-supplied path — a sibling
+    /// checkout, a `HYRR_DATA` pointer, or a legacy unversioned home
+    /// dir. If this ever drifts, the healer will start mutating paths
+    /// the user owns.
+    #[test]
+    fn resolved_is_managed_cache_only_matches_the_managed_cache() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let managed = cache_dir().unwrap().join("data");
+        // Make it exist so canonicalise resolves the same on both sides.
+        fs::create_dir_all(&managed).unwrap();
+
+        assert!(resolved_is_managed_cache(&managed));
+        // A different subdir under the same HOME.
+        let other = td.path().join("some/other/nucl-parquet/data");
+        fs::create_dir_all(&other).unwrap();
+        assert!(!resolved_is_managed_cache(&other));
+        // A legacy unversioned home dir.
+        let legacy = PathBuf::from(std::env::var("HOME").unwrap())
+            .join(".hyrr")
+            .join("nucl-parquet")
+            .join("data");
+        fs::create_dir_all(&legacy).unwrap();
+        assert!(
+            !resolved_is_managed_cache(&legacy),
+            "legacy unversioned path is not the managed cache"
+        );
+    }
+
+    /// The healer must be a no-op on a cache that already carries the
+    /// routed libs — `AlreadyPresent`, no fetch, no writes.
+    #[test]
+    fn try_heal_routed_libraries_is_a_no_op_when_cache_is_covered() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("full.tar.zst");
+        make_test_tarball_with_routing(&archive);
+        install_unverified(&archive).unwrap();
+        assert!(is_cache_complete());
+
+        // NOT arming the seam — if the healer tries to fetch, the test
+        // hits the real network and either times out or hits the
+        // no-fetch guard. A passing test is proof no fetch fired.
+        let outcome = try_heal_routed_libraries_in_managed_cache().unwrap();
+        assert_eq!(outcome, HealOutcome::AlreadyPresent);
     }
 }
 

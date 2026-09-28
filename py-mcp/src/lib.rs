@@ -57,6 +57,22 @@ fn ensure_data(library: Option<String>) -> PyResult<String> {
     // Local resolution: managed cache (sentinel-gated), sibling clone.
     let local = hyrr_core::data_dir::resolve();
     if std::path::Path::new(&local).join("meta").is_dir() {
+        // #709 healer. A cache populated by 0.21.0/0.21.1 has only the
+        // charged library on disk; `library_for_projectile` routes
+        // neutron / heavy-ion projectiles to libraries that were never
+        // fetched, so those runs silently return empty. Best-effort
+        // repair — a network failure warns to stderr and continues
+        // (offline user with a working proton-only cache must keep
+        // working). Only touches the managed cache; a user-supplied
+        // path is left alone.
+        if hyrr_core::data_fetch::resolved_is_managed_cache(std::path::Path::new(&local)) {
+            if let Ok(outcome) = hyrr_core::data_fetch::try_heal_routed_libraries_in_managed_cache()
+            {
+                if let Some(msg) = outcome.warning_message() {
+                    eprintln!("{msg}");
+                }
+            }
+        }
         return Ok(local);
     }
 
