@@ -21,7 +21,7 @@
     "@testing-library/svelte": "^5.3.1",
     "@types/node": "^26.2.0",
     "jsdom": "^30.0.1",
-    "plotly.js-basic-dist-min": "^3.7.0",
+    "plotly.js-basic-dist-min": "^4.1.1",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^6.0.3",
@@ -44,6 +44,6 @@
     "hyparquet-writer": "^0.16.5",
     "hyrr-wasm": "file:src/lib/compute/hyrr-wasm-pkg",
     "lucide-svelte": "^1.0.1",
-    "plotly.js-dist-min": "^3.5.1"
+    "plotly.js-dist-min": "^4.1.1"
   }
 }

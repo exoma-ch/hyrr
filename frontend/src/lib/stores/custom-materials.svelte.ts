@@ -8,6 +8,24 @@
 import { parseFormula, SYMBOL_TO_Z } from "@hyrr/compute";
 import { nsDbName } from "../base-path";
 import { forgetSharedCustomMaterial } from "../config-codec-map";
+import { invalidateExpansion } from "./config.svelte";
+import { forceRun } from "../scheduler/sim-scheduler.svelte";
+
+/**
+ * A layer references a custom material by name, not by a live binding, so
+ * editing/deleting an already-applied material doesn't change the
+ * SimulationConfig shape at all — configHash() (scheduler/config-hash.ts)
+ * sees the same layers[].material string and, seeing no hash change, skips
+ * the recompute (sim-scheduler.svelte.ts's `hash === lastHash` guard). The
+ * lightweight depth/heat preview has no such guard so it happens to pick up
+ * the edit once anything re-fires its effect, which produced the reported
+ * bug: absorption/heat updates after a composition edit, isotope yield does
+ * not. Call this after any registry mutation so both the cheap preview and
+ * the full simulation re-run from the material's current definition. */
+function notifyMaterialsChanged(): void {
+  invalidateExpansion();
+  forceRun();
+}
 
 export interface CustomMaterial {
   id: string;
@@ -129,6 +147,7 @@ export async function saveCustomMaterial(
   // shipped-file/URL shadow would otherwise silently override this edit until
   // page reload.
   forgetSharedCustomMaterial(name);
+  notifyMaterialsChanged();
   return entry.id;
 }
 
@@ -156,6 +175,7 @@ export async function updateCustomMaterial(
   // just edited their own library entry, so any embedded shared def under
   // this name must stop winning.
   forgetSharedCustomMaterial(name);
+  notifyMaterialsChanged();
 }
 
 /** Delete a custom material by ID. */
@@ -182,6 +202,7 @@ export async function deleteCustomMaterial(id: string): Promise<void> {
   // Note: if the name still appears in a layer, resolution then falls through
   // to formula-parsing that name, which is the intended "it's gone" behaviour.
   if (nameToForget) forgetSharedCustomMaterial(nameToForget);
+  notifyMaterialsChanged();
 }
 
 /** Validate a formula string. Returns null if valid, or an error message. */
