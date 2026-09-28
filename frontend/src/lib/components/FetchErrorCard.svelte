@@ -55,12 +55,24 @@
 
   const triedUrl = $derived(
     error.kind === "FetchError" &&
-      (error.variant === "HttpStatus" || error.variant === "Network")
+      (error.variant === "HttpStatus" ||
+        error.variant === "Network" ||
+        error.variant === "UnexpectedContent")
       ? error.url
       : (releaseUrl ?? ""),
   );
   const cacheDirDisplay = $derived(
     error.kind === "FetchError" && "cache_dir" in error ? error.cache_dir : (cacheRoot ?? ""),
+  );
+  // The `hyrr fetch-data` CLI fixes the Rust-side (Tauri) tarball path.
+  // The browser-only variants (EmptyIndex, UnexpectedContent) come from
+  // the hyparquet DataStore and CLI-refresh cannot repair them — showing
+  // the hint would send the user down a dead end. (#689)
+  const cliHintApplies = $derived(
+    error.kind === "unknown" ||
+      (error.kind === "FetchError" &&
+        error.variant !== "EmptyIndex" &&
+        error.variant !== "UnexpectedContent"),
   );
 
   async function onOpenUrl() {
@@ -116,9 +128,11 @@
     </section>
   {/if}
 
-  <p class="cli-hint">
-    Or from a terminal: <code>hyrr fetch-data</code>
-  </p>
+  {#if cliHintApplies}
+    <p class="cli-hint">
+      Or from a terminal: <code>hyrr fetch-data</code>
+    </p>
+  {/if}
 </div>
 
 <style>

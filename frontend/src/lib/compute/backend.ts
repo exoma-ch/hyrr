@@ -41,6 +41,59 @@ export function getActiveBackend(): BackendKind | null {
   return activeBackend;
 }
 
+/**
+ * Pick which error to throw when both Tauri and WASM init failed.
+ *
+ * Called by `initBackend`; extracted so the rethrow policy is unit-
+ * testable without pulling in `hyrr-wasm` / Tauri dynamic imports.
+ * (#689 PR #715 review)
+ *
+ * Policy:
+ * - Tauri error wins when we have it — on desktop it names the primary
+ *   backend's actual failure (`init_data_store` command), which is more
+ *   actionable than "hyrr-wasm not found in bundle" from the fallback.
+ *   The WASM error is attached on `.cause` for support triage.
+ * - Otherwise return the WASM error unchanged so the typed
+ *   `DataFetchError` from `DataStore.init` reaches `FetchErrorCard`
+ *   with its `variant` and `url` intact.
+ * - Both null: caller should treat as unreachable (the tests pin this).
+ */
+export function pickBackendInitError(
+  tauriErr: unknown,
+  wasmErr: unknown,
+): unknown | null {
+  if (tauriErr != null) {
+    if (tauriErr instanceof Error && wasmErr != null) {
+      const existing = (tauriErr as { cause?: unknown }).cause;
+      // Preserve any existing cause on the Tauri error — some Tauri
+      // command errors already carry a chained cause (e.g. an inner
+      // FetchError from Rust). Overwriting it would drop the deeper
+      // signal in favour of the WASM-fallback message. If both are
+      // present, wrap the WASM error so both chains are reachable via
+      // `.cause` walks (Node's util.inspect and DevTools both traverse).
+      // (PR #715 re-review nit)
+      const chained = existing != null
+        ? Object.assign(new Error("WASM fallback also failed"), {
+            cause: wasmErr,
+          })
+        : wasmErr;
+      if (existing != null) {
+        (tauriErr as { cause?: unknown; wasmFallbackCause?: unknown }).wasmFallbackCause = chained;
+      } else {
+        Object.defineProperty(tauriErr, "cause", {
+          value: chained,
+          enumerable: false,
+          configurable: true,
+          writable: true,
+        });
+      }
+    }
+    return tauriErr;
+  }
+  if (wasmErr != null) return wasmErr;
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Initialization
 // ---------------------------------------------------------------------------
@@ -59,7 +112,15 @@ export async function initBackend(
   onProgress?: (msg: string, fraction?: number) => void,
 ): Promise<BackendKind> {
   // 1. Try Tauri — data is bundled in the installer, no download needed.
-  if (isTauri()) {
+  //
+  // We record the Tauri init failure so we can prefer it over the WASM
+  // fallback failure when both fail on desktop: the tauri path is the
+  // primary one on desktop, and a WASM error message like "hyrr-wasm not
+  // found in bundle" is less useful than the actual tauri command error.
+  // (#689 PR #715 review)
+  let tauriInitError: unknown = null;
+  const inTauri = isTauri();
+  if (inTauri) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const lib = library ?? DEFAULT_LIBRARY;
@@ -71,10 +132,12 @@ export async function initBackend(
       // Init-time: no compute run yet, so use the reserved "_init" bucket — the
       // splash/recovery card surfaces this if startup hangs (#118/#159).
       trace.event("_init", "backend.tauri.init_failed", { error: String(e) });
+      tauriInitError = e;
     }
   }
 
   // 2. Try WASM
+  let wasmInitError: unknown = null;
   try {
     onProgress?.("Loading WASM compute engine...", 0.1);
     const wasm = await import("hyrr-wasm");
@@ -140,12 +203,28 @@ export async function initBackend(
     return "wasm";
   } catch (e) {
     trace.event("_init", "backend.wasm.init_failed", { error: String(e) });
+    wasmInitError = e;
   }
 
-  // No TS fallback — Rust (Tauri or WASM) is required
-  throw new Error(
-    "No compute backend available. Tauri and WASM both failed to initialize.",
-  );
+  // No TS fallback — Rust (Tauri or WASM) is required. Preserve the typed
+  // underlying error (a `DataFetchError` from `DataStore.init`, an
+  // `AuthGateInterceptedError`, a WASM engine load failure) so
+  // `parseFetchError` / `FetchErrorCard` can render the actual remedy
+  // instead of the generic "No compute backend" line. Fixes the last mile
+  // of #689 — a load-bearing data failure that reached here still landed
+  // on a generic error and lost every field the UI needs to help. (#689)
+  //
+  // Preference order when we have both errors (desktop, Tauri failed then
+  // WASM failed): the Tauri error, because the tauri path is the primary
+  // one on desktop and its message names the actual command that broke.
+  // The WASM error is stashed on `.cause` for diagnostics. In the browser
+  // there is no Tauri path so `wasmInitError` is the only signal.
+  const rethrow = pickBackendInitError(tauriInitError, wasmInitError);
+  if (rethrow != null) throw rethrow;
+  // Truly unreachable: `inTauri` false forces the WASM branch, and its
+  // catch guarantees `wasmInitError` is set on failure. Kept as a defensive
+  // throw so a future refactor can't silently return `undefined`.
+  throw new Error("initBackend: unreachable — neither backend reported a result");
 }
 
 // ---------------------------------------------------------------------------

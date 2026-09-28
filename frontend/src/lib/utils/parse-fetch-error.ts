@@ -61,6 +61,35 @@ export type FetchErrorPayload =
       kind: "FetchError";
       variant: "NoHome";
       message: string;
+    }
+  // Browser-only variants introduced by `packages/compute/src/data-store.ts`.
+  // Kept in the FetchError union so `FetchErrorCard` and `parseFetchError`
+  // stay the single wire shape — the Rust side never produces these, but
+  // the render path is shared.
+  | {
+      // `EmptyIndex` — every load succeeded but the resulting index is
+      // empty (e.g. hosting misconfig, corrupt-but-parseable bundle).
+      // Distinct from `HttpStatus 200` because there was no HTTP failure —
+      // rendering it as "HTTP 200" was actively misleading. (#689)
+      kind: "FetchError";
+      variant: "EmptyIndex";
+      subject: string;
+      message: string;
+    }
+  | {
+      // `UnexpectedContent` — a 200 whose body isn't the file we expected
+      // (typical example: an SSO / SPA fallback returning HTML where a
+      // parquet is served). The ETH deployment's auth-gate returns 200
+      // with WAYF HTML, so this — not a redirect — is the real "signed out"
+      // signal on `hyrr.ethz.ch`. The Vite dev/preview SPA fallback for a
+      // missing per-element emissions file also lands here, which is why
+      // the emissions 404-as-optional rule needs this arm to cover the
+      // dev/preview equivalent. (#689 / #684)
+      kind: "FetchError";
+      variant: "UnexpectedContent";
+      url: string;
+      contentType: string;
+      message: string;
     };
 
 export type ParsedFetchError =
@@ -172,6 +201,23 @@ function tryStructured(raw: unknown): FetchErrorPayload | null {
       message,
     };
   }
+  if (variant === "EmptyIndex") {
+    return {
+      kind: "FetchError",
+      variant: "EmptyIndex",
+      subject: str(o.subject),
+      message,
+    };
+  }
+  if (variant === "UnexpectedContent") {
+    return {
+      kind: "FetchError",
+      variant: "UnexpectedContent",
+      url: str(o.url),
+      contentType: str(o.contentType),
+      message,
+    };
+  }
   return null;
 }
 
@@ -203,5 +249,9 @@ export function fetchErrorTitle(err: ParsedFetchError): string {
       return "Couldn't write nuclear data to disk";
     case "NoHome":
       return "Couldn't locate user home directory";
+    case "EmptyIndex":
+      return `Data bundle loaded, but ${err.subject} is empty`;
+    case "UnexpectedContent":
+      return "Server returned the wrong kind of response (likely a sign-in page)";
   }
 }
