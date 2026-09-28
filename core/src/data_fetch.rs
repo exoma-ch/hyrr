@@ -44,6 +44,8 @@ use std::time::{Duration, Instant};
 use fs2::FileExt;
 use serde::Serialize;
 
+use crate::db::{HEAVY_ION_LIBRARY, NEUTRON_LIBRARY};
+
 /// Version of the `nucl-parquet` data this build expects.
 ///
 /// Sourced at build time from `nucl-parquet/pyproject.toml` by
@@ -1929,17 +1931,29 @@ fn fetch_full_tarball_with_seam(out: &Path, progress: ProgressFn<'_>) -> Result<
     fetch_full_tarball_to_with_progress(out, progress)
 }
 
-/// Ensure the given library's data is present in the cache.
+/// Ensure the given library's data is present in the cache — plus every
+/// library `library_for_projectile` might silently route to.
 ///
 /// On a cold cache fetches the full release tarball but extracts only the
-/// requested library's subtree plus the mandatory `meta/`/`stopping/` —
-/// disk write bounded to ~50–110 MB rather than the full 400 MB. When
-/// upstream ships per-library tarballs, only the URL changes here.
+/// requested library's subtree, the mandatory `meta/`/`stopping/`, and the
+/// routed neutron / heavy-ion libraries (see [`required_libraries`]) —
+/// disk write bounded to ~100–200 MB rather than the full 400 MB.
 ///
-/// On a warm cache (sentinel present) where the library is already
-/// extracted, returns immediately. If the sentinel is present but the
-/// library subtree is absent (the bundled-resources-on-installer case),
-/// fetches and merges only that library into the cache.
+/// The routed libs matter because [`crate::db::library_for_projectile`]
+/// overrides the store's library for neutron and heavy-ion projectiles: `n`
+/// reads from `endfb-8.0`, `c12`/`ar40`/… read from `hi-xs-prod`. Callers
+/// (`hyrr-mcp/src/main.rs`, `py/src/lib.rs`, `py-mcp/src/lib.rs`) only pass
+/// the charged-library default, so before #709 those routed libs were never
+/// fetched and every neutron / heavy-ion run returned empty out of the box
+/// with no diagnostic. Fetching them here keeps the cost to disk space —
+/// the tarball is the same ~727 MB either way — but closes the silent-empty
+/// hole.
+///
+/// On a warm cache (sentinel present) where the requested library **and
+/// every routed lib** are already extracted, returns immediately. If any
+/// required subtree is absent (an old cache from before this fix, or the
+/// bundled-resources-on-installer case), re-fetches and merges the missing
+/// libraries into the cache.
 pub fn ensure_library(library: &str) -> Result<()> {
     let mut noop = no_op_progress();
     ensure_library_with_progress(library, &mut noop)
@@ -1947,22 +1961,55 @@ pub fn ensure_library(library: &str) -> Result<()> {
 
 /// Progress-aware variant of [`ensure_library`].
 pub fn ensure_library_with_progress(library: &str, progress: ProgressFn<'_>) -> Result<()> {
-    if is_cache_complete() && cache_dir()?.join("data").join(library).exists() {
+    if warm_cache_covers(library)? {
         return Ok(());
     }
     let _lock = acquire_lock()?;
-    if is_cache_complete() && cache_dir()?.join("data").join(library).exists() {
+    if warm_cache_covers(library)? {
         return Ok(());
     }
     require_free_space(1024 * 1024 * 1024)?;
     let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
-    fetch_full_tarball_to_with_progress(&tmp, progress)?;
-    let lib_prefix = format!("data/{library}/");
+    fetch_full_tarball_with_seam(&tmp, progress)?;
+    let libs = required_libraries(library);
+    let lib_prefixes: Vec<String> = libs.iter().map(|lib| format!("data/{lib}/")).collect();
     let mut prefixes: Vec<&str> = MANDATORY_PREFIXES.to_vec();
-    prefixes.push(&lib_prefix);
+    prefixes.extend(lib_prefixes.iter().map(String::as_str));
     install_tarball_atomic(&tmp, &prefixes, progress)?;
     Ok(())
+}
+
+/// The libraries `ensure_library(library)` must extract: the caller's
+/// requested one, plus [`NEUTRON_LIBRARY`] and [`HEAVY_ION_LIBRARY`] so
+/// `library_for_projectile`'s neutron / heavy-ion overrides resolve to
+/// something on disk (#709). Deduplicated so a caller that already asked
+/// for a routed lib doesn't get a duplicate prefix into the extractor.
+fn required_libraries(library: &str) -> Vec<&str> {
+    let mut libs = vec![library];
+    for routed in [NEUTRON_LIBRARY, HEAVY_ION_LIBRARY] {
+        if !libs.contains(&routed) {
+            libs.push(routed);
+        }
+    }
+    libs
+}
+
+/// Warm-cache short-circuit gate for [`ensure_library_with_progress`]: the
+/// sentinel is present AND every library `library_for_projectile` might
+/// pick is extracted. If any routed subtree is missing, callers fall
+/// through to the fetch path so a stale (pre-#709) cache gets healed.
+fn warm_cache_covers(library: &str) -> Result<bool> {
+    if !is_cache_complete() {
+        return Ok(false);
+    }
+    let data_dir = cache_dir()?.join("data");
+    for lib in required_libraries(library) {
+        if !data_dir.join(lib).exists() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Ensure *every* library is present in the cache. This is the path the
@@ -2804,6 +2851,37 @@ mod tests {
         h2.set_cksum();
         tar.append_data(&mut h2, "data/tendl-test/xs/p_Cu.parquet", p2.as_slice())
             .unwrap();
+        tar.finish().unwrap();
+    }
+
+    /// Same as [`make_test_tarball`] but also carries entries under the
+    /// routed neutron ([`NEUTRON_LIBRARY`]) and heavy-ion
+    /// ([`HEAVY_ION_LIBRARY`]) subtrees, so `ensure_library` post-#709 can
+    /// short-circuit on it (the fix requires those routed libs to be
+    /// present, not just the charged one). Kept separate from the base
+    /// fixture because the manifest-verification tests hard-code the
+    /// two-entry shape of `make_test_tarball` (see `manifest_install_tests`).
+    pub(super) fn make_test_tarball_with_routing(out: &Path) {
+        let file = fs::File::create(out).unwrap();
+        let encoder = zstd::stream::Encoder::new(file, 0).unwrap().auto_finish();
+        let mut tar = tar::Builder::new(encoder);
+        // Named-const-driven, not literals: if a maintainer flips
+        // NEUTRON_LIBRARY / HEAVY_ION_LIBRARY the fixture follows.
+        let neutron_path = format!("data/{NEUTRON_LIBRARY}/xs/n_Fe.parquet");
+        let heavy_path = format!("data/{HEAVY_ION_LIBRARY}/xs/c12_Al.parquet");
+        let entries: [(&str, &[u8]); 4] = [
+            ("data/meta/marker", b"test-marker"),
+            ("data/tendl-test/xs/p_Cu.parquet", b"xs-marker"),
+            (neutron_path.as_str(), b"n-marker"),
+            (heavy_path.as_str(), b"hi-marker"),
+        ];
+        for (path, payload) in entries.iter() {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, *path, *payload).unwrap();
+        }
         tar.finish().unwrap();
     }
 
@@ -4134,28 +4212,136 @@ mod tests {
         assert!(!cache_dir().unwrap().join("data/random-dir").exists());
     }
 
-    /// `ensure_library` short-circuits when the sentinel is present
-    /// AND the library directory already exists (the warm-cache path).
-    /// Install the test tarball first to populate the cache, then
-    /// verify ensure_library returns immediately without fetching.
+    /// `ensure_library` short-circuits when the sentinel is present AND
+    /// every library it must cover (requested + [`NEUTRON_LIBRARY`] +
+    /// [`HEAVY_ION_LIBRARY`], see #709) is already extracted (the warm-cache
+    /// path). Install the routing-aware test tarball first to populate the
+    /// cache, then verify `ensure_library` returns immediately without
+    /// hitting the fetch seam.
     #[test]
     fn ensure_library_short_circuits_on_warm_cache() {
         let _g = SERIAL.lock().unwrap();
         let td = isolated_home();
         let archive = td.path().join("test.tar.zst");
-        make_test_tarball(&archive); // contains data/tendl-test/xs/p_Cu.parquet
+        // Post-#709 the warm-cache short-circuit requires the routed libs
+        // to be present too, so use the routing-aware fixture.
+        make_test_tarball_with_routing(&archive);
 
         // Populate the cache via install_from_tarball (which doesn't
         // need network).
         install_unverified(&archive).unwrap();
         assert!(is_cache_complete());
 
-        let lib_dir = cache_dir().unwrap().join("data/tendl-test");
-        assert!(lib_dir.exists(), "library subtree was not extracted");
+        let cd = cache_dir().unwrap();
+        assert!(cd.join("data/tendl-test").exists(), "charged lib missing");
+        assert!(
+            cd.join(format!("data/{NEUTRON_LIBRARY}")).exists(),
+            "neutron routed lib missing from fixture install"
+        );
+        assert!(
+            cd.join(format!("data/{HEAVY_ION_LIBRARY}")).exists(),
+            "heavy-ion routed lib missing from fixture install"
+        );
 
-        // ensure_library with the installed library is a no-op.
-        // It should return Ok immediately without hitting the network.
+        // Fetch seam is NOT armed — if the short-circuit fails we get a
+        // real network call, which the test cannot pass. So a passing
+        // test is proof no fetch happened.
         ensure_library("tendl-test").unwrap();
+    }
+
+    /// **Regression for #709.** A cache that holds the charged library
+    /// but is missing the routed neutron / heavy-ion libraries must NOT
+    /// short-circuit — `ensure_library` has to fall through to the fetch
+    /// path and pull them in, or every neutron and heavy-ion simulation
+    /// silently returns an empty result on a fresh install. This is the
+    /// exact shape the bug had in production: `uvx hyrr-mcp` populated a
+    /// cache with `tendl-2023-iso` only, and `library_for_projectile`
+    /// then routed `n` and `c12` calls to on-disk directories that never
+    /// existed. The test asserts a non-empty outcome (all three subtrees
+    /// present) rather than "no panic", because the bug class here is
+    /// silent-empty results.
+    #[test]
+    fn ensure_library_fetches_routed_libraries_on_cold_cache() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let archive = td.path().join("test.tar.zst");
+        make_test_tarball_with_routing(&archive);
+
+        // No cache yet — cold path. Arm the fetch seam so the "download"
+        // step returns our fixture instead of hitting GitHub.
+        test_hooks::arm_fetch_source(archive.clone());
+
+        ensure_library("tendl-test").unwrap();
+
+        let cd = cache_dir().unwrap();
+        assert!(is_cache_complete());
+        assert!(
+            cd.join("data/tendl-test/xs/p_Cu.parquet").exists(),
+            "requested charged library missing after ensure_library"
+        );
+        assert!(
+            cd.join(format!("data/{NEUTRON_LIBRARY}/xs/n_Fe.parquet"))
+                .exists(),
+            "#709: routed neutron library ({NEUTRON_LIBRARY}) must be extracted"
+        );
+        assert!(
+            cd.join(format!("data/{HEAVY_ION_LIBRARY}/xs/c12_Al.parquet"))
+                .exists(),
+            "#709: routed heavy-ion library ({HEAVY_ION_LIBRARY}) must be extracted"
+        );
+
+        test_hooks::clear_fetch_source();
+    }
+
+    /// **Regression for #709 — the upgrade path.** Users on 0.21.1 have a
+    /// warm cache that carries the charged library but not the routed ones
+    /// (they were never fetched). On upgrade, the very next
+    /// `ensure_library` call must detect the gap and re-fetch to heal it,
+    /// rather than short-circuiting on `is_cache_complete()` alone.
+    #[test]
+    fn ensure_library_refetches_when_routed_libs_missing_from_warm_cache() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+
+        // Step 1: simulate a pre-#709 warm cache — tendl-test only, no
+        // routed libs. `make_test_tarball` gives us exactly that shape.
+        let old_archive = td.path().join("pre-709.tar.zst");
+        make_test_tarball(&old_archive);
+        install_unverified(&old_archive).unwrap();
+        assert!(is_cache_complete());
+        let cd = cache_dir().unwrap();
+        assert!(cd.join("data/tendl-test").exists());
+        assert!(
+            !cd.join(format!("data/{NEUTRON_LIBRARY}")).exists(),
+            "sanity: pre-#709 cache must NOT have the routed neutron lib"
+        );
+        assert!(
+            !cd.join(format!("data/{HEAVY_ION_LIBRARY}")).exists(),
+            "sanity: pre-#709 cache must NOT have the routed heavy-ion lib"
+        );
+
+        // Step 2: on the next boot, ensure_library must re-fetch to pull
+        // in the missing routed libs. Arm the seam with a full fixture.
+        let full_archive = td.path().join("post-709.tar.zst");
+        make_test_tarball_with_routing(&full_archive);
+        test_hooks::arm_fetch_source(full_archive.clone());
+
+        ensure_library("tendl-test").unwrap();
+
+        assert!(
+            cd.join(format!("data/{NEUTRON_LIBRARY}/xs/n_Fe.parquet"))
+                .exists(),
+            "#709: warm-cache upgrade must extract the routed neutron library"
+        );
+        assert!(
+            cd.join(format!("data/{HEAVY_ION_LIBRARY}/xs/c12_Al.parquet"))
+                .exists(),
+            "#709: warm-cache upgrade must extract the routed heavy-ion library"
+        );
+        // And the original library survives the merge.
+        assert!(cd.join("data/tendl-test/xs/p_Cu.parquet").exists());
+
+        test_hooks::clear_fetch_source();
     }
 
     /// `ensure_library` returns an error (not a panic) when the cache
