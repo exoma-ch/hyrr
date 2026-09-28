@@ -133,3 +133,120 @@ describe("ActivityTableEnhanced — empty state", () => {
     expect(screen.getByTestId("diag-empty-state")).toBeTruthy();
   });
 });
+
+/** A result with a non-empty isotope table plus an error-severity diagnostic —
+ *  the #668 shape. `ActivityTableEnhanced` must show the diagnostic above the
+ *  table so the user learns why a downstream yield is missing even when
+ *  charged direct products fill the rows. */
+function nonEmptyResultWithDiag(
+  diagnostics: SimulationResult["diagnostics"] = undefined,
+): SimulationResult {
+  return {
+    config: {
+      beam: { projectile: "p", energy_MeV: 17.8, current_mA: 0.02 },
+      layers: [
+        { material: "Be", thickness_cm: 0.2 },
+        { material: "Al", thickness_cm: 0.2 },
+      ],
+      irradiation_s: 3600,
+      cooling_s: 0,
+    },
+    layers: [
+      {
+        layer_index: 0,
+        energy_in: 17.8,
+        energy_out: 5.33,
+        delta_E_MeV: 12.47,
+        heat_kW: 0,
+        // Al direct products present — non-empty table, so the empty-tbody
+        // branch of the component does NOT fire. Field names match
+        // `IsotopeResultData` (mixed camelCase — TS side, not the on-wire
+        // serde shape).
+        isotopes: [
+          {
+            name: "Al-27",
+            Z: 13,
+            A: 27,
+            state: "",
+            half_life_s: null,
+            production_rate: 1.54e10,
+            saturation_yield_Bq_uA: 0,
+            activity_Bq: 1e5,
+            activity_direct_Bq: 1e5,
+            activity_ingrowth_Bq: 0,
+            time_grid_s: [0, 3600],
+            activity_vs_time_Bq: [0, 1e5],
+            source: "direct",
+            reactions: ["²⁷Al(p,p)"],
+            decay_notations: [],
+          },
+        ],
+        depth_profile: [],
+      },
+    ],
+    timestamp: 0,
+    diagnostics,
+  } as unknown as SimulationResult;
+}
+
+describe("ActivityTableEnhanced — above-table notice (#668)", () => {
+  it("renders a collapsible notice above a non-empty table for error-severity diagnostics", () => {
+    render(ActivityTableEnhanced, {
+      props: {
+        result: nonEmptyResultWithDiag([
+          {
+            kind: "secondary_neutrons_no_source",
+            severity: "error",
+            layer_index: null,
+            message:
+              "`secondary_neutron: true` was requested, but the charged pass emitted zero (x,n) free neutrons — the downstream neutron-activation pass was skipped. No cross-section data for p + Be-9 in layer 1 in this library — that upstream converter produced no free neutrons. Pick a library that carries Be-9 to restore the source.",
+            missing_converter_data: [
+              { layer_index: 0, projectile: "p", target_symbol: "Be", target_a: 9 },
+            ],
+          },
+        ]),
+      },
+    });
+
+    const notice = screen.getByTestId("diag-notice");
+    expect(notice).toBeTruthy();
+    // Non-empty tbody: the empty-state must NOT be rendered — this is the
+    // above-the-table path, not the empty-tbody one.
+    expect(screen.queryByTestId("diag-empty-state")).toBeNull();
+    // The message must be there in full — pre-rendered by the engine.
+    expect(notice.textContent).toMatch(/secondary_neutron/);
+    expect(notice.textContent).toMatch(/p \+ Be-9/);
+    // Notice defaults to open so the user sees the reason immediately.
+    expect((notice as HTMLDetailsElement).open).toBe(true);
+    // Copy must not contradict the open-by-default: the previous "Click to
+    // expand" line was a bug flagged by the coordinator.
+    expect(notice.textContent).not.toMatch(/click to expand/i);
+  });
+
+  it("hides the notice when only Warning-severity diagnostics are present", () => {
+    render(ActivityTableEnhanced, {
+      props: {
+        result: nonEmptyResultWithDiag([
+          {
+            kind: "secondary_neutrons_no_source",
+            severity: "warning",
+            layer_index: null,
+            message:
+              "`secondary_neutron: true` was requested, but the charged pass emitted zero (x,n) free neutrons — the downstream neutron-activation pass was skipped. The library covered every upstream target, so this looks like a physically legitimate zero — no (x,n) channel is open at these energies. Raise the beam energy or drop the flag.",
+            missing_converter_data: [],
+          },
+        ]),
+      },
+    });
+
+    // Warning-severity zeros are a legitimate physical result — no banner.
+    expect(screen.queryByTestId("diag-notice")).toBeNull();
+  });
+
+  it("hides the notice on a healthy run with no diagnostics", () => {
+    render(ActivityTableEnhanced, {
+      props: { result: nonEmptyResultWithDiag([]) },
+    });
+    expect(screen.queryByTestId("diag-notice")).toBeNull();
+  });
+});

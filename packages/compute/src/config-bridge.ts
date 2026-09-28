@@ -178,7 +178,23 @@ export interface LayerResultData {
 export type DiagnosticKind =
   | "no_cross_section_data"
   | "empty_isotope_composition"
-  | "reaction_outside_energy_range";
+  | "reaction_outside_energy_range"
+  /** #668: `secondary_neutron: true` requested, but the charged pass
+   *  emitted zero (x,n) neutrons — the downstream neutron pass was skipped.
+   *  Carries `missing_converter_data`; when that list is non-empty the
+   *  severity is "error" (library gap on the converter), otherwise
+   *  "warning" (physically legitimate zero — no (x,n) channel open). */
+  | "secondary_neutrons_no_source";
+
+/** One (layer, projectile+target) miss that explains why the secondary-
+ *  neutron source is zero (#668). Mirrors `hyrr_core::types::MissingConverterTarget`. */
+export interface MissingConverterTarget {
+  /** 0-based index into `layers`. */
+  layer_index: number;
+  projectile: string;
+  target_symbol: string;
+  target_a: number;
+}
 
 export interface Diagnostic {
   kind: DiagnosticKind;
@@ -198,6 +214,8 @@ export interface Diagnostic {
   data_max_mev?: number;
   beam_min_mev?: number;
   beam_max_mev?: number;
+  /** Set on `secondary_neutrons_no_source`. */
+  missing_converter_data?: MissingConverterTarget[];
 }
 
 export interface SimulationResult {
