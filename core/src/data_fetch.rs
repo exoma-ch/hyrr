@@ -1030,14 +1030,13 @@ fn build_http_client() -> Result<ureq::Agent> {
 /// cap so a stuck stream on the healer's detached thread cannot tie
 /// up the process forever.
 ///
-/// 4 hours is enough for a ~727 MB tarball at ~400 kbps (a real, if
-/// slow, cellular link), which is well below the point where a user
-/// would consider the download healthy. Beyond that the heal thread
-/// gives up, writes the backoff marker (with a short window for
-/// transient errors), and the MCP keeps serving charged-particle
-/// requests. This cap only applies to the heal path; the shared
-/// client above has no body cap so it doesn't regress the cold-cache
-/// fetch that a user actively waits on.
+/// 6 hours: 727 MB × 8 / (6 × 3600 s) ≈ 270 kbps sustained is enough
+/// to finish inside the window, which covers a real, if slow, cellular
+/// or degraded satellite link. Beyond that the heal thread gives up,
+/// writes a transient backoff marker (15 min), and the MCP keeps
+/// serving charged-particle requests. This cap only applies to the
+/// heal path; the shared client above has no body cap so it doesn't
+/// regress the cold-cache fetch that a user actively waits on.
 fn build_heal_http_client() -> Result<ureq::Agent> {
     let tls = ureq::tls::TlsConfig::builder()
         .root_certs(tls_root_certs()?)
@@ -1047,7 +1046,7 @@ fn build_heal_http_client() -> Result<ureq::Agent> {
         .user_agent(concat!("hyrr-heal/", env!("CARGO_PKG_VERSION")))
         .timeout_connect(Some(std::time::Duration::from_secs(30)))
         .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
-        .timeout_recv_body(Some(std::time::Duration::from_secs(4 * 60 * 60)))
+        .timeout_recv_body(Some(std::time::Duration::from_secs(6 * 60 * 60)))
         .tls_config(tls)
         .build()
         .new_agent())
@@ -2243,24 +2242,50 @@ impl HealHandle {
 }
 
 /// Global slot the MCP tool layer consults to decide whether a routed
-/// projectile can be served or needs a diagnostic. Set once per process
-/// by the MCP entry point.
-static HEAL_HANDLE: OnceLock<HealHandle> = OnceLock::new();
+/// projectile can be served or needs a diagnostic. Set once per
+/// production process by the MCP entry point; tests can also clear
+/// it via [`clear_heal_handle_for_tests`] so a scenario running with
+/// a `Downloading` handle doesn't spill into other tests.
+///
+/// A `Mutex<Option<_>>` (rather than a `OnceLock<_>`) because tests
+/// need to swap handles between scenarios; the production install
+/// pattern is a single `install_heal_handle` at boot and a heavy
+/// read-only workload afterwards, so lock contention is a non-issue.
+static HEAL_HANDLE: OnceLock<Mutex<Option<HealHandle>>> = OnceLock::new();
 
-/// Install the process-global heal handle. Callable once — subsequent
-/// installs are silently ignored (`OnceLock::set` semantics). Returns
-/// `false` when a handle was already installed, so the caller can log
-/// the duplicate-install case.
-pub fn install_heal_handle(handle: HealHandle) -> bool {
-    HEAL_HANDLE.set(handle).is_ok()
+fn heal_handle_slot() -> &'static Mutex<Option<HealHandle>> {
+    HEAL_HANDLE.get_or_init(|| Mutex::new(None))
 }
 
-/// Retrieve the process-global heal handle. `None` when no MCP entry
-/// point has installed one (typical for a plain library / test build,
-/// or for a `--data-dir` / `HYRR_DATA` install where healing is out of
-/// scope).
-pub fn heal_handle() -> Option<&'static HealHandle> {
-    HEAL_HANDLE.get()
+/// Install the process-global heal handle. Replaces any previously
+/// installed handle (production callers install exactly once at boot).
+pub fn install_heal_handle(handle: HealHandle) -> bool {
+    let mut slot = heal_handle_slot().lock().unwrap_or_else(|e| e.into_inner());
+    *slot = Some(handle);
+    true
+}
+
+/// Retrieve a clone of the process-global heal handle. `None` when
+/// no MCP entry point has installed one (typical for a plain library
+/// / test build, or for a `--data-dir` / `HYRR_DATA` install where
+/// healing is out of scope). Returning an owned `HealHandle` (rather
+/// than a `&'static`) is cheap — the type is `Arc`-backed under the
+/// hood — and lets us keep the global mutable.
+pub fn heal_handle() -> Option<HealHandle> {
+    heal_handle_slot()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// Test-only: clear the global heal handle so a subsequent test
+/// starts from a "no MCP boot has happened" state. Callers must hold
+/// the tests-module `SERIAL` mutex before invoking, otherwise a
+/// concurrent installer can race.
+#[cfg(test)]
+pub(crate) fn clear_heal_handle_for_tests() {
+    let mut slot = heal_handle_slot().lock().unwrap_or_else(|e| e.into_inner());
+    *slot = None;
 }
 
 /// Backoff window for a transient failure: network unreachable, TLS
@@ -3577,7 +3602,7 @@ mod integrity_tests {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     /// Extraction-focused tests use the unverified installer: they cover
     /// locking, sentinel ordering and merge semantics, none of which are
     /// about authenticity, and no signing key exists to make a fixture
@@ -3593,7 +3618,7 @@ mod tests {
 
     /// Tests in this module must not run concurrently because they all mess
     /// with `$HOME` and the cache root.
-    pub(super) static SERIAL: Mutex<()> = Mutex::new(());
+    pub(crate) static SERIAL: Mutex<()> = Mutex::new(());
 
     /// Set $HOME to a fresh tempdir for the duration of the test.
     pub(super) fn isolated_home() -> tempfile::TempDir {

@@ -109,17 +109,15 @@ impl Lru {
 /// `NpDataStore::ensure_xs` memoised misses for those libs; keeping
 /// those in-memory results would defeat the heal.
 ///
-/// The on-disk tier is a **separate** concern. In this branch its key
-/// (see `hash_config` below) does **not** carry the data fingerprint,
-/// so a result cached during the heal window persists across a store
-/// swap and would be served forever. PR #717 lands the fingerprint in
-/// the disk key so the swap invalidates disk entries naturally — until
-/// it does, callers that need to bypass the disk cache should either
-/// set `HYRR_MCP_NO_DISK_CACHE=1` or let the tool-layer routed-library
-/// gate (`routed_library_unavailable_diagnostic`) short-circuit BEFORE
-/// the compute lands in the cache at all. That is what the current
-/// #709 gate does: routed-lib-unavailable calls return a diagnostic
-/// before `cached_sim` runs, so the stale result never gets written.
+/// The on-disk tier is invalidated **naturally** now that #717 has
+/// landed: `hash_config` folds `db.data_fingerprint()` into the key,
+/// and a store swap changes that fingerprint, so a pre-swap entry
+/// misses on disk and recomputes against the fresh store. This
+/// `clear_memory_cache` call is the belt half of a belt-and-braces
+/// pair — the disk tier is the braces. The tool-layer routed-library
+/// gate (`routed_library_unavailable_diagnostic`) is a third layer:
+/// routed-lib-unavailable calls return a diagnostic before compute
+/// runs, so a stale entry can't be written in the first place.
 pub fn clear_memory_cache() {
     cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }

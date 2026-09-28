@@ -17,7 +17,13 @@ fn main() {
         let _trace_guard = hyrr_core::trace_schema::init_native();
         let data_dir = hyrr_core::data_dir::resolve();
         let library = resolve_mcp_library(&args);
-        hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library);
+        // #709: run the routed-library heal in the background only when
+        // the resolved dir IS the managed cache. A user-supplied
+        // `--data-dir` / `HYRR_DATA` / sibling checkout is out of scope
+        // — the healer must not touch paths the user owns.
+        let spawn_heal =
+            hyrr_core::data_fetch::resolved_is_managed_cache(std::path::Path::new(&data_dir));
+        hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library, spawn_heal);
         return;
     }
 

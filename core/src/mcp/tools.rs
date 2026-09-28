@@ -433,34 +433,70 @@ fn cached_sim_with_id(
 }
 
 /// Routed libraries the given tool-call config depends on beyond the
-/// store's default library. Union of the projectile's routed library
-/// (`endfb-8.0` for `projectile=="n"`, `hi-xs-prod` for heavy-ion keys)
-/// and `NEUTRON_LIBRARY` when `secondary_neutron: true` — the Phase-2
-/// (x,n) → activation path in `simulate` reads (n,x) cross sections
-/// regardless of the primary projectile. Reviewer's blocker #1: a
-/// `p + secondary_neutron` call needs `endfb-8.0` even though the
-/// projectile-name check alone would treat it as pure charged.
+/// store's default library. Union of:
+///
+/// * The projectile's routed library — `NEUTRON_LIBRARY` for
+///   `projectile=="n"`, `HEAVY_ION_LIBRARY` for heavy-ion keys.
+/// * `NEUTRON_LIBRARY` when `secondary_neutron: true` — the Phase-2
+///   (x,n) → activation path in `simulate` reads (n,x) cross sections
+///   regardless of the primary projectile. So a `p + secondary_neutron`
+///   call needs `endfb-8.0` even though the projectile itself is
+///   charged (rev-3 reviewer blocker).
+/// * **All of the above collected recursively over every nested object
+///   argument** that carries a `projectile` key. `compare_simulations`
+///   nests full sim configs in `config_a` / `config_b` (each the same
+///   shape as `simulate` args), and future tools may follow the same
+///   pattern; a top-level-only check would let a nested
+///   `projectile: "n"` or nested `secondary_neutron: true` slip past
+///   the gate for the whole heal window AND every backoff — silently
+///   empty or partial comparisons for as long as the missing library
+///   isn't there (rev-4 reviewer blocker).
 ///
 /// Empty when the call only depends on the store's own library, which
 /// the transport verified at boot.
 fn routed_libraries_for_call(args: &Value) -> Vec<&'static str> {
     let mut libs: Vec<&'static str> = Vec::new();
-    if let Some(projectile) = args.get("projectile").and_then(|v| v.as_str()) {
-        if projectile == "n" {
-            libs.push(crate::db::NEUTRON_LIBRARY);
-        } else if crate::db::is_heavy_ion_key(projectile) {
-            libs.push(crate::db::HEAVY_ION_LIBRARY);
+    collect_routed_libraries(args, &mut libs);
+    libs
+}
+
+/// Recursive worker for [`routed_libraries_for_call`]. Walks every
+/// object value in the tree and folds in the routed libs required by
+/// any node that looks like a simulate config (has a `projectile` key
+/// or `secondary_neutron: true`). Kept iterative-ish (a Vec-based
+/// walk) rather than actually recursive to avoid a stack blow-up on a
+/// pathological deeply-nested config; tool inputs are bounded but the
+/// gate must not be the thing that panics on hostile input.
+fn collect_routed_libraries(node: &Value, libs: &mut Vec<&'static str>) {
+    let mut stack: Vec<&Value> = vec![node];
+    while let Some(v) = stack.pop() {
+        if let Some(obj) = v.as_object() {
+            if let Some(projectile) = obj.get("projectile").and_then(|p| p.as_str()) {
+                if projectile == "n" && !libs.contains(&crate::db::NEUTRON_LIBRARY) {
+                    libs.push(crate::db::NEUTRON_LIBRARY);
+                } else if crate::db::is_heavy_ion_key(projectile)
+                    && !libs.contains(&crate::db::HEAVY_ION_LIBRARY)
+                {
+                    libs.push(crate::db::HEAVY_ION_LIBRARY);
+                }
+            }
+            if obj
+                .get("secondary_neutron")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+                && !libs.contains(&crate::db::NEUTRON_LIBRARY)
+            {
+                libs.push(crate::db::NEUTRON_LIBRARY);
+            }
+            for (_k, child) in obj {
+                stack.push(child);
+            }
+        } else if let Some(arr) = v.as_array() {
+            for child in arr {
+                stack.push(child);
+            }
         }
     }
-    if args
-        .get("secondary_neutron")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-        && !libs.contains(&crate::db::NEUTRON_LIBRARY)
-    {
-        libs.push(crate::db::NEUTRON_LIBRARY);
-    }
-    libs
 }
 
 /// Typed diagnostic for a call that depends on a routed library which
@@ -3889,6 +3925,160 @@ mod tests {
         let n_secondary = json!({"projectile": "n", "secondary_neutron": true});
         let libs = routed_libraries_for_call(&n_secondary);
         assert_eq!(libs, vec![crate::db::NEUTRON_LIBRARY]);
+    }
+
+    /// **Reviewer rev-4 blocker — nested configs must also gate.**
+    /// `compare_simulations` takes `config_a` / `config_b`, each the
+    /// same shape as a `simulate` arg object. A top-level-only check
+    /// let a nested `projectile: "n"` or a nested `secondary_neutron:
+    /// true` through — the comparison then ran against the missing
+    /// routed library and produced a silently empty / partial result
+    /// for the entire backoff window (or forever on a release-gap).
+    /// The recursive union closes that.
+    #[test]
+    fn routed_libraries_for_call_recurses_into_nested_configs() {
+        use serde_json::json;
+
+        // compare_simulations with a nested neutron primary in config_a.
+        let compare_n = json!({
+            "config_a": {"projectile": "n", "energy_mev": 14.0},
+            "config_b": {"projectile": "p", "energy_mev": 18.0},
+        });
+        let libs = routed_libraries_for_call(&compare_n);
+        assert!(
+            libs.contains(&crate::db::NEUTRON_LIBRARY),
+            "nested projectile='n' in config_a must pull in the neutron library: {libs:?}"
+        );
+
+        // Nested secondary_neutron on a charged primary.
+        let compare_secondary = json!({
+            "config_a": {"projectile": "p", "energy_mev": 18.0},
+            "config_b": {"projectile": "p", "energy_mev": 25.0, "secondary_neutron": true},
+        });
+        let libs = routed_libraries_for_call(&compare_secondary);
+        assert!(
+            libs.contains(&crate::db::NEUTRON_LIBRARY),
+            "nested secondary_neutron=true in config_b must pull in the neutron library: {libs:?}"
+        );
+
+        // Nested heavy-ion primary.
+        let compare_hi = json!({
+            "config_a": {"projectile": "p", "energy_mev": 18.0},
+            "config_b": {"projectile": "c12", "energy_mev": 100.0},
+        });
+        let libs = routed_libraries_for_call(&compare_hi);
+        assert!(
+            libs.contains(&crate::db::HEAVY_ION_LIBRARY),
+            "nested heavy-ion in config_b must pull in the heavy-ion library: {libs:?}"
+        );
+
+        // Both nested need it → still one entry each (dedup).
+        let compare_both_n = json!({
+            "config_a": {"projectile": "n", "secondary_neutron": true},
+            "config_b": {"projectile": "p", "secondary_neutron": true},
+        });
+        let libs = routed_libraries_for_call(&compare_both_n);
+        assert_eq!(
+            libs.iter()
+                .filter(|l| **l == crate::db::NEUTRON_LIBRARY)
+                .count(),
+            1
+        );
+
+        // Purely charged nested configs — no routed dependency.
+        let compare_plain = json!({
+            "config_a": {"projectile": "p", "energy_mev": 18.0},
+            "config_b": {"projectile": "d", "energy_mev": 12.0},
+        });
+        assert!(routed_libraries_for_call(&compare_plain).is_empty());
+    }
+
+    /// **Reviewer rev-4 blocker end-to-end — `call_tool` itself must
+    /// return the typed diagnostic** for a top-level
+    /// `p + secondary_neutron` AND a nested `compare_simulations`
+    /// carrying a neutron-routing config, both during the
+    /// `Downloading` window. This exercises the production intercept
+    /// path (`call_tool` → `routed_library_unavailable_diagnostic` →
+    /// process-global heal handle) rather than only the
+    /// `_with(handle, …)` seam.
+    ///
+    /// Serialises against `data_fetch::tests::SERIAL` because the
+    /// global heal handle is a process-wide slot and other tests would
+    /// race with it otherwise.
+    #[test]
+    fn call_tool_gates_top_level_and_nested_configs_during_download() {
+        use crate::data_fetch::{self, HealHandle};
+        use crate::db::InMemoryDataStore;
+        use serde_json::json;
+
+        let _g = crate::data_fetch::tests::SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        // Install a Downloading handle covering NEUTRON_LIBRARY.
+        data_fetch::install_heal_handle(HealHandle::test_new_downloading(vec![
+            crate::db::NEUTRON_LIBRARY.to_string(),
+        ]));
+
+        let db = InMemoryDataStore::new("tendl-2023-iso");
+        let mut materials: crate::materials::MaterialRegistry = HashMap::new();
+
+        // TOP-LEVEL: p + secondary_neutron. Would otherwise call
+        // compute_stack_with_secondary_neutrons against endfb-8.0.
+        let top_level_args = json!({
+            "projectile": "p",
+            "energy_mev": 18.0,
+            "current_ma": 0.1,
+            "layers": [],
+            "secondary_neutron": true,
+        });
+        let resp = call_tool(&db, &mut materials, "simulate", &top_level_args)
+            .expect("call_tool returns Ok with the diagnostic body");
+        assert!(
+            resp.text.contains(crate::db::NEUTRON_LIBRARY),
+            "top-level p+secondary_neutron must be gated: {}",
+            resp.text
+        );
+        assert!(
+            resp.text.contains("not yet available") || resp.text.contains("Downloading"),
+            "top-level diagnostic must call out the in-flight state: {}",
+            resp.text
+        );
+
+        // NESTED: compare_simulations with config_b.projectile == "n".
+        let compare_args = json!({
+            "config_a": {"projectile": "p", "energy_mev": 18.0, "current_ma": 0.1, "layers": []},
+            "config_b": {"projectile": "n", "energy_mev": 14.0, "current_ma": 0.1, "layers": []},
+        });
+        let resp = call_tool(&db, &mut materials, "compare_simulations", &compare_args)
+            .expect("call_tool returns Ok with the diagnostic body");
+        assert!(
+            resp.text.contains(crate::db::NEUTRON_LIBRARY),
+            "nested projectile='n' in compare_simulations must be gated: {}",
+            resp.text
+        );
+
+        // NESTED secondary_neutron on charged: same treatment.
+        let compare_secondary = json!({
+            "config_a": {"projectile": "p", "energy_mev": 18.0, "current_ma": 0.1, "layers": []},
+            "config_b": {"projectile": "p", "energy_mev": 25.0, "current_ma": 0.1, "layers": [], "secondary_neutron": true},
+        });
+        let resp = call_tool(
+            &db,
+            &mut materials,
+            "compare_simulations",
+            &compare_secondary,
+        )
+        .expect("call_tool returns Ok with the diagnostic body");
+        assert!(
+            resp.text.contains(crate::db::NEUTRON_LIBRARY),
+            "nested secondary_neutron=true in compare_simulations must be gated: {}",
+            resp.text
+        );
+
+        // Restore the "no MCP boot" state so this test doesn't leak
+        // its Downloading handle into whatever runs next.
+        data_fetch::clear_heal_handle_for_tests();
     }
 
     /// **Reviewer's blocker #1 — call-layer gate for `p + secondary_neutron`
