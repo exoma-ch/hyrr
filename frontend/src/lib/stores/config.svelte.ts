@@ -243,7 +243,11 @@ function expandSync(): LayerConfig[] {
   return expandLayers(buildStackConfig());
 }
 
-function invalidateExpansion(): void {
+/** Rebuild the expanded-layers cache. Exported so stores that don't own a
+ *  layer/group mutation (e.g. custom-materials.svelte.ts editing a material
+ *  a layer references by name) can still force reactive consumers of
+ *  getConfig()/getLayers() to see the change (#material-edit-stale-yield). */
+export function invalidateExpansion(): void {
   const ver = ++expansionVersion;
 
   // Immediate sync expansion for count-mode (fast path)
