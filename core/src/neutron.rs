@@ -428,6 +428,7 @@ mod tests {
     /// Two temperatures pin both the shape AND the `√(E₀/kT)` scaling:
     /// * `kT = E₀` → `<σ> = σ₀·√π/2`
     /// * `kT = 4·E₀` → `<σ> = σ₀·√π/4`
+    ///
     /// It fails on the pre-#711 density-shape formula (ratio ~1.26–1.27, well
     /// outside the 0.5 % band).
     #[test]
