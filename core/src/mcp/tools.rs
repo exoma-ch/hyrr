@@ -698,15 +698,15 @@ fn neutron_flux_schema() -> Value {
     serde_json::json!({
         "type": "object",
         "additionalProperties": false,
-        "description": "Neutron flux spectrum for a neutron source (projectile 'n'; ADR-0003 Phase 1). Tagged by 'kind'. Defaults to a fission-fast spectrum if omitted. Total 'flux' is n/cm²/s.",
+        "description": "Neutron flux spectrum for a neutron source (projectile 'n'; ADR-0003 Phase 1). Tagged by 'kind'. Defaults to a fission-fast spectrum if omitted. 'flux' is the **total** integrated flux ∫φ(E) dE in n/cm²/s. For 'thermal' with a 1/v absorber this equals the Westcott 2200 m/s flux divided by √π/2·√(E₀/kT) (≈ 0.886 at room-temp equilibrium) — quote the total flux, not φ₀, or scale by that factor (#711).",
         "properties": {
             "kind": {
                 "type": "string",
                 "enum": ["thermal", "epithermal", "fast", "monoenergetic", "custom", "composite"],
                 "description": "Spectrum shape."
             },
-            "flux": { "type": "number", "description": "Total flux [n/cm²/s]." },
-            "kt_mev": { "type": "number", "description": "thermal: Maxwellian temperature kT [MeV] (0.0253 eV = 2.53e-8)." },
+            "flux": { "type": "number", "description": "Total flux ∫φ(E) dE [n/cm²/s] — NOT the Westcott 2200 m/s flux φ₀ (which is smaller by √π/2·√(E₀/kT) for a thermal spectrum, ≈ 0.886 at room-temp equilibrium; #711)." },
+            "kt_mev": { "type": "number", "description": "thermal: Maxwellian temperature kT [MeV] (0.0253 eV = 2.53e-8). Spectrum shape is the Maxwellian *flux* φ(E) ∝ E·e^{−E/kT}." },
             "e_min_mev": { "type": "number", "description": "epithermal: lower bound [MeV]." },
             "e_max_mev": { "type": "number", "description": "epithermal: upper bound [MeV]." },
             "temp_mev": { "type": "number", "description": "fast: evaporation temperature T [MeV] (~1.4 for fission)." },
