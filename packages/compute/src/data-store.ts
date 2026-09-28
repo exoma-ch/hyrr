@@ -118,18 +118,51 @@ export class AuthGateInterceptedError extends Error {
  * bindings that don't want to re-parse the message). The `url`, `status`
  * (0 == network/other) and `source` are convenience projections. (#689)
  */
-export interface DataFetchErrorPayload {
-  kind: "FetchError";
-  variant: "HttpStatus" | "Network";
-  status: number;
-  url: string;
-  cache_dir: string;
-  detail?: string;
-  message: string;
-}
+export type DataFetchErrorPayload =
+  | {
+      kind: "FetchError";
+      variant: "HttpStatus";
+      status: number;
+      url: string;
+      cache_dir: string;
+      message: string;
+    }
+  | {
+      kind: "FetchError";
+      variant: "Network";
+      status: 0;
+      url: string;
+      cache_dir: string;
+      detail: string;
+      message: string;
+    }
+  | {
+      // Emitted when every fetch in `init()` succeeded but the resulting
+      // index is still empty (bad-fixture / hosting misconfig). NOT an
+      // HTTP failure, so it must not render as "HTTP 200" — the reviewer
+      // caught this in PR #715 review. (#689)
+      kind: "FetchError";
+      variant: "EmptyIndex";
+      subject: string;
+      message: string;
+    }
+  | {
+      // Emitted when a 200 response body is not what we expected (HTML
+      // where parquet is served). The ETH deployment's auth-gate returns
+      // 200 with WAYF HTML — so "signed out" is *this* variant, not a
+      // redirect. Vite dev/preview's SPA fallback for a missing emission
+      // file also lands here. (#689 / #684 / PR #715 review)
+      kind: "FetchError";
+      variant: "UnexpectedContent";
+      url: string;
+      contentType: string;
+      message: string;
+    };
 
 export class DataFetchError extends Error {
   readonly url: string;
+  /** HTTP status. 0 for network-layer failures, 200 for UnexpectedContent,
+   *  N/A (0) for EmptyIndex. */
   readonly status: number;
   readonly payload: DataFetchErrorPayload;
   /** Short descriptor for logs / bug reports — e.g. "stopping/PSTAR",
@@ -137,34 +170,7 @@ export class DataFetchError extends Error {
    *  the JSON payload from `.message`. */
   readonly source: string;
 
-  constructor(opts: {
-    url: string;
-    status: number;
-    source: string;
-    /** Human-readable text used inside the wire payload's `message` field. */
-    humanMessage: string;
-    /** Optional detail (network error string) — mapped to Network variant. */
-    detail?: string;
-  }) {
-    const isHttp = opts.status > 0;
-    const payload: DataFetchErrorPayload = isHttp
-      ? {
-          kind: "FetchError",
-          variant: "HttpStatus",
-          status: opts.status,
-          url: opts.url,
-          cache_dir: "",
-          message: opts.humanMessage,
-        }
-      : {
-          kind: "FetchError",
-          variant: "Network",
-          status: 0,
-          url: opts.url,
-          cache_dir: "",
-          detail: opts.detail ?? "",
-          message: opts.humanMessage,
-        };
+  constructor(payload: DataFetchErrorPayload, source: string) {
     // parseFetchError's Error-branch JSON-parses `.message` — matches the
     // Tauri convention where `Result<_, String>` carries a JSON payload as
     // the error string. Keeping the JSON in `.message` means we don't need
@@ -172,10 +178,90 @@ export class DataFetchError extends Error {
     // violation — parse-fetch-error lives in the frontend).
     super(JSON.stringify(payload));
     this.name = "DataFetchError";
-    this.url = opts.url;
-    this.status = opts.status;
-    this.source = opts.source;
     this.payload = payload;
+    this.source = source;
+    switch (payload.variant) {
+      case "HttpStatus":
+        this.url = payload.url;
+        this.status = payload.status;
+        break;
+      case "Network":
+        this.url = payload.url;
+        this.status = 0;
+        break;
+      case "EmptyIndex":
+        this.url = "";
+        this.status = 0;
+        break;
+      case "UnexpectedContent":
+        this.url = payload.url;
+        this.status = 200;
+        break;
+    }
+  }
+
+  /** Convenience for the two most common construction sites — the
+   *  `readParquetRows` layer builds these from `Response` objects and
+   *  the `init` post-condition builds an `EmptyIndex`. Named factories
+   *  keep the payload shape uniform without every call site restating
+   *  the discriminant fields. */
+  static http(opts: { url: string; status: number; source: string; humanMessage: string }): DataFetchError {
+    return new DataFetchError(
+      {
+        kind: "FetchError",
+        variant: "HttpStatus",
+        status: opts.status,
+        url: opts.url,
+        cache_dir: "",
+        message: opts.humanMessage,
+      },
+      opts.source,
+    );
+  }
+
+  static network(opts: { url: string; source: string; detail: string; humanMessage: string }): DataFetchError {
+    return new DataFetchError(
+      {
+        kind: "FetchError",
+        variant: "Network",
+        status: 0,
+        url: opts.url,
+        cache_dir: "",
+        detail: opts.detail,
+        message: opts.humanMessage,
+      },
+      opts.source,
+    );
+  }
+
+  static unexpectedContent(opts: {
+    url: string;
+    source: string;
+    contentType: string;
+    humanMessage: string;
+  }): DataFetchError {
+    return new DataFetchError(
+      {
+        kind: "FetchError",
+        variant: "UnexpectedContent",
+        url: opts.url,
+        contentType: opts.contentType,
+        message: opts.humanMessage,
+      },
+      opts.source,
+    );
+  }
+
+  static emptyIndex(opts: { subject: string; humanMessage: string }): DataFetchError {
+    return new DataFetchError(
+      {
+        kind: "FetchError",
+        variant: "EmptyIndex",
+        subject: opts.subject,
+        message: opts.humanMessage,
+      },
+      opts.subject,
+    );
   }
 }
 
@@ -187,23 +273,42 @@ async function fetchParquet(url: string, source: string): Promise<ArrayBuffer> {
     // Network-layer failure (DNS, offline, aborted, CORS). Distinguish from
     // an HTTP error because the remedy differs (retry-once vs check server)
     // and because the FetchError schema splits them (#689).
-    throw new DataFetchError({
+    const detail = String((e as Error)?.message ?? e);
+    throw DataFetchError.network({
       url,
-      status: 0,
       source,
-      humanMessage: `Failed to reach ${source} at ${url}: ${String((e as Error)?.message ?? e)}`,
-      detail: String((e as Error)?.message ?? e),
+      detail,
+      humanMessage: `Failed to reach ${source} at ${url}: ${detail}`,
     });
   }
   if (!response.ok) {
     if (response.headers.get("X-Hyrr-Cache-Guard") === "auth-gate") {
       throw new AuthGateInterceptedError(url);
     }
-    throw new DataFetchError({
+    throw DataFetchError.http({
       url,
       status: response.status,
       source,
       humanMessage: `Failed to load ${source} (HTTP ${response.status} from ${url})`,
+    });
+  }
+  // 200 OK but the wrong kind of body: an HTML SSO page (ETH's WAYF gate
+  // returns 200 with HTML), or a Vite dev/preview SPA fallback for a
+  // missing file. Both look identical downstream — hyparquet would fail
+  // with an opaque "invalid parquet" error and no operator-visible signal
+  // for either root cause. Detect at this layer so `UnexpectedContent`
+  // carries the actual remedy through to `FetchErrorCard`. (#689 / #684)
+  const contentType = response.headers.get("Content-Type") ?? "";
+  if (/^\s*text\/(html|xml)/i.test(contentType)) {
+    throw DataFetchError.unexpectedContent({
+      url,
+      source,
+      contentType,
+      humanMessage:
+        `Expected a Parquet file at ${url} but the server returned ` +
+        `${contentType}. This is usually a sign-in page (auth gate) or a ` +
+        `dev-server SPA fallback for a missing file. Sign in and refresh, ` +
+        `or verify the file is present. (#689)`,
     });
   }
   return response.arrayBuffer();
@@ -420,10 +525,8 @@ export class DataStore implements DatabaseProtocol {
     // The per-file errors above catch a real load failure; this catches a
     // "loaded fine but the bundle is empty" bad-fixture / hosting misconfig.
     if (this.spIndex.size === 0) {
-      throw new DataFetchError({
-        url: `${this.baseUrl}/stopping/`,
-        status: 200,
-        source: "stopping/",
+      throw DataFetchError.emptyIndex({
+        subject: "stopping-power index",
         humanMessage:
           "Stopping-power tables loaded, but the resulting index is empty. " +
           "The data bundle is present but not usable — refusing to compute " +
@@ -556,19 +659,16 @@ export class DataStore implements DatabaseProtocol {
           );
         } catch (err) {
           // 404 is the expected "no ENSDF file for this element" case
-          // (see method docstring). Every other error is load-bearing —
-          // let it propagate so the run fails loudly rather than rendering
-          // a wrong dose. Auth-gate hits also propagate: on the emissions
-          // path they mean the whole `meta/` tree is gated too, same
-          // remedy as the xs case (#684). (#689)
+          // (see method docstring) — keep the "attempted" flag set so we
+          // don't re-fetch and proceed with an empty bucket. Every other
+          // error is load-bearing; un-flag so a retry after the user
+          // fixes their connection re-fetches instead of short-
+          // circuiting the "already loaded" check. Auth-gate hits also
+          // propagate: on the emissions path they mean the whole `meta/`
+          // tree is gated too, same remedy as the xs case (#684). (#689)
           if (err instanceof DataFetchError && err.status === 404) {
-            this.emissionLoadedSymbols.delete(symbol);
-            this.emissionLoadedSymbols.add(symbol); // idempotent: keep the "attempted" flag
             return;
           }
-          // Un-flag so a retry after the user fixes their connection
-          // actually re-fetches instead of short-circuiting the "already
-          // loaded" check.
           this.emissionLoadedSymbols.delete(symbol);
           throw err;
         }

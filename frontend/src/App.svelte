@@ -27,6 +27,8 @@
     getStatus,
     getProgress,
     getComputeError,
+    getDataWarning,
+    clearDataWarning,
   } from "./lib/stores/results.svelte";
   import {
     getHistoryOpen,
@@ -58,6 +60,7 @@
   import HistoryPanel from "./lib/components/HistoryPanel.svelte";
   import HistoryImportExport from "./lib/components/HistoryImportExport.svelte";
   import ComputeErrorCard from "./lib/components/ComputeErrorCard.svelte";
+  import PostSimDataWarning from "./lib/components/PostSimDataWarning.svelte";
   import MaterialPopup from "./lib/components/MaterialPopup.svelte";
   import ElementPopup from "./lib/components/ElementPopup.svelte";
   import IsotopePopup from "./lib/components/IsotopePopup.svelte";
@@ -86,6 +89,7 @@
   let result = $derived(getResult());
   let computeError = $derived(getComputeError());
   let resultError = $derived(getResultError());
+  let dataWarning = $derived(getDataWarning());
   let historyOpen = $derived(getHistoryOpen());
 
   // Popup state
@@ -414,6 +418,21 @@
             if (el && "scrollIntoView" in el) el.scrollIntoView({ behavior: "smooth" });
           }}
           onReportGap={openBugReport}
+        />
+      {/if}
+
+      {#if dataWarning && result}
+        <!--
+          Non-fatal warning: a post-compute emission/dose data load failed
+          but the simulation itself succeeded (#689 PR #715 review). The
+          banner sits ABOVE the results so a re-run doesn't hide it, but
+          preserves the results so the user can still act on the correct
+          activities/yields while the emission side is retried.
+        -->
+        <PostSimDataWarning
+          warning={dataWarning}
+          onretry={forceRun}
+          ondismiss={clearDataWarning}
         />
       {/if}
 

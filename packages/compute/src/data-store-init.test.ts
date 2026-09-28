@@ -215,11 +215,15 @@ describe("DataStore.init — load-bearing failures (#689)", () => {
     expect(parsed.url).toContain("PSTAR.parquet");
   });
 
-  it("throws when every stopping load succeeds but the resulting index is empty", async () => {
+  it("throws EmptyIndex when every stopping load succeeds but the resulting index is empty", async () => {
     // Belt-and-braces guard: a bundle whose stopping parquets parse to
     // zero rows (a hosting misconfig, a corrupt-body-that-still-parses,
     // a data-pipeline regression) must NOT silently proceed to a
     // zero-dE/dx run. Load-bearing post-condition, not a per-file check.
+    //
+    // Pin the variant explicitly — the pre-review encoding used
+    // `HttpStatus 200`, which rendered as "HTTP 200" in FetchErrorCard
+    // (misleading; there was no HTTP failure). (#689 PR #715 review)
     const handlers = happyDefaults();
     for (const key of Object.keys(handlers)) {
       if (key.startsWith("/stopping/") && !key.includes("compounds")) {
@@ -229,7 +233,67 @@ describe("DataStore.init — load-bearing failures (#689)", () => {
     installFetch(handlers);
 
     const store = new DataStore("https://example.com/data/parquet");
-    await expect(store.init()).rejects.toBeInstanceOf(DataFetchError);
+    let err: unknown;
+    try {
+      await store.init();
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(DataFetchError);
+    expect((err as DataFetchError).payload.variant).toBe("EmptyIndex");
+  });
+
+  it("throws Network when fetch itself rejects (DNS / offline / CORS)", async () => {
+    // Distinct from HttpStatus: the network layer never produced a
+    // Response object. The remedy is "check the connection", not "look
+    // at the status code" — FetchErrorCard's Network arm and CLI hint
+    // are only correct when we route through this variant. (#689 PR
+    // #715 review nit 7)
+    const handlers = happyDefaults();
+    // The stub's default is to `throw new Error("unexpected fetch: ...")`
+    // for unlisted suffixes, which is exactly what a rejected fetch looks
+    // like from data-store's point of view. Point PSTAR at that arm.
+    delete handlers["/stopping/PSTAR.parquet"];
+    installFetch(handlers);
+
+    const store = new DataStore("https://example.com/data/parquet");
+    let err: unknown;
+    try {
+      await store.init();
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(DataFetchError);
+    expect((err as DataFetchError).payload.variant).toBe("Network");
+    expect((err as DataFetchError).status).toBe(0);
+  });
+
+  it("throws UnexpectedContent when a 200 body is text/html (WAYF SSO gate / SPA fallback)", async () => {
+    // The ETH deployment's WAYF auth gate returns 200 with HTML, not a
+    // redirect. Vite dev/preview's SPA fallback for a missing file also
+    // returns 200 HTML. Both would previously fail deep inside hyparquet
+    // as "invalid parquet" with no operator-visible signal for either
+    // root cause — this arm routes them to the right recovery UI. (#689
+    // PR #715 review nits 6, 8)
+    const handlers = happyDefaults();
+    handlers["/stopping/PSTAR.parquet"] = {
+      status: 200,
+      // rows unused: the mocked parquetRead never runs because
+      // fetchParquet throws on the content-type check first.
+      rows: [],
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    };
+    installFetch(handlers);
+
+    const store = new DataStore("https://example.com/data/parquet");
+    let err: unknown;
+    try {
+      await store.init();
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(DataFetchError);
+    expect((err as DataFetchError).payload.variant).toBe("UnexpectedContent");
   });
 
   it("dose_constants 404 is optional — init still succeeds", async () => {

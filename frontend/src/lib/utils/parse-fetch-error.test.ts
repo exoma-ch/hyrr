@@ -162,14 +162,14 @@ describe("parseFetchError — fallbacks", () => {
     expect(result.kind).toBe("unknown");
   });
 
-  it("classifies a browser-side DataFetchError (init-time stopping/emissions failure)", () => {
+  it("classifies a browser-side DataFetchError.http (init-time stopping/emissions failure)", () => {
     // Pins the handshake #689 relies on: `DataStore.init` throws a
     // `DataFetchError` whose `.message` is a JSON-encoded FetchErrorPayload,
     // and `parseFetchError`'s Error branch JSON-parses `.message`. If either
     // side changed the wire shape independently the load-bearing failure
     // would silently degrade to `kind: "unknown"` and `FetchErrorCard`
     // would lose its variant-specific recovery hints.
-    const err = new DataFetchError({
+    const err = DataFetchError.http({
       url: "https://example.com/data/parquet/stopping/PSTAR.parquet",
       status: 403,
       source: "stopping/PSTAR",
@@ -181,6 +181,62 @@ describe("parseFetchError — fallbacks", () => {
     }
     expect(result.status).toBe(403);
     expect(result.url).toContain("PSTAR.parquet");
+  });
+
+  it("classifies a DataFetchError.network (fetch rejected — DNS, offline, CORS)", () => {
+    // The network variant is the one #689 PR #715 review asked for:
+    // fetch() throwing (not a non-OK Response) must reach FetchErrorCard
+    // via the Network arm, with the underlying error detail preserved.
+    const err = DataFetchError.network({
+      url: "https://example.com/data/parquet/stopping/ASTAR.parquet",
+      source: "stopping/ASTAR",
+      detail: "TypeError: NetworkError when attempting to fetch resource.",
+      humanMessage: "Failed to reach stopping/ASTAR",
+    });
+    const result = parseFetchError(err);
+    if (result.kind !== "FetchError" || result.variant !== "Network") {
+      throw new Error(`expected Network from DataFetchError, got ${result.kind}`);
+    }
+    expect(result.detail).toContain("NetworkError");
+    expect(result.url).toContain("ASTAR.parquet");
+  });
+
+  it("classifies a DataFetchError.unexpectedContent (HTML at a parquet URL — auth gate)", () => {
+    // The ETH deployment's WAYF auth gate returns 200 with `text/html`,
+    // so the "signed out" failure mode is UnexpectedContent — not a
+    // redirect, and not a 4xx. Also covers Vite dev/preview SPA fallback
+    // (#689 PR #715 review nit 6/8).
+    const err = DataFetchError.unexpectedContent({
+      url: "https://hyrr.ethz.ch/data/parquet/stopping/PSTAR.parquet",
+      source: "stopping/PSTAR",
+      contentType: "text/html; charset=utf-8",
+      humanMessage: "Expected parquet, got HTML (auth gate?)",
+    });
+    const result = parseFetchError(err);
+    if (result.kind !== "FetchError" || result.variant !== "UnexpectedContent") {
+      throw new Error(
+        `expected UnexpectedContent from DataFetchError, got ${result.kind}`,
+      );
+    }
+    expect(result.contentType).toContain("text/html");
+    expect(result.url).toContain("hyrr.ethz.ch");
+  });
+
+  it("classifies a DataFetchError.emptyIndex (bundle loaded but index empty)", () => {
+    // The belt-and-braces post-condition in `DataStore.init` — separate
+    // from HTTP failures. Rendering this as `HTTP 200` (the pre-review
+    // encoding) was actively misleading.
+    const err = DataFetchError.emptyIndex({
+      subject: "stopping-power index",
+      humanMessage: "Stopping-power tables loaded but the index is empty.",
+    });
+    const result = parseFetchError(err);
+    if (result.kind !== "FetchError" || result.variant !== "EmptyIndex") {
+      throw new Error(
+        `expected EmptyIndex from DataFetchError, got ${result.kind}`,
+      );
+    }
+    expect(result.subject).toContain("stopping-power");
   });
 });
 
@@ -227,6 +283,25 @@ describe("fetchErrorTitle — variant-aware copy for support triage", () => {
       "write",
     ],
     [{ kind: "FetchError", variant: "NoHome", message: "" }, "home"],
+    [
+      {
+        kind: "FetchError",
+        variant: "EmptyIndex",
+        subject: "stopping-power index",
+        message: "",
+      },
+      "empty",
+    ],
+    [
+      {
+        kind: "FetchError",
+        variant: "UnexpectedContent",
+        url: "x",
+        contentType: "text/html",
+        message: "",
+      },
+      "wrong kind",
+    ],
   ];
 
   for (const [payload, fragment] of cases) {
