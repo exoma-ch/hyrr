@@ -104,19 +104,248 @@ export class AuthGateInterceptedError extends Error {
   }
 }
 
-async function fetchParquet(url: string): Promise<ArrayBuffer> {
-  const response = await fetch(url);
+/**
+ * Typed fetch failure for a static-data file (Parquet, stopping table, …).
+ *
+ * The message is a JSON-encoded `FetchErrorPayload` — the same on-the-wire
+ * shape the Rust `hyrr_core::data_fetch::FetchError` produces on Tauri, so
+ * `parseFetchError` classifies both without the browser having to know it
+ * came from JS. That keeps `FetchErrorCard` (the existing recovery UI, #118)
+ * as the single render surface for cold-load failures whatever engine hit
+ * them. See `frontend/src/lib/utils/parse-fetch-error.ts` for the schema.
+ *
+ * The `payload` field is the parsed payload for programmatic access (tests,
+ * bindings that don't want to re-parse the message). The `url`, `status`
+ * (0 == network/other) and `source` are convenience projections. (#689)
+ */
+export type DataFetchErrorPayload =
+  | {
+      kind: "FetchError";
+      variant: "HttpStatus";
+      status: number;
+      url: string;
+      cache_dir: string;
+      message: string;
+    }
+  | {
+      kind: "FetchError";
+      variant: "Network";
+      status: 0;
+      url: string;
+      cache_dir: string;
+      detail: string;
+      message: string;
+    }
+  | {
+      // Emitted when every fetch in `init()` succeeded but the resulting
+      // index is still empty (bad-fixture / hosting misconfig). NOT an
+      // HTTP failure, so it must not render as "HTTP 200" — the reviewer
+      // caught this in PR #715 review. (#689)
+      kind: "FetchError";
+      variant: "EmptyIndex";
+      subject: string;
+      message: string;
+    }
+  | {
+      // Emitted when a 200 response body is not what we expected (HTML
+      // where parquet is served). The ETH deployment's auth-gate returns
+      // 200 with WAYF HTML — so "signed out" is *this* variant, not a
+      // redirect. Vite dev/preview's SPA fallback for a missing emission
+      // file also lands here. (#689 / #684 / PR #715 review)
+      kind: "FetchError";
+      variant: "UnexpectedContent";
+      url: string;
+      contentType: string;
+      message: string;
+    };
+
+export class DataFetchError extends Error {
+  readonly url: string;
+  /** HTTP status. 0 for network-layer failures, 200 for UnexpectedContent,
+   *  N/A (0) for EmptyIndex. */
+  readonly status: number;
+  readonly payload: DataFetchErrorPayload;
+  /** Short descriptor for logs / bug reports — e.g. "stopping/PSTAR",
+   *  "meta/ensdf/emissions/Ra". Not on the wire; the render surface reads
+   *  the JSON payload from `.message`. */
+  readonly source: string;
+
+  constructor(payload: DataFetchErrorPayload, source: string) {
+    // parseFetchError's Error-branch JSON-parses `.message` — matches the
+    // Tauri convention where `Result<_, String>` carries a JSON payload as
+    // the error string. Keeping the JSON in `.message` means we don't need
+    // a compute → parse-fetch-error import (which would be a layering
+    // violation — parse-fetch-error lives in the frontend).
+    super(JSON.stringify(payload));
+    this.name = "DataFetchError";
+    this.payload = payload;
+    this.source = source;
+    switch (payload.variant) {
+      case "HttpStatus":
+        this.url = payload.url;
+        this.status = payload.status;
+        break;
+      case "Network":
+        this.url = payload.url;
+        this.status = 0;
+        break;
+      case "EmptyIndex":
+        this.url = "";
+        this.status = 0;
+        break;
+      case "UnexpectedContent":
+        this.url = payload.url;
+        this.status = 200;
+        break;
+    }
+  }
+
+  /** Convenience for the two most common construction sites — the
+   *  `readParquetRows` layer builds these from `Response` objects and
+   *  the `init` post-condition builds an `EmptyIndex`. Named factories
+   *  keep the payload shape uniform without every call site restating
+   *  the discriminant fields. */
+  static http(opts: { url: string; status: number; source: string; humanMessage: string }): DataFetchError {
+    return new DataFetchError(
+      {
+        kind: "FetchError",
+        variant: "HttpStatus",
+        status: opts.status,
+        url: opts.url,
+        cache_dir: "",
+        message: opts.humanMessage,
+      },
+      opts.source,
+    );
+  }
+
+  static network(opts: { url: string; source: string; detail: string; humanMessage: string }): DataFetchError {
+    return new DataFetchError(
+      {
+        kind: "FetchError",
+        variant: "Network",
+        status: 0,
+        url: opts.url,
+        cache_dir: "",
+        detail: opts.detail,
+        message: opts.humanMessage,
+      },
+      opts.source,
+    );
+  }
+
+  static unexpectedContent(opts: {
+    url: string;
+    source: string;
+    contentType: string;
+    humanMessage: string;
+  }): DataFetchError {
+    return new DataFetchError(
+      {
+        kind: "FetchError",
+        variant: "UnexpectedContent",
+        url: opts.url,
+        contentType: opts.contentType,
+        message: opts.humanMessage,
+      },
+      opts.source,
+    );
+  }
+
+  static emptyIndex(opts: { subject: string; humanMessage: string }): DataFetchError {
+    return new DataFetchError(
+      {
+        kind: "FetchError",
+        variant: "EmptyIndex",
+        subject: opts.subject,
+        message: opts.humanMessage,
+      },
+      opts.subject,
+    );
+  }
+}
+
+async function fetchParquet(url: string, source: string): Promise<ArrayBuffer> {
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch (e) {
+    // Network-layer failure (DNS, offline, aborted, CORS). Distinguish from
+    // an HTTP error because the remedy differs (retry-once vs check server)
+    // and because the FetchError schema splits them (#689).
+    const detail = String((e as Error)?.message ?? e);
+    throw DataFetchError.network({
+      url,
+      source,
+      detail,
+      humanMessage: `Failed to reach ${source} at ${url}: ${detail}`,
+    });
+  }
   if (!response.ok) {
     if (response.headers.get("X-Hyrr-Cache-Guard") === "auth-gate") {
       throw new AuthGateInterceptedError(url);
     }
-    throw new Error(`Failed to fetch ${url}: ${response.status}`);
+    throw DataFetchError.http({
+      url,
+      status: response.status,
+      source,
+      humanMessage: `Failed to load ${source} (HTTP ${response.status} from ${url})`,
+    });
   }
-  return response.arrayBuffer();
+  // 200 OK — verify the body IS actually a Parquet.
+  //
+  // The source of truth is the body's PAR1 magic bytes (Apache Parquet v2:
+  // first four AND last four bytes are `PAR1`). Content-Type is diagnostic
+  // detail only — the ACTUAL parquet bytes reject false negatives.
+  //
+  // Why NOT trust Content-Type: Tauri v2's asset protocol on Linux
+  // (WebKit2GTK) serves unknown extensions — `.parquet` among them — with
+  // `Content-Type: text/html`. That's the very case a naive content-type
+  // sniff would call an auth-gate SPA fallback, which is what broke the
+  // e2e-tauri suite on PR #715 before this reordering. Under the ETH
+  // WAYF gate and under Vite dev/preview's SPA fallback the body is
+  // ACTUALLY html, not a parquet, so the PAR1 check catches those cases
+  // without depending on the Content-Type header at all. See PR #715
+  // re-review-2 for the full analysis.
+  const buffer = await response.arrayBuffer();
+  if (!hasParquetMagic(buffer)) {
+    const contentType = response.headers.get("Content-Type") ?? "";
+    throw DataFetchError.unexpectedContent({
+      url,
+      source,
+      contentType: contentType || "(no Content-Type)",
+      humanMessage:
+        `Expected a Parquet file at ${url} but the body does not carry the ` +
+        `PAR1 magic bytes (Content-Type was ${contentType || "(none)"}). ` +
+        `This is usually a sign-in page (auth gate) or a dev-server SPA ` +
+        `fallback for a missing file. Sign in and refresh, or verify the ` +
+        `file is present. (#689)`,
+    });
+  }
+  return buffer;
 }
 
-async function readParquetRows(url: string): Promise<ParquetRow[]> {
-  const buffer = await fetchParquet(url);
+/** Parquet v2 magic: the ASCII bytes `PAR1` (0x50 0x41 0x52 0x31) appear
+ *  at both the head and tail of every conformant file. Cheap to check
+ *  and correctly rejects HTML fallbacks that slip past a content-type
+ *  sniff. Kept intentionally strict — a partial parquet with only one
+ *  magic present is corrupt too. (#689 PR #715 re-review) */
+function hasParquetMagic(buffer: ArrayBuffer): boolean {
+  if (buffer.byteLength < 8) return false;
+  const head = new Uint8Array(buffer, 0, 4);
+  const tail = new Uint8Array(buffer, buffer.byteLength - 4, 4);
+  // 0x50 0x41 0x52 0x31 = "PAR1"
+  return (
+    head[0] === 0x50 && head[1] === 0x41 && head[2] === 0x52 && head[3] === 0x31 &&
+    tail[0] === 0x50 && tail[1] === 0x41 && tail[2] === 0x52 && tail[3] === 0x31
+  );
+}
+
+async function readParquetRows(
+  url: string,
+  source: string,
+): Promise<ParquetRow[]> {
+  const buffer = await fetchParquet(url, source);
   let rows: ParquetRow[] = [];
   await parquetRead({
     file: buffer,
@@ -188,10 +417,27 @@ export class DataStore implements DatabaseProtocol {
     return this.chargedSubdir;
   }
 
-  /** Initialize by loading meta + stopping tables. Must be called before use. */
+  /** Initialize by loading meta + stopping tables. Must be called before use.
+   *
+   *  Load-bearing files (elements, abundances, decay, ALL stopping-power
+   *  tables, NIST compound tables) fail LOUDLY — the previous
+   *  `.catch(() => [])` on stopping/compound made a truncated fetch, an
+   *  auth-gate redirect, or a corrupt bundle look like "computed with zero
+   *  stopping power", i.e. a plausible number instead of an error. Every
+   *  such failure now throws a typed `DataFetchError`, which propagates up
+   *  through `initBackend` → `runInitialDataLoad` → `FetchErrorCard` (#118)
+   *  so the user sees the actual remedy instead of wrong yields. (#689)
+   *
+   *  Truly optional file (skipped-on-404): `meta/dose_constants.parquet` —
+   *  dose_constants powers a dose-rate readout that gracefully degrades to
+   *  "unavailable". Missing it does not silently change any physics
+   *  quantity. */
   async init(onProgress?: (msg: string, fraction?: number) => void): Promise<void> {
     onProgress?.("Loading element data...", 0);
-    const elements = await readParquetRows(`${this.baseUrl}/meta/elements.parquet`);
+    const elements = await readParquetRows(
+      `${this.baseUrl}/meta/elements.parquet`,
+      "meta/elements",
+    );
     for (const row of elements) {
       const Z = Number(row.Z);
       const symbol = String(row.symbol);
@@ -200,14 +446,28 @@ export class DataStore implements DatabaseProtocol {
     }
 
     onProgress?.("Loading abundance data...", 0.25);
-    this.abundanceData = await readParquetRows(`${this.baseUrl}/meta/abundances.parquet`);
+    this.abundanceData = await readParquetRows(
+      `${this.baseUrl}/meta/abundances.parquet`,
+      "meta/abundances",
+    );
 
     onProgress?.("Loading decay data...", 0.5);
-    this.decayData = await readParquetRows(`${this.baseUrl}/meta/decay.parquet`);
+    this.decayData = await readParquetRows(
+      `${this.baseUrl}/meta/decay.parquet`,
+      "meta/decay",
+    );
 
     onProgress?.("Loading dose constants...", 0.65);
+    // OPTIONAL: dose_constants only feeds the read-only µSv/m²·MBq·h column.
+    // A missing/failed load is degraded to "no dose readout" — never
+    // silently changes a computed activity or yield. Kept as a bare try/
+    // catch on purpose (#689): swallowing here is the *documented* graceful
+    // fallback, not a bug.
     try {
-      const doseRows = await readParquetRows(`${this.baseUrl}/meta/dose_constants.parquet`);
+      const doseRows = await readParquetRows(
+        `${this.baseUrl}/meta/dose_constants.parquet`,
+        "meta/dose_constants",
+      );
       for (const row of doseRows) {
         const key = `${row.Z}_${row.A}_${row.state ?? ""}`;
         this.doseConstants.set(key, {
@@ -228,6 +488,13 @@ export class DataStore implements DatabaseProtocol {
     // ³He uses its own per-isotope catima_He3 table at the actual total
     // energy (no velocity scaling) — replaces the old ASTAR×4/3 approximation
     // (#194). α (He-4) still uses ASTAR. See _energy-loss.ts.
+    //
+    // LOAD-BEARING: every entry here is shipped by copy-frontend-data.sh in
+    // the same data bundle. If any one fails to load the bundle is
+    // partial — an auth-gate redirect, a 404, or a corrupt fetch — and the
+    // right response is a hard error, not a silent zero-dE/dx run (#689).
+    // No file here is optional; the previous per-src `.catch(() => [])`
+    // was the silent-empty bug this issue kills.
     const stoppingSources = [
       // Light ions
       "PSTAR", "ASTAR", "dSTAR", "tSTAR",
@@ -239,7 +506,10 @@ export class DataStore implements DatabaseProtocol {
     ];
     const stoppingFiles = await Promise.all(
       stoppingSources.map((src) =>
-        readParquetRows(`${this.baseUrl}/stopping/${src}.parquet`).catch(() => [] as ParquetRow[]),
+        readParquetRows(
+          `${this.baseUrl}/stopping/${src}.parquet`,
+          `stopping/${src}`,
+        ),
       ),
     );
     for (const rows of stoppingFiles) {
@@ -257,14 +527,38 @@ export class DataStore implements DatabaseProtocol {
     // Load NIST compound stopping tables (PSTAR/ASTAR compounds).
     // Schema: { source, compound, energy_MeV, dedx } — keyed by compound
     // name, not target_Z. (#193)
+    //
+    // LOAD-BEARING: any named-compound layer (water, polystyrene, muscle,
+    // …) uses these tables. Missing them makes those layers silently fall
+    // back to Bragg additivity over elemental stopping, i.e. a *different*
+    // physics answer with no operator-visible signal — the same silent-
+    // wrong-number failure mode as the light-ion tables above. (#689)
     const compoundSources = ["compounds/PSTAR_compounds", "compounds/ASTAR_compounds"];
     const compoundFiles = await Promise.all(
       compoundSources.map((src) =>
-        readParquetRows(`${this.baseUrl}/stopping/${src}.parquet`).catch(() => [] as ParquetRow[]),
+        readParquetRows(
+          `${this.baseUrl}/stopping/${src}.parquet`,
+          `stopping/${src}`,
+        ),
       ),
     );
     for (const rows of compoundFiles) {
       this.compoundStoppingData = this.compoundStoppingData.concat(rows);
+    }
+
+    // Belt-and-braces: if every stopping load returned zero rows we'd
+    // otherwise silently proceed to a wrong-number run (see issue #689 body:
+    // "no legitimate configuration in which all stopping tables are absent").
+    // The per-file errors above catch a real load failure; this catches a
+    // "loaded fine but the bundle is empty" bad-fixture / hosting misconfig.
+    if (this.spIndex.size === 0) {
+      throw DataFetchError.emptyIndex({
+        subject: "stopping-power index",
+        humanMessage:
+          "Stopping-power tables loaded, but the resulting index is empty. " +
+          "The data bundle is present but not usable — refusing to compute " +
+          "with zero dE/dx. (#689)",
+      });
     }
 
     this.initialized = true;
@@ -317,7 +611,10 @@ export class DataStore implements DatabaseProtocol {
     let authGateHit = false;
     for (const relPath of candidates) {
       try {
-        const rows = await readParquetRows(`${this.baseUrl}/${relPath}`);
+        const rows = await readParquetRows(
+          `${this.baseUrl}/${relPath}`,
+          relPath,
+        );
         this.xsCache.set(key, rows);
         return;
       } catch (err) {
@@ -359,7 +656,21 @@ export class DataStore implements DatabaseProtocol {
   }
 
   /** Load emissions for elements by symbol (lazy, idempotent).
-   *  Fetches `meta/ensdf/emissions/{Symbol}.parquet` for each new symbol. */
+   *  Fetches `meta/ensdf/emissions/{Symbol}.parquet` for each new symbol.
+   *
+   *  Emissions are LOAD-BEARING when they exist: they feed dose rate and
+   *  spectrum rendering, and a missing line silently changes the dose
+   *  reported to the user (#689). Two distinct cases must NOT be conflated:
+   *
+   *  - Element file legitimately absent (404): some elements have no ENSDF
+   *    emission data at all (e.g. stable-only Z with no metastable isomer
+   *    in the bundle). This is expected and the store proceeds with an
+   *    empty bucket — a "no lines" render is truthful.
+   *  - Any other failure (network drop, auth-gate, corrupt bytes, HTTP 5xx):
+   *    load-bearing. Rethrown as a typed `DataFetchError` so the caller
+   *    (sim-scheduler) can surface it via `ComputeErrorCard`. The previous
+   *    bare `catch {}` here was the exact silent-empty failure #689
+   *    prohibits. */
   async ensureEmissions(symbols: string[]): Promise<void> {
     const toLoad = symbols.filter((s) => !this.emissionLoadedSymbols.has(s));
     if (toLoad.length === 0) return;
@@ -367,10 +678,38 @@ export class DataStore implements DatabaseProtocol {
     await Promise.all(
       toLoad.map(async (symbol) => {
         this.emissionLoadedSymbols.add(symbol);
+        let rows: ParquetRow[];
         try {
-          const rows = await readParquetRows(
+          rows = await readParquetRows(
             `${this.baseUrl}/meta/ensdf/emissions/${symbol}.parquet`,
+            `meta/ensdf/emissions/${symbol}`,
           );
+        } catch (err) {
+          // 404 is the expected "no ENSDF file for this element" case
+          // (see method docstring) — keep the "attempted" flag set so we
+          // don't re-fetch and proceed with an empty bucket.
+          //
+          // `UnexpectedContent` on the emissions path is treated the same
+          // way: under `vite preview` (and any other static server that
+          // returns the SPA shell for a missing file), a missing per-
+          // element parquet arrives as a 200 HTML — rendering it as
+          // "sign in" would be a lie. The auth-gate case, which the
+          // reviewer flagged (PR #715 re-review), is signalled via
+          // `AuthGateInterceptedError` (the SW's marked 502), not this
+          // arm; that error keeps propagating so the scheduler's degrade
+          // path can show the right guidance. Every other error is
+          // load-bearing; un-flag so a retry after the user fixes their
+          // connection re-fetches instead of short-circuiting the
+          // "already loaded" check.
+          if (err instanceof DataFetchError) {
+            if (err.status === 404 || err.payload.variant === "UnexpectedContent") {
+              return;
+            }
+          }
+          this.emissionLoadedSymbols.delete(symbol);
+          throw err;
+        }
+        try {
           // Aggregate same-energy lines across decay modes.
           // The upstream data has one row per (decay_mode, transition) —
           // e.g. Na-22 1274.5 keV γ appears 4 times (β⁺, KshellEC, LshellEC, MshellEC).
@@ -414,8 +753,14 @@ export class DataStore implements DatabaseProtocol {
           for (const key of touchedKeys) {
             this.emissionIndex.get(key)!.sort((a, b) => b.intensity - a.intensity);
           }
-        } catch {
-          // File doesn't exist for this element — that's fine
+        } catch (err) {
+          // Post-fetch aggregation should not throw for a well-formed
+          // parquet file, but if the schema is unexpectedly wrong (data
+          // migration mid-flight, corrupt bytes past the header) we
+          // surface it as a load-bearing failure rather than swallowing
+          // and rendering a truncated emissions list. (#689)
+          this.emissionLoadedSymbols.delete(symbol);
+          throw err;
         }
       }),
     );

@@ -22,6 +22,8 @@ import {
   clearResult,
   setResultErrored,
   setActiveTraceId,
+  setDataWarning,
+  clearDataWarning,
   type SimStatus,
 } from "../stores/results.svelte";
 import { parseComputeError } from "../compute/parse-error";
@@ -29,6 +31,7 @@ import { trace, newTraceId } from "../trace/trace";
 import { configHash } from "./config-hash";
 import { DataStore } from "@hyrr/compute";
 import type { SimulationConfig, SimulationResult } from "@hyrr/compute";
+import { classifyEmissionsFailure } from "./degrade-emissions";
 import {
   initBackend,
   computeStackBackend,
@@ -129,14 +132,23 @@ export async function initDataStore(
   // Reuse the WASM backend's already-init'd DataStore when available —
   // avoids creating a second instance and the race where the popup opens
   // before this DataStore finishes loading (#201 reactivity fix).
+  //
+  // The Tauri path used to assign `dataStore = new DataStore(...)` and
+  // then `await ds.init(...)`. A failed init left the module-level
+  // `dataStore` pointing at an uninitialised store, so a Retry after
+  // the FetchErrorCard saw `!dataStore` as false, skipped this branch
+  // entirely, and reported success against a store that had never
+  // loaded any parquet. Assign only after init resolves, so the retry
+  // sees a null slot and re-attempts init cleanly. (#689 PR #715 review)
   if (!dataStore) {
     const { getWasmTsDataStore } = await import("../compute/backend");
     const existing = getWasmTsDataStore();
     if (existing) {
       dataStore = existing;
     } else {
-      dataStore = new DataStore(baseUrl, getSelectedSubdir());
-      await dataStore.init(onProgress);
+      const ds = new DataStore(baseUrl, getSelectedSubdir());
+      await ds.init(onProgress);
+      dataStore = ds;
     }
   }
 }
@@ -156,6 +168,9 @@ async function runSimulation(hash: string): Promise<void> {
     energy_MeV: config.beam.energy_MeV,
     nLayers: config.layers.length,
   });
+  // Fresh run — clear any stale post-sim warning from a previous run so
+  // the banner does not leak across configurations. (#689)
+  clearDataWarning();
 
   try {
     if (!backendReady) {
@@ -180,6 +195,30 @@ async function runSimulation(hash: string): Promise<void> {
     if (currentHash !== hash) return;
 
     // Load emission data for all produced isotope elements (lazy, parallel).
+    //
+    // Emissions feed dose rate + emission-spectrum readouts ONLY. Activities,
+    // yields, depth profiles, residual energies and every physics quantity
+    // rendered in the results table are computed by the Rust backend
+    // BEFORE this call and are unaffected by an emissions-fetch failure.
+    // #689 PR #715 review pinned this: it is strictly worse to throw away
+    // a correct result on an emissions network hiccup than to keep the
+    // result and surface the failure alongside it as a warning banner.
+    //
+    // The degrade classifier (`classifyEmissionsFailure`) covers three
+    // typed cases the reviewer specifically flagged in the re-review:
+    //   1. `DataFetchError` — HTTP failures, network rejections, the
+    //      PAR1-magic-byte check, EmptyIndex — routed via parseFetchError.
+    //   2. `AuthGateInterceptedError` — the SW's 502 with
+    //      `X-Hyrr-Cache-Guard: auth-gate` on a redirected response,
+    //      i.e. the ETH deploy signed-out case. Degraded with sign-in
+    //      guidance so the user isn't shown "Unknown" and doesn't lose
+    //      the successful compute.
+    //   3. non-parquet body without text/html header — caught inside
+    //      `fetchParquet` by the PAR1 magic-byte check and rethrown as
+    //      `UnexpectedContent`, so it lands on case 1.
+    // Any other throw (a real bug in the aggregation, an unexpected
+    // exception) still propagates to the outer catch and reports as a
+    // run failure — the degrade path is scoped to typed fetch failures.
     if (dataStore) {
       const zValues = new Set<number>();
       for (const layer of simResult.layers) {
@@ -187,7 +226,23 @@ async function runSimulation(hash: string): Promise<void> {
           zValues.add(iso.Z);
         }
       }
-      await dataStore.ensureEmissionsByZ([...zValues]);
+      try {
+        await dataStore.ensureEmissionsByZ([...zValues]);
+      } catch (emErr) {
+        const classified = classifyEmissionsFailure(emErr);
+        if (classified.degrade) {
+          trace.event(traceId, "emissions.load_failed", {
+            kind: classified.kind,
+            variant:
+              classified.warning.kind === "FetchError"
+                ? classified.warning.variant
+                : "unknown",
+          });
+          setDataWarning(classified.warning);
+        } else {
+          throw emErr;
+        }
+      }
     }
 
     lastHash = hash;

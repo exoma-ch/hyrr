@@ -16,6 +16,8 @@
 
 #![cfg(feature = "mcp")]
 
+mod common;
+
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::materials::MaterialRegistry;
 use hyrr_core::mcp::activity_at::MAX_AT_S_ENTRIES;
@@ -26,6 +28,8 @@ use serde_json::{json, Value};
 /// Locate the tendl-2023-iso data, or `None` if unavailable — matches the
 /// existing MCP test pattern (see mcp_dose_and_nuclide.rs).
 fn maybe_store() -> Option<ParquetDataStore> {
+    // Never touch the developer's real `~/.cache/hyrr/stack-results` (#708).
+    common::isolate_disk_cache();
     let data_dir = std::env::var("HYRR_DATA").unwrap_or_else(|_| {
         concat!(env!("CARGO_MANIFEST_DIR"), "/../nucl-parquet/data").to_string()
     });
@@ -346,8 +350,8 @@ fn different_at_s_reuses_the_cached_stack_result() {
     let args_a = build(json!([100.0, 500.0]));
     let args_b = build(json!([7237.0, 8000.0, 9000.0]));
 
-    let id_a = sim_id(&args_a, "tendl-2023-iso", "");
-    let id_b = sim_id(&args_b, "tendl-2023-iso", "");
+    let id_a = sim_id(&args_a, "tendl-2023-iso", "", "");
+    let id_b = sim_id(&args_b, "tendl-2023-iso", "", "");
     assert_eq!(
         id_a, id_b,
         "at_s is a VIEW parameter: two configs differing only in at_s must map \
@@ -364,7 +368,7 @@ fn different_at_s_reuses_the_cached_stack_result() {
         .insert("energy_mev".to_string(), json!(17.5));
     assert_ne!(
         id_a,
-        sim_id(&physics_changed, "tendl-2023-iso", ""),
+        sim_id(&physics_changed, "tendl-2023-iso", "", ""),
         "changing beam energy must change the cache key"
     );
 

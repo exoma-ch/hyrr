@@ -73,6 +73,11 @@ fi
 # ── Stopping ──────────────────────────────────────────────────────
 mkdir -p "$DEST/stopping/compounds"
 # NIST elemental sources (PSTAR/ASTAR/dSTAR/tSTAR …) — every non-catima shard.
+# Copy the whole set that upstream ships, then verify the four load-bearing
+# light-ion tables landed. Runtime (data-store.ts init) explicitly demands
+# all four, so a sparse-checkout that dropped one would silently break the
+# corresponding projectile. Same "build and runtime must agree" rationale
+# as the catima loop below. (#689 PR #715 review)
 for f in "$NP/stopping/"*.parquet; do
   [ -e "$f" ] || continue
   case "$(basename "$f")" in
@@ -80,18 +85,49 @@ for f in "$NP/stopping/"*.parquet; do
     *) cp "$f" "$DEST/stopping/" ;;
   esac
 done
+for name in PSTAR ASTAR dSTAR tSTAR; do
+  if [ ! -f "$DEST/stopping/${name}.parquet" ]; then
+    echo "copy-frontend-data: ERROR: required light-ion stopping table '${name}.parquet' is missing at $NP/stopping/." >&2
+    echo "  It is on the runtime load-bearing list in packages/compute/src/data-store.ts." >&2
+    exit 1
+  fi
+done
 # CatIMA stopping is federated upstream into ~399 per-beam-isotope shards
 # (nucl-parquet #252/#254). The frontend only needs the beams HYRR offers, so
 # copy just those rather than shipping ~58 MB of unused shards.
 #   - He3: the active ³He ("h") light-ion beam now uses per-isotope CatIMA
 #     instead of ASTAR×4/3 velocity-scaling (#194).
 #   - C12…Fe56: the heavy-ion beams (currently UI-gated on #266, native-only).
-# Keep in sync with core/src/stopping.rs BUNDLED_CATIMA_PROJECTILES.
+# Keep in sync with core/src/stopping.rs BUNDLED_CATIMA_PROJECTILES and with
+# the stoppingSources list in packages/compute/src/data-store.ts.
+#
+# Missing shards are HARD ERRORS. Runtime (data-store.ts init) treats every
+# entry in stoppingSources as load-bearing; a silently-skipped shard here
+# would make init fail with `HTTP 404` in the browser, and the affected
+# projectile would be silently unusable on tauri. Build and runtime must
+# agree on the "which files are load-bearing" list. (#689 PR #715 review)
 for iso in He3 C12 O16 Ne20 Si28 Ar40 Fe56; do
-  [ -f "$NP/stopping/catima_${iso}.parquet" ] && cp "$NP/stopping/catima_${iso}.parquet" "$DEST/stopping/"
+  src="$NP/stopping/catima_${iso}.parquet"
+  if [ ! -f "$src" ]; then
+    echo "copy-frontend-data: ERROR: required stopping shard '$src' is missing." >&2
+    echo "  It is on the runtime load-bearing list in packages/compute/src/data-store.ts." >&2
+    echo "  Widen the nucl-parquet sparse-checkout to include it, or drop it from" >&2
+    echo "  BOTH lists — runtime and build must agree." >&2
+    exit 1
+  fi
+  cp "$src" "$DEST/stopping/"
 done
-# NIST compound stopping (PSTAR/ASTAR compounds)
-cp "$NP/stopping/compounds/"*.parquet "$DEST/stopping/compounds/" 2>/dev/null || true
+# NIST compound stopping (PSTAR/ASTAR compounds). Same load-bearing status as
+# above — data-store.ts throws on any missing compound file. (#689)
+for name in PSTAR_compounds ASTAR_compounds; do
+  src="$NP/stopping/compounds/${name}.parquet"
+  if [ ! -f "$src" ]; then
+    echo "copy-frontend-data: ERROR: required NIST compound table '$src' is missing." >&2
+    echo "  Named-compound layers (water, muscle, polystyrene) key into this file." >&2
+    exit 1
+  fi
+  cp "$src" "$DEST/stopping/compounds/"
+done
 
 # ── Cross-section libraries ───────────────────────────────────────
 # Format: "name" → xs/, or "name:subdir" → subdir/

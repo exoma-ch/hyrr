@@ -5,7 +5,8 @@
 //! module keys a small LRU on a canonical hash of the simulation config
 //! (projectile, energy, current, times, ordered layers incl. density &
 //! enrichment overrides, current profile) plus the library id, the
-//! hyrr-core version, and a session-material fingerprint.
+//! hyrr-core version, the **data-tree fingerprint** (#708) and a
+//! session-material fingerprint.
 //!
 //! Two tiers stack on the same key:
 //!
@@ -17,6 +18,16 @@
 //!    entry count and total bytes, LRU-evicted by mtime. Salt-gated so a
 //!    hyrr-core version bump invalidates every stale entry. Opt-out via
 //!    `HYRR_MCP_NO_DISK_CACHE=1`; wipe recovery = `rm -rf` the directory.
+//!
+//! **Empty results are not persisted (#708).** A `StackResult` that produced
+//! no isotopes in any layer is the symptom of missing / incomplete nuclear
+//! data; caching it would let the empty answer survive the data being
+//! fixed. Empties still flow through the caller normally; they just don't
+//! populate either tier, so the next run against corrected data recomputes.
+//! **Partial** results — some isotopes plus a `NoCrossSectionData`
+//! diagnostic for one absent target — are cached like any other: the
+//! diagnostic is data, the numbers are the answer, and the standard
+//! F-18-water-behind-Havar workflow relies on that. See `is_empty_result`.
 //!
 //! `simulate` populates the cache; the read-only tools look it up first.
 
@@ -149,16 +160,30 @@ struct DiskEnvelope {
 ///
 /// `registry_fp` is a fingerprint of session-defined materials (empty when
 /// none) so a redefined alloy can't return a stale result for the same args.
+///
+/// `data_fp` fingerprints the nuclear-data tree that will feed the compute
+/// (#708). Two runs against the same library string but different data roots
+/// — e.g. the pinned cache vs `HYRR_DATA=<full tree>` — MUST produce different
+/// keys, otherwise an empty result computed against an incomplete tree keeps
+/// being served after the user points HYRR at a complete one. Callers must
+/// pass `db.data_fingerprint()`; the empty string here is only for tests that
+/// don't exercise the data-identity dimension.
+///
+/// A freshly-computed result that [`is_empty_result`] reports as empty — no
+/// isotopes in any layer — is returned to the caller but is **not** written
+/// to either cache tier (#708 fix side of the same bug). Diagnostics do not
+/// gate on their own; see `is_empty_result` for why.
 pub fn cached_stack<F>(
     args: &Value,
     library: &str,
     registry_fp: &str,
+    data_fp: &str,
     compute: F,
 ) -> Result<Arc<StackResult>, String>
 where
     F: FnOnce() -> Result<StackResult, String>,
 {
-    let key = hash_config(args, library, registry_fp);
+    let key = hash_config(args, library, registry_fp, data_fp);
 
     // Tier 1: in-memory LRU.
     if let Some(hit) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(key) {
@@ -168,6 +193,13 @@ where
     }
 
     // Tier 2: on-disk (native only, and only if enabled).
+    //
+    // No emptiness check on read: post-#708 the key includes `data=<fp>|`,
+    // so a pre-fix empty entry lives at a different key and cannot collide
+    // with a new lookup. It simply orphans on disk and ages out via the
+    // mtime-LRU / byte-cap eviction in `enforce_bounds`. `rm -rf
+    // ~/.cache/hyrr/stack-results` is always safe if a user wants to force
+    // a clean start.
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(root) = disk_root() {
         if let Some(from_disk) = disk_load(&root, key) {
@@ -181,11 +213,20 @@ where
         }
     }
 
-    // Tier 3: miss — compute, populate both tiers.
+    // Tier 3: miss — compute, populate both tiers (if the result is worth
+    // keeping).
     #[cfg(not(target_arch = "wasm32"))]
     crate::trace_schema::mcp_cache_miss();
 
     let result = Arc::new(compute()?);
+
+    // #708: an empty result is the symptom of missing / incomplete nuclear
+    // data, and caching it would let that empty answer outlive the data fix.
+    // Skip both tiers rather than serve a stale zero on the next run.
+    if is_empty_result(&result) {
+        return Ok(result);
+    }
+
     cache()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -205,16 +246,43 @@ where
 /// Short, stable identifier for a simulation config — the cache key as hex.
 /// Used to tag exported tables / Parquet resource URIs so a consumer can tell
 /// which simulation a dataset came from.
-pub fn sim_id(args: &Value, library: &str, registry_fp: &str) -> String {
-    format!("{:016x}", hash_config(args, library, registry_fp))
+///
+/// `data_fp` participates so a dataset URI reused from a previous session's
+/// exports cannot silently re-attribute rows to a different data tree (#708).
+pub fn sim_id(args: &Value, library: &str, registry_fp: &str, data_fp: &str) -> String {
+    format!("{:016x}", hash_config(args, library, registry_fp, data_fp))
+}
+
+/// True when a `StackResult` produced nothing at all — no isotopes in any
+/// layer. This is the exact shape the #708 reproduction hits: a neutron run
+/// against a library missing the neutron sublibrary yields zero isotopes and
+/// no diagnostics (`compute_neutron_stack` has an explicit
+/// `TODO(#650 follow-up)`).
+///
+/// **Diagnostics deliberately don't gate on their own.** `compute_stack`
+/// emits `NoCrossSectionData` (severity Error) per (target_z, target_a) with
+/// missing data — and `tendl-2023-iso` ships no `p_H.parquet` and no C-13
+/// entries. So common physics stacks (water, H₂-18O, Kapton, graphite,
+/// steels, Havar) carry that diagnostic on every run while still producing
+/// real activation. Blanket "any error diagnostic → don't cache" would
+/// disable the cache for the F-18-water-behind-Havar workflow — recomputing
+/// the whole simulation on every read-only tool call and defeating #427/#568.
+/// The isotope-count check alone matches the failure mode we're targeting:
+/// a result that produced *nothing* isn't worth persisting; a partial
+/// result with a warning still is.
+fn is_empty_result(result: &StackResult) -> bool {
+    result
+        .layer_results
+        .iter()
+        .all(|lr| lr.isotope_results.is_empty())
 }
 
 /// Stable 64-bit key for a simulation config. Deterministic within a process
 /// run (std's `DefaultHasher` uses fixed keys), which is all a process-scoped
 /// cache needs.
-fn hash_config(args: &Value, library: &str, registry_fp: &str) -> u64 {
+fn hash_config(args: &Value, library: &str, registry_fp: &str, data_fp: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    canonical_config(args, library, registry_fp).hash(&mut h);
+    canonical_config(args, library, registry_fp, data_fp).hash(&mut h);
     h.finish()
 }
 
@@ -223,11 +291,18 @@ fn hash_config(args: &Value, library: &str, registry_fp: &str) -> u64 {
 /// Explicit field extraction (not `serde_json` map iteration) so the key is
 /// independent of JSON key order and of whether `preserve_order` is enabled.
 /// All numbers route through `as_f64` + `{:?}` so `12` and `12.0` collapse.
-fn canonical_config(args: &Value, library: &str, registry_fp: &str) -> String {
+fn canonical_config(args: &Value, library: &str, registry_fp: &str, data_fp: &str) -> String {
     let mut s = String::new();
     s.push_str(CACHE_SALT);
     s.push('|');
     s.push_str(library);
+    s.push('|');
+    // #708: data-tree identity is part of the key so a different HYRR_DATA
+    // (or a switch from the pinned cache to a user-supplied tree) is
+    // automatically a cache miss, rather than serving a stale result computed
+    // against a different — perhaps incomplete — tree.
+    s.push_str("data=");
+    s.push_str(data_fp);
     s.push('|');
     s.push_str(registry_fp);
     s.push('|');
@@ -601,17 +676,36 @@ mod tests {
             "layers":[{"material":"Ti","thickness_cm":0.02}]});
         let b = json!({"current_ma":0.04,"layers":[{"thickness_cm":0.02,"material":"ti"}],
             "energy_mev":18.0,"projectile":"p"});
-        assert_eq!(hash_config(&a, "lib", ""), hash_config(&b, "lib", ""));
+        assert_eq!(
+            hash_config(&a, "lib", "", ""),
+            hash_config(&b, "lib", "", "")
+        );
     }
 
     #[test]
     fn key_separates_distinct_configs() {
         let a = json!({"projectile":"p","energy_mev":18.0,"current_ma":0.04,"layers":[]});
         let b = json!({"projectile":"p","energy_mev":16.0,"current_ma":0.04,"layers":[]});
-        assert_ne!(hash_config(&a, "lib", ""), hash_config(&b, "lib", ""));
-        // Library and registry fingerprint participate in the key.
-        assert_ne!(hash_config(&a, "lib1", ""), hash_config(&a, "lib2", ""));
-        assert_ne!(hash_config(&a, "lib", "fp1"), hash_config(&a, "lib", "fp2"));
+        assert_ne!(
+            hash_config(&a, "lib", "", ""),
+            hash_config(&b, "lib", "", "")
+        );
+        // Library, registry fingerprint and data fingerprint each participate.
+        assert_ne!(
+            hash_config(&a, "lib1", "", ""),
+            hash_config(&a, "lib2", "", "")
+        );
+        assert_ne!(
+            hash_config(&a, "lib", "fp1", ""),
+            hash_config(&a, "lib", "fp2", "")
+        );
+        // #708: same library, different data tree → different key.
+        assert_ne!(
+            hash_config(&a, "lib", "", "/a/tree"),
+            hash_config(&a, "lib", "", "/other/tree"),
+            "data fingerprint must participate: otherwise a run against a \
+             different HYRR_DATA is served the previous tree's cached result"
+        );
     }
 
     #[test]
@@ -624,7 +718,10 @@ mod tests {
             {"material":"MoO3","enrichment":[
                 {"element":"Mo","A":98,"fraction":0.05},
                 {"element":"Mo","A":100,"fraction":0.95}]}]});
-        assert_eq!(hash_config(&a, "lib", ""), hash_config(&b, "lib", ""));
+        assert_eq!(
+            hash_config(&a, "lib", "", ""),
+            hash_config(&b, "lib", "", "")
+        );
     }
 
     #[test]
@@ -638,20 +735,22 @@ mod tests {
         let args = json!({"projectile":"p","energy_mev":7.7777,"current_ma":0.0123,"layers":[]});
         let lib = "lib-cache-once-test";
         let calls = AtomicUsize::new(0);
+        // Non-empty layer_results so this test exercises the cache path, not
+        // the #708 empty-result filter.
         let mk = |t: f64| StackResult {
-            layer_results: vec![],
+            layer_results: vec![nonempty_layer()],
             irradiation_time_s: t,
             cooling_time_s: 0.0,
             provenance: crate::provenance::Provenance::unknown(),
             diagnostics: Vec::new(),
         };
 
-        let a = cached_stack(&args, lib, "", || {
+        let a = cached_stack(&args, lib, "", "", || {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(mk(11.0))
         })
         .unwrap();
-        let b = cached_stack(&args, lib, "", || {
+        let b = cached_stack(&args, lib, "", "", || {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(mk(22.0))
         })
@@ -726,14 +825,83 @@ mod tests {
         td
     }
 
+    /// A non-empty `StackResult` for tests that only care about the cache
+    /// wiring, not the physics. Populates one layer with one isotope so the
+    /// #708 "don't persist silently-empty results" filter treats it as real.
     fn sample_result(marker: f64) -> StackResult {
         StackResult {
-            layer_results: vec![],
+            layer_results: vec![nonempty_layer()],
             irradiation_time_s: marker,
             cooling_time_s: 0.0,
             provenance: crate::provenance::Provenance::unknown(),
             diagnostics: Vec::new(),
         }
+    }
+
+    /// A `StackResult` that mirrors the #708 reproduction: at least one layer,
+    /// zero isotopes anywhere, no diagnostics. Used to prove the empty-result
+    /// filter refuses to persist it — the same shape `compute_neutron_stack`
+    /// currently produces when the cross-section file is missing.
+    fn silently_empty_result() -> StackResult {
+        StackResult {
+            layer_results: vec![empty_layer()],
+            irradiation_time_s: 3600.0,
+            cooling_time_s: 0.0,
+            provenance: crate::provenance::Provenance::unknown(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    fn empty_layer() -> crate::types::LayerResult {
+        crate::types::LayerResult {
+            energy_in: 18.0,
+            energy_out: 12.0,
+            delta_e_mev: 6.0,
+            heat_kw: 0.0,
+            provenance: crate::types::LayerProvenance {
+                density_g_cm3: 1.0,
+                thickness_cm: 0.01,
+                areal_density_g_cm2: None,
+                is_monitor: false,
+                nist_compound: None,
+                elements: Vec::new(),
+            },
+            depth_profile: Vec::new(),
+            isotope_results: std::collections::HashMap::new(),
+            stopping_power_sources: std::collections::HashMap::new(),
+            depth_production_rates: std::collections::HashMap::new(),
+            neutron_source_rate: 0.0,
+            pruned_negligible_count: 0,
+        }
+    }
+
+    fn nonempty_layer() -> crate::types::LayerResult {
+        let mut lr = empty_layer();
+        // A single stub isotope is enough — the emptiness check counts
+        // isotope_results across layers, so one entry flips it.
+        lr.isotope_results.insert(
+            "F-18".to_string(),
+            crate::types::IsotopeResult {
+                name: "F-18".to_string(),
+                z: 9,
+                a: 18,
+                state: String::new(),
+                half_life_s: Some(6586.2),
+                production_rate: 1.0,
+                saturation_yield_bq_ua: 1.0,
+                activity_bq: 1.0,
+                time_grid_s: vec![0.0],
+                activity_vs_time_bq: vec![1.0],
+                source: "direct".into(),
+                activity_direct_bq: 1.0,
+                activity_ingrowth_bq: 0.0,
+                activity_direct_vs_time_bq: vec![1.0],
+                activity_ingrowth_vs_time_bq: vec![0.0],
+                reactions: Vec::new(),
+                decay_notations: Vec::new(),
+            },
+        );
+        lr
     }
 
     #[test]
@@ -744,7 +912,7 @@ mod tests {
         let lib = "lib-disk-roundtrip";
 
         // Populate: mem + disk.
-        let first = cached_stack(&args, lib, "", || Ok(sample_result(101.0))).unwrap();
+        let first = cached_stack(&args, lib, "", "", || Ok(sample_result(101.0))).unwrap();
         assert_eq!(first.irradiation_time_s, 101.0);
 
         // Simulate a fresh process: wipe the mem LRU. Disk entry must still
@@ -752,7 +920,7 @@ mod tests {
         reset_mem_lru();
         use std::sync::atomic::{AtomicUsize, Ordering};
         let calls = AtomicUsize::new(0);
-        let second = cached_stack(&args, lib, "", || {
+        let second = cached_stack(&args, lib, "", "", || {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(sample_result(999.0)) // should never be used
         })
@@ -769,7 +937,7 @@ mod tests {
         // Compute a real key + drop a plausibly-named but garbage file at it.
         let args = json!({"projectile":"p","energy_mev":11.11,"current_ma":0.02,"layers":[]});
         let lib = "lib-disk-corrupt";
-        let key = hash_config(&args, lib, "");
+        let key = hash_config(&args, lib, "", "");
         let path = entry_path(td.path(), key);
         std::fs::write(&path, b"not gzip, not JSON, not anything").unwrap();
         assert!(path.exists());
@@ -777,7 +945,7 @@ mod tests {
         reset_mem_lru();
         use std::sync::atomic::{AtomicUsize, Ordering};
         let calls = AtomicUsize::new(0);
-        let out = cached_stack(&args, lib, "", || {
+        let out = cached_stack(&args, lib, "", "", || {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(sample_result(7.0))
         })
@@ -800,7 +968,7 @@ mod tests {
         let td = isolate_disk();
         let args = json!({"projectile":"p","energy_mev":22.22,"current_ma":0.03,"layers":[]});
         let lib = "lib-disk-salt";
-        let key = hash_config(&args, lib, "");
+        let key = hash_config(&args, lib, "", "");
 
         // Hand-forge an envelope with a bogus salt (as if hyrr-core moved on).
         let bad = DiskEnvelope {
@@ -817,7 +985,7 @@ mod tests {
         reset_mem_lru();
         use std::sync::atomic::{AtomicUsize, Ordering};
         let calls = AtomicUsize::new(0);
-        let out = cached_stack(&args, lib, "", || {
+        let out = cached_stack(&args, lib, "", "", || {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(sample_result(42.0))
         })
@@ -853,7 +1021,7 @@ mod tests {
         // Any populate triggers enforce_bounds.
         let args = json!({"projectile":"p","energy_mev":7.0,"current_ma":0.02,"layers":[]});
         reset_mem_lru();
-        let _ = cached_stack(&args, "lib-tmp-reap", "", || Ok(sample_result(1.0))).unwrap();
+        let _ = cached_stack(&args, "lib-tmp-reap", "", "", || Ok(sample_result(1.0))).unwrap();
 
         assert!(
             !orphan.exists(),
@@ -876,8 +1044,10 @@ mod tests {
         for i in 0..6u64 {
             let args = json!({"projectile":"p","energy_mev": i as f64 + 0.001,"current_ma":0.02,"layers":[]});
             reset_mem_lru();
-            let _ =
-                cached_stack(&args, "lib-disk-cap", "", || Ok(sample_result(i as f64))).unwrap();
+            let _ = cached_stack(&args, "lib-disk-cap", "", "", || {
+                Ok(sample_result(i as f64))
+            })
+            .unwrap();
             // Space out mtimes so the LRU order is unambiguous.
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
@@ -911,8 +1081,10 @@ mod tests {
         for i in 0..6u64 {
             let args = json!({"projectile":"p","energy_mev": i as f64 + 0.5,"current_ma":0.02,"layers":[]});
             reset_mem_lru();
-            let _ =
-                cached_stack(&args, "lib-disk-bytes", "", || Ok(sample_result(i as f64))).unwrap();
+            let _ = cached_stack(&args, "lib-disk-bytes", "", "", || {
+                Ok(sample_result(i as f64))
+            })
+            .unwrap();
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
         let total: u64 = std::fs::read_dir(td.path())
@@ -941,7 +1113,7 @@ mod tests {
         let lib = "lib-disk-optout";
 
         // Populate: mem only (disk disabled).
-        let _ = cached_stack(&args, lib, "", || Ok(sample_result(1.0))).unwrap();
+        let _ = cached_stack(&args, lib, "", "", || Ok(sample_result(1.0))).unwrap();
         let count = std::fs::read_dir(td.path())
             .unwrap()
             .filter_map(Result::ok)
@@ -958,7 +1130,7 @@ mod tests {
         reset_mem_lru();
         use std::sync::atomic::{AtomicUsize, Ordering};
         let calls = AtomicUsize::new(0);
-        let out = cached_stack(&args, lib, "", || {
+        let out = cached_stack(&args, lib, "", "", || {
             calls.fetch_add(1, Ordering::SeqCst);
             Ok(sample_result(2.0))
         })
@@ -967,6 +1139,213 @@ mod tests {
         assert_eq!(out.irradiation_time_s, 2.0);
         std::env::remove_var("HYRR_MCP_NO_DISK_CACHE");
     }
+
+    // -----------------------------------------------------------------------
+    // #708 — data-identity in the cache key, and refusing to persist empties
+    //
+    // Both halves of the bug reproduction: an empty result computed against
+    // incomplete data (a) got the same cache key as a later run against a
+    // complete tree, and (b) was persisted, so it survived the data fix.
+    // The tests below cover the two halves independently, so a regression on
+    // either side fails a targeted test rather than the same integration one.
+    // -----------------------------------------------------------------------
+
+    /// #708 — a silently empty result must not be written to either tier.
+    ///
+    /// Reproduction shape: a `StackResult` with a layer but zero isotopes and
+    /// no diagnostics. That is exactly what `compute_neutron_stack` currently
+    /// produces when a neutron sublibrary is missing (the neutron path has an
+    /// explicit `TODO(#650 follow-up)` for diagnostics), and it is what the
+    /// disk cache used to persist.
+    #[test]
+    fn silently_empty_result_is_not_persisted() {
+        let _g = disk_test_guard();
+        let td = isolate_disk();
+        let args = json!({"projectile":"n","energy_mev":0.0,"current_ma":0.0,
+                   "layers":[{"material":"Co","thickness_cm":0.05}],
+                   "irradiation_time_s":86400.0,"cooling_time_s":0.0});
+        let lib = "lib-empty-neutron";
+
+        // First run returns the empty (missing-data) result.
+        let first = cached_stack(&args, lib, "", "fake-incomplete-data-fp", || {
+            Ok(silently_empty_result())
+        })
+        .unwrap();
+        assert!(
+            is_empty_result(&first),
+            "test fixture must reproduce the #708 empty-result shape"
+        );
+
+        // Nothing written to disk.
+        let count = std::fs::read_dir(td.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|d| {
+                d.file_name()
+                    .to_str()
+                    .map(|n| n.ends_with(".json.gz"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(
+            count, 0,
+            "an empty result must never be written to disk — that is exactly \
+             the failure mode of #708"
+        );
+
+        // Nothing kept in the mem tier either: a second call with a compute
+        // closure that returns a non-empty result must actually run and return
+        // the non-empty value, rather than serving the cached empty.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = AtomicUsize::new(0);
+        let second = cached_stack(&args, lib, "", "fake-incomplete-data-fp", || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(sample_result(42.0))
+        })
+        .unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "empty result must not have populated the mem tier either"
+        );
+        assert!(
+            !is_empty_result(&second),
+            "second call must return the fresh non-empty result"
+        );
+    }
+
+    /// #708 review — a *partial* result (some isotopes plus a
+    /// `NoCrossSectionData` diagnostic for one target that had no data)
+    /// **must** be cached. `compute_stack` emits that diagnostic per missing
+    /// (target_z, target_a); `tendl-2023-iso` has no `p_H.parquet` and no
+    /// `C-13` entry, so a Havar-window / F-18-water / graphite stack — the
+    /// standard cyclotron workflow — carries that diagnostic on every
+    /// otherwise-correct run. A blanket "any error diagnostic → don't
+    /// cache" rule would recompute the whole simulation on every read-only
+    /// tool call, defeating the point of #427/#568.
+    #[test]
+    fn partial_result_with_error_diagnostic_is_still_cached() {
+        let _g = disk_test_guard();
+        let td = isolate_disk();
+        let args = json!({"projectile":"p","energy_mev":18.0,"current_ma":0.04,"layers":[]});
+        let lib = "lib-partial-diag";
+
+        // Non-empty isotopes AND a NoCrossSectionData diagnostic — the shape
+        // an F-18-water run against tendl-2023-iso produces (real O-18 → F-18
+        // yield, plus the per-target diagnostic for H having no `p_H.parquet`).
+        let mut result = sample_result(1.0);
+        result.diagnostics.push(crate::types::Diagnostic::new(
+            crate::types::DiagnosticKind::NoCrossSectionData {
+                projectile: "p".into(),
+                target_z: 1,
+                target_symbol: "H".into(),
+                target_a: 1,
+            },
+            Some(0),
+        ));
+        assert!(
+            !is_empty_result(&result),
+            "a partial result with real isotopes is NOT empty just because a \
+             per-target diagnostic is attached — the standard cyclotron \
+             workflow always carries this shape"
+        );
+
+        let _ = cached_stack(&args, lib, "", "some-data-fp", || Ok(result.clone())).unwrap();
+        let count = std::fs::read_dir(td.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|d| {
+                d.file_name()
+                    .to_str()
+                    .map(|n| n.ends_with(".json.gz"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(
+            count, 1,
+            "a partial-but-real result must be persisted like any other, or \
+             every water/Havar/graphite run recomputes on every tool call"
+        );
+    }
+
+    /// #708 — the exact reproduction from the issue, staged through the cache
+    /// API rather than a live simulate call.
+    ///
+    /// **This is the load-bearing test.** Before the fix, two runs against
+    /// the same library string but different data trees mapped to the same
+    /// key, so the second one served the first's empty result — the bug in
+    /// one sentence. After the fix, the data fingerprint participates in the
+    /// key and the second run is a miss.
+    #[test]
+    fn different_data_fingerprint_forces_cache_miss() {
+        let _g = disk_test_guard();
+        let _td = isolate_disk();
+        let args = json!({"projectile":"n","energy_mev":0.0,"current_ma":0.0,
+                   "layers":[{"material":"Co","thickness_cm":0.05}],
+                   "irradiation_time_s":86400.0,"cooling_time_s":0.0});
+        let lib = "tendl-2023-iso";
+
+        // Step 1: pretend to read the default cache (missing endfb-8.0). The
+        // fingerprint identifies THAT tree; the result is silently empty.
+        // (This step won't populate the cache thanks to the empty-result
+        // filter, but the key contract still has to hold on its own.)
+        let fp_incomplete = "src=LocalDirectory|dv=X|root=/incomplete/tree";
+        let k_incomplete = hash_config(&args, lib, "", fp_incomplete);
+
+        // Step 2: user re-runs with HYRR_DATA=<full tree>. Same library
+        // string, same args — different fingerprint.
+        let fp_full = "src=LocalDirectory|dv=X|root=/full/tree";
+        let k_full = hash_config(&args, lib, "", fp_full);
+
+        assert_ne!(
+            k_incomplete, k_full,
+            "same args + same library + DIFFERENT data tree must be distinct \
+             cache keys, or the incomplete-tree result outlives its data fix"
+        );
+
+        // Belt and braces: even if the empty-result filter someday changes
+        // its mind, seeding the mem tier at the incomplete-tree key with a
+        // non-empty result must not affect the full-tree lookup.
+        cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .put(k_incomplete, Arc::new(sample_result(11.0)));
+
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = AtomicUsize::new(0);
+        let full = cached_stack(&args, lib, "", fp_full, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(sample_result(22.0))
+        })
+        .unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the full-tree lookup must have missed the mem cache — data \
+             fingerprint is in the key"
+        );
+        assert_eq!(full.irradiation_time_s, 22.0);
+    }
+
+    /// A `sim_id` handed to a viewer / dataset consumer must also change when
+    /// the data tree changes — a URI like `hyrr://sim/{sim_id}/{table}.parquet`
+    /// used to re-attribute rows to a different tree's cached result. #708.
+    #[test]
+    fn sim_id_changes_with_data_fingerprint() {
+        let args = json!({"projectile":"p","energy_mev":18.0,"current_ma":0.04,"layers":[]});
+        assert_ne!(
+            sim_id(&args, "tendl-2023-iso", "", "root=/a"),
+            sim_id(&args, "tendl-2023-iso", "", "root=/b"),
+        );
+    }
+
+    // Note: an earlier draft added `pre_fix_disk_entry_orphans_rather_than_collides`
+    // to prove that a pre-#708 disk entry can't collide with a post-fix
+    // lookup. Removed on review — it hand-built the "old key" as a string
+    // omitting args, so `assert_ne!` passed by construction and proved
+    // nothing beyond "these two different strings hash differently".
+    // `different_data_fingerprint_forces_cache_miss` already covers the
+    // live invariant end-to-end.
 
     #[test]
     fn concurrent_writes_produce_no_partial_files() {
@@ -978,7 +1357,7 @@ mod tests {
 
         let args = json!({"projectile":"p","energy_mev":88.88,"current_ma":0.05,"layers":[]});
         let lib = "lib-disk-atomic";
-        let key = hash_config(&args, lib, "");
+        let key = hash_config(&args, lib, "", "");
         let root = td.path().to_path_buf();
 
         let mut handles = Vec::new();
