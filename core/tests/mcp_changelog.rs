@@ -20,6 +20,8 @@
 
 #![cfg(feature = "mcp")]
 
+mod common;
+
 use hyrr_core::db::{DatabaseProtocol, InMemoryDataStore};
 use hyrr_core::materials::MaterialRegistry;
 use hyrr_core::mcp::tools::{call_tool, list_tools, server_instructions};
@@ -30,6 +32,11 @@ use serde_json::{json, Value};
 /// (the classification is a compiled-in release-time artifact). The empty
 /// store lets us assert that fact without needing `HYRR_DATA` on disk.
 fn empty_db() -> InMemoryDataStore {
+    // Never touch the developer's real `~/.cache/hyrr/stack-results` (#708).
+    // No physics tool in this file reaches the cache, but the isolation is
+    // uniform across every MCP integration test so a future addition here
+    // can't accidentally read it.
+    common::isolate_disk_cache();
     InMemoryDataStore::new("tendl-2023-iso")
 }
 

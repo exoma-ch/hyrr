@@ -15,12 +15,16 @@
 
 #![cfg(feature = "mcp")]
 
+mod common;
+
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::materials::MaterialRegistry;
 use hyrr_core::mcp::tools::{call_tool, list_tools, server_instructions};
 use serde_json::{json, Value};
 
 fn store() -> ParquetDataStore {
+    // Never touch the developer's real `~/.cache/hyrr/stack-results` (#708).
+    common::isolate_disk_cache();
     let data_dir = std::env::var("HYRR_DATA").unwrap_or_else(|_| {
         concat!(env!("CARGO_MANIFEST_DIR"), "/../nucl-parquet/data").to_string()
     });
