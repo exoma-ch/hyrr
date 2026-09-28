@@ -462,7 +462,7 @@ mod np_store {
         fn ensure_xs(&self, projectile: &str, target_z: u32, symbol: &str) {
             let cache_key = format!("{}_{}", projectile, symbol);
             {
-                let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
+                let cache = self.xs_cache.lock().unwrap_or_else(|e| e.into_inner());
                 if cache.contains_key(&cache_key) {
                     return;
                 }
@@ -537,7 +537,7 @@ mod np_store {
             self.ensure_xs(projectile, target_z, &symbol);
 
             let cache_key = format!("{}_{}", projectile, symbol);
-            let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
+            let cache = self.xs_cache.lock().unwrap_or_else(|e| e.into_inner());
             let xs = cache
                 .get(&cache_key)
                 .map(|xs| {
@@ -1030,7 +1030,7 @@ mod embedded_store {
         fn ensure_xs(&self, projectile: &str, target_z: u32, symbol: &str) {
             let cache_key = format!("{}_{}", projectile, symbol);
             {
-                let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
+                let cache = self.xs_cache.lock().unwrap_or_else(|e| e.into_inner());
                 if cache.contains_key(&cache_key) {
                     return;
                 }
@@ -1079,7 +1079,7 @@ mod embedded_store {
                 }
             };
 
-            let mut cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
+            let mut cache = self.xs_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.insert(cache_key, xs_list);
         }
     }
@@ -1107,7 +1107,7 @@ mod embedded_store {
             };
             self.ensure_xs(projectile, target_z, &symbol);
             let cache_key = format!("{}_{}", projectile, symbol);
-            let cache = self.xs_cache.lock().expect("xs_cache mutex poisoned");
+            let cache = self.xs_cache.lock().unwrap_or_else(|e| e.into_inner());
             let xs = cache
                 .get(&cache_key)
                 .map(|xs| {

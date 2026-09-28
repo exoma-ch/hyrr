@@ -531,6 +531,129 @@ fn layer_schema(require_thickness: bool) -> Value {
     })
 }
 
+/// Neutron-flux schema block, shared by every sim-based tool that reads a
+/// `neutron_flux` argument (#712 review — the drift class had this fragment
+/// declared on `simulate` alone, while several other sim-based tools accepted
+/// it at runtime). One source of truth here.
+fn neutron_flux_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Neutron flux spectrum for a neutron source (projectile 'n'; ADR-0003 Phase 1). Tagged by 'kind'. Defaults to a fission-fast spectrum if omitted. Total 'flux' is n/cm²/s.",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["thermal", "epithermal", "fast", "monoenergetic", "custom", "composite"],
+                "description": "Spectrum shape."
+            },
+            "flux": { "type": "number", "description": "Total flux [n/cm²/s]." },
+            "kt_mev": { "type": "number", "description": "thermal: Maxwellian temperature kT [MeV] (0.0253 eV = 2.53e-8)." },
+            "e_min_mev": { "type": "number", "description": "epithermal: lower bound [MeV]." },
+            "e_max_mev": { "type": "number", "description": "epithermal: upper bound [MeV]." },
+            "temp_mev": { "type": "number", "description": "fast: evaporation temperature T [MeV] (~1.4 for fission)." },
+            "e0_mev": { "type": "number", "description": "monoenergetic: energy [MeV]." },
+            "energies_mev": { "type": "array", "items": { "type": "number" }, "description": "custom: differential spectrum energies [MeV]." },
+            "phi": { "type": "array", "items": { "type": "number" }, "description": "custom: differential flux φ at each energy [n/cm²/s/MeV]." },
+            "components": { "type": "array", "items": { "type": "object" }, "description": "composite: list of sub-spectra (each a neutron_flux object)." }
+        },
+        "required": ["kind", "flux"]
+    })
+}
+
+/// Current-profile schema block. Same reason as [`neutron_flux_schema`].
+fn current_profile_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Optional time-varying beam current profile (piecewise-constant). When present, overrides current_ma for activation calculations.",
+        "properties": {
+            "times_s": {
+                "type": "array",
+                "items": { "type": "number" },
+                "description": "Monotonically increasing time points starting at 0 [seconds]"
+            },
+            "currents_ma": {
+                "type": "array",
+                "items": { "type": "number" },
+                "description": "Beam current at each time point [mA]. Must be non-negative. Same length as times_s."
+            }
+        },
+        "required": ["times_s", "currents_ma"]
+    })
+}
+
+/// Base simulation-arg property map shared by every tool that runs a
+/// simulation through `build_and_run_sim` / `cached_sim` (#712 review).
+///
+/// The schema this returns is the ONE SOURCE OF TRUTH for these ten keys:
+/// [`SIM_BASE_KEYS`] carries the same names in the same order, and the
+/// strict-args regression test asserts set-equality between the two AND
+/// between each tool's schema-properties and its allowlist. That closes the
+/// drift class the review flagged — before, several sim-based tools accepted
+/// `neutron_flux` / `secondary_neutron` / `current_profile` at runtime while
+/// their schemas didn't advertise them.
+///
+/// Callers merge this into the tool's own extras (`isotope`, `vs`, `top_n`,
+/// …) via [`extend_props`], then wrap with `additionalProperties: false`.
+fn sim_base_properties() -> serde_json::Map<String, Value> {
+    let mut m = serde_json::Map::new();
+    m.insert("projectile".to_string(), serde_json::json!({
+        "type": "string",
+        "description": "Beam projectile: p (proton), d (deuteron), t (tritium), h (helion/³He), a (alpha), or n (neutron source — defined by 'neutron_flux' instead of energy/current; ADR-0003)",
+        "enum": ["p", "d", "t", "h", "a", "n"]
+    }));
+    m.insert("energy_mev".to_string(), serde_json::json!({
+        "type": "number",
+        "description": "Beam energy in MeV. Required for charged projectiles; ignored for a neutron source (projectile 'n')."
+    }));
+    m.insert("current_ma".to_string(), serde_json::json!({
+        "type": "number",
+        "description": "Beam current in mA (micro-amps). Required for charged projectiles; ignored for a neutron source (projectile 'n')."
+    }));
+    m.insert("neutron_flux".to_string(), neutron_flux_schema());
+    m.insert("secondary_neutron".to_string(), serde_json::json!({
+        "type": "boolean",
+        "description": "For a charged run: also model Phase-2 secondary (x,n)-driven neutron activation from the beam-produced neutron source (ADR-0003 Phase 2). Ignored for a neutron source."
+    }));
+    m.insert(
+        "layers".to_string(),
+        serde_json::json!({
+            "type": "array",
+            "description": "Target layers (beam traversal order)",
+            "items": layer_schema(false)
+        }),
+    );
+    m.insert(
+        "irradiation_time_s".to_string(),
+        serde_json::json!({
+            "type": "number",
+            "description": "Irradiation time in seconds (default: 86400)"
+        }),
+    );
+    m.insert(
+        "cooling_time_s".to_string(),
+        serde_json::json!({
+            "type": "number",
+            "description": "Cooling time in seconds (default: 86400)"
+        }),
+    );
+    m.insert("current_profile".to_string(), current_profile_schema());
+    m.insert("activity_floor_bq".to_string(), activity_floor_schema());
+    m
+}
+
+/// Extend a properties map with the tool's own extras. Each `(key, schema)`
+/// pair overwrites any pre-existing entry of the same name — used e.g. by
+/// `get_stack_energy_budget` to swap its `layers` schema for one that
+/// requires `thickness_cm`. The order of the returned map preserves
+/// insertion, which is what serde_json emits.
+fn extend_props(mut base: serde_json::Map<String, Value>, extras: &[(&str, Value)]) -> Value {
+    for (k, v) in extras {
+        base.insert((*k).to_string(), v.clone());
+    }
+    Value::Object(base)
+}
+
 /// List all available MCP tools.
 ///
 /// `library` is the id the live store is reading (`db.library()`), threaded in
@@ -547,79 +670,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "projectile": {
-                        "type": "string",
-                        "description": "Beam projectile: p (proton), d (deuteron), t (tritium), h (helion/³He), a (alpha), or n (neutron source — defined by 'neutron_flux' instead of energy/current; ADR-0003)",
-                        "enum": ["p", "d", "t", "h", "a", "n"]
-                    },
-                    "energy_mev": {
-                        "type": "number",
-                        "description": "Beam energy in MeV. Required for charged projectiles; ignored for a neutron source (projectile 'n')."
-                    },
-                    "current_ma": {
-                        "type": "number",
-                        "description": "Beam current in mA (micro-amps). Required for charged projectiles; ignored for a neutron source (projectile 'n')."
-                    },
-                    "neutron_flux": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "description": "Neutron flux spectrum for a neutron source (projectile 'n'; ADR-0003 Phase 1). Tagged by 'kind'. Defaults to a fission-fast spectrum if omitted. Total 'flux' is n/cm²/s.",
-                        "properties": {
-                            "kind": {
-                                "type": "string",
-                                "enum": ["thermal", "epithermal", "fast", "monoenergetic", "custom", "composite"],
-                                "description": "Spectrum shape."
-                            },
-                            "flux": { "type": "number", "description": "Total flux [n/cm²/s]." },
-                            "kt_mev": { "type": "number", "description": "thermal: Maxwellian temperature kT [MeV] (0.0253 eV = 2.53e-8)." },
-                            "e_min_mev": { "type": "number", "description": "epithermal: lower bound [MeV]." },
-                            "e_max_mev": { "type": "number", "description": "epithermal: upper bound [MeV]." },
-                            "temp_mev": { "type": "number", "description": "fast: evaporation temperature T [MeV] (~1.4 for fission)." },
-                            "e0_mev": { "type": "number", "description": "monoenergetic: energy [MeV]." },
-                            "energies_mev": { "type": "array", "items": { "type": "number" }, "description": "custom: differential spectrum energies [MeV]." },
-                            "phi": { "type": "array", "items": { "type": "number" }, "description": "custom: differential flux φ at each energy [n/cm²/s/MeV]." },
-                            "components": { "type": "array", "items": { "type": "object" }, "description": "composite: list of sub-spectra (each a neutron_flux object)." }
-                        },
-                        "required": ["kind", "flux"]
-                    },
-                    "secondary_neutron": {
-                        "type": "boolean",
-                        "description": "For a charged run: also model Phase-2 secondary (x,n)-driven neutron activation from the beam-produced neutron source (ADR-0003 Phase 2). Ignored for a neutron source."
-                    },
-                    "layers": {
-                        "type": "array",
-                        "description": "Target layers (beam traversal order)",
-                        "items": layer_schema(false)
-                    },
-                    "irradiation_time_s": {
-                        "type": "number",
-                        "description": "Irradiation time in seconds (default: 86400)"
-                    },
-                    "cooling_time_s": {
-                        "type": "number",
-                        "description": "Cooling time in seconds (default: 86400)"
-                    },
-                    "current_profile": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "description": "Optional time-varying beam current profile (piecewise-constant). When present, overrides current_ma for activation calculations.",
-                        "properties": {
-                            "times_s": {
-                                "type": "array",
-                                "items": { "type": "number" },
-                                "description": "Monotonically increasing time points starting at 0 [seconds]"
-                            },
-                            "currents_ma": {
-                                "type": "array",
-                                "items": { "type": "number" },
-                                "description": "Beam current at each time point [mA]. Must be non-negative. Same length as times_s."
-                            }
-                        },
-                        "required": ["times_s", "currents_ma"]
-                    },
-                    "activity_floor_bq": activity_floor_schema()
-                },
+                "properties": extend_props(sim_base_properties(), &[]),
                 "required": ["projectile", "layers"]
             }
         }),
@@ -733,20 +784,11 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
-                    "energy_mev": { "type": "number" },
-                    "current_ma": { "type": "number" },
-                    "layers": {
-                        "type": "array",
-                        "items": layer_schema(false)
-                    },
-                    "irradiation_time_s": { "type": "number" },
-                    "cooling_time_s": { "type": "number" },
-                    "isotope": { "type": "string", "description": "Isotope name, e.g. 'Cu-64' or 'Mo-99'" },
-                    "layer_index": { "type": "integer", "description": "1-based layer to read the curve from (matches `simulate` layer numbering). Optional — when omitted, defaults to the first layer in beam order that produces the isotope, with a warning if more than one layer does. Errors if the named isotope is not produced in the requested layer." },
-                    "vs": { "type": "string", "enum": ["time", "cooling", "depth"] }
-                },
+                "properties": extend_props(sim_base_properties(), &[
+                    ("isotope", serde_json::json!({ "type": "string", "description": "Isotope name, e.g. 'Cu-64' or 'Mo-99'" })),
+                    ("layer_index", serde_json::json!({ "type": "integer", "description": "1-based layer to read the curve from (matches `simulate` layer numbering). Optional — when omitted, defaults to the first layer in beam order that produces the isotope, with a warning if more than one layer does. Errors if the named isotope is not produced in the requested layer." })),
+                    ("vs", serde_json::json!({ "type": "string", "enum": ["time", "cooling", "depth"] })),
+                ]),
                 "required": ["projectile", "energy_mev", "current_ma", "layers", "isotope", "vs"]
             }
         }),
@@ -756,41 +798,38 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
-                    "energy_mev": { "type": "number" },
-                    "current_ma": { "type": "number" },
-                    "layers": {
-                        "type": "array",
-                        "items": layer_schema(false)
-                    },
-                    "irradiation_time_s": { "type": "number" },
-                    "cooling_time_s": { "type": "number" },
-                    "isotope": { "type": "string", "description": "Isotope name, e.g. 'Sc-44' or 'Cu-64'" },
-                    "activity_floor_bq": activity_floor_schema()
-                },
+                "properties": extend_props(sim_base_properties(), &[
+                    ("isotope", serde_json::json!({ "type": "string", "description": "Isotope name, e.g. 'Sc-44' or 'Cu-64'" })),
+                ]),
                 "required": ["projectile", "energy_mev", "current_ma", "layers", "isotope"]
             }
         }),
-        serde_json::json!({
-            "name": "compare_simulations",
-            "description": format!("Run two simulations and compare first-layer isotope activities side-by-side. Useful for comparing beam energies, targets, or irradiation times.{SCOPE_SUFFIX}"),
-            "inputSchema": {
+        {
+            // `config_a` / `config_b` spell out every key the runtime accepts
+            // (the simulate surface + optional display `label`) so a schema-
+            // validating client can send neutron_flux / current_profile /
+            // secondary_neutron / activity_floor_bq inside them (#712 review).
+            let compare_config_schema = serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "config_a": {
-                        "type": "object",
-                        "description": "First simulation config (same shape as simulate args, plus optional 'label')",
+                "properties": extend_props(sim_base_properties(), &[
+                    ("label", serde_json::json!({ "type": "string", "description": "Optional display label for this config in the comparison table." })),
+                ]),
+            });
+            serde_json::json!({
+                "name": "compare_simulations",
+                "description": format!("Run two simulations and compare first-layer isotope activities side-by-side. Useful for comparing beam energies, targets, or irradiation times.{SCOPE_SUFFIX}"),
+                "inputSchema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "config_a": compare_config_schema.clone(),
+                        "config_b": compare_config_schema,
                     },
-                    "config_b": {
-                        "type": "object",
-                        "description": "Second simulation config (same shape as simulate args, plus optional 'label')",
-                    }
-                },
-                "required": ["config_a", "config_b"]
-            }
-        }),
+                    "required": ["config_a", "config_b"]
+                }
+            })
+        },
         serde_json::json!({
             "name": "get_decay_data",
             "description": "Get decay data for a specific nuclide (half-life, decay modes, daughters). Complementary to `get_nuclide_data`, which also returns dose constant + per-decay emission lines + natural abundance in one call.",
@@ -821,20 +860,13 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
-                    "energy_mev": { "type": "number" },
-                    "current_ma": { "type": "number" },
-                    "layers": { "type": "array", "items": layer_schema(false) },
-                    "irradiation_time_s": { "type": "number" },
-                    "cooling_time_s": { "type": "number" },
-                    "cooling": { "type": "boolean", "description": "Include the cooling-tail table (activity [Bq] vs time, t ≥ irradiation). Default false." },
-                    "depth": { "type": "boolean", "description": "Include the depth-profile table (production rate [atoms/s/cm] vs depth). Default false." },
-                    "emissions": { "type": "boolean", "description": "Include the emission table (per γ/x-ray/Auger/β±/annihilation line with intensity_per_decay). Default false." },
-                    "top_n": { "type": "integer", "minimum": 0, "description": "Bound the number of rows shown INLINE in the JSON view (per table). The attached Parquet resource is ALWAYS complete — this only trims the token cost of the inline view, never the exported data. When omitted, defaults to a built-in cap; when set, the smaller of the two applies. Truncation is stated explicitly in the response." },
-                    "sort_by": { "type": "string", "description": "Column name to sort the INLINE JSON view by (descending). Applies only to tables that carry that column; the Parquet remains in insertion order regardless. Must be a numeric column (F64/I64) — unknown or non-numeric keys are rejected rather than silently ignored." },
-                    "activity_floor_bq": activity_floor_schema()
-                },
+                "properties": extend_props(sim_base_properties(), &[
+                    ("cooling", serde_json::json!({ "type": "boolean", "description": "Include the cooling-tail table (activity [Bq] vs time, t ≥ irradiation). Default false." })),
+                    ("depth", serde_json::json!({ "type": "boolean", "description": "Include the depth-profile table (production rate [atoms/s/cm] vs depth). Default false." })),
+                    ("emissions", serde_json::json!({ "type": "boolean", "description": "Include the emission table (per γ/x-ray/Auger/β±/annihilation line with intensity_per_decay). Default false." })),
+                    ("top_n", serde_json::json!({ "type": "integer", "minimum": 0, "description": "Bound the number of rows shown INLINE in the JSON view (per table). The attached Parquet resource is ALWAYS complete — this only trims the token cost of the inline view, never the exported data. When omitted, defaults to a built-in cap; when set, the smaller of the two applies. Truncation is stated explicitly in the response." })),
+                    ("sort_by", serde_json::json!({ "type": "string", "description": "Column name to sort the INLINE JSON view by (descending). Applies only to tables that carry that column; the Parquet remains in insertion order regardless. Must be a numeric column (F64/I64) — unknown or non-numeric keys are rejected rather than silently ignored." })),
+                ]),
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
         }),
@@ -844,17 +876,10 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
-                    "energy_mev": { "type": "number" },
-                    "current_ma": { "type": "number" },
-                    "layers": { "type": "array", "items": layer_schema(false) },
-                    "irradiation_time_s": { "type": "number" },
-                    "cooling_time_s": { "type": "number" },
-                    "top_n": { "type": "integer", "minimum": 0, "description": "Bound INLINE JSON rows; the Parquet is always complete." },
-                    "sort_by": { "type": "string", "description": "Numeric column to sort the INLINE JSON by (descending); Parquet order is unaffected." },
-                    "activity_floor_bq": activity_floor_schema()
-                },
+                "properties": extend_props(sim_base_properties(), &[
+                    ("top_n", serde_json::json!({ "type": "integer", "minimum": 0, "description": "Bound INLINE JSON rows; the Parquet is always complete." })),
+                    ("sort_by", serde_json::json!({ "type": "string", "description": "Numeric column to sort the INLINE JSON by (descending); Parquet order is unaffected." })),
+                ]),
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
         }),
@@ -864,22 +889,15 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
-                    "energy_mev": { "type": "number" },
-                    "current_ma": { "type": "number" },
-                    "layers": { "type": "array", "items": layer_schema(false) },
-                    "irradiation_time_s": { "type": "number" },
-                    "cooling_time_s": { "type": "number" },
-                    "isotope": { "type": "string", "description": "Restrict to one isotope, e.g. 'F-18'. Optional — default sums every produced isotope." },
-                    "emission_type": { "type": "string", "description": "Restrict to one radiation type: gamma | xray | auger | ce | beta- | beta+ | annihilation." },
-                    "energy_kev": { "type": "number", "description": "Restrict to lines within ± energy_tolerance_kev of this energy (e.g. 511)." },
-                    "energy_tolerance_kev": { "type": "number", "description": "Tolerance for energy_kev matching [keV]. Default 1.0." },
-                    "vs": { "type": "string", "enum": ["time", "cooling"], "description": "'time' = full irradiation + cooling timeline; 'cooling' = cooling tail only. Default 'time'." },
-                    "top_n": { "type": "integer", "minimum": 0, "description": "Bound INLINE JSON rows; the Parquet is always complete." },
-                    "sort_by": { "type": "string", "description": "Numeric column to sort the INLINE JSON by (descending); Parquet order is unaffected." },
-                    "activity_floor_bq": activity_floor_schema()
-                },
+                "properties": extend_props(sim_base_properties(), &[
+                    ("isotope", serde_json::json!({ "type": "string", "description": "Restrict to one isotope, e.g. 'F-18'. Optional — default sums every produced isotope." })),
+                    ("emission_type", serde_json::json!({ "type": "string", "description": "Restrict to one radiation type: gamma | xray | auger | ce | beta- | beta+ | annihilation." })),
+                    ("energy_kev", serde_json::json!({ "type": "number", "description": "Restrict to lines within ± energy_tolerance_kev of this energy (e.g. 511)." })),
+                    ("energy_tolerance_kev", serde_json::json!({ "type": "number", "description": "Tolerance for energy_kev matching [keV]. Default 1.0." })),
+                    ("vs", serde_json::json!({ "type": "string", "enum": ["time", "cooling"], "description": "'time' = full irradiation + cooling timeline; 'cooling' = cooling tail only. Default 'time'." })),
+                    ("top_n", serde_json::json!({ "type": "integer", "minimum": 0, "description": "Bound INLINE JSON rows; the Parquet is always complete." })),
+                    ("sort_by", serde_json::json!({ "type": "string", "description": "Numeric column to sort the INLINE JSON by (descending); Parquet order is unaffected." })),
+                ]),
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
         }),
@@ -936,39 +954,22 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
-                    "energy_mev": { "type": "number" },
-                    "current_ma": { "type": "number" },
-                    "layers": { "type": "array", "items": layer_schema(false) },
-                    "irradiation_time_s": { "type": "number" },
-                    "cooling_time_s": { "type": "number", "description": "Cooling time in seconds — every `at_s` entry must lie inside (irr + cool). Widen this to query further out." },
-                    "current_profile": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "description": "Optional piecewise-constant current profile (same shape as `simulate`).",
-                        "properties": {
-                            "times_s": { "type": "array", "items": { "type": "number" } },
-                            "currents_ma": { "type": "array", "items": { "type": "number" } }
-                        },
-                        "required": ["times_s", "currents_ma"]
-                    },
-                    "at_s": {
+                "properties": extend_props(sim_base_properties(), &[
+                    ("at_s", serde_json::json!({
                         "type": "array",
                         "items": { "type": "number", "minimum": 0 },
                         "description": "List of query times [seconds since start of irradiation]. Each t must be finite and within the simulated window (irr + cool). Callers supply their own grid (log-spaced decay points, clearance dates, shipping windows)."
-                    },
-                    "scope": {
+                    })),
+                    ("scope", serde_json::json!({
                         "type": "string",
                         "enum": ["isotope", "layer", "element", "stack"],
                         "default": "isotope",
                         "description": "Aggregation level. 'isotope' (default): one row per (isotope × layer). 'layer': sum across all isotopes in each layer. 'element': sum across all isotopes of each Z across the whole stack. 'stack': one total row summed across everything. Aggregation is AFTER the chain solve so ingrowth stays correct."
-                    },
-                    "isotope": { "type": "string", "description": "Optional exact-name filter (e.g. 'F-18', 'Sc-44m'). Combines with `layer_index` and `element`." },
-                    "layer_index": { "type": "integer", "description": "Optional 1-based layer filter (matches `simulate` numbering)." },
-                    "element": { "type": "string", "description": "Optional element filter — symbol ('Cu') or atomic number (as a string, e.g. '29')." },
-                    "activity_floor_bq": activity_floor_schema()
-                },
+                    })),
+                    ("isotope", serde_json::json!({ "type": "string", "description": "Optional exact-name filter (e.g. 'F-18', 'Sc-44m'). Combines with `layer_index` and `element`." })),
+                    ("layer_index", serde_json::json!({ "type": "integer", "description": "Optional 1-based layer filter (matches `simulate` numbering)." })),
+                    ("element", serde_json::json!({ "type": "string", "description": "Optional element filter — symbol ('Cu') or atomic number (as a string, e.g. '29')." })),
+                ]),
                 "required": ["projectile", "energy_mev", "current_ma", "layers", "at_s"]
             }
         }),
@@ -978,30 +979,14 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
-                    "energy_mev": { "type": "number" },
-                    "current_ma": { "type": "number" },
-                    "layers": { "type": "array", "items": layer_schema(false) },
-                    "irradiation_time_s": { "type": "number" },
-                    "cooling_time_s": { "type": "number" },
-                    "current_profile": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "properties": {
-                            "times_s": { "type": "array", "items": { "type": "number" } },
-                            "currents_ma": { "type": "array", "items": { "type": "number" } }
-                        },
-                        "required": ["times_s", "currents_ma"]
-                    },
-                    "at_s": {
+                "properties": extend_props(sim_base_properties(), &[
+                    ("at_s", serde_json::json!({
                         "type": "array",
                         "items": { "type": "number", "minimum": 0 },
                         "description": "List of query times [seconds since start of irradiation]."
-                    },
-                    "distance_cm": { "type": "number", "description": "Point-source distance in cm (default 100 = 1 m). Refuses distances below ~1 cm as the near-field approximation is invalid there." },
-                    "activity_floor_bq": activity_floor_schema()
-                },
+                    })),
+                    ("distance_cm", serde_json::json!({ "type": "number", "description": "Point-source distance in cm (default 100 = 1 m). Refuses distances below ~1 cm as the near-field approximation is invalid there." })),
+                ]),
                 "required": ["projectile", "energy_mev", "current_ma", "layers", "at_s"]
             }
         }),
@@ -1011,16 +996,9 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
-                    "energy_mev": { "type": "number" },
-                    "current_ma": { "type": "number" },
-                    "layers": { "type": "array", "items": layer_schema(false) },
-                    "irradiation_time_s": { "type": "number" },
-                    "cooling_time_s": { "type": "number", "description": "Cooling time in seconds — dose is computed at the end of this window (default 86400). Pass 0 for end-of-bombardment dose." },
-                    "distance_cm": { "type": "number", "description": "Point-source distance in cm (default 100 = 1 m). Refuses distances below ~1 cm as the near-field approximation is invalid there." },
-                    "activity_floor_bq": activity_floor_schema()
-                },
+                "properties": extend_props(sim_base_properties(), &[
+                    ("distance_cm", serde_json::json!({ "type": "number", "description": "Point-source distance in cm (default 100 = 1 m). Refuses distances below ~1 cm as the near-field approximation is invalid there." })),
+                ]),
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
         }),
@@ -1050,25 +1028,20 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {
-                    "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a", "n"], "description": "Beam projectile." },
-                    "energy_mev": { "type": "number", "description": "Beam energy in MeV." },
-                    "current_ma": { "type": "number", "description": "Beam current in mA." },
-                    "layers": { "type": "array", "description": "Target layers (beam traversal order).", "items": layer_schema(false) },
-                    "irradiation_time_s": { "type": "number", "description": "Irradiation time in seconds (default: 86400)." },
-                    "cooling_time_s": { "type": "number", "description": "Cooling time in seconds (default: 86400)." },
-                    "secondary_neutron": { "type": "boolean", "description": "Also model Phase-2 secondary (x,n)-driven neutron activation." },
-                    "activity_floor_bq": activity_floor_schema(),
-                    "tier": {
+                // Full sim surface + tier + template_path. The base includes
+                // `neutron_flux` so a `projectile: "n"` export doesn't silently
+                // fall back to the default fast spectrum (#712 review).
+                "properties": extend_props(sim_base_properties(), &[
+                    ("tier", serde_json::json!({
                         "type": "string",
                         "enum": ["A", "B"],
                         "description": "How much data the artifact carries. \"A\" (default) embeds derived results only — activities, yields, curves, depth profiles — and nothing from the evaluated nuclear-data libraries; emission spectra are omitted and the dose column degrades to a small hardcoded table. \"B\" additionally embeds emission lines and dose constants for the nuclides this run produced, and only those, which makes the gamma spectra viewable. Choose deliberately: the tier is recorded in the file so its contents stay auditable after it has been shared."
-                    },
-                    "template_path": {
+                    })),
+                    ("template_path", serde_json::json!({
                         "type": "string",
                         "description": "Path to the built viewer template (frontend/dist-viewer/viewer.html, produced by `npx vite build --config frontend/vite.viewer.config.ts`). Falls back to the HYRR_VIEWER_TEMPLATE environment variable. The template is read at call time rather than compiled in, so core never depends on a frontend build."
-                    }
-                },
+                    })),
+                ]),
                 "required": ["projectile", "layers"]
             }
         }),
@@ -1322,6 +1295,49 @@ fn parse_neutron_flux(val: Option<&Value>) -> Result<crate::neutron::FluxModel, 
     }
 }
 
+/// Run every strict-args check on the NESTED objects of a sim-shaped args
+/// value: `layers[i]` + each `enrichment[j]` inside it, `neutron_flux`,
+/// `current_profile`. Called from every sim-based tool's `tool_*` function
+/// BEFORE compute so a nested typo (`kT_MeV`, `frac`, `ramp`) is rejected
+/// even when the caller also omitted a required top-level arg (#712
+/// re-review — otherwise "Missing 'projectile'" would fire first and hide
+/// the strict-args failure).
+///
+/// This is validation only — no material resolution, no compute, no shape
+/// coercion. It calls the same helpers `build_and_run_sim` uses (parse_*),
+/// so nested validators can't drift from the schema either.
+pub(crate) fn validate_nested_stack_args(args: &Value) -> Result<(), String> {
+    if let Some(layers) = args.get("layers").and_then(|v| v.as_array()) {
+        for (idx, layer_val) in layers.iter().enumerate() {
+            let ctx = format!("layers[{idx}]");
+            reject_unknown_keys(layer_val, LAYER_KEYS, &ctx)?;
+            // Reuse `parse_enrichment` for its layer-attributed
+            // `enrichment[i]` checks; discard the resolved value.
+            let _ = parse_enrichment(layer_val.get("enrichment"), &ctx)?;
+        }
+    }
+    if let Some(nf) = args.get("neutron_flux") {
+        if !nf.is_null() {
+            reject_unknown_keys(nf, NEUTRON_FLUX_KEYS, "neutron_flux")?;
+            // Also run serde's per-variant `deny_unknown_fields` so a
+            // cross-variant typo (`{kind:"thermal", temp_mev}`) is caught
+            // here rather than only inside compute.
+            serde_json::from_value::<crate::neutron::FluxModel>(nf.clone()).map_err(|e| {
+                format!(
+                    "Invalid 'neutron_flux' (expected a FluxModel, e.g. \
+                     {{\"kind\":\"thermal\",\"flux\":1e13,\"kt_mev\":2.53e-8}}): {e}"
+                )
+            })?;
+        }
+    }
+    if let Some(cp) = args.get("current_profile") {
+        if !cp.is_null() {
+            reject_unknown_keys(cp, CURRENT_PROFILE_KEYS, "current_profile")?;
+        }
+    }
+    Ok(())
+}
+
 /// Parse a simulate-shaped args object and run compute_stack.
 ///
 /// Shared by `simulate` and `compare_simulations` so their input
@@ -1489,6 +1505,15 @@ const DEFINE_MATERIAL_KEYS: &[&str] = &["name", "density_g_cm3", "composition", 
 
 fn tool_define_material(materials: &mut MaterialRegistry, args: &Value) -> Result<String, String> {
     reject_unknown_keys(args, DEFINE_MATERIAL_KEYS, "define_material")?;
+    // Validate `composition[i]` keys BEFORE we require the top-level `name`
+    // (#712 re-review). Otherwise a caller who forgot `name` would see
+    // `Missing 'name'` instead of the `Unknown key '<frac>'` for the typo
+    // that likely produced the ambiguity in the first place.
+    if let Some(comp) = args.get("composition").and_then(|v| v.as_array()) {
+        for (idx, entry) in comp.iter().enumerate() {
+            reject_unknown_keys(entry, COMPOSITION_ITEM_KEYS, &format!("composition[{idx}]"))?;
+        }
+    }
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -1563,11 +1588,12 @@ fn tool_define_material(materials: &mut MaterialRegistry, args: &Value) -> Resul
     ))
 }
 
-/// The base sim-arg keys shared by every tool that runs (or looks like it
-/// runs) [`build_and_run_sim`]. Each tool extends this with its own
-/// per-tool keys; strict-args regressions cross-check the schema against the
-/// merged list so a schema change without an allowlist change trips the test.
-const SIMULATE_BASE_KEYS: &[&str] = &[
+/// The base sim-arg keys — the SAME names, in the SAME order, that
+/// [`sim_base_properties`] emits as schema properties. Set-equality between
+/// the two is enforced by the `schema_matches_sim_base_keys` regression;
+/// every sim-based tool extends this via `[SIM_BASE_KEYS, &[extras]].concat()`
+/// so schema and allowlist stay in lockstep by construction (#712 review).
+pub(crate) const SIM_BASE_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
     "current_ma",
@@ -1580,15 +1606,13 @@ const SIMULATE_BASE_KEYS: &[&str] = &[
     "activity_floor_bq",
 ];
 
-/// Keys accepted by [`tool_simulate`] (`simulate` tool).
-const SIMULATE_KEYS: &[&str] = SIMULATE_BASE_KEYS;
-
 fn tool_simulate(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
-    reject_unknown_keys(args, SIMULATE_KEYS, "simulate")?;
+    reject_unknown_keys(args, SIM_BASE_KEYS, "simulate")?;
+    validate_nested_stack_args(args)?;
     // Populate the result cache so follow-up dataset / inventory / emission
     // queries on the same config are lazy views instead of re-runs (#427).
     let result = cached_sim(db, registry, args)?;
@@ -1915,40 +1939,33 @@ fn tool_get_decay_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String
 /// `config_b`); each nested config accepts the union below.
 const COMPARE_SIMULATIONS_KEYS: &[&str] = &["config_a", "config_b"];
 
-const COMPARE_CONFIG_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "neutron_flux",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "current_profile",
-    "activity_floor_bq",
-    "label",
-];
+/// The compare_simulations config_a/b surface extends the shared sim base
+/// with an optional display `label`. Kept as `EXTRAS` so it composes with
+/// `SIM_BASE_KEYS` the same way as every other sim-based tool.
+pub(crate) const COMPARE_CONFIG_EXTRAS: &[&str] = &["label"];
 
-/// Keys accepted inside `compare_simulations.config_{a,b}` — the simulate
-/// surface plus an optional display `label`.
 fn tool_compare_simulations(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
     reject_unknown_keys(args, COMPARE_SIMULATIONS_KEYS, "compare_simulations")?;
+    // Validate keys inside EITHER config first so a typo in `config_a` isn't
+    // hidden by "Missing 'config_b'" (#712 review). Each config's key check
+    // runs whenever the caller supplied that config, regardless of the
+    // other. The require-both check comes after.
+    let config_keys: Vec<&str> = [SIM_BASE_KEYS, COMPARE_CONFIG_EXTRAS].concat();
+    for (which, opt) in [
+        ("config_a", args.get("config_a")),
+        ("config_b", args.get("config_b")),
+    ] {
+        if let Some(v) = opt {
+            reject_unknown_keys(v, &config_keys, &format!("compare_simulations.{which}"))?;
+            validate_nested_stack_args(v)?;
+        }
+    }
     let config_a = args.get("config_a").ok_or("Missing 'config_a'")?;
     let config_b = args.get("config_b").ok_or("Missing 'config_b'")?;
-    reject_unknown_keys(
-        config_a,
-        COMPARE_CONFIG_KEYS,
-        "compare_simulations.config_a",
-    )?;
-    reject_unknown_keys(
-        config_b,
-        COMPARE_CONFIG_KEYS,
-        "compare_simulations.config_b",
-    )?;
 
     let label_a = config_a
         .get("label")
@@ -2039,6 +2056,10 @@ fn tool_get_stack_energy_budget(
         GET_STACK_ENERGY_BUDGET_KEYS,
         "get_stack_energy_budget",
     )?;
+    // Nested-key validation before compute so an unknown key inside a layer
+    // (or its enrichment) surfaces at parse time rather than after
+    // "Missing 'projectile'" (#712 review).
+    validate_nested_stack_args(args)?;
     // Stopping-only fast path — skips the activation pipeline that
     // build_and_run_sim would invoke. Identical energy/heat numbers, much
     // less work for stacks with many cross-section channels.
@@ -2082,12 +2103,13 @@ fn tool_get_stack_energy_budget(
     Ok(output)
 }
 
+// The `GET_STOPPING_POWER_KEYS` slice below documents what
+// `tool_get_stopping_power` accepts. `density_g_cm3` used to be an
+// undocumented hidden argument (#713 review); now schema-visible and
+// enforced here.
 const GET_STOPPING_POWER_KEYS: &[&str] =
     &["projectile", "material", "energies_mev", "density_g_cm3"];
 
-/// Keys accepted by [`tool_get_stopping_power`]. `density_g_cm3` used to be
-/// an undocumented hidden argument (#713 review); now schema-visible and
-/// enforced here.
 fn tool_get_stopping_power(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
@@ -2247,21 +2269,7 @@ fn select_producing_layer<'a>(
     })
 }
 
-const GET_ISOTOPE_PRODUCTION_CURVE_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "neutron_flux",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "current_profile",
-    "activity_floor_bq",
-    "isotope",
-    "layer_index",
-    "vs",
-];
+const GET_ISOTOPE_PRODUCTION_CURVE_EXTRAS: &[&str] = &["isotope", "layer_index", "vs"];
 
 fn tool_get_isotope_production_curve(
     db: &dyn DatabaseProtocol,
@@ -2270,9 +2278,10 @@ fn tool_get_isotope_production_curve(
 ) -> Result<String, String> {
     reject_unknown_keys(
         args,
-        GET_ISOTOPE_PRODUCTION_CURVE_KEYS,
+        &[SIM_BASE_KEYS, GET_ISOTOPE_PRODUCTION_CURVE_EXTRAS].concat(),
         "get_isotope_production_curve",
     )?;
+    validate_nested_stack_args(args)?;
     let isotope = args
         .get("isotope")
         .and_then(|v| v.as_str())
@@ -2416,26 +2425,19 @@ fn tool_get_isotope_production_curve(
     Ok(output)
 }
 
-const LIST_PRODUCING_LAYERS_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "neutron_flux",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "current_profile",
-    "activity_floor_bq",
-    "isotope",
-];
+const LIST_PRODUCING_LAYERS_EXTRAS: &[&str] = &["isotope"];
 
 fn tool_list_producing_layers(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
-    reject_unknown_keys(args, LIST_PRODUCING_LAYERS_KEYS, "list_producing_layers")?;
+    reject_unknown_keys(
+        args,
+        &[SIM_BASE_KEYS, LIST_PRODUCING_LAYERS_EXTRAS].concat(),
+        "list_producing_layers",
+    )?;
+    validate_nested_stack_args(args)?;
     let isotope = args
         .get("isotope")
         .and_then(|v| v.as_str())
@@ -2628,30 +2630,20 @@ fn parse_inline_view(args: &Value) -> Result<(Option<usize>, Option<&str>), Stri
     Ok((top_n, sort_by))
 }
 
-const GET_SIMULATION_DATASET_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "neutron_flux",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "current_profile",
-    "activity_floor_bq",
-    "cooling",
-    "depth",
-    "emissions",
-    "top_n",
-    "sort_by",
-];
+const GET_SIMULATION_DATASET_EXTRAS: &[&str] =
+    &["cooling", "depth", "emissions", "top_n", "sort_by"];
 
 fn tool_get_simulation_dataset(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    reject_unknown_keys(args, GET_SIMULATION_DATASET_KEYS, "get_simulation_dataset")?;
+    reject_unknown_keys(
+        args,
+        &[SIM_BASE_KEYS, GET_SIMULATION_DATASET_EXTRAS].concat(),
+        "get_simulation_dataset",
+    )?;
+    validate_nested_stack_args(args)?;
     let want_cooling = args
         .get("cooling")
         .and_then(|v| v.as_bool())
@@ -2801,27 +2793,19 @@ fn tool_get_simulation_dataset(
     Ok(ToolResponse { text, resources })
 }
 
-const GET_ISOTOPE_INVENTORY_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "neutron_flux",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "current_profile",
-    "activity_floor_bq",
-    "top_n",
-    "sort_by",
-];
+const GET_ISOTOPE_INVENTORY_EXTRAS: &[&str] = &["top_n", "sort_by"];
 
 fn tool_get_isotope_inventory(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    reject_unknown_keys(args, GET_ISOTOPE_INVENTORY_KEYS, "get_isotope_inventory")?;
+    reject_unknown_keys(
+        args,
+        &[SIM_BASE_KEYS, GET_ISOTOPE_INVENTORY_EXTRAS].concat(),
+        "get_isotope_inventory",
+    )?;
+    validate_nested_stack_args(args)?;
     let activity_floor_bq = parse_activity_floor(args)?;
     let (top_n, sort_by) = parse_inline_view(args)?;
     let result = cached_sim(db, registry, args)?;
@@ -2865,17 +2849,7 @@ fn tool_get_isotope_inventory(
     Ok(ToolResponse { text, resources })
 }
 
-const GET_EMISSION_CURVE_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "neutron_flux",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "current_profile",
-    "activity_floor_bq",
+const GET_EMISSION_CURVE_EXTRAS: &[&str] = &[
     "isotope",
     "emission_type",
     "energy_kev",
@@ -2890,7 +2864,12 @@ fn tool_get_emission_curve(
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    reject_unknown_keys(args, GET_EMISSION_CURVE_KEYS, "get_emission_curve")?;
+    reject_unknown_keys(
+        args,
+        &[SIM_BASE_KEYS, GET_EMISSION_CURVE_EXTRAS].concat(),
+        "get_emission_curve",
+    )?;
+    validate_nested_stack_args(args)?;
     let vs = args.get("vs").and_then(|v| v.as_str()).unwrap_or("time");
     if !["time", "cooling"].contains(&vs) {
         return Err(format!("'vs' must be 'time' or 'cooling' (got '{vs}')"));
@@ -3081,19 +3060,7 @@ will report the same — the underlying `DoseDb::dose_constant` returned None.\n
     }
 }
 
-const GET_DOSE_RATE_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "neutron_flux",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "current_profile",
-    "activity_floor_bq",
-    "distance_cm",
-];
+const GET_DOSE_RATE_EXTRAS: &[&str] = &["distance_cm"];
 
 /// Bare-source dose rate [µSv/h] from every produced isotope in a simulated
 /// stack, at `distance_cm`. Delegates the sum to [`compute_stack_dose`] so
@@ -3103,7 +3070,12 @@ fn tool_get_dose_rate(
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
-    reject_unknown_keys(args, GET_DOSE_RATE_KEYS, "get_dose_rate")?;
+    reject_unknown_keys(
+        args,
+        &[SIM_BASE_KEYS, GET_DOSE_RATE_EXTRAS].concat(),
+        "get_dose_rate",
+    )?;
+    validate_nested_stack_args(args)?;
     let distance_cm = args
         .get("distance_cm")
         .and_then(|v| v.as_f64())
@@ -3185,23 +3157,7 @@ and contribute **0** to the total: {}. The reported total is a LOWER BOUND.\n\n"
 
 // ─── #570: exact-Bateman point queries ─────────────────────────────────────
 
-const GET_ACTIVITY_AT_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "neutron_flux",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "current_profile",
-    "activity_floor_bq",
-    "at_s",
-    "scope",
-    "isotope",
-    "layer_index",
-    "element",
-];
+const GET_ACTIVITY_AT_EXTRAS: &[&str] = &["at_s", "scope", "isotope", "layer_index", "element"];
 
 /// `get_activity_at` — exact Bateman activity at caller-chosen times.
 ///
@@ -3217,7 +3173,12 @@ fn tool_get_activity_at(
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    reject_unknown_keys(args, GET_ACTIVITY_AT_KEYS, "get_activity_at")?;
+    reject_unknown_keys(
+        args,
+        &[SIM_BASE_KEYS, GET_ACTIVITY_AT_EXTRAS].concat(),
+        "get_activity_at",
+    )?;
+    validate_nested_stack_args(args)?;
     use crate::mcp::activity_at::{
         aggregate, apply_activity_floor, parse_at_s, parse_current_profile_from_args,
         resolve_all_layers, to_json_rows, Scope,
@@ -3349,20 +3310,7 @@ fn parse_element_filter(db: &dyn DatabaseProtocol, args: &Value) -> Result<Optio
     Ok(Some(z))
 }
 
-const GET_DOSE_RATE_AT_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "neutron_flux",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "current_profile",
-    "activity_floor_bq",
-    "at_s",
-    "distance_cm",
-];
+const GET_DOSE_RATE_AT_EXTRAS: &[&str] = &["at_s", "distance_cm"];
 
 /// `get_dose_rate_at` — gamma dose rate at caller-chosen times.
 ///
@@ -3376,7 +3324,12 @@ fn tool_get_dose_rate_at(
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    reject_unknown_keys(args, GET_DOSE_RATE_AT_KEYS, "get_dose_rate_at")?;
+    reject_unknown_keys(
+        args,
+        &[SIM_BASE_KEYS, GET_DOSE_RATE_AT_EXTRAS].concat(),
+        "get_dose_rate_at",
+    )?;
+    validate_nested_stack_args(args)?;
     use crate::mcp::activity_at::{
         apply_activity_floor, parse_at_s, parse_current_profile_from_args, resolve_all_layers,
     };

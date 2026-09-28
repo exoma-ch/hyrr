@@ -375,13 +375,27 @@ fn handle_request(
             // between was recoverable. Wrapping the call in `catch_unwind`
             // turns a panic into an `isError` result the client can render
             // and recover from — the same shape as a returned `Err(String)`,
-            // just with a payload that names the panic. AssertUnwindSafe is
-            // sound here: `call_tool` takes `&mut MaterialRegistry`, but if
-            // the panic left the registry mid-mutation, the next `initialize`
-            // wipes it (session-scoped), and neither `db` nor `arguments`
-            // has interior state a panic can poison. We keep the fix in
-            // parse_layers as the primary defence; this is just the safety
-            // net so a future panic behaves like a Result.
+            // just with a payload that names the panic.
+            //
+            // AssertUnwindSafe is sound in practice because every `tool_*`
+            // panics BEFORE it mutates the shared `MaterialRegistry` (only
+            // `tool_define_material` mutates it, and its parser errors out
+            // long before the insert). The only truly-shared state visible
+            // through `db` is the xs_cache Mutex, whose poison error the
+            // db.rs recovery path handles (`unwrap_or_else(|e| e.into_inner())`)
+            // rather than propagating.
+            //
+            // This is the belt-and-braces safety net. The primary defence
+            // is `parse_layers` (typed rejection before compute) plus
+            // `StoppingError::LayerUnresolvedThickness` (typed error from
+            // compute); the catch_unwind exists so an as-yet-unaudited
+            // panic path still becomes a Result-shaped response instead of
+            // a dead server.
+            //
+            // For `hyrr-mcp` release builds, `hyrr-mcp/Cargo.toml`
+            // explicitly pins `panic = "unwind"` — without that override,
+            // the shipped binary would abort and the "server did not exit"
+            // message would be a lie. WASM keeps `abort` (its own profile).
             let call =
                 std::panic::AssertUnwindSafe(|| tools::call_tool(db, materials, name, &arguments));
             let result = std::panic::catch_unwind(call).unwrap_or_else(|panic_payload| {

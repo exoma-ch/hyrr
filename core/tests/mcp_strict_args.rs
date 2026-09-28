@@ -294,44 +294,54 @@ fn well_formed_args_pass_strict_validation() {
 
 // ─── #712.8 — schemas and allowlists agree, both directions, all levels ────
 
-/// Contract check: for every tool, the set of keys the schema advertises must
-/// equal the set the runtime allowlist accepts. Both directions:
+/// Set-equality contract at every level of every tool schema (#712 review).
 ///
-/// * Schema key not in allowlist → runtime rejects a schema-valid caller.
-/// * Allowlist key not in schema → a well-behaved client (that pre-validates
-///   against the schema) can't send a key the server would happily accept —
-///   the same silent-mismatch class that #712 exists to close.
+/// For each tool, and for every nested object schema underneath it, collect
+/// the set of property names the schema advertises and assert it equals the
+/// set the runtime allowlist accepts. Both directions of drift are caught
+/// (schema advertises a key the runtime rejects, OR the runtime accepts a
+/// key the schema doesn't advertise), at every level (top-level tool args,
+/// `layers[i]`, `enrichment[i]`, `neutron_flux`, `current_profile`,
+/// `composition[i]`, `compare_simulations.config_{a,b}`).
 ///
-/// Runs recursively down through `layers[i]`, `enrichment[i]`, `neutron_flux`,
-/// `current_profile`, `composition[i]`, and `config_a` / `config_b`.
+/// Coverage is validated by exercising the runtime allowlist through
+/// `call_tool`: for every schema property, an args object carrying just
+/// that key must not be rejected with "Unknown key '<key>'". For every
+/// nested object, the same probe uses a container that fills the wrapping
+/// property with a single-key object.
 #[test]
-fn schema_and_allowlist_agree_in_both_directions_recursively() {
+fn schema_and_allowlist_agree_set_equality_at_every_level() {
     let tools = list_tools("tendl-2023-iso");
     let db = empty_store();
     let mut reg = MaterialRegistry::new();
 
     for tool in &tools {
         let name = tool.get("name").and_then(|v| v.as_str()).unwrap();
-        walk_schema_object(&db, &mut reg, name, &tool["inputSchema"], name);
+        walk_schema_object(&db, &mut reg, name, &tool["inputSchema"], name, &[]);
     }
 }
 
-/// Recursively enumerate schema properties and, for every string-keyed key,
-/// probe the tool to make sure the allowlist accepts it (schema → allowlist),
-/// then invert to check the allowlist doesn't accept keys the schema doesn't
-/// advertise (allowlist → schema, via a bogus key at the tool level).
+/// Recursively enumerate schema properties. At every object node, probe the
+/// tool's runtime allowlist by shape-nesting a garbage value under that path
+/// and checking that no rejection names an in-schema key as "Unknown key",
+/// AND that a genuinely-out-of-schema key at that same path DOES get
+/// rejected as "Unknown key".
+///
+/// `path` is the sequence of property names from the tool root down to the
+/// current node, used to construct a probe args value with the shape the
+/// tool expects (`layers[0]` → `{"layers": [{...}]}`, `neutron_flux` →
+/// `{"neutron_flux": {...}}`, etc.).
 fn walk_schema_object(
     db: &dyn DatabaseProtocol,
     reg: &mut MaterialRegistry,
     tool: &str,
     schema: &Value,
     ctx: &str,
+    path: &[&str],
 ) {
     // additionalProperties: false MUST be set on every object schema that
-    // declares `properties` (i.e. a shape with a known set of allowed keys).
-    // A missing guard means clients that pre-validate don't catch the typo
-    // before the round-trip. An open object (`{type:"object"}` with no
-    // properties, e.g. neutron_flux.components[i] which is recursively
+    // declares `properties`. An open object (`{type:"object"}` with no
+    // properties, e.g. neutron_flux.components[i], which recurses into
     // another FluxModel — serde `deny_unknown_fields` handles the
     // per-variant check there) is exempt.
     let has_properties = schema
@@ -348,45 +358,100 @@ fn walk_schema_object(
             "object schema at `{ctx}` must set additionalProperties: false"
         );
     }
-    let props = match schema.get("properties").and_then(|v| v.as_object()) {
-        Some(p) => p,
-        None => return,
+    let Some(props) = schema.get("properties").and_then(|v| v.as_object()) else {
+        return;
     };
-    for (key, subschema) in props {
-        // Schema → allowlist: probe just this key at the tool's top level
-        // with a garbage placeholder. call_tool errors for a hundred
-        // reasons, but it must NOT reject the key with "Unknown key ".
-        //
-        // Only meaningful when `ctx == tool`; for nested objects the
-        // probe is done by including that nested key on an otherwise-empty
-        // top-level object, which schema-validates but hits the parser.
-        if ctx == tool {
-            let args = Value::Object(std::iter::once((key.clone(), Value::Null)).collect());
-            if let Err(e) = call_tool(db, reg, tool, &args) {
-                assert!(
-                    !e.starts_with(&format!("Unknown key '{key}'")),
-                    "tool `{tool}` advertises `{key}` in its schema but the \
-                     runtime rejects it: {e}"
-                );
-            }
-        }
 
-        // Recurse into nested objects and array-of-object schemas.
-        if subschema.get("type").and_then(|v| v.as_str()) == Some("object") {
-            walk_schema_object(db, reg, tool, subschema, &format!("{ctx}.{key}"));
+    // Schema → allowlist: every key in the schema must be accepted by
+    // the runtime at this path.
+    for key in props.keys() {
+        let probe_args = probe_with_key_at_path(path, key);
+        if let Err(e) = call_tool(db, reg, tool, &probe_args) {
+            assert!(
+                !e.contains(&format!("Unknown key '{key}'")),
+                "tool `{tool}` at path `{ctx}` advertises `{key}` in its schema \
+                 but the runtime rejects it: {e}"
+            );
+        }
+    }
+
+    // Allowlist → schema: a bogus key at this path must be rejected by
+    // "Unknown key '<bogus>'" naming the path — proves the runtime doesn't
+    // silently accept anything the schema didn't advertise. Use a key
+    // that no real allowlist would carry.
+    let bogus = "__zzz_probe_drift_1712";
+    let probe_args = probe_with_key_at_path(path, bogus);
+    match call_tool(db, reg, tool, &probe_args) {
+        Ok(_) => panic!(
+            "tool `{tool}` at path `{ctx}` accepted the fabricated key `{bogus}` — \
+             the runtime allowlist is missing a rejection at this level"
+        ),
+        Err(e) => {
+            // Must be a strict-args rejection, not any other error.
+            assert!(
+                e.contains(&format!("Unknown key '{bogus}'")),
+                "tool `{tool}` at path `{ctx}` did not reject `{bogus}` as unknown: {e}"
+            );
+        }
+    }
+
+    // Recurse into nested objects and array-of-object schemas.
+    for (key, subschema) in props {
+        let mut next_path: Vec<&str> = path.to_vec();
+        next_path.push(key.as_str());
+        if subschema.get("type").and_then(|v| v.as_str()) == Some("object")
+            || subschema.get("properties").is_some()
+        {
+            walk_schema_object(
+                db,
+                reg,
+                tool,
+                subschema,
+                &format!("{ctx}.{key}"),
+                &next_path,
+            );
         }
         if subschema.get("type").and_then(|v| v.as_str()) == Some("array") {
             if let Some(items) = subschema.get("items") {
-                walk_schema_object(db, reg, tool, items, &format!("{ctx}.{key}[]"));
+                // Represent an array-of-objects path as `key`; the probe
+                // helper wraps it as `[{...}]` on first array segment.
+                walk_schema_object(db, reg, tool, items, &format!("{ctx}.{key}[]"), &next_path);
             }
         }
     }
 }
 
-/// Allowlist → schema: send an obviously-invalid extra key at the top level
-/// of every tool. The runtime allowlist must reject it, which means the
-/// error names it — coverage that no `<TOOL>_KEYS` slot lets through a key
-/// the schema didn't advertise.
+/// Build a probe args object by nesting `{key: null}` inside the shape
+/// implied by `path`. Each segment names either a nested object or an
+/// array-of-objects — for `list_tools()`'s current shape, only `layers`,
+/// `enrichment`, `composition`, `config_a`, and `config_b` are array-typed
+/// at any depth. The helper hardcodes those.
+fn probe_with_key_at_path(path: &[&str], key: &str) -> Value {
+    let leaf = Value::Object(std::iter::once((key.to_string(), Value::Null)).collect());
+    let mut current = leaf;
+    for segment in path.iter().rev() {
+        // Wrap as an array if this segment carries multiple items (per the
+        // current `list_tools()` shape). Otherwise wrap as an object.
+        let wrapped = if is_array_property(segment) {
+            Value::Array(vec![current])
+        } else {
+            current
+        };
+        current = Value::Object(std::iter::once((segment.to_string(), wrapped)).collect());
+    }
+    current
+}
+
+/// Property names that are arrays of objects in the current `list_tools()`
+/// shape. Kept as a local list rather than reading `type: "array"` off the
+/// schema because the probe helper needs the shape at build time.
+fn is_array_property(name: &str) -> bool {
+    matches!(name, "layers" | "enrichment" | "composition")
+}
+
+/// Original one-key top-level probe kept for coverage of the tool-name
+/// error surface (the ONE-key case where the recursive helper doesn't
+/// carry a path prefix). Complements the set-equality test above.
 #[test]
 fn allowlist_never_admits_a_key_the_schema_omits() {
     let tools = list_tools("tendl-2023-iso");

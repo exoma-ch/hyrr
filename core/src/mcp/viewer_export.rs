@@ -144,27 +144,15 @@ fn collect_evaluated(
     }
 }
 
-/// Keys accepted by [`tool_export_result_html`]. Matches the schema in
-/// [`crate::mcp::tools::list_tools`] exactly — the strict-args regression
-/// test cross-checks both directions, so a drift here fails a test rather
-/// than silently rejecting a schema-advertised key at runtime (or, worse,
-/// silently accepting one that isn't advertised).
-///
-/// No `neutron_flux` / `current_profile` today: ADR 0008 exports a
-/// single-config artifact from the charged-particle stack (the primary
-/// distribution channel), and the schema mirrors that.
-pub(crate) const EXPORT_RESULT_HTML_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "activity_floor_bq",
-    "tier",
-    "template_path",
-];
+/// Keys added by `export_result_html` on top of the shared sim base
+/// ([`crate::mcp::tools::SIM_BASE_KEYS`]). Set-equality between
+/// `[SIM_BASE_KEYS, EXPORT_RESULT_HTML_EXTRAS]` and this tool's schema
+/// properties is enforced by the strict-args regression, so the two can't
+/// drift (#712 re-review). The schema DOES advertise `neutron_flux` /
+/// `current_profile` via the shared base — an `export_result_html` call
+/// with `projectile: "n"` no longer silently uses the default fast
+/// spectrum.
+pub(crate) const EXPORT_RESULT_HTML_EXTRAS: &[&str] = &["tier", "template_path"];
 
 /// Reject unknown top-level keys BEFORE the caller pays for `cached_sim`
 /// (#712 review). Kept as a separate entry point because `call_tool`
@@ -172,11 +160,9 @@ pub(crate) const EXPORT_RESULT_HTML_KEYS: &[&str] = &[
 /// calling [`tool_export_result_html`] with the finished `StackResult`; a
 /// key rejection buried inside that function costs the caller the compute.
 pub(crate) fn validate_export_args(args: &Value) -> Result<(), String> {
-    crate::mcp::strict_args::reject_unknown_keys(
-        args,
-        EXPORT_RESULT_HTML_KEYS,
-        "export_result_html",
-    )
+    let allowed: Vec<&str> = [crate::mcp::tools::SIM_BASE_KEYS, EXPORT_RESULT_HTML_EXTRAS].concat();
+    crate::mcp::strict_args::reject_unknown_keys(args, &allowed, "export_result_html")?;
+    crate::mcp::tools::validate_nested_stack_args(args)
 }
 
 pub fn tool_export_result_html(
