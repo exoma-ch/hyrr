@@ -7,32 +7,16 @@
 
 #![cfg(feature = "mcp")]
 
+mod common;
+
 use hyrr_core::db::ParquetDataStore;
 use hyrr_core::materials::MaterialRegistry;
 use hyrr_core::mcp::tools::call_tool;
 use serde_json::json;
 
-/// Isolate the MCP disk cache from the developer's real `~/.cache/hyrr/`
-/// (#708). Every prior version of this test file happily read and wrote
-/// the developer's cache, so a poisoned entry from a bug-repro run on the
-/// same machine could make these tests fail as if the physics regressed.
-///
-/// Set exactly once via `Once` — env vars are process-global, and Rust
-/// tests share a process, so racing setters would be the #588 EnvVarGuard
-/// trap. Setting the opt-out flag (rather than pointing `HYRR_MCP_CACHE_DIR`
-/// at a tempdir) keeps this dependency-free: no per-test tempdir, no shared
-/// mutex, and every test in the file is protected without having to remember
-/// to call the helper.
-fn isolate_disk_cache() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        std::env::set_var("HYRR_MCP_NO_DISK_CACHE", "1");
-    });
-}
-
 fn store() -> Option<ParquetDataStore> {
-    isolate_disk_cache();
+    // Never touch the developer's real `~/.cache/hyrr/stack-results` (#708).
+    common::isolate_disk_cache();
     let data_dir = std::env::var("HYRR_DATA").unwrap_or_else(|_| {
         concat!(env!("CARGO_MANIFEST_DIR"), "/../nucl-parquet/data").to_string()
     });

@@ -808,11 +808,19 @@ mod np_store {
         // Sorted list of directory entries at the root, so a library added or
         // removed shifts the fingerprint even when the path and catalog stay
         // the same. Only directories: catalog.json etc. are already covered.
+        //
+        // Dot-prefixed entries (`.tmp-<pid>`, `.partial-<pid>`, `.complete`)
+        // are skipped — the fetch / install pipeline creates these as
+        // extraction scratch space and they come and go independently of the
+        // library set. Counting them would flip the fingerprint on every
+        // background fetch and force a spurious miss for a run that shares
+        // the tree with a concurrent install.
         if let Ok(rd) = std::fs::read_dir(&canon) {
             let mut dirs: Vec<String> = rd
                 .filter_map(Result::ok)
                 .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
                 .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|n| !n.starts_with('.'))
                 .collect();
             dirs.sort();
             fp.push_str("|dirs=");
@@ -920,6 +928,30 @@ mod np_store {
             let fa = compute_tree_fingerprint(a.path());
             let fb = compute_tree_fingerprint(b.path());
             assert_ne!(fa, fb);
+        }
+
+        /// #708 review — dot-prefixed entries (`.tmp-<pid>`, `.partial-<pid>`,
+        /// `.complete`) come and go with the install pipeline. Counting them
+        /// would flip the fingerprint under a concurrent fetch and force a
+        /// spurious miss for a run that shares the tree.
+        #[test]
+        fn dot_prefixed_entries_are_ignored() {
+            let td = tempfile::tempdir().unwrap();
+            fs::create_dir(td.path().join("meta")).unwrap();
+            fs::create_dir(td.path().join("endfb-8.0")).unwrap();
+            let stable = compute_tree_fingerprint(td.path());
+            // Drop in the kinds of scratch directories the fetch pipeline
+            // leaves behind mid-install.
+            fs::create_dir(td.path().join(".tmp-12345")).unwrap();
+            fs::create_dir(td.path().join(".partial-67890")).unwrap();
+            // And a plain `.complete` sentinel would appear in `~/.hyrr/…`.
+            fs::write(td.path().join(".complete"), b"").unwrap();
+            let with_scratch = compute_tree_fingerprint(td.path());
+            assert_eq!(
+                stable, with_scratch,
+                "scratch directories from the install pipeline must not \
+                 shift the fingerprint, or a concurrent fetch is a cache miss"
+            );
         }
     }
 } // mod np_store

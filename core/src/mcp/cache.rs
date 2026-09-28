@@ -1339,76 +1339,13 @@ mod tests {
         );
     }
 
-    /// #708 — a pre-fix empty entry on disk keys off the OLD canonical string
-    /// (no `data=<fp>|` segment). The new lookup computes a different key
-    /// and never touches the old file. It's an orphan, not poison — LRU
-    /// eviction retires it in the normal course of business. This test
-    /// documents that invariant so a future refactor of the key shape
-    /// doesn't accidentally re-collide on old entries.
-    #[test]
-    fn pre_fix_disk_entry_orphans_rather_than_collides() {
-        let _g = disk_test_guard();
-        let td = isolate_disk();
-
-        let args = json!({"projectile":"n","energy_mev":0.0,"current_ma":0.0,
-                          "layers":[{"material":"Co","thickness_cm":0.05}]});
-        let lib = "lib-orphan-check";
-        let data_fp = "root=/some/tree";
-
-        // The new key participates data_fp.
-        let new_key = hash_config(&args, lib, "", data_fp);
-        // Reconstruct what a pre-#708 hyrr would have hashed for the same
-        // args + lib: no data segment, no `data_fp` variable. This is
-        // deliberately kept in lockstep with the pre-fix `canonical_config`
-        // shape rather than calling the current one — the point is to catch a
-        // future accidental collision.
-        let old_canonical = {
-            let mut s = String::new();
-            s.push_str(CACHE_SALT);
-            s.push('|');
-            s.push_str(lib);
-            s.push('|'); // pre-fix had registry_fp here with no data= segment
-            s.push('|');
-            // The rest of the pre-fix canonical config would follow, but the
-            // absence of the `data=` segment is already enough to shift the
-            // hash — we assert that any pre-fix layout that omitted data_fp
-            // hashes differently.
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            s.hash(&mut h);
-            h.finish()
-        };
-        assert_ne!(
-            new_key, old_canonical,
-            "the new key MUST include a segment the old canonical form lacked, \
-             or a pre-fix empty entry could collide with a post-fix lookup"
-        );
-
-        // And a lookup at the new key against an empty tempdir is a clean
-        // miss (the compute closure runs).
-        reset_mem_lru();
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let calls = AtomicUsize::new(0);
-        let out = cached_stack(&args, lib, "", data_fp, || {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Ok(sample_result(3.0))
-        })
-        .unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(out.irradiation_time_s, 3.0);
-        // Sanity: the fresh non-empty result was persisted at the NEW key,
-        // and the tempdir has exactly one file (nothing crossed over).
-        let count = std::fs::read_dir(td.path())
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|d| {
-                d.file_name()
-                    .to_str()
-                    .map(|n| n.ends_with(".json.gz"))
-                    .unwrap_or(false)
-            })
-            .count();
-        assert_eq!(count, 1);
-    }
+    // Note: an earlier draft added `pre_fix_disk_entry_orphans_rather_than_collides`
+    // to prove that a pre-#708 disk entry can't collide with a post-fix
+    // lookup. Removed on review — it hand-built the "old key" as a string
+    // omitting args, so `assert_ne!` passed by construction and proved
+    // nothing beyond "these two different strings hash differently".
+    // `different_data_fingerprint_forces_cache_miss` already covers the
+    // live invariant end-to-end.
 
     #[test]
     fn concurrent_writes_produce_no_partial_files() {
