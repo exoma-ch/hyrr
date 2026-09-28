@@ -1,0 +1,49 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.exoma-ch/hyrr",
+  "title": "HYRR",
+  "description": "Radio-isotope production, activity and dose for charged-particle beams on stacked targets",
+  "version": "0.21.1",
+  "websiteUrl": "https://exoma-ch.github.io/hyrr/",
+  "repository": {
+    "url": "https://github.com/exoma-ch/hyrr",
+    "source": "github",
+    "id": "1179986153",
+    "subfolder": "py-mcp"
+  },
+  "icons": [
+    {
+      "src": "https://exoma-ch.github.io/hyrr/hyrr-icon-192.png",
+      "mimeType": "image/png",
+      "sizes": ["192x192"]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "hyrr-mcp",
+      "version": "0.21.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "HYRR_DATA",
+          "description": "nucl-parquet data directory. Unset: the matching data release is fetched once into ~/.hyrr/nucl-parquet",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "filepath"
+        },
+        {
+          "name": "HYRR_LIBRARY",
+          "description": "Nuclear data library id, e.g. tendl-2023-iso (default) or endfb-8.1",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
