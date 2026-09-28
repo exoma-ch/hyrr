@@ -152,9 +152,14 @@ fn thermal_neutron_activates_co59_to_co60() {
     );
 
     // Absolute-magnitude guard: the flux-averaged ⁵⁹Co(n,γ)→Co-60 cross-section
-    // must be physical (~33–41 b), NOT the ~1480 b that linear interpolation of
-    // the sparse thermal grid would return. Pull the ground-state capture channel
-    // straight from the store and fold it against the same thermal spectrum.
+    // must be physical, NOT the ~1480 b that linear interpolation of the sparse
+    // thermal grid would return, and NOT the ~42 b (= 33·4/π) that using the
+    // Maxwellian *density* shape as a flux would return (#711). The correct
+    // total-flux fold is `σ₀·(√π/2)·√(E₀/kT)` for a 1/v absorber; at
+    // `kT = E₀ = 0.0253 eV` with σ₀(Co-59) = 37.2 b, that is ~33 b, plus a
+    // small (~5 %) contribution from the low-lying resonance tail. Pull the
+    // ground-state capture channel from the store and fold it against the
+    // same thermal spectrum.
     let cap = db
         .get_cross_sections("n", 27, 59)
         .into_iter()
@@ -165,9 +170,11 @@ fn thermal_neutron_activates_co59_to_co60() {
     // flux_averaged_xs returns cm²; 1 b = 1e-24 cm².
     let sigma_b = flux_averaged_xs(&cap.energies_mev, &cap.xs_mb, &flux, 400) / 1.0e-24;
     assert!(
-        (25.0..70.0).contains(&sigma_b),
-        "thermal flux-averaged ⁵⁹Co(n,γ) = {sigma_b:.1} b — expected ~33–41 b. \
-         A value near ~1480 b means the neutron fold regressed to LINEAR \
-         interpolation of the log-log thermal grid (see interp_log_log)."
+        (25.0..40.0).contains(&sigma_b),
+        "thermal flux-averaged ⁵⁹Co(n,γ) = {sigma_b:.1} b — expected ~33 b under the \
+         total-flux Maxwellian convention (σ₀·√π/2·√(E₀/kT); #711). A value near \
+         ~1480 b means the fold regressed to LINEAR interpolation of the log-log \
+         thermal grid; a value near ~42 b means the shape regressed to the \
+         Maxwellian *density* √E·e^{{−E/kT}} (the pre-#711 bug)."
     );
 }
