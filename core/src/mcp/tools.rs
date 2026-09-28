@@ -14,6 +14,7 @@ use super::cache;
 use super::dataset::{self, DatasetMeta, Table};
 use super::dose::compute_stack_dose;
 use super::nuclide;
+use super::strict_args::reject_unknown_keys;
 
 /// Scope suffix appended to every production-tool description (#528).
 ///
@@ -434,11 +435,54 @@ fn layer_materials(args: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Every key the layer parser accepts. Kept as a `const` so [`layer_schema`]
+/// and [`reject_unknown_keys`] agree by construction: the strict-args regression
+/// test enumerates the schema's `properties` and cross-checks this slice. Add
+/// a key here whenever [`layer_schema`] gains one, or the tool rejects a caller
+/// who was following the schema.
+pub(crate) const LAYER_KEYS: &[&str] = &[
+    "material",
+    "thickness_cm",
+    "energy_out_mev",
+    "density_g_cm3",
+    "enrichment",
+];
+
+/// Keys accepted inside one `enrichment[i]` record — enforced by
+/// [`parse_enrichment`] and mirrored into the schema below.
+pub(crate) const ENRICHMENT_ITEM_KEYS: &[&str] = &["element", "A", "fraction"];
+
+/// Keys accepted inside a `current_profile` object — enforced by every tool
+/// that parses one and mirrored into the schemas below.
+pub(crate) const CURRENT_PROFILE_KEYS: &[&str] = &["times_s", "currents_ma"];
+
+/// Keys accepted inside a `neutron_flux` object across every variant of
+/// [`crate::neutron::FluxModel`]. The kind-specific parser rejects the wrong
+/// combination downstream; this top-level allowlist just keeps unknown
+/// top-level keys (`spectrum`, `flux_type`, …) from being silently ignored.
+pub(crate) const NEUTRON_FLUX_KEYS: &[&str] = &[
+    "kind",
+    "flux",
+    "kt_mev",
+    "e_min_mev",
+    "e_max_mev",
+    "temp_mev",
+    "e0_mev",
+    "energies_mev",
+    "phi",
+    "components",
+];
+
 /// JSON Schema for a single target layer. Shared by every tool that takes
 /// `layers`. `require_thickness` toggles whether `thickness_cm` is required —
 /// `simulate` and `get_isotope_production_curve` accept thickness-OR-energy
 /// (an exit-energy degrader is also valid), while `get_stack_energy_budget`
 /// always wants explicit thickness.
+///
+/// `additionalProperties: false` is set so a well-behaved client rejects
+/// unknown keys (`thickness_mm`, `energy_MeV`, …) before the round-trip
+/// happens. The server ALSO rejects them at parse time (#712 — a client that
+/// ignores the schema still gets the same error), see [`reject_unknown_keys`].
 fn layer_schema(require_thickness: bool) -> Value {
     let required: Vec<&'static str> = if require_thickness {
         vec!["material", "thickness_cm"]
@@ -447,6 +491,7 @@ fn layer_schema(require_thickness: bool) -> Value {
     };
     serde_json::json!({
         "type": "object",
+        "additionalProperties": false,
         "properties": {
             "material": {
                 "type": "string",
@@ -454,7 +499,7 @@ fn layer_schema(require_thickness: bool) -> Value {
             },
             "thickness_cm": {
                 "type": "number",
-                "description": "Layer thickness in cm"
+                "description": "Layer thickness in cm. Optional on `simulate` etc. as long as SOME layer has `thickness_cm` OR `energy_out_mev` (degrader-spec) — otherwise the whole stack is unresolved and the call is rejected rather than filled in with a silent default (#712)."
             },
             "energy_out_mev": {
                 "type": "number",
@@ -462,13 +507,14 @@ fn layer_schema(require_thickness: bool) -> Value {
             },
             "density_g_cm3": {
                 "type": "number",
-                "description": "Override density [g/cm³] for this layer. Replaces the material's resolved density."
+                "description": "Override density [g/cm³] for this layer. Replaces the material's resolved density, AND supplies the density for materials with no built-in entry (e.g. Tc, ⁴⁴CaCO₃) so the caller doesn't need `define_material` for a one-number override (#713)."
             },
             "enrichment": {
                 "type": "array",
                 "description": "Isotopic enrichment overrides for this layer. Flat shape: [{element: 'Mo', A: 100, fraction: 0.95}].",
                 "items": {
                     "type": "object",
+                    "additionalProperties": false,
                     "properties": {
                         "element": { "type": "string" },
                         "A": { "type": "integer" },
@@ -497,6 +543,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Run a HYRR isotope production simulation for a target stack. Returns production rates, activities, and yields for all produced isotopes.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": {
                         "type": "string",
@@ -513,6 +560,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                     },
                     "neutron_flux": {
                         "type": "object",
+                        "additionalProperties": false,
                         "description": "Neutron flux spectrum for a neutron source (projectile 'n'; ADR-0003 Phase 1). Tagged by 'kind'. Defaults to a fission-fast spectrum if omitted. Total 'flux' is n/cm²/s.",
                         "properties": {
                             "kind": {
@@ -551,6 +599,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                     },
                     "current_profile": {
                         "type": "object",
+                        "additionalProperties": false,
                         "description": "Optional time-varying beam current profile (piecewise-constant). When present, overrides current_ma for activation calculations.",
                         "properties": {
                             "times_s": {
@@ -576,6 +625,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": "List available materials in HYRR's catalog, including named alloys, session-defined materials, and elements with known densities.",
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {}
             }
         }),
@@ -584,6 +634,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": "Register a custom material (alloy, compound, etc.) for this session. Once defined, the name can be used in any layer's 'material' field. Session-scoped — lost when the server restarts.",
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "name": {
                         "type": "string",
@@ -598,6 +649,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                         "description": "Mass fractions. Each entry: {element, fraction}. Fractions must sum to ~1.0.",
                         "items": {
                             "type": "object",
+                            "additionalProperties": false,
                             "properties": {
                                 "element": { "type": "string", "description": "Element symbol, e.g. 'Ni'" },
                                 "fraction": { "type": "number", "description": "Mass fraction (0-1)" }
@@ -618,6 +670,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("List all production channels (residual nuclei) for a given projectile on a target isotope, with peak cross-section and energy range per channel. Returns a summary.{referral}{SCOPE_SUFFIX}", referral = cross_section_referral_brief(library)),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": {
                         "type": "string",
@@ -640,6 +693,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Per-layer energy degradation and heat deposition for a target stack. No activation/isotope math — use this to answer 'will this stack stop the beam?' or 'how much heat in layer N?' without running a full simulation.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "energy_mev": { "type": "number" },
@@ -657,10 +711,15 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Material-level linear stopping power dE/dx [MeV/cm] at given energies, via Bragg additivity. Distinct from nucl-parquet-mcp's per-element PSTAR/ASTAR lookup.{referral}", referral = stopping_power_referral()),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "material": { "type": "string", "description": "Material name, formula, or alloy (e.g., 'Cu', 'MoO3', 'havar')" },
-                    "energies_mev": { "type": "array", "items": { "type": "number" } }
+                    "energies_mev": { "type": "array", "items": { "type": "number" } },
+                    "density_g_cm3": {
+                        "type": "number",
+                        "description": "Optional density [g/cm³]. REQUIRED for materials with no built-in density (e.g. Tc, ⁴⁴CaCO₃) so this tool can return numbers instead of erroring; otherwise it overrides the resolved density. Linear dE/dx scales with it; mass stopping power is unaffected. (#713)"
+                    }
                 },
                 "required": ["projectile", "material", "energies_mev"]
             }
@@ -670,6 +729,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Activity or depth profile for one named isotope from a simulation. `vs=time` returns buildup+cooling activity [Bq] vs time grid. `vs=cooling` returns the cooling tail only. `vs=depth` returns depth [cm] + local production rate [atoms/s/cm]. When several layers produce the isotope, pass `layer_index` (1-based, matching `simulate` output) to choose which one; if omitted, the first producing layer in beam order is used and a warning naming the other producing layers is prepended. Use `list_producing_layers` to discover every layer that makes the isotope.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "energy_mev": { "type": "number" },
@@ -692,6 +752,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("List every layer in a stack that produces a named isotope, with each layer's energy window and end-of-bombardment activity [Bq]. Cheap discovery tool — lets you find which layer to pass as `layer_index` to `get_isotope_production_curve` without parsing a full `simulate` output. Takes the same stack arguments as `simulate`.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "energy_mev": { "type": "number" },
@@ -713,6 +774,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Run two simulations and compare first-layer isotope activities side-by-side. Useful for comparing beam energies, targets, or irradiation times.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "config_a": {
                         "type": "object",
@@ -731,6 +793,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": "Get decay data for a specific nuclide (half-life, decay modes, daughters). Complementary to `get_nuclide_data`, which also returns dose constant + per-decay emission lines + natural abundance in one call.",
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "z": {
                         "type": "integer",
@@ -754,6 +817,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Full structured export of a simulation as **self-describing** long-format tables (#569) — inline JSON (for direct reasoning) and attached **complete** Parquet resources (for polars / DuckDB / pandas). Every column carries UNIT + one-line DESCRIPTION + EVALUATION POINT (`end_of_bombardment` / `end_of_cooling` / `per_time_grid_row` / `per_depth_row` / `static`) both in the inline schema block AND baked into the Parquet's Arrow field metadata; dataset-level PROVENANCE (config, library id, hyrr-core version, time grid) lives in the Parquet file's `key_value_metadata` so a downloaded file stays self-contained. Always returns the inventory table (one row per isotope × layer × source, with production rate, saturation yield, end-of-bombardment + end-of-cooling activity, half-life, β+/EC/β−/IT branching). Set `cooling`, `depth`, `emissions` to also include cooling-tail (activity vs time), depth-profile (production rate vs depth), and per-decay emission-line tables. Query the Parquet with polars: `pl.read_parquet('inventory.parquet').filter(pl.col('activity_at_cooling_bq') > 1e6)` — or DuckDB: `SELECT * FROM 'inventory.parquet' WHERE activity_at_cooling_bq > 1e6`. Cheap: backed by a config-hashed cache, so repeat queries on the same config don't recompute.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "energy_mev": { "type": "number" },
@@ -776,6 +840,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Cheap 'what's in the can' query: just the self-describing inventory table (one row per isotope × layer × source — production rate, saturation yield, EOB + cooling activity, half-life, branching). No time series, no depth. Inline JSON (per-column UNIT / DESCRIPTION / EVALUATION POINT / null semantics attached) plus a **complete** Parquet resource with the same metadata + dataset-level provenance in `key_value_metadata` (#569). Query it with polars / DuckDB one-liners; see `get_simulation_dataset` for examples. Same stack arguments as `simulate`.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "energy_mev": { "type": "number" },
@@ -795,6 +860,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Per-isotope / per-line photon (or particle) emission-rate time series: rate_per_s(t) = total stack activity × intensity_per_decay, summed across layers. Self-describing long-format {{t_s, isotope, energy_kev, emission_type, rate_per_s}}, inline JSON + **complete** Parquet resource (per-column metadata + dataset provenance, #569). The load-bearing surface for 511 keV purity windows, HPGe spectrum prediction, and dose-rate envelopes. Optional filters narrow the output: `isotope`, `emission_type` (gamma/xray/auger/ce/beta-/beta+/annihilation), `energy_kev` (± `energy_tolerance_kev`).{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "energy_mev": { "type": "number" },
@@ -820,6 +886,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": "Raw uncurated per-nuclide data lookup — half-life, decay modes, dose constant (µSv·m²·MBq⁻¹·h⁻¹ at 1 m), per-decay emission lines (γ/x-ray/Auger/CE/β±/annihilation with absolute intensity_per_decay), and natural abundance if any. Assembled from what hyrr-core already exposes (DecayDb, DoseDb, ENSDF emissions, natural abundances); no new physics. Read-only, one nuclide per call. Use this when no curated task tool covers the datum you need (e.g. 'what's the half-life / γ-lines / k of ⁶⁸Ga?'). Empty fields are returned as [] / null (never omitted) so the shape is stable.",
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "z": { "type": "integer", "description": "Atomic number" },
                     "a": { "type": "integer", "description": "Mass number" },
@@ -838,6 +905,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": "Specific gamma dose-rate constant k [µSv·m²·MBq⁻¹·h⁻¹] for one nuclide, as loaded from the active library's meta/dose_constants.parquet (ENSDF-derived, validated against RADAR reference values). Returns k + source-quality tag ('ensdf' | 'it-approx' | 'zero'). k is the dose rate at 1 m per MBq of point-source activity — scale by activity / distance² for a specific case (see `get_dose_rate`). Accepts EITHER `isotope: 'F-18'` OR (`z`, `a`, `state?`).",
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "isotope": {
                         "type": "string",
@@ -855,6 +923,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": "Report the running hyrr-mcp version, the compiled-in nucl-parquet DATA_VERSION, and — if the opt-out network check has populated the cache — whether a newer release is available on GitHub. Never blocks: the network check runs in the background; this tool only reads whatever is currently known. Also reports the compiled-in-data CalVer staleness (fires with NO network access when the pinned nuclear data is older than the threshold, so air-gapped installs still see the warning). Disable the network check with `HYRR_DISABLE_UPDATE_CHECK=1`; the staleness floor still fires. No arguments.",
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {}
             }
         }),
@@ -863,6 +932,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Exact-Bateman ACTIVITY at caller-chosen times [Bq] (#570). Re-solves the decay chain at each `at_s` using the cached production rates — no interpolation of the 200-point curve, so short/long-lived products in one run are both resolved analytically at any `t`. Cheap: the expensive production integral is served from the config-hashed cache (`at_s` is a VIEW parameter and is NEVER part of the cache key, so different time sets on the same config all reuse the cached simulation). `at_s` capped at {MAX_AT_S} entries — coarsen or split; a query outside the simulated window (irr + cool) is rejected rather than extrapolated. Scope aggregation happens AFTER the chain solve so ingrowth stays correct at layer/element/stack scope. Filters: `isotope` (exact name), `layer_index` (1-based), `element` (symbol or Z). {SCOPE_SUFFIX}", MAX_AT_S = crate::mcp::activity_at::MAX_AT_S_ENTRIES),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "energy_mev": { "type": "number" },
@@ -872,6 +942,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                     "cooling_time_s": { "type": "number", "description": "Cooling time in seconds — every `at_s` entry must lie inside (irr + cool). Widen this to query further out." },
                     "current_profile": {
                         "type": "object",
+                        "additionalProperties": false,
                         "description": "Optional piecewise-constant current profile (same shape as `simulate`).",
                         "properties": {
                             "times_s": { "type": "array", "items": { "type": "number" } },
@@ -903,6 +974,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Exact gamma DOSE RATE [µSv/h] at caller-chosen times (#570). Same machinery as `get_activity_at`: re-solves the chain at each `at_s`, then applies Γ · A_i(t) / d² per isotope using the ENSDF-derived dose constants (`get_dose_constant`). Bare-source, inverse-square, no shielding. Reports per-time total plus a peak-time per-isotope breakdown and — critically — any produced isotope with no dose constant loaded (surfaced in `missing_dose_constant`, contribution = 0, never silently omitted). `at_s` cap {MAX_AT_S}. `distance_cm` refuses < 1 cm (near-field). {SCOPE_SUFFIX}", MAX_AT_S = crate::mcp::activity_at::MAX_AT_S_ENTRIES),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "energy_mev": { "type": "number" },
@@ -912,6 +984,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                     "cooling_time_s": { "type": "number" },
                     "current_profile": {
                         "type": "object",
+                        "additionalProperties": false,
                         "properties": {
                             "times_s": { "type": "array", "items": { "type": "number" } },
                             "currents_ma": { "type": "array", "items": { "type": "number" } }
@@ -934,6 +1007,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Gamma dose rate [µSv/h] at `distance_cm` from a point-source stack (bare, no shielding). Runs the simulation (via the config-hashed cache — cheap on repeat), sums k_i · (A_i / 1e6) / r² across every produced isotope in every layer at the end-of-cooling time. Reports the total, a per-isotope breakdown (activity, k, dose contribution, fraction), and — critically — any produced isotope with non-negligible activity but NO dose constant in the library (surfaced in `missing_dose_constant`, dose set to 0, never silently omitted). Same stack arguments as `simulate`, plus `distance_cm` (default 100.0 = 1 m). No photon shielding.{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a"] },
                     "energy_mev": { "type": "number" },
@@ -958,6 +1032,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": "Impact-classified release notes (#572). Per-release entries carry `impact` (physics_affecting, silent_failure_fixed, data_update, api_change, ux, internal), `silent` (was the earlier version silently wrong?), `affected` MCP tools, `guidance` (what to re-run) and `refs` (GitHub issues). Machine-readable companion to CHANGELOG.md, hand-reviewed at release time — never generated at runtime. Filter with `since_version` to get only what is newer than what you last saw; omit to get every release. Include `data_version` in the response so you can tell a data-only change apart from a code change. Air-gapped: the artifact for the running version is compiled in.",
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "since_version": {
                         "type": "string",
@@ -971,6 +1046,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
             "description": format!("Export a simulation as a single self-contained HTML file the recipient can open from disk — no install, no network, no engine (ADR 0008). Intended for sharing a result with someone who cannot reach the gated web app. The artifact is view-only: they can filter, sort and browse, but cannot re-run or re-tune. Takes the same arguments as `simulate`, plus `tier`. Requires a built viewer template (see `template_path`).{SCOPE_SUFFIX}"),
             "inputSchema": {
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "projectile": { "type": "string", "enum": ["p", "d", "t", "h", "a", "n"], "description": "Beam projectile." },
                     "energy_mev": { "type": "number", "description": "Beam energy in MeV." },
@@ -1061,11 +1137,107 @@ pub fn call_tool(
     Ok(response)
 }
 
+/// Parse the shared `layers: [{...}]` argument into resolved [`Layer`] structs,
+/// used by every tool that accepts a stack. Two things are load-bearing here:
+///
+/// * **Strict keys** (#712) — unknown per-layer keys are rejected with a
+///   "did you mean" hint. `thickness_mm` used to be silently dropped, letting
+///   the stopping-power calculation fall back to a hidden 0.1 cm default; now
+///   it errors before the compute ever starts.
+/// * **Density override reaches the resolver** (#713) — `density_g_cm3` is now
+///   *read first* and passed into [`resolve_material`], so materials with no
+///   built-in entry (Tc, ⁴⁴CaCO₃, …) resolve successfully with the layer's
+///   own density. The old order — resolve first, then apply the override — is
+///   why `{"material":"Tc","density_g_cm3":11.5}` errored while telling the
+///   caller to pass a `density_g_cm3` they already had.
+///
+/// The silent "no layer has thickness or exit-energy → set first layer to
+/// 0.1 cm" default is deliberately NOT re-applied here (see the "no layer
+/// resolved" branch in [`build_and_run_sim`] / [`build_and_run_stopping_only`]).
+fn parse_layers(
+    db: &dyn DatabaseProtocol,
+    registry: &MaterialRegistry,
+    layer_arr: &[Value],
+) -> Result<Vec<Layer>, String> {
+    let mut layers = Vec::with_capacity(layer_arr.len());
+    for (idx, layer_val) in layer_arr.iter().enumerate() {
+        let ctx = format!("layers[{idx}]");
+        reject_unknown_keys(layer_val, LAYER_KEYS, &ctx)?;
+
+        let material = layer_val
+            .get("material")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("{ctx} missing 'material'"))?;
+
+        // enrichment: [{element, A, fraction}] — flat, array-of-records shape.
+        let overrides = parse_enrichment(layer_val.get("enrichment"), &ctx)?;
+
+        // Read the density override FIRST (#713). resolve_material used to be
+        // called with None here and only consulted the layer's density_g_cm3
+        // AFTER resolution — so a material with no built-in density errored
+        // out even though the caller supplied the one number that would fix
+        // it. Feed the override through so Tc / ⁴⁴CaCO₃ / etc. resolve
+        // successfully.
+        let density_override = layer_val.get("density_g_cm3").and_then(|v| v.as_f64());
+        let resolution = resolve_material(
+            db,
+            material,
+            overrides.as_ref(),
+            Some(registry),
+            density_override,
+        )?;
+        let thickness_cm = layer_val.get("thickness_cm").and_then(|v| v.as_f64());
+        let energy_out = layer_val.get("energy_out_mev").and_then(|v| v.as_f64());
+        // resolution.density is the override if one was supplied, so the
+        // layer's density_g_cm3 propagates through the compute unchanged.
+        let density = density_override.unwrap_or(resolution.density);
+
+        layers.push(Layer {
+            density_g_cm3: density,
+            elements: resolution.elements,
+            thickness_cm,
+            areal_density_g_cm2: None,
+            energy_out_mev: energy_out,
+            is_monitor: false,
+            nist_compound: resolution.nist_compound,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        });
+    }
+
+    // Reject a stack with NO thickness AND NO exit-energy anywhere (#712).
+    // The old code silently patched the first layer to `thickness_cm = 0.1`,
+    // which is a physics choice hidden behind a convenience — an agent that
+    // wrote `thickness_mm` and got 10× the target it meant is exactly the
+    // failure mode #712 documents.
+    if !layers.is_empty()
+        && layers
+            .iter()
+            .all(|l| l.thickness_cm.is_none() && l.energy_out_mev.is_none())
+    {
+        return Err(
+            "No layer has a resolved thickness. Each stack must specify \
+             `thickness_cm` OR `energy_out_mev` (degrader spec) on at least \
+             one layer — there is no default. Note: only `thickness_cm` is \
+             accepted; `thickness_mm` / `thickness_um` are not."
+                .to_string(),
+        );
+    }
+
+    Ok(layers)
+}
+
 /// Parse the flat enrichment array `[{element, A, fraction}]` into the
 /// nested `HashMap<String, HashMap<u32, f64>>` that resolve_material expects.
 /// Returns None when the input is absent or null; errors on malformed entries.
+///
+/// `layer_ctx` is the human name for the enclosing layer (`"layers[0]"`,
+/// `"layers[3]"`, …) so a rejected unknown key inside an `enrichment[i]` record
+/// points at the exact site (#712).
 fn parse_enrichment(
     val: Option<&Value>,
+    layer_ctx: &str,
 ) -> Result<Option<std::collections::HashMap<String, std::collections::HashMap<u32, f64>>>, String>
 {
     use std::collections::HashMap;
@@ -1080,7 +1252,9 @@ fn parse_enrichment(
         return Ok(None);
     }
     let mut overrides: HashMap<String, HashMap<u32, f64>> = HashMap::new();
-    for entry in arr {
+    for (idx, entry) in arr.iter().enumerate() {
+        let ctx = format!("{layer_ctx}.enrichment[{idx}]");
+        reject_unknown_keys(entry, ENRICHMENT_ITEM_KEYS, &ctx)?;
         let elem = entry
             .get("element")
             .and_then(|v| v.as_str())
@@ -1110,8 +1284,14 @@ fn parse_enrichment(
 /// produces a sensible result rather than erroring.
 fn parse_neutron_flux(val: Option<&Value>) -> Result<crate::neutron::FluxModel, String> {
     match val {
-        Some(v) if !v.is_null() => serde_json::from_value::<crate::neutron::FluxModel>(v.clone())
-            .map_err(|e| format!("Invalid 'neutron_flux' (expected a FluxModel, e.g. {{\"kind\":\"thermal\",\"flux\":1e13,\"kt_mev\":2.53e-8}}): {e}")),
+        Some(v) if !v.is_null() => {
+            // Reject typos before serde does — otherwise a misspelt kt_mev
+            // reads as the model's default and silently gives the wrong
+            // spectrum (#712, same failure mode as `thickness_mm`).
+            reject_unknown_keys(v, NEUTRON_FLUX_KEYS, "neutron_flux")?;
+            serde_json::from_value::<crate::neutron::FluxModel>(v.clone())
+                .map_err(|e| format!("Invalid 'neutron_flux' (expected a FluxModel, e.g. {{\"kind\":\"thermal\",\"flux\":1e13,\"kt_mev\":2.53e-8}}): {e}"))
+        }
         _ => Ok(crate::neutron::FluxModel::Fast {
             flux: 1.0e13,
             temp_mev: 1.4,
@@ -1170,48 +1350,11 @@ fn build_and_run_sim(
         Beam::new(projectile, energy_mev, current_ma)
     };
 
-    let mut layers = Vec::new();
-    for layer_val in layer_arr {
-        let material = layer_val
-            .get("material")
-            .and_then(|v| v.as_str())
-            .ok_or("Layer missing 'material'")?;
-
-        // enrichment: [{element, A, fraction}] — flat, array-of-records shape.
-        let overrides = parse_enrichment(layer_val.get("enrichment"))?;
-        let resolution = resolve_material(db, material, overrides.as_ref(), Some(registry), None)?;
-        let thickness_cm = layer_val.get("thickness_cm").and_then(|v| v.as_f64());
-        let energy_out = layer_val.get("energy_out_mev").and_then(|v| v.as_f64());
-        let density = layer_val
-            .get("density_g_cm3")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(resolution.density);
-
-        layers.push(Layer {
-            density_g_cm3: density,
-            elements: resolution.elements,
-            thickness_cm,
-            areal_density_g_cm2: None,
-            energy_out_mev: energy_out,
-            is_monitor: false,
-            nist_compound: resolution.nist_compound,
-            computed_energy_in: 0.0,
-            computed_energy_out: 0.0,
-            computed_thickness: 0.0,
-        });
-    }
-
-    if layers
-        .iter()
-        .all(|l| l.thickness_cm.is_none() && l.energy_out_mev.is_none())
-    {
-        if let Some(l) = layers.first_mut() {
-            l.thickness_cm = Some(0.1);
-        }
-    }
+    let layers = parse_layers(db, registry, layer_arr)?;
 
     let current_profile = match args.get("current_profile") {
         Some(cp) if !cp.is_null() => {
+            reject_unknown_keys(cp, CURRENT_PROFILE_KEYS, "current_profile")?;
             let times: Vec<f64> = cp
                 .get("times_s")
                 .and_then(|v| v.as_array())
@@ -1303,43 +1446,7 @@ fn build_and_run_stopping_only(
 
     let beam = Beam::new(projectile, energy_mev, current_ma);
 
-    let mut layers = Vec::new();
-    for layer_val in layer_arr {
-        let material = layer_val
-            .get("material")
-            .and_then(|v| v.as_str())
-            .ok_or("Layer missing 'material'")?;
-        let overrides = parse_enrichment(layer_val.get("enrichment"))?;
-        let resolution = resolve_material(db, material, overrides.as_ref(), Some(registry), None)?;
-        let thickness_cm = layer_val.get("thickness_cm").and_then(|v| v.as_f64());
-        let energy_out = layer_val.get("energy_out_mev").and_then(|v| v.as_f64());
-        let density = layer_val
-            .get("density_g_cm3")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(resolution.density);
-
-        layers.push(Layer {
-            density_g_cm3: density,
-            elements: resolution.elements,
-            thickness_cm,
-            areal_density_g_cm2: None,
-            energy_out_mev: energy_out,
-            is_monitor: false,
-            nist_compound: resolution.nist_compound,
-            computed_energy_in: 0.0,
-            computed_energy_out: 0.0,
-            computed_thickness: 0.0,
-        });
-    }
-
-    if layers
-        .iter()
-        .all(|l| l.thickness_cm.is_none() && l.energy_out_mev.is_none())
-    {
-        if let Some(l) = layers.first_mut() {
-            l.thickness_cm = Some(0.1);
-        }
-    }
+    let layers = parse_layers(db, registry, layer_arr)?;
 
     let mut stack = TargetStack {
         beam,
@@ -1355,7 +1462,11 @@ fn build_and_run_stopping_only(
     Ok((result, projectile_str.to_string(), energy_mev, current_ma))
 }
 
+/// Keys accepted by [`tool_define_material`].
+const DEFINE_MATERIAL_KEYS: &[&str] = &["name", "density_g_cm3", "composition", "nist_compound"];
+
 fn tool_define_material(materials: &mut MaterialRegistry, args: &Value) -> Result<String, String> {
+    reject_unknown_keys(args, DEFINE_MATERIAL_KEYS, "define_material")?;
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -1429,11 +1540,32 @@ fn tool_define_material(materials: &mut MaterialRegistry, args: &Value) -> Resul
     ))
 }
 
+/// The base sim-arg keys shared by every tool that runs (or looks like it
+/// runs) [`build_and_run_sim`]. Each tool extends this with its own
+/// per-tool keys; strict-args regressions cross-check the schema against the
+/// merged list so a schema change without an allowlist change trips the test.
+const SIMULATE_BASE_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+];
+
+/// Keys accepted by [`tool_simulate`] (`simulate` tool).
+const SIMULATE_KEYS: &[&str] = SIMULATE_BASE_KEYS;
+
 fn tool_simulate(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
+    reject_unknown_keys(args, SIMULATE_KEYS, "simulate")?;
     // Populate the result cache so follow-up dataset / inventory / emission
     // queries on the same config are lazy views instead of re-runs (#427).
     let result = cached_sim(db, registry, args)?;
@@ -1634,7 +1766,11 @@ fn tool_list_materials(registry: &MaterialRegistry) -> Result<String, String> {
     Ok(output)
 }
 
+/// Keys accepted by [`tool_list_reaction_channels`].
+const LIST_REACTION_CHANNELS_KEYS: &[&str] = &["projectile", "target_z", "target_a"];
+
 fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+    reject_unknown_keys(args, LIST_REACTION_CHANNELS_KEYS, "list_reaction_channels")?;
     let projectile = args
         .get("projectile")
         .and_then(|v| v.as_str())
@@ -1694,7 +1830,11 @@ fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Resul
     Ok(output)
 }
 
+/// Keys accepted by [`tool_get_decay_data`].
+const GET_DECAY_DATA_KEYS: &[&str] = &["z", "a", "state"];
+
 fn tool_get_decay_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+    reject_unknown_keys(args, GET_DECAY_DATA_KEYS, "get_decay_data")?;
     let z = args
         .get("z")
         .and_then(|v| v.as_u64())
@@ -1750,13 +1890,44 @@ fn tool_get_decay_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String
     }
 }
 
+/// Keys accepted at the TOP LEVEL of `compare_simulations` (`config_a` /
+/// `config_b`); each nested config accepts the union below.
+const COMPARE_SIMULATIONS_KEYS: &[&str] = &["config_a", "config_b"];
+
+/// Keys accepted inside `compare_simulations.config_{a,b}` — the simulate
+/// surface plus an optional display `label`.
+const COMPARE_CONFIG_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+    "label",
+];
+
 fn tool_compare_simulations(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
+    reject_unknown_keys(args, COMPARE_SIMULATIONS_KEYS, "compare_simulations")?;
     let config_a = args.get("config_a").ok_or("Missing 'config_a'")?;
     let config_b = args.get("config_b").ok_or("Missing 'config_b'")?;
+    reject_unknown_keys(
+        config_a,
+        COMPARE_CONFIG_KEYS,
+        "compare_simulations.config_a",
+    )?;
+    reject_unknown_keys(
+        config_b,
+        COMPARE_CONFIG_KEYS,
+        "compare_simulations.config_b",
+    )?;
 
     let label_a = config_a
         .get("label")
@@ -1835,11 +2006,19 @@ fn tool_compare_simulations(
     Ok(output)
 }
 
+/// Keys accepted by [`tool_get_stack_energy_budget`].
+const GET_STACK_ENERGY_BUDGET_KEYS: &[&str] = &["projectile", "energy_mev", "current_ma", "layers"];
+
 fn tool_get_stack_energy_budget(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
+    reject_unknown_keys(
+        args,
+        GET_STACK_ENERGY_BUDGET_KEYS,
+        "get_stack_energy_budget",
+    )?;
     // Stopping-only fast path — skips the activation pipeline that
     // build_and_run_sim would invoke. Identical energy/heat numbers, much
     // less work for stacks with many cross-section channels.
@@ -1883,11 +2062,18 @@ fn tool_get_stack_energy_budget(
     Ok(output)
 }
 
+/// Keys accepted by [`tool_get_stopping_power`]. `density_g_cm3` used to be
+/// an undocumented hidden argument (#713 review); now schema-visible and
+/// enforced here.
+const GET_STOPPING_POWER_KEYS: &[&str] =
+    &["projectile", "material", "energies_mev", "density_g_cm3"];
+
 fn tool_get_stopping_power(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
+    reject_unknown_keys(args, GET_STOPPING_POWER_KEYS, "get_stopping_power")?;
     let projectile_str = args
         .get("projectile")
         .and_then(|v| v.as_str())
@@ -1909,11 +2095,13 @@ fn tool_get_stopping_power(
         return Err("'energies_mev' must be a non-empty array of numbers".to_string());
     }
 
-    let resolution = resolve_material(db, material, None, Some(registry), None)?;
-    let density = args
-        .get("density_g_cm3")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(resolution.density);
+    // #713: same ordering fix as `parse_layers` — read `density_g_cm3` first
+    // so the resolver has a density for materials it has no built-in entry
+    // for (Tc, ⁴⁴CaCO₃, …), and the override still wins for materials it
+    // does have one for.
+    let density_override = args.get("density_g_cm3").and_then(|v| v.as_f64());
+    let resolution = resolve_material(db, material, None, Some(registry), density_override)?;
+    let density = density_override.unwrap_or(resolution.density);
     // Convert (Element, atom_fraction) → (Z, mass_fraction) for compound_dedx.
     let composition: Vec<(u32, f64)> = {
         let mut raw: Vec<(u32, f64)> = Vec::new();
@@ -2039,11 +2227,33 @@ fn select_producing_layer<'a>(
     })
 }
 
+/// Keys accepted by [`tool_get_isotope_production_curve`].
+const GET_ISOTOPE_PRODUCTION_CURVE_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+    "isotope",
+    "layer_index",
+    "vs",
+];
+
 fn tool_get_isotope_production_curve(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
+    reject_unknown_keys(
+        args,
+        GET_ISOTOPE_PRODUCTION_CURVE_KEYS,
+        "get_isotope_production_curve",
+    )?;
     let isotope = args
         .get("isotope")
         .and_then(|v| v.as_str())
@@ -2187,11 +2397,27 @@ fn tool_get_isotope_production_curve(
     Ok(output)
 }
 
+/// Keys accepted by [`tool_list_producing_layers`].
+const LIST_PRODUCING_LAYERS_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+    "isotope",
+];
+
 fn tool_list_producing_layers(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
+    reject_unknown_keys(args, LIST_PRODUCING_LAYERS_KEYS, "list_producing_layers")?;
     let isotope = args
         .get("isotope")
         .and_then(|v| v.as_str())
@@ -2384,11 +2610,31 @@ fn parse_inline_view(args: &Value) -> Result<(Option<usize>, Option<&str>), Stri
     Ok((top_n, sort_by))
 }
 
+/// Keys accepted by [`tool_get_simulation_dataset`].
+const GET_SIMULATION_DATASET_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+    "cooling",
+    "depth",
+    "emissions",
+    "top_n",
+    "sort_by",
+];
+
 fn tool_get_simulation_dataset(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
+    reject_unknown_keys(args, GET_SIMULATION_DATASET_KEYS, "get_simulation_dataset")?;
     let want_cooling = args
         .get("cooling")
         .and_then(|v| v.as_bool())
@@ -2538,11 +2784,28 @@ fn tool_get_simulation_dataset(
     Ok(ToolResponse { text, resources })
 }
 
+/// Keys accepted by [`tool_get_isotope_inventory`].
+const GET_ISOTOPE_INVENTORY_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+    "top_n",
+    "sort_by",
+];
+
 fn tool_get_isotope_inventory(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
+    reject_unknown_keys(args, GET_ISOTOPE_INVENTORY_KEYS, "get_isotope_inventory")?;
     let activity_floor_bq = parse_activity_floor(args)?;
     let (top_n, sort_by) = parse_inline_view(args)?;
     let result = cached_sim(db, registry, args)?;
@@ -2586,11 +2849,33 @@ fn tool_get_isotope_inventory(
     Ok(ToolResponse { text, resources })
 }
 
+/// Keys accepted by [`tool_get_emission_curve`].
+const GET_EMISSION_CURVE_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+    "isotope",
+    "emission_type",
+    "energy_kev",
+    "energy_tolerance_kev",
+    "vs",
+    "top_n",
+    "sort_by",
+];
+
 fn tool_get_emission_curve(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
+    reject_unknown_keys(args, GET_EMISSION_CURVE_KEYS, "get_emission_curve")?;
     let vs = args.get("vs").and_then(|v| v.as_str()).unwrap_or("time");
     if !["time", "cooling"].contains(&vs) {
         return Err(format!("'vs' must be 'time' or 'cooling' (got '{vs}')"));
@@ -2671,7 +2956,11 @@ fn tool_get_emission_curve(
 /// Uncurated per-nuclide data lookup. Accepts `{z, a, state?}`; returns the
 /// assembled record from [`nuclide::nuclide_data`] as a pretty-printed JSON
 /// text block. See the module doc for the shape.
+/// Keys accepted by [`tool_get_nuclide_data`].
+const GET_NUCLIDE_DATA_KEYS: &[&str] = &["z", "a", "state"];
+
 fn tool_get_nuclide_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+    reject_unknown_keys(args, GET_NUCLIDE_DATA_KEYS, "get_nuclide_data")?;
     let z = args
         .get("z")
         .and_then(|v| v.as_u64())
@@ -2745,7 +3034,11 @@ fn parse_nuclide_arg(
 
 /// `k` (specific gamma dose constant) for one nuclide, as loaded from the
 /// active library's `meta/dose_constants.parquet`.
+/// Keys accepted by [`tool_get_dose_constant`].
+const GET_DOSE_CONSTANT_KEYS: &[&str] = &["isotope", "z", "a", "state"];
+
 fn tool_get_dose_constant(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
+    reject_unknown_keys(args, GET_DOSE_CONSTANT_KEYS, "get_dose_constant")?;
     let (z, a, state, iso) = parse_nuclide_arg(db, args)?;
 
     match db.get_dose_constant(z, a, &state) {
@@ -2778,11 +3071,27 @@ will report the same — the underlying `DoseDb::dose_constant` returned None.\n
 /// Bare-source dose rate [µSv/h] from every produced isotope in a simulated
 /// stack, at `distance_cm`. Delegates the sum to [`compute_stack_dose`] so
 /// the per-isotope breakdown table and the total agree by construction.
+/// Keys accepted by [`tool_get_dose_rate`].
+const GET_DOSE_RATE_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+    "distance_cm",
+];
+
 fn tool_get_dose_rate(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
+    reject_unknown_keys(args, GET_DOSE_RATE_KEYS, "get_dose_rate")?;
     let distance_cm = args
         .get("distance_cm")
         .and_then(|v| v.as_f64())
@@ -2873,11 +3182,31 @@ and contribute **0** to the total: {}. The reported total is a LOWER BOUND.\n\n"
 /// `solve_chain_at_times` the curve tools go through, so a point query at a
 /// grid time matches the curve exactly and a query between grid points is the
 /// analytic value, not an interpolation of a coarse grid.
+/// Keys accepted by [`tool_get_activity_at`].
+const GET_ACTIVITY_AT_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+    "at_s",
+    "scope",
+    "isotope",
+    "layer_index",
+    "element",
+];
+
 fn tool_get_activity_at(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
+    reject_unknown_keys(args, GET_ACTIVITY_AT_KEYS, "get_activity_at")?;
     use crate::mcp::activity_at::{
         aggregate, apply_activity_floor, parse_at_s, parse_current_profile_from_args,
         resolve_all_layers, to_json_rows, Scope,
@@ -3016,11 +3345,28 @@ fn parse_element_filter(db: &dyn DatabaseProtocol, args: &Value) -> Result<Optio
 /// (photons leave the whole stack, not one layer) — same convention as
 /// `compute_stack_dose` (`get_dose_rate`), just evaluated at a list of times
 /// instead of end-of-cooling.
+/// Keys accepted by [`tool_get_dose_rate_at`].
+const GET_DOSE_RATE_AT_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+    "at_s",
+    "distance_cm",
+];
+
 fn tool_get_dose_rate_at(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
+    reject_unknown_keys(args, GET_DOSE_RATE_AT_KEYS, "get_dose_rate_at")?;
     use crate::mcp::activity_at::{
         apply_activity_floor, parse_at_s, parse_current_profile_from_args, resolve_all_layers,
     };
@@ -3275,7 +3621,11 @@ fn tool_get_version_info() -> Result<String, String> {
 /// Deliberately does NOT touch the database or the network. The artifact is
 /// baked into the binary via `include_str!`; a corrupt artifact surfaces here
 /// as a JSON-RPC error rather than a panic-at-load.
+/// Keys accepted by [`tool_get_changelog`].
+const GET_CHANGELOG_KEYS: &[&str] = &["since_version"];
+
 fn tool_get_changelog(args: &Value) -> Result<String, String> {
+    reject_unknown_keys(args, GET_CHANGELOG_KEYS, "get_changelog")?;
     let since = match args.get("since_version") {
         Some(v) if !v.is_null() => Some(
             v.as_str()

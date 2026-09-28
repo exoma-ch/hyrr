@@ -144,12 +144,36 @@ fn collect_evaluated(
     }
 }
 
+/// Keys accepted by [`tool_export_result_html`]. Mirrors ADR-0008's schema —
+/// the `simulate` surface plus `tier` + `template_path`. Rejected via
+/// [`crate::mcp::strict_args::reject_unknown_keys`] before the artifact build
+/// starts (#712).
+const EXPORT_RESULT_HTML_KEYS: &[&str] = &[
+    "projectile",
+    "energy_mev",
+    "current_ma",
+    "neutron_flux",
+    "secondary_neutron",
+    "layers",
+    "irradiation_time_s",
+    "cooling_time_s",
+    "current_profile",
+    "activity_floor_bq",
+    "tier",
+    "template_path",
+];
+
 pub fn tool_export_result_html(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
     result: &crate::types::StackResult,
 ) -> Result<ToolResponse, String> {
+    crate::mcp::strict_args::reject_unknown_keys(
+        args,
+        EXPORT_RESULT_HTML_KEYS,
+        "export_result_html",
+    )?;
     let _ = registry;
     let tier = parse_tier(args)?;
     let template = resolve_template(args)?;

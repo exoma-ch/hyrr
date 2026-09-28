@@ -16,6 +16,7 @@ mis = "mis"           # "mis-target" (comment)
 browseable = "browseable"   # accepted variant of browsable
 unparseable = "unparseable" # accepted variant of unparsable
 encrypter = "encrypter"     # age-encryption API: `new Encrypter()`
+irradation = "irradation"   # deliberate typo in strict-args tests (#712 example)
 
 # Skip generated / vendored / data paths (prek's global exclude covers most,
 # but typos is also run directly via `just`/CI sometimes).

@@ -549,21 +549,24 @@ pub fn resolve_material(
 ) -> Result<MaterialResolution, String> {
     let lower = identifier.to_lowercase();
 
-    // Check runtime registry first (session-defined materials override built-ins)
+    // Check runtime registry first (session-defined materials override built-ins).
+    // #713: honor the layer's density_g_cm3 here too — otherwise the same
+    // override that fixes Tc / ⁴⁴CaCO₃ downstream would be silently ignored
+    // for a `define_material` alloy the caller wants to re-density.
     if let Some(reg) = registry {
         if let Some(entry) = reg.get(&lower) {
             let composition: HashMap<String, f64> = entry.mass_fractions.clone();
             let elements = resolve_isotopics(db, &composition, false, overrides);
             return Ok(MaterialResolution {
                 elements,
-                density: entry.density_g_cm3,
+                density: density_override.unwrap_or(entry.density_g_cm3),
                 molecular_weight: 0.0,
                 nist_compound: entry.nist_compound.clone(),
             });
         }
     }
 
-    // Check static catalog
+    // Check static catalog. Same density-override rule as the registry branch.
     if let Some(entry) = MATERIAL_CATALOG.get(lower.as_str()) {
         let composition: HashMap<String, f64> = entry
             .mass_fractions
@@ -573,7 +576,7 @@ pub fn resolve_material(
         let elements = resolve_isotopics(db, &composition, false, overrides);
         return Ok(MaterialResolution {
             elements,
-            density: entry.density,
+            density: density_override.unwrap_or(entry.density),
             molecular_weight: 0.0,
             nist_compound: entry.nist_compound.map(|s| s.to_string()),
         });
@@ -589,12 +592,20 @@ pub fn resolve_material(
                 let mut enrichment = HashMap::new();
                 enrichment.insert(mass_num, 1.0);
                 let element = resolve_element(db, sym, Some(&enrichment));
-                let density = *ELEMENT_DENSITIES.get(sym).ok_or_else(|| {
-                    format!(
-                        "No density known for element '{sym}'. \
-                         Provide density_g_cm3 on the layer or use define_material."
-                    )
-                })?;
+                // Layer's density_g_cm3 (#713) takes precedence — same rule
+                // as the compound branch below. Without it, isotope notation
+                // for elements with no built-in density (Tc-99, Pm-147, …)
+                // would still error even with the override supplied.
+                let density = if let Some(d) = density_override {
+                    d
+                } else {
+                    *ELEMENT_DENSITIES.get(sym).ok_or_else(|| {
+                        format!(
+                            "No density known for element '{sym}'. \
+                             Provide density_g_cm3 on the layer or use define_material."
+                        )
+                    })?
+                };
                 return Ok(MaterialResolution {
                     elements: vec![(element, 1.0)],
                     density,
