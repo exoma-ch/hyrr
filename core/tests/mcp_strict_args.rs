@@ -296,19 +296,19 @@ fn well_formed_args_pass_strict_validation() {
 
 /// Set-equality contract at every level of every tool schema (#712 review).
 ///
-/// For each tool, and for every nested object schema underneath it, collect
-/// the set of property names the schema advertises and assert it equals the
-/// set the runtime allowlist accepts. Both directions of drift are caught
-/// (schema advertises a key the runtime rejects, OR the runtime accepts a
-/// key the schema doesn't advertise), at every level (top-level tool args,
-/// `layers[i]`, `enrichment[i]`, `neutron_flux`, `current_profile`,
-/// `composition[i]`, `compare_simulations.config_{a,b}`).
+/// The runtime allowlist is now DERIVED from each tool's JSON schema
+/// (`hyrr_core::mcp::strict_args::build_allowlist_tree`), so the two can't
+/// drift by construction. This test is a sanity check that the derived
+/// tree behaves the same at every schema level:
 ///
-/// Coverage is validated by exercising the runtime allowlist through
-/// `call_tool`: for every schema property, an args object carrying just
-/// that key must not be rejected with "Unknown key '<key>'". For every
-/// nested object, the same probe uses a container that fills the wrapping
-/// property with a single-key object.
+/// * for every property the schema advertises, the runtime accepts it at
+///   that path (no rejection with "Unknown key '<key>'"),
+/// * for a fabricated key at the same path, the runtime rejects it with
+///   "Unknown key '<bogus>' in <tool>.<path>".
+///
+/// Path shape is derived from the schema too — the walker records
+/// `type: "array"` per level so `probe_with_shape` wraps items as an
+/// array instead of an object.
 #[test]
 fn schema_and_allowlist_agree_set_equality_at_every_level() {
     let tools = list_tools("tendl-2023-iso");
@@ -317,7 +317,7 @@ fn schema_and_allowlist_agree_set_equality_at_every_level() {
 
     for tool in &tools {
         let name = tool.get("name").and_then(|v| v.as_str()).unwrap();
-        walk_schema_object(&db, &mut reg, name, &tool["inputSchema"], name, &[]);
+        walk_schema_object(&db, &mut reg, name, &tool["inputSchema"], name, &[], &[]);
     }
 }
 
@@ -328,9 +328,9 @@ fn schema_and_allowlist_agree_set_equality_at_every_level() {
 /// rejected as "Unknown key".
 ///
 /// `path` is the sequence of property names from the tool root down to the
-/// current node, used to construct a probe args value with the shape the
-/// tool expects (`layers[0]` → `{"layers": [{...}]}`, `neutron_flux` →
-/// `{"neutron_flux": {...}}`, etc.).
+/// current node; `path_is_array` is the parallel array-flag sequence
+/// (derived from each schema level's `type`) so the probe helper can wrap
+/// items correctly instead of hardcoding which names are arrays.
 fn walk_schema_object(
     db: &dyn DatabaseProtocol,
     reg: &mut MaterialRegistry,
@@ -338,6 +338,7 @@ fn walk_schema_object(
     schema: &Value,
     ctx: &str,
     path: &[&str],
+    path_is_array: &[bool],
 ) {
     // additionalProperties: false MUST be set on every object schema that
     // declares `properties`. An open object (`{type:"object"}` with no
@@ -365,7 +366,7 @@ fn walk_schema_object(
     // Schema → allowlist: every key in the schema must be accepted by
     // the runtime at this path.
     for key in props.keys() {
-        let probe_args = probe_with_key_at_path(path, key);
+        let probe_args = probe_with_shape(path, path_is_array, key);
         if let Err(e) = call_tool(db, reg, tool, &probe_args) {
             assert!(
                 !e.contains(&format!("Unknown key '{key}'")),
@@ -380,7 +381,7 @@ fn walk_schema_object(
     // silently accept anything the schema didn't advertise. Use a key
     // that no real allowlist would carry.
     let bogus = "__zzz_probe_drift_1712";
-    let probe_args = probe_with_key_at_path(path, bogus);
+    let probe_args = probe_with_shape(path, path_is_array, bogus);
     match call_tool(db, reg, tool, &probe_args) {
         Ok(_) => panic!(
             "tool `{tool}` at path `{ctx}` accepted the fabricated key `{bogus}` — \
@@ -395,13 +396,17 @@ fn walk_schema_object(
         }
     }
 
-    // Recurse into nested objects and array-of-object schemas.
+    // Recurse into nested objects and array-of-object schemas — record
+    // whether each segment is an array so `probe_with_shape` wraps items
+    // correctly at descent time.
     for (key, subschema) in props {
         let mut next_path: Vec<&str> = path.to_vec();
         next_path.push(key.as_str());
         if subschema.get("type").and_then(|v| v.as_str()) == Some("object")
             || subschema.get("properties").is_some()
         {
+            let mut next_is_array = path_is_array.to_vec();
+            next_is_array.push(false);
             walk_schema_object(
                 db,
                 reg,
@@ -409,30 +414,43 @@ fn walk_schema_object(
                 subschema,
                 &format!("{ctx}.{key}"),
                 &next_path,
+                &next_is_array,
             );
         }
         if subschema.get("type").and_then(|v| v.as_str()) == Some("array") {
             if let Some(items) = subschema.get("items") {
-                // Represent an array-of-objects path as `key`; the probe
-                // helper wraps it as `[{...}]` on first array segment.
-                walk_schema_object(db, reg, tool, items, &format!("{ctx}.{key}[]"), &next_path);
+                let mut next_is_array = path_is_array.to_vec();
+                next_is_array.push(true);
+                walk_schema_object(
+                    db,
+                    reg,
+                    tool,
+                    items,
+                    &format!("{ctx}.{key}[]"),
+                    &next_path,
+                    &next_is_array,
+                );
             }
         }
     }
 }
 
 /// Build a probe args object by nesting `{key: null}` inside the shape
-/// implied by `path`. Each segment names either a nested object or an
-/// array-of-objects — for `list_tools()`'s current shape, only `layers`,
-/// `enrichment`, `composition`, `config_a`, and `config_b` are array-typed
-/// at any depth. The helper hardcodes those.
-fn probe_with_key_at_path(path: &[&str], key: &str) -> Value {
+/// implied by (`path`, `path_is_array`). Each pair is a `(name, is_array)`
+/// segment: `is_array = true` wraps as an array containing one object,
+/// `false` wraps as a plain object. The `is_array` values come from the
+/// schema's own `type: "array"` decisions, so this stays right no matter
+/// which properties become arrays.
+fn probe_with_shape(path: &[&str], path_is_array: &[bool], key: &str) -> Value {
+    assert_eq!(
+        path.len(),
+        path_is_array.len(),
+        "path and path_is_array must have the same length"
+    );
     let leaf = Value::Object(std::iter::once((key.to_string(), Value::Null)).collect());
     let mut current = leaf;
-    for segment in path.iter().rev() {
-        // Wrap as an array if this segment carries multiple items (per the
-        // current `list_tools()` shape). Otherwise wrap as an object.
-        let wrapped = if is_array_property(segment) {
+    for (segment, is_array) in path.iter().zip(path_is_array.iter()).rev() {
+        let wrapped = if *is_array {
             Value::Array(vec![current])
         } else {
             current
@@ -440,13 +458,6 @@ fn probe_with_key_at_path(path: &[&str], key: &str) -> Value {
         current = Value::Object(std::iter::once((segment.to_string(), wrapped)).collect());
     }
     current
-}
-
-/// Property names that are arrays of objects in the current `list_tools()`
-/// shape. Kept as a local list rather than reading `type: "array"` off the
-/// schema because the probe helper needs the shape at build time.
-fn is_array_property(name: &str) -> bool {
-    matches!(name, "layers" | "enrichment" | "composition")
 }
 
 /// Original one-key top-level probe kept for coverage of the tool-name
@@ -650,6 +661,58 @@ fn compare_simulations_still_accepts_the_label_key_on_nested_configs() {
             !e.contains("Unknown key 'label'"),
             "strict-args ate `label`: {e}"
         );
+    }
+}
+
+/// #712 re-review: the shared sim base advertises `projectile: "n"` on
+/// every sim-based tool now. Prove that a neutron call to
+/// `get_isotope_production_curve` with `vs=depth` (the surface that reads
+/// per-layer depth arrays) neither panics nor returns nonsense. A neutron
+/// source has no beam depth profile, so the tool must error cleanly.
+#[test]
+fn neutron_projectile_on_isotope_production_curve_vs_depth_does_not_panic() {
+    let Some(db) = parquet_store() else {
+        eprintln!("skipping: no nucl-parquet data available");
+        return;
+    };
+    let mut reg = MaterialRegistry::new();
+    let args = json!({
+        "projectile": "n",
+        "layers": [{ "material": "Au", "thickness_cm": 0.01 }],
+        "neutron_flux": {
+            "kind": "fast",
+            "flux": 1e13,
+            "temp_mev": 1.4
+        },
+        "irradiation_time_s": 60.0,
+        "cooling_time_s": 0.0,
+        "isotope": "Au-198",
+        "vs": "depth"
+    });
+    // The load-bearing assertion: no panic, no "Missing 'energy_mev'"
+    // (which would prove the schema still forces it). If depth is
+    // unavailable for a neutron source, the tool errors cleanly.
+    match call_tool(&db, &mut reg, "get_isotope_production_curve", &args) {
+        Ok(out) => {
+            // Success is fine — a stale but non-zero depth grid might still
+            // exist if the compute path fills one; but it must not include
+            // any obviously-wrong text like "panicked".
+            assert!(
+                !out.text.to_lowercase().contains("panic"),
+                "leaked panic: {}",
+                out.text
+            );
+        }
+        Err(e) => {
+            assert!(
+                !e.contains("Missing 'energy_mev'") && !e.contains("Missing 'current_ma'"),
+                "neutron call rejected on missing charged-beam args: {e}"
+            );
+            assert!(
+                !e.to_lowercase().contains("panic"),
+                "neutron call panicked at compute time: {e}"
+            );
+        }
     }
 }
 

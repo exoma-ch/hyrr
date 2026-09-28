@@ -14,7 +14,7 @@ use super::cache;
 use super::dataset::{self, DatasetMeta, Table};
 use super::dose::compute_stack_dose;
 use super::nuclide;
-use super::strict_args::reject_unknown_keys;
+use super::strict_args::validate_args;
 
 /// Scope suffix appended to every production-tool description (#528).
 ///
@@ -435,47 +435,6 @@ fn layer_materials(args: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Every key the layer parser accepts. Kept as a `const` so [`layer_schema`]
-/// and [`reject_unknown_keys`] agree by construction: the strict-args regression
-/// test enumerates the schema's `properties` and cross-checks this slice. Add
-/// a key here whenever [`layer_schema`] gains one, or the tool rejects a caller
-/// who was following the schema.
-pub(crate) const LAYER_KEYS: &[&str] = &[
-    "material",
-    "thickness_cm",
-    "energy_out_mev",
-    "density_g_cm3",
-    "enrichment",
-];
-
-/// Keys accepted inside one `enrichment[i]` record — enforced by
-/// [`parse_enrichment`] and mirrored into the schema below.
-pub(crate) const ENRICHMENT_ITEM_KEYS: &[&str] = &["element", "A", "fraction"];
-
-/// Keys accepted inside one `define_material.composition[i]` record.
-pub(crate) const COMPOSITION_ITEM_KEYS: &[&str] = &["element", "fraction"];
-
-/// Keys accepted inside a `current_profile` object — enforced by every tool
-/// that parses one and mirrored into the schemas below.
-pub(crate) const CURRENT_PROFILE_KEYS: &[&str] = &["times_s", "currents_ma"];
-
-/// Keys accepted inside a `neutron_flux` object across every variant of
-/// [`crate::neutron::FluxModel`]. The kind-specific parser rejects the wrong
-/// combination downstream; this top-level allowlist just keeps unknown
-/// top-level keys (`spectrum`, `flux_type`, …) from being silently ignored.
-pub(crate) const NEUTRON_FLUX_KEYS: &[&str] = &[
-    "kind",
-    "flux",
-    "kt_mev",
-    "e_min_mev",
-    "e_max_mev",
-    "temp_mev",
-    "e0_mev",
-    "energies_mev",
-    "phi",
-    "components",
-];
-
 /// JSON Schema for a single target layer. Shared by every tool that takes
 /// `layers`. `require_thickness` toggles whether `thickness_cm` is required —
 /// `simulate` and `get_isotope_production_curve` accept thickness-OR-energy
@@ -484,8 +443,10 @@ pub(crate) const NEUTRON_FLUX_KEYS: &[&str] = &[
 ///
 /// `additionalProperties: false` is set so a well-behaved client rejects
 /// unknown keys (`thickness_mm`, `energy_MeV`, …) before the round-trip
-/// happens. The server ALSO rejects them at parse time (#712 — a client that
-/// ignores the schema still gets the same error), see [`reject_unknown_keys`].
+/// happens. The server ALSO rejects them at parse time (#712 — a client
+/// that ignores the schema still gets the same error) via the
+/// schema-derived allowlist walker in
+/// [`crate::mcp::strict_args::validate_args`].
 fn layer_schema(require_thickness: bool) -> Value {
     let required: Vec<&'static str> = if require_thickness {
         vec!["material", "thickness_cm"]
@@ -585,16 +546,14 @@ fn current_profile_schema() -> Value {
 /// Base simulation-arg property map shared by every tool that runs a
 /// simulation through `build_and_run_sim` / `cached_sim` (#712 review).
 ///
-/// The schema this returns is the ONE SOURCE OF TRUTH for these ten keys:
-/// [`SIM_BASE_KEYS`] carries the same names in the same order, and the
-/// strict-args regression test asserts set-equality between the two AND
-/// between each tool's schema-properties and its allowlist. That closes the
-/// drift class the review flagged — before, several sim-based tools accepted
-/// `neutron_flux` / `secondary_neutron` / `current_profile` at runtime while
-/// their schemas didn't advertise them.
-///
-/// Callers merge this into the tool's own extras (`isotope`, `vs`, `top_n`,
-/// …) via [`extend_props`], then wrap with `additionalProperties: false`.
+/// This is the ONE SOURCE OF TRUTH for the sim-base keys. The runtime
+/// allowlist is derived DIRECTLY from the schema in
+/// [`crate::mcp::strict_args::build_allowlist_tree`], so there is no
+/// separate `SIM_BASE_KEYS` slice that could drift — adding a property
+/// here shows up in the allowlist at every tool that composes this base,
+/// and removing one drops it at every tool. Callers merge this into the
+/// tool's own extras via [`extend_props`], then wrap with
+/// `additionalProperties: false`.
 fn sim_base_properties() -> serde_json::Map<String, Value> {
     let mut m = serde_json::Map::new();
     m.insert("projectile".to_string(), serde_json::json!({
@@ -757,6 +716,9 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                         "items": layer_schema(true)
                     }
                 },
+                // Charged-only tool (`n` not in the projectile enum), so
+                // `energy_mev` / `current_ma` are unconditionally required
+                // here — the runtime enforces the same at compute time.
                 "required": ["projectile", "energy_mev", "current_ma", "layers"]
             }
         }),
@@ -789,7 +751,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                     ("layer_index", serde_json::json!({ "type": "integer", "description": "1-based layer to read the curve from (matches `simulate` layer numbering). Optional — when omitted, defaults to the first layer in beam order that produces the isotope, with a warning if more than one layer does. Errors if the named isotope is not produced in the requested layer." })),
                     ("vs", serde_json::json!({ "type": "string", "enum": ["time", "cooling", "depth"] })),
                 ]),
-                "required": ["projectile", "energy_mev", "current_ma", "layers", "isotope", "vs"]
+                "required": ["projectile", "layers", "isotope", "vs"]
             }
         }),
         serde_json::json!({
@@ -801,7 +763,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                 "properties": extend_props(sim_base_properties(), &[
                     ("isotope", serde_json::json!({ "type": "string", "description": "Isotope name, e.g. 'Sc-44' or 'Cu-64'" })),
                 ]),
-                "required": ["projectile", "energy_mev", "current_ma", "layers", "isotope"]
+                "required": ["projectile", "layers", "isotope"]
             }
         }),
         {
@@ -867,7 +829,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                     ("top_n", serde_json::json!({ "type": "integer", "minimum": 0, "description": "Bound the number of rows shown INLINE in the JSON view (per table). The attached Parquet resource is ALWAYS complete — this only trims the token cost of the inline view, never the exported data. When omitted, defaults to a built-in cap; when set, the smaller of the two applies. Truncation is stated explicitly in the response." })),
                     ("sort_by", serde_json::json!({ "type": "string", "description": "Column name to sort the INLINE JSON view by (descending). Applies only to tables that carry that column; the Parquet remains in insertion order regardless. Must be a numeric column (F64/I64) — unknown or non-numeric keys are rejected rather than silently ignored." })),
                 ]),
-                "required": ["projectile", "energy_mev", "current_ma", "layers"]
+                "required": ["projectile", "layers"]
             }
         }),
         serde_json::json!({
@@ -880,7 +842,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                     ("top_n", serde_json::json!({ "type": "integer", "minimum": 0, "description": "Bound INLINE JSON rows; the Parquet is always complete." })),
                     ("sort_by", serde_json::json!({ "type": "string", "description": "Numeric column to sort the INLINE JSON by (descending); Parquet order is unaffected." })),
                 ]),
-                "required": ["projectile", "energy_mev", "current_ma", "layers"]
+                "required": ["projectile", "layers"]
             }
         }),
         serde_json::json!({
@@ -898,7 +860,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                     ("top_n", serde_json::json!({ "type": "integer", "minimum": 0, "description": "Bound INLINE JSON rows; the Parquet is always complete." })),
                     ("sort_by", serde_json::json!({ "type": "string", "description": "Numeric column to sort the INLINE JSON by (descending); Parquet order is unaffected." })),
                 ]),
-                "required": ["projectile", "energy_mev", "current_ma", "layers"]
+                "required": ["projectile", "layers"]
             }
         }),
         // ─── #459 — raw per-nuclide escape hatch ────────────────────────────
@@ -970,7 +932,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                     ("layer_index", serde_json::json!({ "type": "integer", "description": "Optional 1-based layer filter (matches `simulate` numbering)." })),
                     ("element", serde_json::json!({ "type": "string", "description": "Optional element filter — symbol ('Cu') or atomic number (as a string, e.g. '29')." })),
                 ]),
-                "required": ["projectile", "energy_mev", "current_ma", "layers", "at_s"]
+                "required": ["projectile", "layers", "at_s"]
             }
         }),
         serde_json::json!({
@@ -987,7 +949,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                     })),
                     ("distance_cm", serde_json::json!({ "type": "number", "description": "Point-source distance in cm (default 100 = 1 m). Refuses distances below ~1 cm as the near-field approximation is invalid there." })),
                 ]),
-                "required": ["projectile", "energy_mev", "current_ma", "layers", "at_s"]
+                "required": ["projectile", "layers", "at_s"]
             }
         }),
         serde_json::json!({
@@ -999,7 +961,7 @@ pub fn list_tools(library: &str) -> Vec<Value> {
                 "properties": extend_props(sim_base_properties(), &[
                     ("distance_cm", serde_json::json!({ "type": "number", "description": "Point-source distance in cm (default 100 = 1 m). Refuses distances below ~1 cm as the near-field approximation is invalid there." })),
                 ]),
-                "required": ["projectile", "energy_mev", "current_ma", "layers"]
+                "required": ["projectile", "layers"]
             }
         }),
         // #572 — impact-classified release notes. Compiled into the binary
@@ -1075,7 +1037,7 @@ pub fn call_tool(
             // Empty-schema tool. Reject any extra key so a client that
             // schema-validates (additionalProperties: false) and the runtime
             // agree — no silent-drop of a caller's typo (#712).
-            reject_unknown_keys(arguments, &[], "list_materials")?;
+            validate_args("list_materials", arguments)?;
             tool_list_materials(&*materials)?.into()
         }
         "list_reaction_channels" => tool_list_reaction_channels(db, arguments)?.into(),
@@ -1102,7 +1064,7 @@ pub fn call_tool(
         // table.
         "get_version_info" => {
             // Empty-schema tool — same strict-args rule as `list_materials`.
-            reject_unknown_keys(arguments, &[], "get_version_info")?;
+            validate_args("get_version_info", arguments)?;
             tool_get_version_info()?.into()
         }
         "get_changelog" => tool_get_changelog(arguments)?.into(),
@@ -1154,7 +1116,6 @@ fn parse_layers(
     let mut layers = Vec::with_capacity(layer_arr.len());
     for (idx, layer_val) in layer_arr.iter().enumerate() {
         let ctx = format!("layers[{idx}]");
-        reject_unknown_keys(layer_val, LAYER_KEYS, &ctx)?;
 
         let material = layer_val
             .get("material")
@@ -1162,7 +1123,7 @@ fn parse_layers(
             .ok_or_else(|| format!("{ctx} missing 'material'"))?;
 
         // enrichment: [{element, A, fraction}] — flat, array-of-records shape.
-        let overrides = parse_enrichment(layer_val.get("enrichment"), &ctx)?;
+        let overrides = parse_enrichment(layer_val.get("enrichment"))?;
 
         // Read the density override FIRST (#713). resolve_material used to be
         // called with None here and only consulted the layer's density_g_cm3
@@ -1228,12 +1189,8 @@ fn parse_layers(
 /// nested `HashMap<String, HashMap<u32, f64>>` that resolve_material expects.
 /// Returns None when the input is absent or null; errors on malformed entries.
 ///
-/// `layer_ctx` is the human name for the enclosing layer (`"layers[0]"`,
-/// `"layers[3]"`, …) so a rejected unknown key inside an `enrichment[i]` record
-/// points at the exact site (#712).
 fn parse_enrichment(
     val: Option<&Value>,
-    layer_ctx: &str,
 ) -> Result<Option<std::collections::HashMap<String, std::collections::HashMap<u32, f64>>>, String>
 {
     use std::collections::HashMap;
@@ -1248,9 +1205,7 @@ fn parse_enrichment(
         return Ok(None);
     }
     let mut overrides: HashMap<String, HashMap<u32, f64>> = HashMap::new();
-    for (idx, entry) in arr.iter().enumerate() {
-        let ctx = format!("{layer_ctx}.enrichment[{idx}]");
-        reject_unknown_keys(entry, ENRICHMENT_ITEM_KEYS, &ctx)?;
+    for entry in arr.iter() {
         let elem = entry
             .get("element")
             .and_then(|v| v.as_str())
@@ -1281,10 +1236,6 @@ fn parse_enrichment(
 fn parse_neutron_flux(val: Option<&Value>) -> Result<crate::neutron::FluxModel, String> {
     match val {
         Some(v) if !v.is_null() => {
-            // Reject typos before serde does — otherwise a misspelt kt_mev
-            // reads as the model's default and silently gives the wrong
-            // spectrum (#712, same failure mode as `thickness_mm`).
-            reject_unknown_keys(v, NEUTRON_FLUX_KEYS, "neutron_flux")?;
             serde_json::from_value::<crate::neutron::FluxModel>(v.clone())
                 .map_err(|e| format!("Invalid 'neutron_flux' (expected a FluxModel, e.g. {{\"kind\":\"thermal\",\"flux\":1e13,\"kt_mev\":2.53e-8}}): {e}"))
         }
@@ -1293,49 +1244,6 @@ fn parse_neutron_flux(val: Option<&Value>) -> Result<crate::neutron::FluxModel, 
             temp_mev: 1.4,
         }),
     }
-}
-
-/// Run every strict-args check on the NESTED objects of a sim-shaped args
-/// value: `layers[i]` + each `enrichment[j]` inside it, `neutron_flux`,
-/// `current_profile`. Called from every sim-based tool's `tool_*` function
-/// BEFORE compute so a nested typo (`kT_MeV`, `frac`, `ramp`) is rejected
-/// even when the caller also omitted a required top-level arg (#712
-/// re-review — otherwise "Missing 'projectile'" would fire first and hide
-/// the strict-args failure).
-///
-/// This is validation only — no material resolution, no compute, no shape
-/// coercion. It calls the same helpers `build_and_run_sim` uses (parse_*),
-/// so nested validators can't drift from the schema either.
-pub(crate) fn validate_nested_stack_args(args: &Value) -> Result<(), String> {
-    if let Some(layers) = args.get("layers").and_then(|v| v.as_array()) {
-        for (idx, layer_val) in layers.iter().enumerate() {
-            let ctx = format!("layers[{idx}]");
-            reject_unknown_keys(layer_val, LAYER_KEYS, &ctx)?;
-            // Reuse `parse_enrichment` for its layer-attributed
-            // `enrichment[i]` checks; discard the resolved value.
-            let _ = parse_enrichment(layer_val.get("enrichment"), &ctx)?;
-        }
-    }
-    if let Some(nf) = args.get("neutron_flux") {
-        if !nf.is_null() {
-            reject_unknown_keys(nf, NEUTRON_FLUX_KEYS, "neutron_flux")?;
-            // Also run serde's per-variant `deny_unknown_fields` so a
-            // cross-variant typo (`{kind:"thermal", temp_mev}`) is caught
-            // here rather than only inside compute.
-            serde_json::from_value::<crate::neutron::FluxModel>(nf.clone()).map_err(|e| {
-                format!(
-                    "Invalid 'neutron_flux' (expected a FluxModel, e.g. \
-                     {{\"kind\":\"thermal\",\"flux\":1e13,\"kt_mev\":2.53e-8}}): {e}"
-                )
-            })?;
-        }
-    }
-    if let Some(cp) = args.get("current_profile") {
-        if !cp.is_null() {
-            reject_unknown_keys(cp, CURRENT_PROFILE_KEYS, "current_profile")?;
-        }
-    }
-    Ok(())
 }
 
 /// Parse a simulate-shaped args object and run compute_stack.
@@ -1393,7 +1301,6 @@ fn build_and_run_sim(
 
     let current_profile = match args.get("current_profile") {
         Some(cp) if !cp.is_null() => {
-            reject_unknown_keys(cp, CURRENT_PROFILE_KEYS, "current_profile")?;
             let times: Vec<f64> = cp
                 .get("times_s")
                 .and_then(|v| v.as_array())
@@ -1501,19 +1408,8 @@ fn build_and_run_stopping_only(
     Ok((result, projectile_str.to_string(), energy_mev, current_ma))
 }
 
-const DEFINE_MATERIAL_KEYS: &[&str] = &["name", "density_g_cm3", "composition", "nist_compound"];
-
 fn tool_define_material(materials: &mut MaterialRegistry, args: &Value) -> Result<String, String> {
-    reject_unknown_keys(args, DEFINE_MATERIAL_KEYS, "define_material")?;
-    // Validate `composition[i]` keys BEFORE we require the top-level `name`
-    // (#712 re-review). Otherwise a caller who forgot `name` would see
-    // `Missing 'name'` instead of the `Unknown key '<frac>'` for the typo
-    // that likely produced the ambiguity in the first place.
-    if let Some(comp) = args.get("composition").and_then(|v| v.as_array()) {
-        for (idx, entry) in comp.iter().enumerate() {
-            reject_unknown_keys(entry, COMPOSITION_ITEM_KEYS, &format!("composition[{idx}]"))?;
-        }
-    }
+    validate_args("define_material", args)?;
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -1535,8 +1431,7 @@ fn tool_define_material(materials: &mut MaterialRegistry, args: &Value) -> Resul
 
     let mut mass_fractions = HashMap::new();
     let mut total = 0.0;
-    for (idx, entry) in comp_arr.iter().enumerate() {
-        reject_unknown_keys(entry, COMPOSITION_ITEM_KEYS, &format!("composition[{idx}]"))?;
+    for entry in comp_arr.iter() {
         let elem = entry
             .get("element")
             .and_then(|v| v.as_str())
@@ -1588,31 +1483,12 @@ fn tool_define_material(materials: &mut MaterialRegistry, args: &Value) -> Resul
     ))
 }
 
-/// The base sim-arg keys — the SAME names, in the SAME order, that
-/// [`sim_base_properties`] emits as schema properties. Set-equality between
-/// the two is enforced by the `schema_matches_sim_base_keys` regression;
-/// every sim-based tool extends this via `[SIM_BASE_KEYS, &[extras]].concat()`
-/// so schema and allowlist stay in lockstep by construction (#712 review).
-pub(crate) const SIM_BASE_KEYS: &[&str] = &[
-    "projectile",
-    "energy_mev",
-    "current_ma",
-    "neutron_flux",
-    "secondary_neutron",
-    "layers",
-    "irradiation_time_s",
-    "cooling_time_s",
-    "current_profile",
-    "activity_floor_bq",
-];
-
 fn tool_simulate(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
-    reject_unknown_keys(args, SIM_BASE_KEYS, "simulate")?;
-    validate_nested_stack_args(args)?;
+    validate_args("simulate", args)?;
     // Populate the result cache so follow-up dataset / inventory / emission
     // queries on the same config are lazy views instead of re-runs (#427).
     let result = cached_sim(db, registry, args)?;
@@ -1813,10 +1689,8 @@ fn tool_list_materials(registry: &MaterialRegistry) -> Result<String, String> {
     Ok(output)
 }
 
-const LIST_REACTION_CHANNELS_KEYS: &[&str] = &["projectile", "target_z", "target_a"];
-
 fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
-    reject_unknown_keys(args, LIST_REACTION_CHANNELS_KEYS, "list_reaction_channels")?;
+    validate_args("list_reaction_channels", args)?;
     let projectile = args
         .get("projectile")
         .and_then(|v| v.as_str())
@@ -1876,10 +1750,8 @@ fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Resul
     Ok(output)
 }
 
-const GET_DECAY_DATA_KEYS: &[&str] = &["z", "a", "state"];
-
 fn tool_get_decay_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
-    reject_unknown_keys(args, GET_DECAY_DATA_KEYS, "get_decay_data")?;
+    validate_args("get_decay_data", args)?;
     let z = args
         .get("z")
         .and_then(|v| v.as_u64())
@@ -1935,35 +1807,16 @@ fn tool_get_decay_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String
     }
 }
 
-/// Keys accepted at the TOP LEVEL of `compare_simulations` (`config_a` /
-/// `config_b`); each nested config accepts the union below.
-const COMPARE_SIMULATIONS_KEYS: &[&str] = &["config_a", "config_b"];
-
-/// The compare_simulations config_a/b surface extends the shared sim base
-/// with an optional display `label`. Kept as `EXTRAS` so it composes with
-/// `SIM_BASE_KEYS` the same way as every other sim-based tool.
-pub(crate) const COMPARE_CONFIG_EXTRAS: &[&str] = &["label"];
-
 fn tool_compare_simulations(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
-    reject_unknown_keys(args, COMPARE_SIMULATIONS_KEYS, "compare_simulations")?;
-    // Validate keys inside EITHER config first so a typo in `config_a` isn't
-    // hidden by "Missing 'config_b'" (#712 review). Each config's key check
-    // runs whenever the caller supplied that config, regardless of the
-    // other. The require-both check comes after.
-    let config_keys: Vec<&str> = [SIM_BASE_KEYS, COMPARE_CONFIG_EXTRAS].concat();
-    for (which, opt) in [
-        ("config_a", args.get("config_a")),
-        ("config_b", args.get("config_b")),
-    ] {
-        if let Some(v) = opt {
-            reject_unknown_keys(v, &config_keys, &format!("compare_simulations.{which}"))?;
-            validate_nested_stack_args(v)?;
-        }
-    }
+    // `validate_args` walks the whole args tree from the shared
+    // schema-derived allowlist, so a typo inside `config_a` or `config_b`
+    // is caught here before either the require-both check below or the
+    // downstream compute (#712 re-review — one source of truth).
+    validate_args("compare_simulations", args)?;
     let config_a = args.get("config_a").ok_or("Missing 'config_a'")?;
     let config_b = args.get("config_b").ok_or("Missing 'config_b'")?;
 
@@ -2044,22 +1897,15 @@ fn tool_compare_simulations(
     Ok(output)
 }
 
-const GET_STACK_ENERGY_BUDGET_KEYS: &[&str] = &["projectile", "energy_mev", "current_ma", "layers"];
-
 fn tool_get_stack_energy_budget(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
-    reject_unknown_keys(
-        args,
-        GET_STACK_ENERGY_BUDGET_KEYS,
-        "get_stack_energy_budget",
-    )?;
+    validate_args("get_stack_energy_budget", args)?;
     // Nested-key validation before compute so an unknown key inside a layer
     // (or its enrichment) surfaces at parse time rather than after
     // "Missing 'projectile'" (#712 review).
-    validate_nested_stack_args(args)?;
     // Stopping-only fast path — skips the activation pipeline that
     // build_and_run_sim would invoke. Identical energy/heat numbers, much
     // less work for stacks with many cross-section channels.
@@ -2103,19 +1949,12 @@ fn tool_get_stack_energy_budget(
     Ok(output)
 }
 
-// The `GET_STOPPING_POWER_KEYS` slice below documents what
-// `tool_get_stopping_power` accepts. `density_g_cm3` used to be an
-// undocumented hidden argument (#713 review); now schema-visible and
-// enforced here.
-const GET_STOPPING_POWER_KEYS: &[&str] =
-    &["projectile", "material", "energies_mev", "density_g_cm3"];
-
 fn tool_get_stopping_power(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
-    reject_unknown_keys(args, GET_STOPPING_POWER_KEYS, "get_stopping_power")?;
+    validate_args("get_stopping_power", args)?;
     let projectile_str = args
         .get("projectile")
         .and_then(|v| v.as_str())
@@ -2269,19 +2108,12 @@ fn select_producing_layer<'a>(
     })
 }
 
-const GET_ISOTOPE_PRODUCTION_CURVE_EXTRAS: &[&str] = &["isotope", "layer_index", "vs"];
-
 fn tool_get_isotope_production_curve(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
-    reject_unknown_keys(
-        args,
-        &[SIM_BASE_KEYS, GET_ISOTOPE_PRODUCTION_CURVE_EXTRAS].concat(),
-        "get_isotope_production_curve",
-    )?;
-    validate_nested_stack_args(args)?;
+    validate_args("get_isotope_production_curve", args)?;
     let isotope = args
         .get("isotope")
         .and_then(|v| v.as_str())
@@ -2425,19 +2257,12 @@ fn tool_get_isotope_production_curve(
     Ok(output)
 }
 
-const LIST_PRODUCING_LAYERS_EXTRAS: &[&str] = &["isotope"];
-
 fn tool_list_producing_layers(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
-    reject_unknown_keys(
-        args,
-        &[SIM_BASE_KEYS, LIST_PRODUCING_LAYERS_EXTRAS].concat(),
-        "list_producing_layers",
-    )?;
-    validate_nested_stack_args(args)?;
+    validate_args("list_producing_layers", args)?;
     let isotope = args
         .get("isotope")
         .and_then(|v| v.as_str())
@@ -2630,20 +2455,12 @@ fn parse_inline_view(args: &Value) -> Result<(Option<usize>, Option<&str>), Stri
     Ok((top_n, sort_by))
 }
 
-const GET_SIMULATION_DATASET_EXTRAS: &[&str] =
-    &["cooling", "depth", "emissions", "top_n", "sort_by"];
-
 fn tool_get_simulation_dataset(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    reject_unknown_keys(
-        args,
-        &[SIM_BASE_KEYS, GET_SIMULATION_DATASET_EXTRAS].concat(),
-        "get_simulation_dataset",
-    )?;
-    validate_nested_stack_args(args)?;
+    validate_args("get_simulation_dataset", args)?;
     let want_cooling = args
         .get("cooling")
         .and_then(|v| v.as_bool())
@@ -2793,19 +2610,12 @@ fn tool_get_simulation_dataset(
     Ok(ToolResponse { text, resources })
 }
 
-const GET_ISOTOPE_INVENTORY_EXTRAS: &[&str] = &["top_n", "sort_by"];
-
 fn tool_get_isotope_inventory(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    reject_unknown_keys(
-        args,
-        &[SIM_BASE_KEYS, GET_ISOTOPE_INVENTORY_EXTRAS].concat(),
-        "get_isotope_inventory",
-    )?;
-    validate_nested_stack_args(args)?;
+    validate_args("get_isotope_inventory", args)?;
     let activity_floor_bq = parse_activity_floor(args)?;
     let (top_n, sort_by) = parse_inline_view(args)?;
     let result = cached_sim(db, registry, args)?;
@@ -2849,27 +2659,12 @@ fn tool_get_isotope_inventory(
     Ok(ToolResponse { text, resources })
 }
 
-const GET_EMISSION_CURVE_EXTRAS: &[&str] = &[
-    "isotope",
-    "emission_type",
-    "energy_kev",
-    "energy_tolerance_kev",
-    "vs",
-    "top_n",
-    "sort_by",
-];
-
 fn tool_get_emission_curve(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    reject_unknown_keys(
-        args,
-        &[SIM_BASE_KEYS, GET_EMISSION_CURVE_EXTRAS].concat(),
-        "get_emission_curve",
-    )?;
-    validate_nested_stack_args(args)?;
+    validate_args("get_emission_curve", args)?;
     let vs = args.get("vs").and_then(|v| v.as_str()).unwrap_or("time");
     if !["time", "cooling"].contains(&vs) {
         return Err(format!("'vs' must be 'time' or 'cooling' (got '{vs}')"));
@@ -2947,13 +2742,11 @@ fn tool_get_emission_curve(
 
 // ─── #459: get_nuclide_data ────────────────────────────────────────────────
 
-const GET_NUCLIDE_DATA_KEYS: &[&str] = &["z", "a", "state"];
-
 /// Uncurated per-nuclide data lookup. Accepts `{z, a, state?}`; returns the
 /// assembled record from [`nuclide::nuclide_data`] as a pretty-printed JSON
 /// text block. See the module doc for the shape.
 fn tool_get_nuclide_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
-    reject_unknown_keys(args, GET_NUCLIDE_DATA_KEYS, "get_nuclide_data")?;
+    validate_args("get_nuclide_data", args)?;
     let z = args
         .get("z")
         .and_then(|v| v.as_u64())
@@ -3025,12 +2818,10 @@ fn parse_nuclide_arg(
     Ok((z, a, state, canonical))
 }
 
-const GET_DOSE_CONSTANT_KEYS: &[&str] = &["isotope", "z", "a", "state"];
-
 /// `k` (specific gamma dose constant) for one nuclide, as loaded from the
 /// active library's `meta/dose_constants.parquet`.
 fn tool_get_dose_constant(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
-    reject_unknown_keys(args, GET_DOSE_CONSTANT_KEYS, "get_dose_constant")?;
+    validate_args("get_dose_constant", args)?;
     let (z, a, state, iso) = parse_nuclide_arg(db, args)?;
 
     match db.get_dose_constant(z, a, &state) {
@@ -3060,8 +2851,6 @@ will report the same — the underlying `DoseDb::dose_constant` returned None.\n
     }
 }
 
-const GET_DOSE_RATE_EXTRAS: &[&str] = &["distance_cm"];
-
 /// Bare-source dose rate [µSv/h] from every produced isotope in a simulated
 /// stack, at `distance_cm`. Delegates the sum to [`compute_stack_dose`] so
 /// the per-isotope breakdown table and the total agree by construction.
@@ -3070,12 +2859,7 @@ fn tool_get_dose_rate(
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<String, String> {
-    reject_unknown_keys(
-        args,
-        &[SIM_BASE_KEYS, GET_DOSE_RATE_EXTRAS].concat(),
-        "get_dose_rate",
-    )?;
-    validate_nested_stack_args(args)?;
+    validate_args("get_dose_rate", args)?;
     let distance_cm = args
         .get("distance_cm")
         .and_then(|v| v.as_f64())
@@ -3157,8 +2941,6 @@ and contribute **0** to the total: {}. The reported total is a LOWER BOUND.\n\n"
 
 // ─── #570: exact-Bateman point queries ─────────────────────────────────────
 
-const GET_ACTIVITY_AT_EXTRAS: &[&str] = &["at_s", "scope", "isotope", "layer_index", "element"];
-
 /// `get_activity_at` — exact Bateman activity at caller-chosen times.
 ///
 /// Reuses the cached `StackResult` (which is keyed on the physics config only —
@@ -3173,12 +2955,7 @@ fn tool_get_activity_at(
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    reject_unknown_keys(
-        args,
-        &[SIM_BASE_KEYS, GET_ACTIVITY_AT_EXTRAS].concat(),
-        "get_activity_at",
-    )?;
-    validate_nested_stack_args(args)?;
+    validate_args("get_activity_at", args)?;
     use crate::mcp::activity_at::{
         aggregate, apply_activity_floor, parse_at_s, parse_current_profile_from_args,
         resolve_all_layers, to_json_rows, Scope,
@@ -3310,8 +3087,6 @@ fn parse_element_filter(db: &dyn DatabaseProtocol, args: &Value) -> Result<Optio
     Ok(Some(z))
 }
 
-const GET_DOSE_RATE_AT_EXTRAS: &[&str] = &["at_s", "distance_cm"];
-
 /// `get_dose_rate_at` — gamma dose rate at caller-chosen times.
 ///
 /// Runs `get_activity_at`'s per-layer chain re-solve, then applies k · A / r²
@@ -3324,12 +3099,7 @@ fn tool_get_dose_rate_at(
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<ToolResponse, String> {
-    reject_unknown_keys(
-        args,
-        &[SIM_BASE_KEYS, GET_DOSE_RATE_AT_EXTRAS].concat(),
-        "get_dose_rate_at",
-    )?;
-    validate_nested_stack_args(args)?;
+    validate_args("get_dose_rate_at", args)?;
     use crate::mcp::activity_at::{
         apply_activity_floor, parse_at_s, parse_current_profile_from_args, resolve_all_layers,
     };
@@ -3569,8 +3339,6 @@ fn tool_get_version_info() -> Result<String, String> {
     Ok(out)
 }
 
-const GET_CHANGELOG_KEYS: &[&str] = &["since_version"];
-
 /// Return the impact-classified release notes (#572).
 ///
 /// Optional `since_version` filters to releases strictly newer than that
@@ -3587,7 +3355,7 @@ const GET_CHANGELOG_KEYS: &[&str] = &["since_version"];
 /// baked into the binary via `include_str!`; a corrupt artifact surfaces here
 /// as a JSON-RPC error rather than a panic-at-load.
 fn tool_get_changelog(args: &Value) -> Result<String, String> {
-    reject_unknown_keys(args, GET_CHANGELOG_KEYS, "get_changelog")?;
+    validate_args("get_changelog", args)?;
     let since = match args.get("since_version") {
         Some(v) if !v.is_null() => Some(
             v.as_str()
