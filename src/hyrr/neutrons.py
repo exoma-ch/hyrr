@@ -55,9 +55,19 @@ class NeutronFlux:
 
 @dataclass(frozen=True)
 class ThermalFlux(NeutronFlux):
-    """Maxwellian thermal neutron flux.
+    """Maxwellian thermal neutron flux (flux shape, not density).
 
-    phi(E) = phi_th * (2/sqrt(pi)) * sqrt(E/kT) * exp(-E/kT) / kT
+    phi(E) = total_flux * (E / kT^2) * exp(-E / kT)
+
+    This is the Maxwellian *flux* v * n(E) for the density
+    n(E) proportional to sqrt(E) * exp(-E/kT); the extra factor of
+    sqrt(E) comes from v proportional to sqrt(E). Normalised so
+    ``integral phi dE == total_flux``.
+
+    The earlier form ``phi ~ sqrt(E) * exp(-E/kT)`` was the density
+    shape used as a flux; folded against a 1/v cross-section it
+    over-predicted thermal (n,gamma) by ``4/pi ~ 1.273``. Fixed in #711
+    (same fix as ``FluxModel::Thermal`` in the Rust core).
 
     Default temperature: 293.15 K (room temp, kT = 0.0253 eV).
     """
@@ -66,14 +76,7 @@ class ThermalFlux(NeutronFlux):
 
     def phi(self, E_MeV: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
         kT_MeV = self.kT_eV * 1e-6
-        x = E_MeV / kT_MeV
-        return (
-            self.total_flux
-            * (2.0 / math.sqrt(math.pi))
-            * np.sqrt(x)
-            * np.exp(-x)
-            / kT_MeV
-        )
+        return self.total_flux * (E_MeV / kT_MeV**2) * np.exp(-E_MeV / kT_MeV)
 
 
 @dataclass(frozen=True)

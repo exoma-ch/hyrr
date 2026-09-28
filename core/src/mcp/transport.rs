@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
+use std::sync::{Arc, RwLock};
 
 use super::tools;
 use crate::db::DatabaseProtocol;
@@ -114,9 +115,12 @@ pub const DEFAULT_LIBRARY: &str = env!("HYRR_DEFAULT_LIBRARY");
 
 /// Run the MCP stdio server loop with the default library.
 ///
-/// Convenience wrapper around [`run_mcp_server_with_library`].
+/// Convenience wrapper around [`run_mcp_server_with_library`]. Assumes a
+/// user-supplied data dir (no healer); the MCP binary entry points pass
+/// `spawn_heal: true` explicitly when they know the resolved path is the
+/// managed cache.
 pub fn run_mcp_server(data_dir: &str) {
-    run_mcp_server_with_library(data_dir, DEFAULT_LIBRARY);
+    run_mcp_server_with_library(data_dir, DEFAULT_LIBRARY, false);
 }
 
 /// Run the MCP stdio server loop pinned to `library`.
@@ -126,7 +130,18 @@ pub fn run_mcp_server(data_dir: &str) {
 /// The server's `library_used` echo footer reflects this value, and every
 /// tool's data fetches happen against this library for the lifetime of
 /// the process.
-pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
+///
+/// If `spawn_heal` is `true` and `data_dir` is the managed cache
+/// (`~/.hyrr/nucl-parquet/v{DATA_VERSION}/data`), a background
+/// [`crate::data_fetch::spawn_managed_cache_heal_thread`] fetches any
+/// missing routed neutron / heavy-ion libraries (#709) WITHOUT blocking
+/// this call. When the heal succeeds, this function transparently swaps
+/// the in-memory data store for a fresh one (new fingerprint, empty
+/// xs_cache — see PR #717 for why memoised misses would otherwise
+/// outlive the fetch) and clears the simulate-result cache. Callers
+/// pass `spawn_heal: false` for a user-supplied `--data-dir` /
+/// `HYRR_DATA` / sibling checkout, which is out of scope for the healer.
+pub fn run_mcp_server_with_library(data_dir: &str, library: &str, spawn_heal: bool) {
     // Kick off the opt-out, cached, non-blocking update check (#571)
     // BEFORE the pre-flight data-dir probe so the background thread has
     // the maximum head start against a fast-arriving `initialize` frame.
@@ -166,7 +181,7 @@ pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
         std::process::exit(2);
     }
 
-    let db = match crate::db::ParquetDataStore::new(data_dir, library) {
+    let initial_store = match crate::db::ParquetDataStore::new(data_dir, library) {
         Ok(db) => db,
         Err(e) => {
             eprintln!(
@@ -175,6 +190,54 @@ pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
             std::process::exit(1);
         }
     };
+
+    // #709: hold the store behind `Arc<RwLock<Arc<…>>>`. Tool calls
+    // read-lock and clone the inner Arc (cheap), so a background heal
+    // thread can write-lock briefly to swap in a fresh
+    // `ParquetDataStore` after new routed libraries land on disk.
+    // Without the swap, `NpDataStore::ensure_xs` — which memoises
+    // missing cross-sections as empty vectors on the first lookup —
+    // would keep returning empty for `n` / heavy-ion queries even
+    // after their libraries were extracted (PR #717 rev-1 review).
+    let store: Arc<RwLock<Arc<crate::db::ParquetDataStore>>> =
+        Arc::new(RwLock::new(Arc::new(initial_store)));
+
+    // Spawn the routed-library heal thread AFTER the store is set up
+    // and BEFORE the request loop starts — the handle is registered
+    // globally so `tools::call_tool` can consult it on the first
+    // request, and the thread does its I/O in the background so the
+    // client's initialize timeout doesn't fire during a slow download.
+    if spawn_heal {
+        let store_for_swap = Arc::clone(&store);
+        let data_dir_owned = data_dir.to_string();
+        let library_owned = library.to_string();
+        let _ = crate::data_fetch::spawn_managed_cache_heal_thread(move || {
+            // Runs on the heal thread once the tarball is extracted and
+            // the routed subtree(s) have been atomically renamed into
+            // place. Rebuild the store — this re-derives the on-disk
+            // fingerprint (which will include the new library dir once
+            // #708 lands and is what makes the `mcp::cache` disk key
+            // rotate naturally) and starts fresh xs caches — and clear
+            // the in-memory `mcp::cache` LRU so a query cached against
+            // the pre-heal store isn't served back.
+            //
+            // Returning `Err` here tells `spawn_managed_cache_heal_thread`
+            // to keep the gate CLOSED and flip to `HealPhase::Failed`
+            // instead of `Complete { added }` — a store rebuild failure
+            // must not be misreported as "library available" (reviewer's
+            // SHOULD-FIX #3).
+            let new_store = crate::db::ParquetDataStore::new(&data_dir_owned, &library_owned)
+                .map_err(|e| format!("{e}"))?;
+            let mut writer = match store_for_swap.write() {
+                Ok(w) => w,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *writer = Arc::new(new_store);
+            drop(writer);
+            crate::mcp::cache::clear_memory_cache();
+            Ok(())
+        });
+    }
 
     let mut materials: MaterialRegistry = std::collections::HashMap::new();
 
@@ -203,8 +266,22 @@ pub fn run_mcp_server_with_library(data_dir: &str, library: &str) {
             }
         };
 
+        // Snapshot the store BEFORE the request runs. Read-locking
+        // and cloning the inner `Arc` releases the lock immediately;
+        // the request then holds the snapshot for its whole lifetime
+        // so an in-flight call is never observed against a half-
+        // swapped store. A heal-thread swap that lands mid-request
+        // only affects the NEXT snapshot.
+        let db_snap: Arc<crate::db::ParquetDataStore> = {
+            let reader = match store.read() {
+                Ok(r) => r,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            Arc::clone(&reader)
+        };
+
         // Notifications produce no response frame — see [`handle_request`].
-        if let Some(response) = handle_request(&db, &mut materials, request) {
+        if let Some(response) = handle_request(&db_snap, &mut materials, request) {
             let _ = writeln!(stdout, "{}", serde_json::to_string(&response).unwrap());
             let _ = stdout.flush();
         }

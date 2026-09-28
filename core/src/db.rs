@@ -14,12 +14,12 @@ use crate::types::{CrossSectionData, DecayData};
 /// law (INT=5), so the neutron fold interpolates cross-sections log-log
 /// (`interpolation::interp_log_log`); linear interpolation over-predicts the
 /// thermal region ~30x.
-pub(crate) const NEUTRON_LIBRARY: &str = "endfb-8.0";
+pub const NEUTRON_LIBRARY: &str = "endfb-8.0";
 
 /// Heavy-ion production cross-sections live in their own library; the charged
 /// default (tendl-2023-iso) ships none. Same shape as [`NEUTRON_LIBRARY`] —
 /// see `library_for_projectile`.
-pub(crate) const HEAVY_ION_LIBRARY: &str = "hi-xs-prod";
+pub const HEAVY_ION_LIBRARY: &str = "hi-xs-prod";
 
 /// Which library actually serves a given projectile.
 ///
@@ -30,7 +30,7 @@ pub(crate) const HEAVY_ION_LIBRARY: &str = "hi-xs-prod";
 ///
 /// Heavy-ion keys are `{symbol_lowercase}{A}` — `c12`, `ar40`, `fe56` — which is
 /// how `ProjectileType::xs_key` renders them.
-pub(crate) fn library_for_projectile<'a>(projectile: &str, store_library: &'a str) -> &'a str
+pub fn library_for_projectile<'a>(projectile: &str, store_library: &'a str) -> &'a str
 where
     'static: 'a,
 {
@@ -46,7 +46,7 @@ where
 /// `c12`, `ar40`, `fe56`, … — a lowercase element symbol followed by a mass
 /// number. Distinguishes a heavy-ion stem from the light-ion keys (`p`, `d`,
 /// `t`, `h`, `a`) and from `n`/`g`.
-pub(crate) fn is_heavy_ion_key(projectile: &str) -> bool {
+pub fn is_heavy_ion_key(projectile: &str) -> bool {
     let digits = projectile.trim_start_matches(|c: char| c.is_ascii_alphabetic());
     let symbol = &projectile[..projectile.len() - digits.len()];
     !digits.is_empty()

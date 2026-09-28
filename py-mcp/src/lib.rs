@@ -6,12 +6,15 @@ use pyo3::prelude::*;
 
 /// Enter the MCP stdio loop pinned to the given nuclear data library.
 ///
-/// Blocks until stdin closes.
+/// Blocks until stdin closes. Runs the routed-library healer in the
+/// background only when `data_dir` is the managed cache (#709).
 #[pyfunction]
 #[pyo3(signature = (data_dir, library=None))]
 fn run(data_dir: String, library: Option<String>) -> PyResult<()> {
     let lib = library.unwrap_or_else(|| hyrr_core::mcp::transport::DEFAULT_LIBRARY.to_string());
-    hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &lib);
+    let spawn_heal =
+        hyrr_core::data_fetch::resolved_is_managed_cache(std::path::Path::new(&data_dir));
+    hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &lib, spawn_heal);
     Ok(())
 }
 
@@ -57,6 +60,11 @@ fn ensure_data(library: Option<String>) -> PyResult<String> {
     // Local resolution: managed cache (sentinel-gated), sibling clone.
     let local = hyrr_core::data_dir::resolve();
     if std::path::Path::new(&local).join("meta").is_dir() {
+        // Warm cache — hand it back and let the transport spawn its
+        // background heal thread for any missing routed libraries
+        // (#709). Doing the heal synchronously here would block the
+        // MCP initialize handshake for the whole ~727 MB download and
+        // fail the client's startup timeout.
         return Ok(local);
     }
 
