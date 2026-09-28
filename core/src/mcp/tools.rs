@@ -452,6 +452,9 @@ pub(crate) const LAYER_KEYS: &[&str] = &[
 /// [`parse_enrichment`] and mirrored into the schema below.
 pub(crate) const ENRICHMENT_ITEM_KEYS: &[&str] = &["element", "A", "fraction"];
 
+/// Keys accepted inside one `define_material.composition[i]` record.
+pub(crate) const COMPOSITION_ITEM_KEYS: &[&str] = &["element", "fraction"];
+
 /// Keys accepted inside a `current_profile` object — enforced by every tool
 /// that parses one and mirrored into the schemas below.
 pub(crate) const CURRENT_PROFILE_KEYS: &[&str] = &["times_s", "currents_ma"];
@@ -499,7 +502,7 @@ fn layer_schema(require_thickness: bool) -> Value {
             },
             "thickness_cm": {
                 "type": "number",
-                "description": "Layer thickness in cm. Optional on `simulate` etc. as long as SOME layer has `thickness_cm` OR `energy_out_mev` (degrader-spec) — otherwise the whole stack is unresolved and the call is rejected rather than filled in with a silent default (#712)."
+                "description": "Layer thickness in cm. Every layer must set EITHER `thickness_cm` OR `energy_out_mev` (degrader spec) — there is no default. On `get_stack_energy_budget` this is required; on `simulate` and friends the schema keeps it optional so a per-layer degrader spec is valid, but the server errors out at parse time on any layer that resolves to neither. (#712)"
             },
             "energy_out_mev": {
                 "type": "number",
@@ -1095,7 +1098,13 @@ pub fn call_tool(
     let mut response: ToolResponse = match name {
         "define_material" => tool_define_material(materials, arguments)?.into(),
         "simulate" => tool_simulate(db, &*materials, arguments)?.into(),
-        "list_materials" => tool_list_materials(&*materials)?.into(),
+        "list_materials" => {
+            // Empty-schema tool. Reject any extra key so a client that
+            // schema-validates (additionalProperties: false) and the runtime
+            // agree — no silent-drop of a caller's typo (#712).
+            reject_unknown_keys(arguments, &[], "list_materials")?;
+            tool_list_materials(&*materials)?.into()
+        }
         "list_reaction_channels" => tool_list_reaction_channels(db, arguments)?.into(),
         "get_decay_data" => tool_get_decay_data(db, arguments)?.into(),
         "compare_simulations" => tool_compare_simulations(db, &*materials, arguments)?.into(),
@@ -1118,11 +1127,21 @@ pub fn call_tool(
         // #571 — update-awareness. No `db` dependency; entry lives here
         // so the whole tool surface stays routed from a single dispatch
         // table.
-        "get_version_info" => tool_get_version_info()?.into(),
+        "get_version_info" => {
+            // Empty-schema tool — same strict-args rule as `list_materials`.
+            reject_unknown_keys(arguments, &[], "get_version_info")?;
+            tool_get_version_info()?.into()
+        }
         "get_changelog" => tool_get_changelog(arguments)?.into(),
         // #615 / ADR 0008 — shareable artifact for recipients outside the
         // access allowlist. Reuses the simulate result cache.
+        //
+        // Strict-args runs BEFORE `cached_sim` so a typo doesn't cost a full
+        // compute pass (#712 review). The check is here rather than inside
+        // `tool_export_result_html` because that function is called with an
+        // already-computed `StackResult`, well after the cache miss.
         "export_result_html" => {
+            super::viewer_export::validate_export_args(arguments)?;
             let result = cached_sim(db, &*materials, arguments)?;
             super::viewer_export::tool_export_result_html(db, &*materials, arguments, &result)?
         }
@@ -1206,23 +1225,27 @@ fn parse_layers(
         });
     }
 
-    // Reject a stack with NO thickness AND NO exit-energy anywhere (#712).
-    // The old code silently patched the first layer to `thickness_cm = 0.1`,
-    // which is a physics choice hidden behind a convenience — an agent that
-    // wrote `thickness_mm` and got 10× the target it meant is exactly the
-    // failure mode #712 documents.
-    if !layers.is_empty()
-        && layers
-            .iter()
-            .all(|l| l.thickness_cm.is_none() && l.energy_out_mev.is_none())
-    {
-        return Err(
-            "No layer has a resolved thickness. Each stack must specify \
-             `thickness_cm` OR `energy_out_mev` (degrader spec) on at least \
-             one layer — there is no default. Note: only `thickness_cm` is \
-             accepted; `thickness_mm` / `thickness_um` are not."
-                .to_string(),
-        );
+    // Reject any layer with neither `thickness_cm` nor `energy_out_mev`
+    // (#712 review). The old code silently patched the first layer to
+    // `thickness_cm = 0.1` if EVERY layer was unresolved, then handed the
+    // rest to `compute_stack` — where a subsequent layer without a
+    // thickness would panic on `layer.areal_density_g_cm2.unwrap()` and
+    // take the whole MCP server with it (there is no `catch_unwind` at the
+    // transport boundary; #355). Every layer needs one of the two, per
+    // layer, so the compute call never sees a half-resolved stack.
+    //
+    // `areal_density_g_cm2` is a third valid degrader spec on the Rust
+    // side, but MCP layers never carry it (parse_layers never sets it), so
+    // it doesn't enter the shape a caller can produce through this bridge.
+    for (idx, l) in layers.iter().enumerate() {
+        if l.thickness_cm.is_none() && l.energy_out_mev.is_none() {
+            return Err(format!(
+                "layers[{idx}] needs `thickness_cm` OR `energy_out_mev` \
+                 (degrader spec) — there is no default. Note: only \
+                 `thickness_cm` is accepted; `thickness_mm` / `thickness_um` \
+                 are not."
+            ));
+        }
     }
 
     Ok(layers)
@@ -1462,7 +1485,6 @@ fn build_and_run_stopping_only(
     Ok((result, projectile_str.to_string(), energy_mev, current_ma))
 }
 
-/// Keys accepted by [`tool_define_material`].
 const DEFINE_MATERIAL_KEYS: &[&str] = &["name", "density_g_cm3", "composition", "nist_compound"];
 
 fn tool_define_material(materials: &mut MaterialRegistry, args: &Value) -> Result<String, String> {
@@ -1488,7 +1510,8 @@ fn tool_define_material(materials: &mut MaterialRegistry, args: &Value) -> Resul
 
     let mut mass_fractions = HashMap::new();
     let mut total = 0.0;
-    for entry in comp_arr {
+    for (idx, entry) in comp_arr.iter().enumerate() {
+        reject_unknown_keys(entry, COMPOSITION_ITEM_KEYS, &format!("composition[{idx}]"))?;
         let elem = entry
             .get("element")
             .and_then(|v| v.as_str())
@@ -1766,7 +1789,6 @@ fn tool_list_materials(registry: &MaterialRegistry) -> Result<String, String> {
     Ok(output)
 }
 
-/// Keys accepted by [`tool_list_reaction_channels`].
 const LIST_REACTION_CHANNELS_KEYS: &[&str] = &["projectile", "target_z", "target_a"];
 
 fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
@@ -1830,7 +1852,6 @@ fn tool_list_reaction_channels(db: &dyn DatabaseProtocol, args: &Value) -> Resul
     Ok(output)
 }
 
-/// Keys accepted by [`tool_get_decay_data`].
 const GET_DECAY_DATA_KEYS: &[&str] = &["z", "a", "state"];
 
 fn tool_get_decay_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
@@ -1894,8 +1915,6 @@ fn tool_get_decay_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String
 /// `config_b`); each nested config accepts the union below.
 const COMPARE_SIMULATIONS_KEYS: &[&str] = &["config_a", "config_b"];
 
-/// Keys accepted inside `compare_simulations.config_{a,b}` — the simulate
-/// surface plus an optional display `label`.
 const COMPARE_CONFIG_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
@@ -1910,6 +1929,8 @@ const COMPARE_CONFIG_KEYS: &[&str] = &[
     "label",
 ];
 
+/// Keys accepted inside `compare_simulations.config_{a,b}` — the simulate
+/// surface plus an optional display `label`.
 fn tool_compare_simulations(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
@@ -2006,7 +2027,6 @@ fn tool_compare_simulations(
     Ok(output)
 }
 
-/// Keys accepted by [`tool_get_stack_energy_budget`].
 const GET_STACK_ENERGY_BUDGET_KEYS: &[&str] = &["projectile", "energy_mev", "current_ma", "layers"];
 
 fn tool_get_stack_energy_budget(
@@ -2062,12 +2082,12 @@ fn tool_get_stack_energy_budget(
     Ok(output)
 }
 
-/// Keys accepted by [`tool_get_stopping_power`]. `density_g_cm3` used to be
-/// an undocumented hidden argument (#713 review); now schema-visible and
-/// enforced here.
 const GET_STOPPING_POWER_KEYS: &[&str] =
     &["projectile", "material", "energies_mev", "density_g_cm3"];
 
+/// Keys accepted by [`tool_get_stopping_power`]. `density_g_cm3` used to be
+/// an undocumented hidden argument (#713 review); now schema-visible and
+/// enforced here.
 fn tool_get_stopping_power(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
@@ -2227,7 +2247,6 @@ fn select_producing_layer<'a>(
     })
 }
 
-/// Keys accepted by [`tool_get_isotope_production_curve`].
 const GET_ISOTOPE_PRODUCTION_CURVE_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
@@ -2397,7 +2416,6 @@ fn tool_get_isotope_production_curve(
     Ok(output)
 }
 
-/// Keys accepted by [`tool_list_producing_layers`].
 const LIST_PRODUCING_LAYERS_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
@@ -2610,7 +2628,6 @@ fn parse_inline_view(args: &Value) -> Result<(Option<usize>, Option<&str>), Stri
     Ok((top_n, sort_by))
 }
 
-/// Keys accepted by [`tool_get_simulation_dataset`].
 const GET_SIMULATION_DATASET_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
@@ -2784,7 +2801,6 @@ fn tool_get_simulation_dataset(
     Ok(ToolResponse { text, resources })
 }
 
-/// Keys accepted by [`tool_get_isotope_inventory`].
 const GET_ISOTOPE_INVENTORY_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
@@ -2849,7 +2865,6 @@ fn tool_get_isotope_inventory(
     Ok(ToolResponse { text, resources })
 }
 
-/// Keys accepted by [`tool_get_emission_curve`].
 const GET_EMISSION_CURVE_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
@@ -2953,12 +2968,11 @@ fn tool_get_emission_curve(
 
 // ─── #459: get_nuclide_data ────────────────────────────────────────────────
 
+const GET_NUCLIDE_DATA_KEYS: &[&str] = &["z", "a", "state"];
+
 /// Uncurated per-nuclide data lookup. Accepts `{z, a, state?}`; returns the
 /// assembled record from [`nuclide::nuclide_data`] as a pretty-printed JSON
 /// text block. See the module doc for the shape.
-/// Keys accepted by [`tool_get_nuclide_data`].
-const GET_NUCLIDE_DATA_KEYS: &[&str] = &["z", "a", "state"];
-
 fn tool_get_nuclide_data(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
     reject_unknown_keys(args, GET_NUCLIDE_DATA_KEYS, "get_nuclide_data")?;
     let z = args
@@ -3032,11 +3046,10 @@ fn parse_nuclide_arg(
     Ok((z, a, state, canonical))
 }
 
-/// `k` (specific gamma dose constant) for one nuclide, as loaded from the
-/// active library's `meta/dose_constants.parquet`.
-/// Keys accepted by [`tool_get_dose_constant`].
 const GET_DOSE_CONSTANT_KEYS: &[&str] = &["isotope", "z", "a", "state"];
 
+/// `k` (specific gamma dose constant) for one nuclide, as loaded from the
+/// active library's `meta/dose_constants.parquet`.
 fn tool_get_dose_constant(db: &dyn DatabaseProtocol, args: &Value) -> Result<String, String> {
     reject_unknown_keys(args, GET_DOSE_CONSTANT_KEYS, "get_dose_constant")?;
     let (z, a, state, iso) = parse_nuclide_arg(db, args)?;
@@ -3068,10 +3081,6 @@ will report the same — the underlying `DoseDb::dose_constant` returned None.\n
     }
 }
 
-/// Bare-source dose rate [µSv/h] from every produced isotope in a simulated
-/// stack, at `distance_cm`. Delegates the sum to [`compute_stack_dose`] so
-/// the per-isotope breakdown table and the total agree by construction.
-/// Keys accepted by [`tool_get_dose_rate`].
 const GET_DOSE_RATE_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
@@ -3086,6 +3095,9 @@ const GET_DOSE_RATE_KEYS: &[&str] = &[
     "distance_cm",
 ];
 
+/// Bare-source dose rate [µSv/h] from every produced isotope in a simulated
+/// stack, at `distance_cm`. Delegates the sum to [`compute_stack_dose`] so
+/// the per-isotope breakdown table and the total agree by construction.
 fn tool_get_dose_rate(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
@@ -3173,16 +3185,6 @@ and contribute **0** to the total: {}. The reported total is a LOWER BOUND.\n\n"
 
 // ─── #570: exact-Bateman point queries ─────────────────────────────────────
 
-/// `get_activity_at` — exact Bateman activity at caller-chosen times.
-///
-/// Reuses the cached `StackResult` (which is keyed on the physics config only —
-/// `at_s` is a view parameter and is NEVER in the cache key, so different time
-/// sets on the same config all hit the same cached simulation). Re-solves the
-/// decay chain per layer at the requested times through the same
-/// `solve_chain_at_times` the curve tools go through, so a point query at a
-/// grid time matches the curve exactly and a query between grid points is the
-/// analytic value, not an interpolation of a coarse grid.
-/// Keys accepted by [`tool_get_activity_at`].
 const GET_ACTIVITY_AT_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
@@ -3201,6 +3203,15 @@ const GET_ACTIVITY_AT_KEYS: &[&str] = &[
     "element",
 ];
 
+/// `get_activity_at` — exact Bateman activity at caller-chosen times.
+///
+/// Reuses the cached `StackResult` (which is keyed on the physics config only —
+/// `at_s` is a view parameter and is NEVER in the cache key, so different time
+/// sets on the same config all hit the same cached simulation). Re-solves the
+/// decay chain per layer at the requested times through the same
+/// `solve_chain_at_times` the curve tools go through, so a point query at a
+/// grid time matches the curve exactly and a query between grid points is the
+/// analytic value, not an interpolation of a coarse grid.
 fn tool_get_activity_at(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
@@ -3338,14 +3349,6 @@ fn parse_element_filter(db: &dyn DatabaseProtocol, args: &Value) -> Result<Optio
     Ok(Some(z))
 }
 
-/// `get_dose_rate_at` — gamma dose rate at caller-chosen times.
-///
-/// Runs `get_activity_at`'s per-layer chain re-solve, then applies k · A / r²
-/// per isotope at each time. Uses stack-summed activity per (z, a, state)
-/// (photons leave the whole stack, not one layer) — same convention as
-/// `compute_stack_dose` (`get_dose_rate`), just evaluated at a list of times
-/// instead of end-of-cooling.
-/// Keys accepted by [`tool_get_dose_rate_at`].
 const GET_DOSE_RATE_AT_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
@@ -3361,6 +3364,13 @@ const GET_DOSE_RATE_AT_KEYS: &[&str] = &[
     "distance_cm",
 ];
 
+/// `get_dose_rate_at` — gamma dose rate at caller-chosen times.
+///
+/// Runs `get_activity_at`'s per-layer chain re-solve, then applies k · A / r²
+/// per isotope at each time. Uses stack-summed activity per (z, a, state)
+/// (photons leave the whole stack, not one layer) — same convention as
+/// `compute_stack_dose` (`get_dose_rate`), just evaluated at a list of times
+/// instead of end-of-cooling.
 fn tool_get_dose_rate_at(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
@@ -3606,6 +3616,8 @@ fn tool_get_version_info() -> Result<String, String> {
     Ok(out)
 }
 
+const GET_CHANGELOG_KEYS: &[&str] = &["since_version"];
+
 /// Return the impact-classified release notes (#572).
 ///
 /// Optional `since_version` filters to releases strictly newer than that
@@ -3621,9 +3633,6 @@ fn tool_get_version_info() -> Result<String, String> {
 /// Deliberately does NOT touch the database or the network. The artifact is
 /// baked into the binary via `include_str!`; a corrupt artifact surfaces here
 /// as a JSON-RPC error rather than a panic-at-load.
-/// Keys accepted by [`tool_get_changelog`].
-const GET_CHANGELOG_KEYS: &[&str] = &["since_version"];
-
 fn tool_get_changelog(args: &Value) -> Result<String, String> {
     reject_unknown_keys(args, GET_CHANGELOG_KEYS, "get_changelog")?;
     let since = match args.get("since_version") {

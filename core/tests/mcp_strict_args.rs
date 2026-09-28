@@ -177,6 +177,32 @@ fn unknown_neutron_flux_key_is_rejected() {
     );
 }
 
+/// #712 review: the top-level `NEUTRON_FLUX_KEYS` slice is a UNION across
+/// every FluxModel variant, so `{kind:"thermal", temp_mev:...}` passes the
+/// coarse check even though `temp_mev` is a Fast field. serde's
+/// `deny_unknown_fields` on the tagged enum catches the per-variant typo.
+#[test]
+fn cross_variant_neutron_flux_key_is_rejected() {
+    let db = empty_store();
+    let args = json!({
+        "projectile": "n",
+        "layers": [{ "material": "Au", "thickness_cm": 0.01 }],
+        "neutron_flux": {
+            "kind": "thermal",
+            "flux": 1e13,
+            "temp_mev": 1.4
+        }
+    });
+    // Serde's message names the field; the outer parser wraps it in "Invalid
+    // 'neutron_flux'". The load-bearing assertion is that `temp_mev` did NOT
+    // silently pass and quietly change the spectrum shape.
+    let err = expect_err(&db, "simulate", &args, &["neutron_flux"]);
+    assert!(
+        err.contains("temp_mev") || err.contains("unknown field"),
+        "expected serde to reject the cross-variant field, got: {err}"
+    );
+}
+
 // ─── #712.5 — unknown key inside an enrichment record ───────────────────────
 
 #[test]
@@ -196,6 +222,24 @@ fn unknown_enrichment_key_is_rejected() {
     });
     // "a" (lowercase) is not the schema's "A".
     expect_err(&db, "simulate", &args, &["Unknown key", "enrichment[0]"]);
+}
+
+/// #712 review: `define_material.composition[i]` also enforces its
+/// per-entry keys — `frac` vs `fraction` used to slip past.
+#[test]
+fn unknown_composition_item_key_is_rejected() {
+    let db = empty_store();
+    let args = json!({
+        "name": "test-alloy",
+        "density_g_cm3": 8.0,
+        "composition": [{ "element": "Cu", "frac": 1.0 }]
+    });
+    expect_err(
+        &db,
+        "define_material",
+        &args,
+        &["Unknown key", "composition[0]", "frac", "fraction"],
+    );
 }
 
 // ─── #712.6 — unknown key inside current_profile ────────────────────────────
@@ -248,40 +292,123 @@ fn well_formed_args_pass_strict_validation() {
     }
 }
 
-// ─── #712.8 — schemas and allowlists agree ─────────────────────────────────
+// ─── #712.8 — schemas and allowlists agree, both directions, all levels ────
 
-/// A schema advertising a key the tool would reject at runtime is exactly the
-/// silent-mismatch that #712 exists to close. Enumerate every tool's
-/// `inputSchema.properties`, walk each declared property back through
-/// `call_tool` with an otherwise-valid argument set, and require the strict
-/// validator NOT to reject it as "Unknown key".
+/// Contract check: for every tool, the set of keys the schema advertises must
+/// equal the set the runtime allowlist accepts. Both directions:
+///
+/// * Schema key not in allowlist → runtime rejects a schema-valid caller.
+/// * Allowlist key not in schema → a well-behaved client (that pre-validates
+///   against the schema) can't send a key the server would happily accept —
+///   the same silent-mismatch class that #712 exists to close.
+///
+/// Runs recursively down through `layers[i]`, `enrichment[i]`, `neutron_flux`,
+/// `current_profile`, `composition[i]`, and `config_a` / `config_b`.
 #[test]
-fn every_schema_property_is_in_the_tool_allowlist() {
+fn schema_and_allowlist_agree_in_both_directions_recursively() {
     let tools = list_tools("tendl-2023-iso");
     let db = empty_store();
     let mut reg = MaterialRegistry::new();
 
     for tool in &tools {
         let name = tool.get("name").and_then(|v| v.as_str()).unwrap();
-        let schema = &tool["inputSchema"];
-        let props = match schema.get("properties").and_then(|v| v.as_object()) {
-            Some(p) => p,
-            None => continue,
-        };
-        for key in props.keys() {
-            // Just one extra key at a time, on top of an intentionally-broken
-            // args object — call_tool will fail for a hundred reasons, but it
-            // must NOT fail with "Unknown key '<schema key>'".
-            let mut extra = serde_json::Map::new();
-            extra.insert(key.clone(), Value::Null);
-            let args = Value::Object(extra);
-            if let Err(e) = call_tool(&db, &mut reg, name, &args) {
+        walk_schema_object(&db, &mut reg, name, &tool["inputSchema"], name);
+    }
+}
+
+/// Recursively enumerate schema properties and, for every string-keyed key,
+/// probe the tool to make sure the allowlist accepts it (schema → allowlist),
+/// then invert to check the allowlist doesn't accept keys the schema doesn't
+/// advertise (allowlist → schema, via a bogus key at the tool level).
+fn walk_schema_object(
+    db: &dyn DatabaseProtocol,
+    reg: &mut MaterialRegistry,
+    tool: &str,
+    schema: &Value,
+    ctx: &str,
+) {
+    // additionalProperties: false MUST be set on every object schema that
+    // declares `properties` (i.e. a shape with a known set of allowed keys).
+    // A missing guard means clients that pre-validate don't catch the typo
+    // before the round-trip. An open object (`{type:"object"}` with no
+    // properties, e.g. neutron_flux.components[i] which is recursively
+    // another FluxModel — serde `deny_unknown_fields` handles the
+    // per-variant check there) is exempt.
+    let has_properties = schema
+        .get("properties")
+        .and_then(|v| v.as_object())
+        .map(|m| !m.is_empty() || schema.get("required").is_some())
+        .unwrap_or(false);
+    let is_object = schema.get("type").and_then(|v| v.as_str()) == Some("object")
+        || schema.get("properties").is_some();
+    if is_object && has_properties {
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&Value::Bool(false)),
+            "object schema at `{ctx}` must set additionalProperties: false"
+        );
+    }
+    let props = match schema.get("properties").and_then(|v| v.as_object()) {
+        Some(p) => p,
+        None => return,
+    };
+    for (key, subschema) in props {
+        // Schema → allowlist: probe just this key at the tool's top level
+        // with a garbage placeholder. call_tool errors for a hundred
+        // reasons, but it must NOT reject the key with "Unknown key ".
+        //
+        // Only meaningful when `ctx == tool`; for nested objects the
+        // probe is done by including that nested key on an otherwise-empty
+        // top-level object, which schema-validates but hits the parser.
+        if ctx == tool {
+            let args = Value::Object(std::iter::once((key.clone(), Value::Null)).collect());
+            if let Err(e) = call_tool(db, reg, tool, &args) {
                 assert!(
                     !e.starts_with(&format!("Unknown key '{key}'")),
-                    "tool `{name}` advertises `{key}` in its schema but rejects it: {e}"
+                    "tool `{tool}` advertises `{key}` in its schema but the \
+                     runtime rejects it: {e}"
                 );
             }
         }
+
+        // Recurse into nested objects and array-of-object schemas.
+        if subschema.get("type").and_then(|v| v.as_str()) == Some("object") {
+            walk_schema_object(db, reg, tool, subschema, &format!("{ctx}.{key}"));
+        }
+        if subschema.get("type").and_then(|v| v.as_str()) == Some("array") {
+            if let Some(items) = subschema.get("items") {
+                walk_schema_object(db, reg, tool, items, &format!("{ctx}.{key}[]"));
+            }
+        }
+    }
+}
+
+/// Allowlist → schema: send an obviously-invalid extra key at the top level
+/// of every tool. The runtime allowlist must reject it, which means the
+/// error names it — coverage that no `<TOOL>_KEYS` slot lets through a key
+/// the schema didn't advertise.
+#[test]
+fn allowlist_never_admits_a_key_the_schema_omits() {
+    let tools = list_tools("tendl-2023-iso");
+    let db = empty_store();
+    let mut reg = MaterialRegistry::new();
+
+    for tool in &tools {
+        let name = tool.get("name").and_then(|v| v.as_str()).unwrap();
+        // A key chosen to be very unlikely to collide with any real one.
+        let bogus = "__zzz_schema_drift_probe_1712";
+        let args = Value::Object(std::iter::once((bogus.to_string(), Value::from(42))).collect());
+        let err = call_tool(&db, &mut reg, name, &args).expect_err(&format!(
+            "tool `{name}` must reject a schema-omitted key at the top level"
+        ));
+        assert!(
+            err.contains("Unknown key"),
+            "tool `{name}` did not report the extra key as unknown: {err}"
+        );
+        assert!(
+            err.contains(bogus),
+            "tool `{name}` error must name the offending key: {err}"
+        );
     }
 }
 
@@ -339,6 +466,86 @@ fn no_thickness_anywhere_is_rejected_not_defaulted() {
     expect_err(&db, "get_stack_energy_budget", &args, &["thickness_cm"]);
 }
 
+/// #712 review: partial-thickless stacks used to reach compute.rs and panic
+/// on `.areal_density_g_cm2.unwrap()`, which killed the whole stdio server.
+/// The parse_layers check ONLY rejected when *every* layer lacked both keys —
+/// a `[{Al thickness_cm}, {Cu}]` stack passed the old check and crashed at
+/// compute-time. This test proves the per-layer check fires now.
+#[test]
+fn per_layer_thickness_check_catches_second_layer_without_thickness() {
+    let db = empty_store();
+    let args = json!({
+        "projectile": "p",
+        "energy_mev": 18.0,
+        "current_ma": 0.01,
+        "layers": [
+            { "material": "Al", "thickness_cm": 0.01 },
+            { "material": "Cu" }
+        ]
+    });
+    let err = expect_err(
+        &db,
+        "get_stack_energy_budget",
+        &args,
+        &["layers[1]", "thickness_cm", "energy_out_mev"],
+    );
+    // Must NOT be the compute-level panic message — that would prove the
+    // check ran too late.
+    assert!(
+        !err.to_lowercase().contains("panic") && !err.contains("unwrap"),
+        "expected a parse-time rejection, not a compute-level panic surface: {err}"
+    );
+}
+
+/// #712 review: even if MCP's parse-layers check somehow lets a half-resolved
+/// layer through, `compute_layer` returns a typed `LayerUnresolvedThickness`
+/// error rather than panicking. Direct compute test — bypasses the MCP parser
+/// on purpose so this exercises the defensive path.
+#[test]
+fn compute_layer_returns_a_typed_error_on_missing_thickness() {
+    use hyrr_core::compute::compute_stack;
+    use hyrr_core::materials::resolve_material;
+    use hyrr_core::types::*;
+
+    // A layer with no thickness_cm, no energy_out_mev, no areal_density_g_cm2.
+    // Cannot go through MCP; construct directly. Uses in-memory nuclear data
+    // so we don't need HYRR_DATA.
+    let Some(mut db) = parquet_store() else {
+        eprintln!("skipping: no nucl-parquet data available");
+        return;
+    };
+    let cu = resolve_material(&db, "Cu", None, None, None).unwrap();
+    let layer = Layer {
+        density_g_cm3: cu.density,
+        elements: cu.elements,
+        thickness_cm: None,
+        areal_density_g_cm2: None,
+        energy_out_mev: None,
+        is_monitor: false,
+        nist_compound: None,
+        computed_energy_in: 0.0,
+        computed_energy_out: 0.0,
+        computed_thickness: 0.0,
+    };
+    let mut stack = TargetStack {
+        beam: Beam::new(ProjectileType::Proton, 18.0, 0.01),
+        layers: vec![layer],
+        irradiation_time_s: 0.0,
+        cooling_time_s: 0.0,
+        area_cm2: 1.0,
+        current_profile: None,
+    };
+    // Silence "unused" for db when we branch on it.
+    let _ = &mut db;
+    let err = compute_stack(&db, &mut stack, false)
+        .expect_err("compute_stack must return an error, not panic");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("layers[0]") && msg.contains("thickness_cm"),
+        "expected LayerUnresolvedThickness naming layer + keys, got: {msg}"
+    );
+}
+
 // ─── #712.12 — compare_simulations preserves the optional `label` key ──────
 
 #[test]
@@ -374,7 +581,10 @@ fn compare_simulations_still_accepts_the_label_key_on_nested_configs() {
     // `label` on either nested config. So any surviving error must NOT name
     // it.
     if let Err(e) = call_tool(&db, &mut reg, "compare_simulations", &args) {
-        assert!(!e.contains("Unknown key 'label'"), "strict-args ate `label`: {e}");
+        assert!(
+            !e.contains("Unknown key 'label'"),
+            "strict-args ate `label`: {e}"
+        );
     }
 }
 

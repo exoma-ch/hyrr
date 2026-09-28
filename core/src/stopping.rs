@@ -40,6 +40,15 @@ const BUNDLED_CATIMA_PROJECTILES: &[&str] =
 pub enum StoppingError {
     #[error("Layer has zero total mass — every element has zero atom fraction or zero isotopic abundance (elements: {elements})")]
     ZeroMassLayer { elements: String },
+    /// A layer reached [`compute_stack`] / [`compute_stack_stopping_only`] with
+    /// no `thickness_cm`, `energy_out_mev` or `areal_density_g_cm2` set — the
+    /// old code path `.unwrap()`ed the areal-density `Option`, which panicked
+    /// the whole process. MCP now catches this earlier (per-layer strict-args
+    /// check in `parse_layers`), but returning a typed error here means no
+    /// other binding — WASM, Tauri, a future direct caller — can crash the
+    /// engine by handing in a half-resolved layer (#712 review, #355).
+    #[error("layers[{layer_index}] has no `thickness_cm`, `energy_out_mev` or `areal_density_g_cm2` set — cannot resolve its stopping-power window")]
+    LayerUnresolvedThickness { layer_index: usize },
     #[error("No {source_name} stopping table — projectile {projectile} not in bundled set. Available: {available_pretty}")]
     NoSourceTable {
         #[serde(rename = "source")]
@@ -124,8 +133,9 @@ impl StoppingError {
                 *li = Some(layer_index);
                 *lm = Some(mat);
             }
-            // ZeroMassLayer already names its elements; no per-layer slots.
-            StoppingError::ZeroMassLayer { .. } => {}
+            // These variants already name their own layer; no per-layer slots.
+            StoppingError::ZeroMassLayer { .. }
+            | StoppingError::LayerUnresolvedThickness { .. } => {}
         }
         self
     }

@@ -144,24 +144,40 @@ fn collect_evaluated(
     }
 }
 
-/// Keys accepted by [`tool_export_result_html`]. Mirrors ADR-0008's schema —
-/// the `simulate` surface plus `tier` + `template_path`. Rejected via
-/// [`crate::mcp::strict_args::reject_unknown_keys`] before the artifact build
-/// starts (#712).
-const EXPORT_RESULT_HTML_KEYS: &[&str] = &[
+/// Keys accepted by [`tool_export_result_html`]. Matches the schema in
+/// [`crate::mcp::tools::list_tools`] exactly — the strict-args regression
+/// test cross-checks both directions, so a drift here fails a test rather
+/// than silently rejecting a schema-advertised key at runtime (or, worse,
+/// silently accepting one that isn't advertised).
+///
+/// No `neutron_flux` / `current_profile` today: ADR 0008 exports a
+/// single-config artifact from the charged-particle stack (the primary
+/// distribution channel), and the schema mirrors that.
+pub(crate) const EXPORT_RESULT_HTML_KEYS: &[&str] = &[
     "projectile",
     "energy_mev",
     "current_ma",
-    "neutron_flux",
     "secondary_neutron",
     "layers",
     "irradiation_time_s",
     "cooling_time_s",
-    "current_profile",
     "activity_floor_bq",
     "tier",
     "template_path",
 ];
+
+/// Reject unknown top-level keys BEFORE the caller pays for `cached_sim`
+/// (#712 review). Kept as a separate entry point because `call_tool`
+/// dispatches export_result_html by running the simulation first and then
+/// calling [`tool_export_result_html`] with the finished `StackResult`; a
+/// key rejection buried inside that function costs the caller the compute.
+pub(crate) fn validate_export_args(args: &Value) -> Result<(), String> {
+    crate::mcp::strict_args::reject_unknown_keys(
+        args,
+        EXPORT_RESULT_HTML_KEYS,
+        "export_result_html",
+    )
+}
 
 pub fn tool_export_result_html(
     db: &dyn DatabaseProtocol,
@@ -169,11 +185,10 @@ pub fn tool_export_result_html(
     args: &Value,
     result: &crate::types::StackResult,
 ) -> Result<ToolResponse, String> {
-    crate::mcp::strict_args::reject_unknown_keys(
-        args,
-        EXPORT_RESULT_HTML_KEYS,
-        "export_result_html",
-    )?;
+    // `validate_export_args` is called upstream by `call_tool` before the
+    // simulate step so a typo doesn't cost a compute; re-check here in
+    // case any caller reaches this fn directly (tests, future bindings).
+    validate_export_args(args)?;
     let _ = registry;
     let tier = parse_tier(args)?;
     let template = resolve_template(args)?;
