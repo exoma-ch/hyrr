@@ -215,29 +215,27 @@ pub fn run_mcp_server_with_library(data_dir: &str, library: &str, spawn_heal: bo
             // Runs on the heal thread once the tarball is extracted and
             // the routed subtree(s) have been atomically renamed into
             // place. Rebuild the store — this re-derives the on-disk
-            // fingerprint (#708) and starts fresh xs caches — and
-            // clear the memoised result cache so a query cached
-            // against the pre-heal store isn't served back.
-            match crate::db::ParquetDataStore::new(&data_dir_owned, &library_owned) {
-                Ok(new_store) => {
-                    let mut writer = match store_for_swap.write() {
-                        Ok(w) => w,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    *writer = Arc::new(new_store);
-                    drop(writer);
-                    crate::mcp::cache::clear_memory_cache();
-                }
-                Err(e) => {
-                    // Extremely unlikely at this point (the store
-                    // opened once already), but a broken parquet in
-                    // the newly-extracted lib would land here.
-                    eprintln!(
-                        "hyrr: heal thread extracted routed libraries but the store rebuild failed: {e} \
-                         — restart hyrr-mcp to pick up the new libraries."
-                    );
-                }
-            }
+            // fingerprint (which will include the new library dir once
+            // #708 lands and is what makes the `mcp::cache` disk key
+            // rotate naturally) and starts fresh xs caches — and clear
+            // the in-memory `mcp::cache` LRU so a query cached against
+            // the pre-heal store isn't served back.
+            //
+            // Returning `Err` here tells `spawn_managed_cache_heal_thread`
+            // to keep the gate CLOSED and flip to `HealPhase::Failed`
+            // instead of `Complete { added }` — a store rebuild failure
+            // must not be misreported as "library available" (reviewer's
+            // SHOULD-FIX #3).
+            let new_store = crate::db::ParquetDataStore::new(&data_dir_owned, &library_owned)
+                .map_err(|e| format!("{e}"))?;
+            let mut writer = match store_for_swap.write() {
+                Ok(w) => w,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *writer = Arc::new(new_store);
+            drop(writer);
+            crate::mcp::cache::clear_memory_cache();
+            Ok(())
         });
     }
 

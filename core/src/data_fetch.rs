@@ -1000,14 +1000,17 @@ fn tls_root_certs_from(
 ///   would otherwise hang the splash until the App.svelte wall clock
 ///   fires (5 min) with no progress.
 /// - `timeout_recv_response(60s)`: cap on waiting for HTTP response
-///   headers so a silently-hung server doesn't wedge the healer
-///   thread for the whole session.
-/// - `timeout_recv_body(30 min)`: total-body cap. ureq 3.x has no
-///   per-read stall timeout, so this is a compromise — a very slow
-///   link (400 kbps) can still finish a ~727 MB download inside this
-///   window, but a truly stuck stream can't tie up the thread forever.
-///   Callers must be able to recover from a mid-stream cut and retry
-///   (the heal thread's backoff marker handles that).
+///   headers so a silently-hung server doesn't wedge the caller for
+///   the whole session.
+/// - **No `timeout_recv_body`**: `ureq` 3.4 only exposes a total-body
+///   cap, not a per-read stall timeout. A total cap here would kill
+///   cold-start `fetch_or_die`, `hyrr fetch-data`, the desktop
+///   first-run download and `export_offline_bundle` every time on
+///   slower links — a 30-minute cap for a 727 MB tarball means every
+///   connection under ~3.2 Mbit/s fails. The heal thread uses its
+///   own agent with a much longer cap (see
+///   [`build_heal_http_client`]); the cost of a stuck detached heal
+///   thread is bounded (the gate reports `Downloading`).
 /// - Roots from [`tls_root_certs`] — the OS store by default.
 fn build_http_client() -> Result<ureq::Agent> {
     let tls = ureq::tls::TlsConfig::builder()
@@ -1018,7 +1021,33 @@ fn build_http_client() -> Result<ureq::Agent> {
         .user_agent(concat!("hyrr/", env!("CARGO_PKG_VERSION")))
         .timeout_connect(Some(std::time::Duration::from_secs(30)))
         .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
-        .timeout_recv_body(Some(std::time::Duration::from_secs(30 * 60)))
+        .tls_config(tls)
+        .build()
+        .new_agent())
+}
+
+/// Same shape as [`build_http_client`] but with a generous total-body
+/// cap so a stuck stream on the healer's detached thread cannot tie
+/// up the process forever.
+///
+/// 4 hours is enough for a ~727 MB tarball at ~400 kbps (a real, if
+/// slow, cellular link), which is well below the point where a user
+/// would consider the download healthy. Beyond that the heal thread
+/// gives up, writes the backoff marker (with a short window for
+/// transient errors), and the MCP keeps serving charged-particle
+/// requests. This cap only applies to the heal path; the shared
+/// client above has no body cap so it doesn't regress the cold-cache
+/// fetch that a user actively waits on.
+fn build_heal_http_client() -> Result<ureq::Agent> {
+    let tls = ureq::tls::TlsConfig::builder()
+        .root_certs(tls_root_certs()?)
+        .build();
+
+    Ok(ureq::Agent::config_builder()
+        .user_agent(concat!("hyrr-heal/", env!("CARGO_PKG_VERSION")))
+        .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
+        .timeout_recv_body(Some(std::time::Duration::from_secs(4 * 60 * 60)))
         .tls_config(tls)
         .build()
         .new_agent())
@@ -1076,6 +1105,20 @@ impl Drop for TmpFileGuard {
 /// library always emits unconditionally so the consumer chooses the
 /// rate.
 pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>) -> Result<()> {
+    fetch_full_tarball_with_agent(&build_http_client()?, out, progress)
+}
+
+/// Fetch-with-agent workhorse. Same behaviour as the public
+/// [`fetch_full_tarball_to_with_progress`] but the client is chosen by
+/// the caller: the shared user-facing client (no body cap — a slow
+/// interactive download must not be killed mid-stream) for the
+/// cold-cache path, and [`build_heal_http_client`] (with a generous
+/// hours-long body cap) for the detached heal thread.
+fn fetch_full_tarball_with_agent(
+    client: &ureq::Agent,
+    out: &Path,
+    progress: ProgressFn<'_>,
+) -> Result<()> {
     let url = release_url();
     progress(FetchProgress {
         stage: FetchStage::Connecting,
@@ -1083,13 +1126,11 @@ pub fn fetch_full_tarball_to_with_progress(out: &Path, progress: ProgressFn<'_>)
         bytes_total: None,
     });
 
-    let client = build_http_client()?;
-
     // Signature first, deliberately. It is ~380 bytes, and fetching it before
     // the ~800 MB payload means a missing key, an unavailable `.minisig`, or a
     // key-id mismatch fails in milliseconds instead of after a long download
     // the user then watches get deleted.
-    let signature = fetch_detached_signature(&client)?;
+    let signature = fetch_detached_signature(client)?;
     let public_key = signing_public_key()?;
     let mut verifier = TarballVerifier::start(&signature, &public_key)?;
 
@@ -1940,6 +1981,22 @@ fn fetch_full_tarball_with_seam(out: &Path, progress: ProgressFn<'_>) -> Result<
     fetch_full_tarball_to_with_progress(out, progress)
 }
 
+/// Heal-thread variant of [`fetch_full_tarball_with_seam`]: routes through
+/// [`build_heal_http_client`] (with the generous hours-long body cap) so a
+/// stuck detached-thread download cannot linger forever, without imposing
+/// a body cap on the shared client that would kill the user-facing
+/// cold-start / desktop / `hyrr fetch-data` paths on slow links.
+fn fetch_full_tarball_for_heal(out: &Path) -> Result<()> {
+    #[cfg(test)]
+    {
+        if let Some(()) = test_hooks::try_test_fetch(out)? {
+            return Ok(());
+        }
+    }
+    let client = build_heal_http_client()?;
+    fetch_full_tarball_with_agent(&client, out, &mut no_op_progress())
+}
+
 /// Ensure the given library's data is present in the cache — plus every
 /// library `library_for_projectile` might silently route to.
 ///
@@ -2023,20 +2080,24 @@ pub fn ensure_library_with_progress(library: &str, progress: ProgressFn<'_>) -> 
         );
         // Record so the async heal thread doesn't loop. The write is
         // best-effort — a filesystem-refuses cache path is caught by
-        // the missing-lib error path, not by silent retries.
-        let _ = write_heal_backoff_marker(&missing_routed, &reason);
+        // the missing-lib error path, not by silent retries. Kind is
+        // `ReleaseGap` (24 h): the tarball came down cleanly, upstream
+        // just doesn't ship this subtree yet.
+        let _ = write_heal_backoff_marker(&missing_routed, &reason, HealFailureKind::ReleaseGap);
     }
     Ok(())
 }
 
 /// Public state a [`HealHandle`] reports for a particular routed library.
+///
+/// "The heal hasn't started yet" and "the library was already on disk
+/// at boot" both surface as [`LibraryHealStatus::Available`] — that's
+/// the only distinction callers care about (may this call proceed?),
+/// and the two cases don't need a separate variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LibraryHealStatus {
     /// The library is on disk (either it always was, or a heal succeeded).
     Available,
-    /// The heal thread hasn't started yet — the resolver saw all routed
-    /// libs present at boot. This is what a fresh install produces.
-    NotHealed,
     /// The heal thread is currently fetching this library.
     Downloading,
     /// The last heal attempt for this library failed and we are in a
@@ -2202,11 +2263,43 @@ pub fn heal_handle() -> Option<&'static HealHandle> {
     HEAL_HANDLE.get()
 }
 
-/// How long a failed heal attempt sidelines itself before another
-/// process is allowed to retry. 24 h matches typical release-cut
-/// cadence — a real network glitch clears fast, a broken release keeps
-/// us from hammering GitHub.
-const HEAL_BACKOFF_WINDOW: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// Backoff window for a transient failure: network unreachable, TLS
+/// error, connection reset, HTTP 5xx, mid-stream drop, disk-full. Short
+/// enough that "restart the MCP after fixing your network" actually
+/// works — the reviewer's #4. Chosen at 15 minutes: covers a typical
+/// captive-portal / VPN-reconnect / router-reboot without blocking
+/// retries for a day, and short enough that a hyrr-mcp restart within
+/// the same working session picks up the retry.
+const HEAL_BACKOFF_WINDOW_TRANSIENT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// Backoff window for a genuine release-gap: the tarball came down and
+/// verified cleanly, but the release simply doesn't ship this routed
+/// subtree. Retrying at 15 minutes would loop-fetch 727 MB every quarter
+/// hour for a library upstream never plans to publish; 24 h matches
+/// typical release-cut cadence so we notice within a day of a fixed
+/// upstream release without wasting bandwidth.
+const HEAL_BACKOFF_WINDOW_RELEASE_GAP: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Why the last heal attempt failed. Determines the backoff window:
+/// see [`HEAL_BACKOFF_WINDOW_TRANSIENT`] vs [`HEAL_BACKOFF_WINDOW_RELEASE_GAP`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HealFailureKind {
+    /// Network / TLS / disk / HTTP-5xx: retry soon.
+    Transient,
+    /// Tarball fetched and verified but did not carry a routed subtree:
+    /// wait for upstream to publish a corrected release.
+    ReleaseGap,
+}
+
+impl HealFailureKind {
+    fn window(self) -> std::time::Duration {
+        match self {
+            HealFailureKind::Transient => HEAL_BACKOFF_WINDOW_TRANSIENT,
+            HealFailureKind::ReleaseGap => HEAL_BACKOFF_WINDOW_RELEASE_GAP,
+        }
+    }
+}
 
 /// Backoff marker path (`<cache_dir>/.heal-attempted`). Not `.complete`,
 /// so its presence never masquerades as a valid cache.
@@ -2215,20 +2308,32 @@ fn heal_backoff_marker_path() -> Result<PathBuf> {
 }
 
 /// Persist a failed-attempt marker so any process (this one and the next
-/// restart) skips the routed-lib heal fetch for [`HEAL_BACKOFF_WINDOW`].
-/// The reason is stored verbatim for the user diagnostic later.
+/// restart) skips the routed-lib heal fetch until the backoff window
+/// elapses. `kind` picks the window: [`HealFailureKind::Transient`]
+/// gives 15 minutes so "fix your network and restart" actually works,
+/// [`HealFailureKind::ReleaseGap`] gives 24 h for an absent upstream
+/// library. The reason is stored verbatim for the user diagnostic later.
 ///
 /// Format is plain `key=value` lines; forward-compatible with additional
 /// keys.
-fn write_heal_backoff_marker(missing: &[String], error: &str) -> Result<u64> {
+fn write_heal_backoff_marker(
+    missing: &[String],
+    error: &str,
+    kind: HealFailureKind,
+) -> Result<u64> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let until = now.saturating_add(HEAL_BACKOFF_WINDOW.as_secs());
+    let until = now.saturating_add(kind.window().as_secs());
+    let kind_str = match kind {
+        HealFailureKind::Transient => "transient",
+        HealFailureKind::ReleaseGap => "release_gap",
+    };
     let body = format!(
         "attempted_epoch_s={now}\n\
          retry_after_epoch_s={until}\n\
+         kind={kind_str}\n\
          missing={}\n\
          error={}\n",
         missing.join(","),
@@ -2314,7 +2419,7 @@ fn read_heal_backoff_marker() -> Option<(u64, Vec<String>, String)> {
 /// needing to plumb the handle through every call site.
 pub fn spawn_managed_cache_heal_thread<F>(on_complete: F) -> HealHandle
 where
-    F: FnOnce() + Send + 'static,
+    F: FnOnce() -> std::result::Result<(), String> + Send + 'static,
 {
     // Compute the initial missing set from the current on-disk state.
     // If nothing is missing, we still return a handle but with phase
@@ -2360,49 +2465,89 @@ where
     let _ = install_heal_handle(handle.clone());
 
     let thread_handle = handle.clone();
-    std::thread::Builder::new()
+    let spawn_result = std::thread::Builder::new()
         .name("hyrr-heal".to_string())
         .spawn(move || {
             let owned: Vec<String> = missing_str;
             let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
             match heal_missing_libraries_atomic(&refs) {
                 Ok(added) => {
-                    // Remove each successfully-installed library from
-                    // the missing set so `library_status` flips to
-                    // `Available` for in-flight tool calls.
-                    for lib in &added {
-                        thread_handle.mark_available(lib);
-                    }
                     let not_shipped: Vec<String> = owned
                         .iter()
                         .filter(|l| !added.iter().any(|a| a == *l))
                         .cloned()
                         .collect();
+
+                    // **Swap the store BEFORE opening the gate.**
+                    // Reviewer's SHOULD-FIX #3: previously the sequence
+                    // was mark_available → set_phase(Complete) →
+                    // on_complete(). Between mark_available and
+                    // on_complete, tool calls saw `library_status ==
+                    // Available` but ran against the pre-swap store
+                    // whose `NpDataStore::ensure_xs` had memoised
+                    // empty vectors for the routed libs — the fetch
+                    // completed but neutron queries still returned
+                    // empty. Swap the store first (via on_complete),
+                    // then flip the gate. If the rebuild fails we
+                    // report Failed rather than a misleading Available.
+                    if !added.is_empty() {
+                        if let Err(rebuild_err) = on_complete() {
+                            let error = format!(
+                                "routed libraries extracted but store rebuild failed: {rebuild_err}"
+                            );
+                            let until = write_heal_backoff_marker(
+                                &owned,
+                                &error,
+                                HealFailureKind::Transient,
+                            )
+                            .unwrap_or(0);
+                            thread_handle.set_backoff_until(until);
+                            thread_handle.set_phase(HealPhase::Failed {
+                                missing: owned,
+                                error,
+                            });
+                            return;
+                        }
+                    }
+                    // With the store swapped, it is now safe to open
+                    // the gate — the next tool call will see the new
+                    // store AND flip past the `Downloading` diagnostic.
+                    for lib in &added {
+                        thread_handle.mark_available(lib);
+                    }
+
                     if !not_shipped.is_empty() {
-                        // Release didn't ship one of the routed libs.
-                        // Record a backoff so we don't loop-fetch the
-                        // whole tarball on every next boot for a
-                        // library upstream doesn't publish.
+                        // Release didn't ship a routed lib. Record a
+                        // release-gap backoff so we don't loop-fetch
+                        // the whole tarball for a library upstream
+                        // doesn't publish.
                         let reason = format!(
                             "release data-{DATA_VERSION} does not include: [{}]",
                             not_shipped.join(", ")
                         );
-                        let until = write_heal_backoff_marker(&not_shipped, &reason).unwrap_or(0);
+                        let until = write_heal_backoff_marker(
+                            &not_shipped,
+                            &reason,
+                            HealFailureKind::ReleaseGap,
+                        )
+                        .unwrap_or(0);
                         thread_handle.set_backoff_until(until);
                     }
                     thread_handle.set_phase(HealPhase::Complete {
                         added: added.clone(),
                     });
-                    // Only swap the store if we actually gained coverage
-                    // — a zero-added completion (release lacked every
-                    // routed lib) leaves nothing new to see.
-                    if !added.is_empty() {
-                        on_complete();
-                    }
                 }
                 Err(e) => {
                     let error = e.to_string();
-                    let until = write_heal_backoff_marker(&owned, &error).unwrap_or(0);
+                    // A fetch/extract failure is transient by default —
+                    // network glitches, HTTP 5xx, disk write errors,
+                    // mid-stream drops. A short window means a
+                    // hyrr-mcp restart after fixing the local problem
+                    // actually retries, which the 24 h window would
+                    // stall (reviewer's SHOULD-FIX #4).
+                    let until =
+                        write_heal_backoff_marker(&owned, &error, HealFailureKind::Transient)
+                            .unwrap_or(0);
                     thread_handle.set_backoff_until(until);
                     thread_handle.set_phase(HealPhase::Failed {
                         missing: owned,
@@ -2410,8 +2555,41 @@ where
                     });
                 }
             }
-        })
-        .expect("spawn hyrr-heal thread");
+        });
+
+    if let Err(e) = spawn_result {
+        // Spawning a thread is essentially guaranteed to succeed on any
+        // modern Linux / macOS / Windows target, but if the OS is out
+        // of PIDs or the ulimit is unusually tight, we surface it as
+        // a `Failed` phase (with a 15-minute transient backoff) rather
+        // than crashing the whole MCP. Reviewer's nit #6.
+        let error = format!("could not spawn hyrr-heal thread: {e}");
+        let until = write_heal_backoff_marker(
+            &handle
+                .inner
+                .missing
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            &error,
+            HealFailureKind::Transient,
+        )
+        .unwrap_or(0);
+        handle.set_backoff_until(until);
+        handle.set_phase(HealPhase::Failed {
+            missing: handle
+                .inner
+                .missing
+                .lock()
+                .unwrap()
+                .iter()
+                .cloned()
+                .collect(),
+            error,
+        });
+    }
 
     handle
 }
@@ -2427,6 +2605,18 @@ where
 /// removal / rename (`merge_dir_into`, used by `install_tarball_atomic`,
 /// removes-and-renames each meta / stopping entry — safe on cold cache,
 /// unsafe with live consumers).
+///
+/// **Short-session download loss** (reviewer's SHOULD-FIX #5): if the
+/// MCP host process exits mid-download, the [`TmpFileGuard`] deletes
+/// the partial `.tar.zst` and the next launch starts from scratch. A
+/// user on a link so slow the download can't finish inside one
+/// session never converges. Resuming with HTTP `Range` into the same
+/// staged file is the fix; it isn't in this PR because a) the release
+/// host (GitHub Releases → S3 redirect) has to honour range requests
+/// (verified to; leaving the check to a follow-up because it needs
+/// its own regression coverage), and b) restarting inside the
+/// 15-minute transient backoff still retries automatically. Follow-up
+/// tracked in the PR description.
 ///
 /// **Locking.** Acquires the same cache lock as `ensure_library`, so a
 /// concurrent `ensure_library` or a second heal thread can't extract on
@@ -2458,7 +2648,7 @@ fn heal_missing_libraries_atomic(missing: &[&str]) -> Result<Vec<String>> {
 
     let tmp = cache_root()?.join(tarball_filename());
     let _guard = TmpFileGuard::new(tmp.clone());
-    fetch_full_tarball_with_seam(&tmp, &mut no_op_progress())?;
+    fetch_full_tarball_for_heal(&tmp)?;
 
     let lib_prefixes: Vec<String> = still_missing
         .iter()
@@ -5145,7 +5335,12 @@ mod tests {
 
         // NOW write the marker into the same cache_dir.
         let missing = vec![NEUTRON_LIBRARY.to_string(), HEAVY_ION_LIBRARY.to_string()];
-        let until = write_heal_backoff_marker(&missing, "simulated network drop").unwrap();
+        let until = write_heal_backoff_marker(
+            &missing,
+            "simulated network drop",
+            HealFailureKind::Transient,
+        )
+        .unwrap();
         let cd = cache_dir().unwrap();
         assert!(cd.join(".heal-attempted").exists());
         let (retry, parsed_missing, err) =
@@ -5157,7 +5352,7 @@ mod tests {
 
         // Spawn the heal thread — with a fresh marker on disk it must
         // NOT retry, and instead report `BackoffActive`.
-        let handle = spawn_managed_cache_heal_thread(|| {});
+        let handle = spawn_managed_cache_heal_thread(|| Ok(()));
         match handle.phase() {
             HealPhase::BackoffActive { until_epoch_s, .. } => {
                 assert_eq!(until_epoch_s, until);
@@ -5192,7 +5387,7 @@ mod tests {
         let broken = td.path().join("does-not-exist.tar.zst");
         test_hooks::arm_fetch_source(broken);
 
-        let handle = spawn_managed_cache_heal_thread(|| {});
+        let handle = spawn_managed_cache_heal_thread(|| Ok(()));
         // Wait for the heal thread to finish. Poll instead of a fixed
         // sleep so a slow CI host doesn't flake this test.
         for _ in 0..200 {

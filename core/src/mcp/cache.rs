@@ -101,16 +101,25 @@ impl Lru {
     }
 }
 
-/// Drop every cached simulation result from the in-memory LRU. The
-/// on-disk cache is left alone — its keys already carry the data
-/// fingerprint (#708), so a subsequent store swap will miss on disk
-/// and recompute.
+/// Drop every cached simulation result from the in-memory LRU.
 ///
 /// Called by the MCP transport after the background heal thread
 /// (#709) installs previously-missing routed libraries. Any result
 /// cached before the heal was computed against a store whose
 /// `NpDataStore::ensure_xs` memoised misses for those libs; keeping
-/// those results would defeat the heal.
+/// those in-memory results would defeat the heal.
+///
+/// The on-disk tier is a **separate** concern. In this branch its key
+/// (see `hash_config` below) does **not** carry the data fingerprint,
+/// so a result cached during the heal window persists across a store
+/// swap and would be served forever. PR #717 lands the fingerprint in
+/// the disk key so the swap invalidates disk entries naturally — until
+/// it does, callers that need to bypass the disk cache should either
+/// set `HYRR_MCP_NO_DISK_CACHE=1` or let the tool-layer routed-library
+/// gate (`routed_library_unavailable_diagnostic`) short-circuit BEFORE
+/// the compute lands in the cache at all. That is what the current
+/// #709 gate does: routed-lib-unavailable calls return a diagnostic
+/// before `cached_sim` runs, so the stale result never gets written.
 pub fn clear_memory_cache() {
     cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
