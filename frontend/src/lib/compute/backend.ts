@@ -64,12 +64,29 @@ export function pickBackendInitError(
 ): unknown | null {
   if (tauriErr != null) {
     if (tauriErr instanceof Error && wasmErr != null) {
-      Object.defineProperty(tauriErr, "cause", {
-        value: wasmErr,
-        enumerable: false,
-        configurable: true,
-        writable: true,
-      });
+      const existing = (tauriErr as { cause?: unknown }).cause;
+      // Preserve any existing cause on the Tauri error — some Tauri
+      // command errors already carry a chained cause (e.g. an inner
+      // FetchError from Rust). Overwriting it would drop the deeper
+      // signal in favour of the WASM-fallback message. If both are
+      // present, wrap the WASM error so both chains are reachable via
+      // `.cause` walks (Node's util.inspect and DevTools both traverse).
+      // (PR #715 re-review nit)
+      const chained = existing != null
+        ? Object.assign(new Error("WASM fallback also failed"), {
+            cause: wasmErr,
+          })
+        : wasmErr;
+      if (existing != null) {
+        (tauriErr as { cause?: unknown; wasmFallbackCause?: unknown }).wasmFallbackCause = chained;
+      } else {
+        Object.defineProperty(tauriErr, "cause", {
+          value: chained,
+          enumerable: false,
+          configurable: true,
+          writable: true,
+        });
+      }
     }
     return tauriErr;
   }

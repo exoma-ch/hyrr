@@ -63,6 +63,28 @@ describe("pickBackendInitError — rethrow policy (#689)", () => {
     expect((rethrown as Error).cause).toBe(wasmErr);
   });
 
+  it("desktop: preserves an EXISTING .cause on the Tauri error (no overwrite)", () => {
+    // PR #715 re-review nit: if the Tauri error already carries a chain
+    // (e.g. an inner Rust FetchError), overwriting `.cause` would drop
+    // that deeper signal in favour of a "hyrr-wasm not installed"
+    // message. Instead the WASM error goes on `.wasmFallbackCause` so
+    // both chains are reachable. The primary `.cause` is left alone.
+    const innerFetchError = new Error("Rust: HTTP 403 on bundle download");
+    const tauriErr = Object.assign(new Error("init_data_store failed"), {
+      cause: innerFetchError,
+    });
+    const wasmErr = new Error("hyrr-wasm not found in bundle");
+    const rethrown = pickBackendInitError(tauriErr, wasmErr);
+    expect(rethrown).toBe(tauriErr);
+    // Existing chain preserved.
+    expect((rethrown as { cause?: unknown }).cause).toBe(innerFetchError);
+    // WASM error still reachable — support triage can walk both chains.
+    const wasmFallbackCause = (rethrown as { wasmFallbackCause?: Error })
+      .wasmFallbackCause;
+    expect(wasmFallbackCause).toBeInstanceOf(Error);
+    expect(wasmFallbackCause?.cause).toBe(wasmErr);
+  });
+
   it("desktop, Tauri-only failure: rethrows Tauri unchanged", () => {
     // No WASM error is legitimate too (rare — happens if the WASM
     // dynamic import short-circuits before its catch). Still hand

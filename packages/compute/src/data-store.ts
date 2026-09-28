@@ -292,12 +292,25 @@ async function fetchParquet(url: string, source: string): Promise<ArrayBuffer> {
       humanMessage: `Failed to load ${source} (HTTP ${response.status} from ${url})`,
     });
   }
-  // 200 OK but the wrong kind of body: an HTML SSO page (ETH's WAYF gate
-  // returns 200 with HTML), or a Vite dev/preview SPA fallback for a
-  // missing file. Both look identical downstream — hyparquet would fail
-  // with an opaque "invalid parquet" error and no operator-visible signal
-  // for either root cause. Detect at this layer so `UnexpectedContent`
-  // carries the actual remedy through to `FetchErrorCard`. (#689 / #684)
+  // 200 OK but the wrong kind of body. Two independent detectors, tried
+  // in order:
+  //
+  //   1. Content-Type of `text/html` / `text/xml` — the ETH WAYF gate
+  //      returns 200 with HTML, and Vite dev/preview's SPA fallback for
+  //      a missing file does the same. This is the fast path.
+  //
+  //   2. PAR1 magic-byte check on the body itself — Parquet files begin
+  //      AND end with the ASCII bytes `PAR1` (Apache Parquet v2 spec).
+  //      A body with no Content-Type header, or `application/octet-stream`
+  //      on a mis-configured server, still falls through content-type
+  //      sniffing but fails the magic check. Both cases were previously
+  //      surfacing as an opaque hyparquet "invalid parquet" error. (#689
+  //      PR #715 re-review)
+  //
+  // Both arms route to the same `UnexpectedContent` variant so
+  // FetchErrorCard renders the actual remedy — sign-in guidance for
+  // the auth-gate case is delivered separately by the AuthGate branch
+  // (SW-marked 502) and by the scheduler's `sw`-aware degrade logic.
   const contentType = response.headers.get("Content-Type") ?? "";
   if (/^\s*text\/(html|xml)/i.test(contentType)) {
     throw DataFetchError.unexpectedContent({
@@ -311,7 +324,36 @@ async function fetchParquet(url: string, source: string): Promise<ArrayBuffer> {
         `or verify the file is present. (#689)`,
     });
   }
-  return response.arrayBuffer();
+  const buffer = await response.arrayBuffer();
+  if (!hasParquetMagic(buffer)) {
+    throw DataFetchError.unexpectedContent({
+      url,
+      source,
+      contentType: contentType || "(no Content-Type)",
+      humanMessage:
+        `Expected a Parquet file at ${url} but the body does not carry the ` +
+        `PAR1 magic bytes. The body is likely a placeholder or wrong file. ` +
+        `Verify the file is present and served with the correct MIME type. ` +
+        `(#689)`,
+    });
+  }
+  return buffer;
+}
+
+/** Parquet v2 magic: the ASCII bytes `PAR1` (0x50 0x41 0x52 0x31) appear
+ *  at both the head and tail of every conformant file. Cheap to check
+ *  and correctly rejects HTML fallbacks that slip past a content-type
+ *  sniff. Kept intentionally strict — a partial parquet with only one
+ *  magic present is corrupt too. (#689 PR #715 re-review) */
+function hasParquetMagic(buffer: ArrayBuffer): boolean {
+  if (buffer.byteLength < 8) return false;
+  const head = new Uint8Array(buffer, 0, 4);
+  const tail = new Uint8Array(buffer, buffer.byteLength - 4, 4);
+  // 0x50 0x41 0x52 0x31 = "PAR1"
+  return (
+    head[0] === 0x50 && head[1] === 0x41 && head[2] === 0x52 && head[3] === 0x31 &&
+    tail[0] === 0x50 && tail[1] === 0x41 && tail[2] === 0x52 && tail[3] === 0x31
+  );
 }
 
 async function readParquetRows(
@@ -660,14 +702,24 @@ export class DataStore implements DatabaseProtocol {
         } catch (err) {
           // 404 is the expected "no ENSDF file for this element" case
           // (see method docstring) — keep the "attempted" flag set so we
-          // don't re-fetch and proceed with an empty bucket. Every other
-          // error is load-bearing; un-flag so a retry after the user
-          // fixes their connection re-fetches instead of short-
-          // circuiting the "already loaded" check. Auth-gate hits also
-          // propagate: on the emissions path they mean the whole `meta/`
-          // tree is gated too, same remedy as the xs case (#684). (#689)
-          if (err instanceof DataFetchError && err.status === 404) {
-            return;
+          // don't re-fetch and proceed with an empty bucket.
+          //
+          // `UnexpectedContent` on the emissions path is treated the same
+          // way: under `vite preview` (and any other static server that
+          // returns the SPA shell for a missing file), a missing per-
+          // element parquet arrives as a 200 HTML — rendering it as
+          // "sign in" would be a lie. The auth-gate case, which the
+          // reviewer flagged (PR #715 re-review), is signalled via
+          // `AuthGateInterceptedError` (the SW's marked 502), not this
+          // arm; that error keeps propagating so the scheduler's degrade
+          // path can show the right guidance. Every other error is
+          // load-bearing; un-flag so a retry after the user fixes their
+          // connection re-fetches instead of short-circuiting the
+          // "already loaded" check.
+          if (err instanceof DataFetchError) {
+            if (err.status === 404 || err.payload.variant === "UnexpectedContent") {
+              return;
+            }
           }
           this.emissionLoadedSymbols.delete(symbol);
           throw err;

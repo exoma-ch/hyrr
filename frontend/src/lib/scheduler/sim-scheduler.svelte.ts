@@ -27,11 +27,11 @@ import {
   type SimStatus,
 } from "../stores/results.svelte";
 import { parseComputeError } from "../compute/parse-error";
-import { parseFetchError } from "../utils/parse-fetch-error";
 import { trace, newTraceId } from "../trace/trace";
 import { configHash } from "./config-hash";
-import { DataStore, DataFetchError } from "@hyrr/compute";
+import { DataStore } from "@hyrr/compute";
 import type { SimulationConfig, SimulationResult } from "@hyrr/compute";
+import { classifyEmissionsFailure } from "./degrade-emissions";
 import {
   initBackend,
   computeStackBackend,
@@ -204,13 +204,21 @@ async function runSimulation(hash: string): Promise<void> {
     // a correct result on an emissions network hiccup than to keep the
     // result and surface the failure alongside it as a warning banner.
     //
-    // So: catch `DataFetchError` narrowly here, route it through
-    // `parseFetchError` / the shared `FetchErrorCard` render surface via
-    // the `dataWarning` slot, and still commit the successful result.
-    // Any other throw (a real bug in the emissions aggregation, an
-    // unexpected exception) still propagates to the outer catch and
-    // reports as a run failure — the degrade path is scoped to typed
-    // fetch failures, not to defects.
+    // The degrade classifier (`classifyEmissionsFailure`) covers three
+    // typed cases the reviewer specifically flagged in the re-review:
+    //   1. `DataFetchError` — HTTP failures, network rejections, the
+    //      PAR1-magic-byte check, EmptyIndex — routed via parseFetchError.
+    //   2. `AuthGateInterceptedError` — the SW's 502 with
+    //      `X-Hyrr-Cache-Guard: auth-gate` on a redirected response,
+    //      i.e. the ETH deploy signed-out case. Degraded with sign-in
+    //      guidance so the user isn't shown "Unknown" and doesn't lose
+    //      the successful compute.
+    //   3. non-parquet body without text/html header — caught inside
+    //      `fetchParquet` by the PAR1 magic-byte check and rethrown as
+    //      `UnexpectedContent`, so it lands on case 1.
+    // Any other throw (a real bug in the aggregation, an unexpected
+    // exception) still propagates to the outer catch and reports as a
+    // run failure — the degrade path is scoped to typed fetch failures.
     if (dataStore) {
       const zValues = new Set<number>();
       for (const layer of simResult.layers) {
@@ -221,12 +229,16 @@ async function runSimulation(hash: string): Promise<void> {
       try {
         await dataStore.ensureEmissionsByZ([...zValues]);
       } catch (emErr) {
-        if (emErr instanceof DataFetchError) {
+        const classified = classifyEmissionsFailure(emErr);
+        if (classified.degrade) {
           trace.event(traceId, "emissions.load_failed", {
-            source: emErr.source,
-            variant: emErr.payload.variant,
+            kind: classified.kind,
+            variant:
+              classified.warning.kind === "FetchError"
+                ? classified.warning.variant
+                : "unknown",
           });
-          setDataWarning(parseFetchError(emErr));
+          setDataWarning(classified.warning);
         } else {
           throw emErr;
         }

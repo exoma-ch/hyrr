@@ -32,15 +32,21 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-// The fetch stub encodes each URL's rows as a UTF-8 JSON body; the mocked
-// `parquetRead` decodes them back and hands them to `onComplete`. Encoding
-// per-response — not a global slot — keeps the mapping race-free under
-// Promise.all, since each Response owns its own ArrayBuffer.
+// The fetch stub encodes each URL's rows as `PAR1<utf8 json>PAR1` — the
+// real Parquet magic-byte wrapper the store's PAR1 check (added in
+// PR #715 re-review) demands, plus a UTF-8 JSON middle the mocked
+// `parquetRead` decodes. Encoding per-response — not a global slot —
+// keeps the mapping race-free under Promise.all, since each Response
+// owns its own ArrayBuffer.
+const PAR1 = new Uint8Array([0x50, 0x41, 0x52, 0x31]);
 vi.mock("hyparquet", () => {
   return {
     parquetRead: vi.fn(
       async (opts: { file: ArrayBuffer; onComplete: (rows: unknown[]) => void }) => {
-        const text = new TextDecoder().decode(new Uint8Array(opts.file));
+        // Strip the PAR1 header/footer that our fetch stub adds.
+        const view = new Uint8Array(opts.file);
+        const middle = view.slice(4, view.byteLength - 4);
+        const text = new TextDecoder().decode(middle);
         const rows = text.length ? (JSON.parse(text) as unknown[]) : [];
         opts.onComplete(rows);
       },
@@ -55,6 +61,9 @@ interface StubHandler {
   status: number;
   /** Rows the mocked `parquetRead` will emit for this fetch. */
   rows?: unknown[];
+  /** Bypass the PAR1-wrapped default body: use these raw bytes as-is.
+   *  For tests of the PAR1-magic-byte / content-type detection. */
+  rawBody?: Uint8Array;
   /** Extra response headers (auth-gate marker etc.). */
   headers?: Record<string, string>;
 }
@@ -78,7 +87,20 @@ function installFetch(handlers: StubHandlers): void {
     if (!key) throw new Error(`unexpected fetch: ${s}`);
     const h = handlers[key];
     if (h.status >= 200 && h.status < 300) {
-      const body = new TextEncoder().encode(JSON.stringify(h.rows ?? []));
+      // Bytes: PAR1 + <UTF-8 JSON of rows> + PAR1 — the magic-wrapped
+      // shape the store's PAR1 check accepts. A per-handler override
+      // via `rawBody` bypasses this wrapping for tests that WANT to
+      // send a non-parquet body (e.g. HTML SPA fallback).
+      let body: Uint8Array;
+      if (h.rawBody != null) {
+        body = h.rawBody;
+      } else {
+        const json = new TextEncoder().encode(JSON.stringify(h.rows ?? []));
+        body = new Uint8Array(4 + json.byteLength + 4);
+        body.set(PAR1, 0);
+        body.set(json, 4);
+        body.set(PAR1, 4 + json.byteLength);
+      }
       return new Response(body, { status: h.status, headers: h.headers });
     }
     return new Response("", { status: h.status, headers: h.headers });
@@ -278,9 +300,7 @@ describe("DataStore.init — load-bearing failures (#689)", () => {
     const handlers = happyDefaults();
     handlers["/stopping/PSTAR.parquet"] = {
       status: 200,
-      // rows unused: the mocked parquetRead never runs because
-      // fetchParquet throws on the content-type check first.
-      rows: [],
+      rawBody: new TextEncoder().encode("<!doctype html><html><body>SPA</body></html>"),
       headers: { "Content-Type": "text/html; charset=utf-8" },
     };
     installFetch(handlers);
@@ -294,6 +314,38 @@ describe("DataStore.init — load-bearing failures (#689)", () => {
     }
     expect(err).toBeInstanceOf(DataFetchError);
     expect((err as DataFetchError).payload.variant).toBe("UnexpectedContent");
+  });
+
+  it("throws UnexpectedContent on a non-parquet body with no Content-Type (PAR1 magic-byte guard)", async () => {
+    // PR #715 re-review blocker: a 200 with `application/octet-stream`
+    // or no Content-Type header slipped through the earlier text/html
+    // sniff, hyparquet threw an opaque "invalid parquet" and the
+    // scheduler's outer catch classified it as `kind: "Unknown"` — the
+    // exact silent-wrong-answer regression #689 was filed to prevent.
+    // The PAR1-magic-byte check catches this class regardless of
+    // content-type; both first four bytes and last four must be `PAR1`.
+    const handlers = happyDefaults();
+    handlers["/stopping/PSTAR.parquet"] = {
+      status: 200,
+      rawBody: new TextEncoder().encode("this is definitely not a parquet"),
+      // No Content-Type — the text/html sniff misses this one, so the
+      // PAR1 check is the only line of defence.
+    };
+    installFetch(handlers);
+
+    const store = new DataStore("https://example.com/data/parquet");
+    let err: unknown;
+    try {
+      await store.init();
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(DataFetchError);
+    expect((err as DataFetchError).payload.variant).toBe("UnexpectedContent");
+    // The message names PAR1 so a debugger who sees this in the wild
+    // knows the check is the reason — not a mystery hyparquet error.
+    expect(((err as DataFetchError).payload as { message: string }).message)
+      .toContain("PAR1");
   });
 
   it("dose_constants 404 is optional — init still succeeds", async () => {
@@ -345,5 +397,24 @@ describe("DataStore.ensureEmissions — load-bearing failures (#689)", () => {
     const store = new DataStore("https://example.com/data/parquet");
     await store.init();
     await expect(store.ensureEmissions(["Xx"])).resolves.toBeUndefined();
+  });
+
+  it("treats UnexpectedContent (SPA fallback for a missing file) as a missing element", async () => {
+    // Under `vite preview` a missing per-element emission parquet gets
+    // served as the SPA shell — 200 with `text/html`. Rendering that as
+    // "sign in and refresh" would be a false alarm; the emissions path
+    // treats it the same as a 404 (missing optional file). (#689 PR
+    // #715 re-review nit)
+    const handlers = happyDefaults();
+    handlers["/meta/ensdf/emissions/Og.parquet"] = {
+      status: 200,
+      rawBody: new TextEncoder().encode("<!doctype html><html/>"),
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    };
+    installFetch(handlers);
+
+    const store = new DataStore("https://example.com/data/parquet");
+    await store.init();
+    await expect(store.ensureEmissions(["Og"])).resolves.toBeUndefined();
   });
 });
