@@ -126,6 +126,51 @@ class TestFluxSpectra:
         # Integral should be close to total_flux (within grid resolution)
         np.testing.assert_allclose(integral, 1e12, rtol=0.05)
 
+    def test_thermal_1_over_v_fold_matches_westcott(self) -> None:
+        """Regression guard for #711: Maxwellian shape is a *flux*, not a density.
+
+        For a 1/v absorber ``sigma(E) = sigma0 * sqrt(E0/E)`` the analytic
+        Westcott flux-average is ``sigma0 * (sqrt(pi)/2) * sqrt(E0/kT)``.
+        Using the density shape ``sqrt(E) * exp(-E/kT)`` as a flux would
+        give ``sigma0 * (2/sqrt(pi)) * sqrt(E0/kT)`` — a factor
+        ``4/pi ~ 1.273`` too high.
+
+        Two cases exercise the ``sqrt(E0/kT)`` scaling:
+          * kT = E0        -> average = sigma0 * sqrt(pi)/2
+          * kT = 4 * E0    -> average = sigma0 * sqrt(pi)/4
+        """
+        sigma0_mb = 100_000.0  # 100 b
+        E0_MeV = 2.53e-8  # 0.0253 eV
+        # Tabulate sigma(E) so np.interp is linear-exact where phi is non-
+        # zero — 1/v is monotone and the flux-average integral only cares
+        # about the low-eV region.
+        xs_energies_MeV = np.geomspace(E0_MeV * 1e-5, 20.0, 200_000)
+        xs_mb = sigma0_mb * np.sqrt(E0_MeV / xs_energies_MeV)
+        for kT_eV_case, factor in [(0.0253, 1.0), (4 * 0.0253, 0.5)]:
+            flux = ThermalFlux(total_flux=1e14, kT_eV=kT_eV_case)
+            avg_mb = flux_averaged_xs(
+                xs_energies_MeV,
+                xs_mb,
+                flux,
+                n_points=8000,
+                E_min_MeV=E0_MeV * 1e-4,
+                E_max_MeV=E0_MeV * 200 * (kT_eV_case / 0.0253),
+            )
+            expected = sigma0_mb * (np.sqrt(np.pi) / 2.0) * factor
+            # 3 % tolerance covers np.interp's linear-in-E fit over a
+            # multi-decade sigma; the shape bug would put the ratio at
+            # ~1.273 (or ~0.786 for the swap direction), both far outside.
+            np.testing.assert_allclose(
+                avg_mb,
+                expected,
+                rtol=0.03,
+                err_msg=(
+                    f"1/v Westcott fold at kT={kT_eV_case} eV: got {avg_mb:.4g} mb, "
+                    f"want {expected:.4g} mb; ThermalFlux.phi must be the *flux* "
+                    "shape E*exp(-E/kT)/kT^2, not the density shape (#711)."
+                ),
+            )
+
     # -- WeisskopfFlux ------------------------------------------------------
 
     def test_weisskopf_nonnegative(self) -> None:

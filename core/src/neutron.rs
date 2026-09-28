@@ -37,7 +37,21 @@ pub const KT_THERMAL_MEV: f64 = 2.53e-8;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FluxModel {
-    /// Maxwellian thermal: `φ(E) = flux·(2/√π)·√E/kT^{3/2}·exp(−E/kT)`.
+    /// Maxwellian thermal *flux* spectrum: `φ(E) = flux·(E/kT²)·exp(−E/kT)`
+    /// — i.e. `v·n(E)` for a Maxwell–Boltzmann *density* `n(E) ∝ √E·e^{−E/kT}`
+    /// (the extra factor of √E comes from `v ∝ √E`). Normalised so
+    /// `∫φ dE == flux` (convention (a) in the schema: `flux` is the **total**
+    /// integrated Maxwellian flux, n/cm²/s).
+    ///
+    /// For a 1/v absorber `σ(E) = σ₀·√(E₀/E)` this gives the closed form
+    /// `∫σφ dE = σ₀·(√π/2)·√(E₀/kT)·flux`; at room-temp equilibrium
+    /// (`kT = E₀ = 0.0253 eV`) that reduces to `σ₀·(√π/2)·flux` and the
+    /// equivalent Westcott 2200 m/s flux is `φ₀ = flux·√π/2 ≈ 0.886·flux`.
+    ///
+    /// The earlier form `φ ∝ √E·e^{−E/kT}` was the Maxwell–Boltzmann *density*
+    /// shape used as a flux; folding it against a 1/v cross-section over-
+    /// weighted low energies and over-predicted thermal (n,γ) by a factor
+    /// `4/π ≈ 1.273` (issue #711).
     Thermal { flux: f64, kt_mev: f64 },
     /// 1/E epithermal between `e_min`..`e_max` (MeV): `φ(E)=flux/(E·ln(e_max/e_min))`.
     Epithermal {
@@ -69,12 +83,16 @@ impl FluxModel {
     pub fn phi(&self, energies_mev: &[f64]) -> Vec<f64> {
         match self {
             FluxModel::Thermal { flux, kt_mev } => {
-                let norm = flux * 2.0 / std::f64::consts::PI.sqrt() / kt_mev.powf(1.5);
+                // Maxwellian *flux* shape φ(E) ∝ E·e^{−E/kT} (i.e. v·n(E) for
+                // the density n(E) ∝ √E·e^{−E/kT}); ∫E·e^{−E/kT} dE = kT², so
+                // the norm 1/kT² keeps ∫φ dE == flux. Fixing #711: the previous
+                // √E·e^{−E/kT} density shape over-predicted 1/v capture by 4/π.
+                let kt2 = kt_mev * kt_mev;
                 energies_mev
                     .iter()
                     .map(|&e| {
                         if e > 0.0 {
-                            norm * e.sqrt() * (-e / kt_mev).exp()
+                            flux * (e / kt2) * (-e / kt_mev).exp()
                         } else {
                             0.0
                         }
@@ -399,6 +417,47 @@ mod tests {
         let got = fold_cross_section(&xs_e, &xs, &f, GRID);
         let want = 100.0 * MILLIBARN_CM2 * 1.0e10;
         assert!((got / want - 1.0).abs() < 1e-9, "got {got}, want {want}");
+    }
+
+    /// Regression guard for #711 — the *Maxwellian shape convention*. A pure
+    /// 1/v absorber has an analytic Westcott flux-average
+    /// `<σ>_φ = σ₀·(√π/2)·√(E₀/kT)`. Using the Maxwell–Boltzmann *density*
+    /// shape (`√E·e^{−E/kT}`) as a flux would instead yield
+    /// `σ₀·(2/√π)·√(E₀/kT)`, a factor `4/π ≈ 1.273` too high.
+    ///
+    /// Two temperatures pin both the shape AND the `√(E₀/kT)` scaling:
+    /// * `kT = E₀` → `<σ> = σ₀·√π/2`
+    /// * `kT = 4·E₀` → `<σ> = σ₀·√π/4`
+    ///
+    /// It fails on the pre-#711 density-shape formula (ratio ~1.26–1.27, well
+    /// outside the 0.5 % band).
+    #[test]
+    fn thermal_1_over_v_fold_matches_westcott_closed_form() {
+        // σ(E) = σ₀·√(E₀/E), tabulated across the whole thermal support so the
+        // log-log interpolant is exact. σ₀ = 100 b at E₀ = KT_THERMAL_MEV.
+        let e0 = KT_THERMAL_MEV;
+        let sigma0_mb: f64 = 100_000.0; // 100 b in millibarn
+                                        // xs table spans well past 4·kT support so `interp_log_log` never
+                                        // clamps to zero within the flux's integration grid.
+        let xs_e: Vec<f64> = geomspace(e0 * 1e-4, e0 * 400.0, 2000);
+        let xs_mb: Vec<f64> = xs_e.iter().map(|&e| sigma0_mb * (e0 / e).sqrt()).collect();
+        for &kt in &[e0, 4.0 * e0] {
+            let flux = FluxModel::Thermal {
+                flux: 1.0e14,
+                kt_mev: kt,
+            };
+            let avg = flux_averaged_xs(&xs_e, &xs_mb, &flux, 4000);
+            let want_cm2 =
+                sigma0_mb * MILLIBARN_CM2 * std::f64::consts::PI.sqrt() * 0.5 * (e0 / kt).sqrt();
+            assert!(
+                (avg / want_cm2 - 1.0).abs() < 5e-3,
+                "1/v Westcott fold at kT={kt:.4e} MeV: got {avg:.6e}, \
+                 want {want_cm2:.6e} (ratio {ratio:.6}); the shape must be the \
+                 Maxwellian *flux* E·e^{{−E/kT}}, not the density \
+                 √E·e^{{−E/kT}} — see issue #711.",
+                ratio = avg / want_cm2
+            );
+        }
     }
 
     #[test]
