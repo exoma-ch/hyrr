@@ -343,8 +343,8 @@ fn different_at_s_reuses_the_cached_stack_result() {
     let args_a = build(json!([100.0, 500.0]));
     let args_b = build(json!([7237.0, 8000.0, 9000.0]));
 
-    let id_a = sim_id(&args_a, "tendl-2023-iso", "");
-    let id_b = sim_id(&args_b, "tendl-2023-iso", "");
+    let id_a = sim_id(&args_a, "tendl-2023-iso", "", "");
+    let id_b = sim_id(&args_b, "tendl-2023-iso", "", "");
     assert_eq!(
         id_a, id_b,
         "at_s is a VIEW parameter: two configs differing only in at_s must map \
@@ -361,7 +361,7 @@ fn different_at_s_reuses_the_cached_stack_result() {
         .insert("energy_mev".to_string(), json!(17.5));
     assert_ne!(
         id_a,
-        sim_id(&physics_changed, "tendl-2023-iso", ""),
+        sim_id(&physics_changed, "tendl-2023-iso", "", ""),
         "changing beam energy must change the cache key"
     );
 

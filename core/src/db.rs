@@ -152,6 +152,29 @@ pub trait DatabaseProtocol: Send + Sync {
     fn data_origin(&self) -> crate::provenance::DataSource {
         crate::provenance::DataSource::for_target()
     }
+
+    /// Stable identity of the *data tree* this store is reading, for cache
+    /// keying (#708).
+    ///
+    /// `library()` alone is not enough: two runs against `tendl-2023-iso` from
+    /// **different directories** — the pinned cache vs `HYRR_DATA=<full tree>` —
+    /// both report the same library string, but only one may have the parquet
+    /// files needed for a given projectile/target. The MCP result cache (#568)
+    /// used to key on library only, so an empty result computed against an
+    /// incomplete tree kept being served after the user pointed HYRR at a
+    /// complete one. Including this fingerprint in the key makes "different
+    /// tree" a cache miss automatically.
+    ///
+    /// The default is empty — safe for any store that has no filesystem
+    /// identity (`InMemoryDataStore`, WASM). The nucl-parquet-backed store
+    /// overrides it with something specific enough that swapping data roots
+    /// changes it.
+    ///
+    /// Not part of `Provenance`: that describes an already-computed *result*,
+    /// while this is consulted *before* the compute happens.
+    fn data_fingerprint(&self) -> String {
+        String::new()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -708,6 +731,63 @@ mod np_store {
                 cache.as_deref(),
                 crate::data_fetch::is_cache_complete(),
             )
+        }
+
+        /// Fingerprint the *data tree* this store is reading (#708).
+        ///
+        /// The reproduction that motivates this: a first `simulate` run reads
+        /// the default cache at `~/.hyrr/nucl-parquet/v<pin>/`, which is missing
+        /// the neutron sublibrary, so the result is empty. A second run
+        /// against `HYRR_DATA=<full tree>` — same library string, same `hyrr`
+        /// version — was served the first (empty) run from the disk cache.
+        /// Encoding the canonicalised data root here makes those two runs land
+        /// on different cache keys.
+        ///
+        /// Includes:
+        /// - the `data_source` classification (managed cache vs local vs
+        ///   unknown), so a switch from `HYRR_DATA=<dir>` back to the pinned
+        ///   cache is also a miss even if paths happen to resolve close;
+        /// - the compile-time [`DATA_VERSION`], which is the strongest
+        ///   version-shaped identifier available before touching disk (the
+        ///   loaded tree's `catalog.json` isn't parsed here; see
+        ///   `data_release()` in mcp/tools.rs for that limitation);
+        /// - the canonicalised `data_root` path — the runtime discriminator
+        ///   that catches "same library, different tree";
+        /// - the verified-tarball SHA-256 when the origin is
+        ///   [`DataSource::VerifiedTarball`]: two paths that resolve to the
+        ///   same directory but sit under a cache that has been re-installed
+        ///   from a different release must miss too.
+        ///
+        /// Canonicalisation may fail (the path is transient, permissions
+        /// change); on failure we fall back to the un-canonicalised path
+        /// rather than an empty string, so cache-key collisions across
+        /// distinct roots are still avoided.
+        ///
+        /// [`DATA_VERSION`]: crate::data_fetch::data_version
+        fn data_fingerprint(&self) -> String {
+            let origin = self.data_origin();
+            let root = self
+                .data_root
+                .canonicalize()
+                .unwrap_or_else(|_| self.data_root.clone());
+            let mut fp = format!(
+                "src={:?}|dv={}|root={}",
+                origin,
+                crate::data_fetch::data_version(),
+                root.display(),
+            );
+            if origin == crate::provenance::DataSource::VerifiedTarball {
+                // The tarball hash the current binary was built against —
+                // meaningful only on the verified-tarball path, per
+                // `Provenance::new`.
+                if let Some(sha) = crate::provenance::Provenance::new(&self.library, origin)
+                    .data_tarball_sha256
+                {
+                    fp.push_str("|tarball=");
+                    fp.push_str(&sha);
+                }
+            }
+            fp
         }
     }
 } // mod np_store

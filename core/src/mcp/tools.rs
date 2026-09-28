@@ -386,15 +386,22 @@ fn registry_fingerprint(reg: &MaterialRegistry) -> String {
     s
 }
 
-/// Run a simulation through the process-scoped result cache (#427). Repeat
-/// queries on the same config are lazy views over the cached `StackResult`.
+/// Run a simulation through the process-scoped result cache (#427, #568,
+/// #708). Repeat queries on the same config are lazy views over the cached
+/// `StackResult`.
+///
+/// `data_fp` in the cache key (#708) is the store's own view of *which data
+/// tree it is reading* — a switch between the pinned cache and a
+/// `HYRR_DATA=<full tree>` override is therefore a cache miss, so an empty
+/// result computed against an incomplete tree cannot silently outlive the fix.
 fn cached_sim(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
 ) -> Result<Arc<StackResult>, String> {
     let fp = registry_fingerprint(registry);
-    cache::cached_stack(args, db.library(), &fp, || {
+    let data_fp = db.data_fingerprint();
+    cache::cached_stack(args, db.library(), &fp, &data_fp, || {
         build_and_run_sim(db, registry, args).map(|(_stack, result, ..)| result)
     })
 }
@@ -2402,7 +2409,7 @@ fn tool_get_simulation_dataset(
     let (top_n, sort_by) = parse_inline_view(args)?;
 
     let result = cached_sim(db, registry, args)?;
-    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry), &db.data_fingerprint());
     let mats = layer_materials(args);
     let (proj, energy, current) = beam_args(args);
     let meta = build_dataset_meta(args, &result, db.library(), &sim_id);
@@ -2546,7 +2553,7 @@ fn tool_get_isotope_inventory(
     let activity_floor_bq = parse_activity_floor(args)?;
     let (top_n, sort_by) = parse_inline_view(args)?;
     let result = cached_sim(db, registry, args)?;
-    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry), &db.data_fingerprint());
     let mats = layer_materials(args);
     let meta = build_dataset_meta(args, &result, db.library(), &sim_id);
     let filtered = dataset::build_inventory(db, &result, &mats, &sim_id, activity_floor_bq);
@@ -2606,7 +2613,7 @@ fn tool_get_emission_curve(
     let (top_n, sort_by) = parse_inline_view(args)?;
 
     let result = cached_sim(db, registry, args)?;
-    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry), &db.data_fingerprint());
     let meta = build_dataset_meta(args, &result, db.library(), &sim_id);
 
     let filtered = dataset::build_emission_curve(
@@ -2888,7 +2895,7 @@ fn tool_get_activity_at(
     // the cache key — the same cached StackResult serves every distinct
     // `at_s` on the same config, which is the whole point of the feature.
     let result = cached_sim(db, registry, args)?;
-    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry), &db.data_fingerprint());
     let sim_end_s = result.irradiation_time_s + result.cooling_time_s;
 
     let at_s = parse_at_s(args, sim_end_s)?;
@@ -3027,7 +3034,7 @@ fn tool_get_dose_rate_at(
     use crate::mcp::dose::{dose_rate_at, MIN_DISTANCE_M};
 
     let result = cached_sim(db, registry, args)?;
-    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry));
+    let sim_id = cache::sim_id(args, db.library(), &registry_fingerprint(registry), &db.data_fingerprint());
     let sim_end_s = result.irradiation_time_s + result.cooling_time_s;
 
     let at_s = parse_at_s(args, sim_end_s)?;
