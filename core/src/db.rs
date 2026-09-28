@@ -414,6 +414,11 @@ mod np_store {
         /// (#427). nucl-parquet's typed DBs don't cover it, so we go through the
         /// crate's generic `ParquetStore` (which caches loaded files internally).
         emissions: ParquetStore,
+        /// Cached data-tree fingerprint for the MCP cache key (#708).
+        /// Snapshotted in `new` so `data_fingerprint()` — called on every MCP
+        /// tool request — is a cheap `String` clone rather than repeated
+        /// path canonicalisation + directory reads.
+        data_fp: String,
     }
 
     impl NpDataStore {
@@ -449,6 +454,8 @@ mod np_store {
                 }
             }
 
+            let data_fp = compute_tree_fingerprint(&root);
+
             Ok(Self {
                 library: library.to_string(),
                 data_root: root,
@@ -460,6 +467,7 @@ mod np_store {
                 symbol_to_z,
                 xs_cache: Mutex::new(HashMap::new()),
                 emissions,
+                data_fp,
             })
         }
 
@@ -736,58 +744,182 @@ mod np_store {
         /// Fingerprint the *data tree* this store is reading (#708).
         ///
         /// The reproduction that motivates this: a first `simulate` run reads
-        /// the default cache at `~/.hyrr/nucl-parquet/v<pin>/`, which is missing
-        /// the neutron sublibrary, so the result is empty. A second run
-        /// against `HYRR_DATA=<full tree>` — same library string, same `hyrr`
-        /// version — was served the first (empty) run from the disk cache.
-        /// Encoding the canonicalised data root here makes those two runs land
-        /// on different cache keys.
+        /// the default cache at `~/.hyrr/nucl-parquet/v<pin>/`, which is
+        /// missing the neutron sublibrary, so the result is empty. A second
+        /// run against `HYRR_DATA=<full tree>` — same library string, same
+        /// `hyrr` version — was served the first (empty) run from the disk
+        /// cache. Encoding this fingerprint in the key makes those two runs
+        /// land on different keys automatically.
         ///
-        /// Includes:
-        /// - the `data_source` classification (managed cache vs local vs
-        ///   unknown), so a switch from `HYRR_DATA=<dir>` back to the pinned
-        ///   cache is also a miss even if paths happen to resolve close;
-        /// - the compile-time [`DATA_VERSION`], which is the strongest
-        ///   version-shaped identifier available before touching disk (the
-        ///   loaded tree's `catalog.json` isn't parsed here; see
-        ///   `data_release()` in mcp/tools.rs for that limitation);
-        /// - the canonicalised `data_root` path — the runtime discriminator
-        ///   that catches "same library, different tree";
-        /// - the verified-tarball SHA-256 when the origin is
-        ///   [`DataSource::VerifiedTarball`]: two paths that resolve to the
-        ///   same directory but sit under a cache that has been re-installed
-        ///   from a different release must miss too.
-        ///
-        /// Canonicalisation may fail (the path is transient, permissions
-        /// change); on failure we fall back to the un-canonicalised path
-        /// rather than an empty string, so cache-key collisions across
-        /// distinct roots are still avoided.
+        /// The value is snapshotted in `new` from `compute_tree_fingerprint`
+        /// (a cheap, one-shot scan) and returned by clone here — this method
+        /// runs on every MCP tool call.
         ///
         /// [`DATA_VERSION`]: crate::data_fetch::data_version
         fn data_fingerprint(&self) -> String {
-            let origin = self.data_origin();
-            let root = self
-                .data_root
-                .canonicalize()
-                .unwrap_or_else(|_| self.data_root.clone());
-            let mut fp = format!(
-                "src={:?}|dv={}|root={}",
-                origin,
-                crate::data_fetch::data_version(),
-                root.display(),
-            );
-            if origin == crate::provenance::DataSource::VerifiedTarball {
-                // The tarball hash the current binary was built against —
-                // meaningful only on the verified-tarball path, per
-                // `Provenance::new`.
-                if let Some(sha) = crate::provenance::Provenance::new(&self.library, origin)
-                    .data_tarball_sha256
-                {
-                    fp.push_str("|tarball=");
-                    fp.push_str(&sha);
+            self.data_fp.clone()
+        }
+    }
+
+    /// One-shot fingerprint of the data tree at `root`, for the MCP cache key
+    /// (#708 review).
+    ///
+    /// Includes:
+    /// - the canonicalised `root` path — the primary discriminator (catches
+    ///   `HYRR_DATA=<a>` vs `HYRR_DATA=<b>`, and treats a symlink to the same
+    ///   tree as the same tree);
+    /// - the loaded tree's `catalog.json/data_version` — a **runtime** read,
+    ///   not the compile-time pin: an in-place submodule bump or `git pull`
+    ///   in the same directory flips this without moving the path;
+    /// - the loaded tree's `catalog.json/data_sha256` when present — the
+    ///   catalog-owned tree hash. Not the tarball-integrity SHA (that's a
+    ///   different digest with different domain), but a fine identity
+    ///   component: if the catalog changes, so does the fingerprint;
+    /// - the sorted list of library subdirectory names under `root` — so
+    ///   adding a previously-missing library (e.g. #709 dropping `endfb-8.0`
+    ///   into a `v<pin>` cache that lacked it) shifts the fingerprint even
+    ///   when the path and catalog stay put.
+    ///
+    /// Compile-time constants (`DATA_VERSION_PIN`, `DATA_TARBALL_PIN`) are
+    /// deliberately **not** included: they describe the binary, not the tree
+    /// on disk, and mixing the two produced the false claim in the earlier
+    /// draft that "a cache re-installed from a different release must miss".
+    /// The catalog read is what actually catches that case.
+    fn compute_tree_fingerprint(root: &Path) -> String {
+        let canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let mut fp = format!("root={}", canon.display());
+
+        // Read the catalog once. Silent failures are fine: a missing catalog
+        // just means those segments are absent, and the other components still
+        // distinguish trees.
+        if let Ok(bytes) = std::fs::read(canon.join("catalog.json")) {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Some(dv) = v.get("data_version").and_then(|x| x.as_str()) {
+                    fp.push_str("|catalog_dv=");
+                    fp.push_str(dv);
+                }
+                if let Some(sha) = v.get("data_sha256").and_then(|x| x.as_str()) {
+                    fp.push_str("|catalog_sha=");
+                    fp.push_str(sha);
                 }
             }
-            fp
+        }
+
+        // Sorted list of directory entries at the root, so a library added or
+        // removed shifts the fingerprint even when the path and catalog stay
+        // the same. Only directories: catalog.json etc. are already covered.
+        if let Ok(rd) = std::fs::read_dir(&canon) {
+            let mut dirs: Vec<String> = rd
+                .filter_map(Result::ok)
+                .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect();
+            dirs.sort();
+            fp.push_str("|dirs=");
+            fp.push_str(&dirs.join(","));
+        }
+
+        fp
+    }
+
+    // -----------------------------------------------------------------------
+    // #708 review — tests for `compute_tree_fingerprint`. Kept inside
+    // `np_store` because the function is private to the module.
+    // -----------------------------------------------------------------------
+    #[cfg(test)]
+    mod fp_tests {
+        use super::compute_tree_fingerprint;
+        use std::fs;
+
+        fn write_catalog(root: &std::path::Path, body: &str) {
+            fs::write(root.join("catalog.json"), body).unwrap();
+        }
+
+        #[test]
+        fn two_distinct_roots_have_distinct_fingerprints() {
+            let a = tempfile::tempdir().unwrap();
+            let b = tempfile::tempdir().unwrap();
+            fs::create_dir(a.path().join("meta")).unwrap();
+            fs::create_dir(b.path().join("meta")).unwrap();
+            assert_ne!(
+                compute_tree_fingerprint(a.path()),
+                compute_tree_fingerprint(b.path()),
+                "distinct data roots must have distinct fingerprints — this is \
+                 the whole #708 reproduction"
+            );
+        }
+
+        #[test]
+        fn a_symlink_to_the_same_root_yields_the_same_fingerprint() {
+            // Canonicalisation collapses the symlink, so two apparent paths
+            // that resolve to the same directory must produce the same
+            // fingerprint — a session that resolves data through a symlinked
+            // `~/.hyrr` must not miss the cache each call.
+            #[cfg(unix)]
+            {
+                let td = tempfile::tempdir().unwrap();
+                fs::create_dir(td.path().join("meta")).unwrap();
+                write_catalog(
+                    td.path(),
+                    r#"{"data_version":"2026.8.2","data_sha256":"abc"}"#,
+                );
+                let link = td
+                    .path()
+                    .parent()
+                    .unwrap()
+                    .join(format!("hyrr708-symlink-{}", std::process::id()));
+                let _ = fs::remove_file(&link);
+                std::os::unix::fs::symlink(td.path(), &link).unwrap();
+                let direct = compute_tree_fingerprint(td.path());
+                let via_symlink = compute_tree_fingerprint(&link);
+                let _ = fs::remove_file(&link);
+                assert_eq!(direct, via_symlink);
+            }
+        }
+
+        #[test]
+        fn adding_a_library_subdir_changes_the_fingerprint() {
+            let td = tempfile::tempdir().unwrap();
+            fs::create_dir(td.path().join("meta")).unwrap();
+            write_catalog(td.path(), r#"{"data_version":"2026.8.2"}"#);
+            let before = compute_tree_fingerprint(td.path());
+            // Dropping in a library subdir — the #709 shape.
+            fs::create_dir(td.path().join("endfb-8.0")).unwrap();
+            let after = compute_tree_fingerprint(td.path());
+            assert_ne!(
+                before, after,
+                "a library appearing in-place under the same root must shift \
+                 the fingerprint, or a first-run-with-missing-data result \
+                 outlives the fix that adds it"
+            );
+        }
+
+        #[test]
+        fn changing_catalog_data_version_changes_the_fingerprint() {
+            let td = tempfile::tempdir().unwrap();
+            fs::create_dir(td.path().join("meta")).unwrap();
+            write_catalog(td.path(), r#"{"data_version":"2026.8.2"}"#);
+            let before = compute_tree_fingerprint(td.path());
+            write_catalog(td.path(), r#"{"data_version":"2026.8.3"}"#);
+            let after = compute_tree_fingerprint(td.path());
+            assert_ne!(
+                before, after,
+                "an in-place submodule bump or `git pull` in the same root \
+                 must shift the fingerprint — this is what the compile-time \
+                 pin never covered"
+            );
+        }
+
+        #[test]
+        fn a_missing_catalog_still_produces_a_fingerprint_that_distinguishes_paths() {
+            let a = tempfile::tempdir().unwrap();
+            let b = tempfile::tempdir().unwrap();
+            // No catalog.json in either — a `nucl-parquet` checkout that
+            // pre-dates the file, or a partially-populated tree. The path
+            // alone must still distinguish them so cache-keys don't collide.
+            let fa = compute_tree_fingerprint(a.path());
+            let fb = compute_tree_fingerprint(b.path());
+            assert_ne!(fa, fb);
         }
     }
 } // mod np_store

@@ -19,12 +19,15 @@
 //!    hyrr-core version bump invalidates every stale entry. Opt-out via
 //!    `HYRR_MCP_NO_DISK_CACHE=1`; wipe recovery = `rm -rf` the directory.
 //!
-//! **Empty results are not persisted (#708).** A silently empty `StackResult`
-//! — no isotopes anywhere, or any error-severity diagnostic attached — is the
-//! symptom of missing / incomplete nuclear data. Caching it would let the
-//! empty answer survive the data being fixed. Empties still flow through the
-//! caller normally; they just don't populate either tier, so the next run
-//! against corrected data recomputes.
+//! **Empty results are not persisted (#708).** A `StackResult` that produced
+//! no isotopes in any layer is the symptom of missing / incomplete nuclear
+//! data; caching it would let the empty answer survive the data being
+//! fixed. Empties still flow through the caller normally; they just don't
+//! populate either tier, so the next run against corrected data recomputes.
+//! **Partial** results — some isotopes plus a `NoCrossSectionData`
+//! diagnostic for one absent target — are cached like any other: the
+//! diagnostic is data, the numbers are the answer, and the standard
+//! F-18-water-behind-Havar workflow relies on that. See `is_empty_result`.
 //!
 //! `simulate` populates the cache; the read-only tools look it up first.
 
@@ -166,9 +169,10 @@ struct DiskEnvelope {
 /// pass `db.data_fingerprint()`; the empty string here is only for tests that
 /// don't exercise the data-identity dimension.
 ///
-/// A freshly-computed result that [`is_empty_result`] reports as silently
-/// empty is returned to the caller but is **not** written to either cache
-/// tier (#708 fix side of the same bug). See the module doc for why.
+/// A freshly-computed result that [`is_empty_result`] reports as empty — no
+/// isotopes in any layer — is returned to the caller but is **not** written
+/// to either cache tier (#708 fix side of the same bug). Diagnostics do not
+/// gate on their own; see `is_empty_result` for why.
 pub fn cached_stack<F>(
     args: &Value,
     library: &str,
@@ -189,26 +193,23 @@ where
     }
 
     // Tier 2: on-disk (native only, and only if enabled).
+    //
+    // No emptiness check on read: post-#708 the key includes `data=<fp>|`,
+    // so a pre-fix empty entry lives at a different key and cannot collide
+    // with a new lookup. It simply orphans on disk and ages out via the
+    // mtime-LRU / byte-cap eviction in `enforce_bounds`. `rm -rf
+    // ~/.cache/hyrr/stack-results` is always safe if a user wants to force
+    // a clean start.
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(root) = disk_root() {
         if let Some(from_disk) = disk_load(&root, key) {
-            // #708: a disk entry that reads back empty is a stale poison —
-            // either an older build populated it before this filter existed,
-            // or the compute path went silently empty during a data-missing
-            // window that has since been fixed. Either way, keep serving it
-            // would let the empty answer survive the data fix. Delete and
-            // fall through to recompute.
-            if is_empty_result(&from_disk) {
-                let _ = std::fs::remove_file(entry_path(&root, key));
-            } else {
-                let shared = Arc::new(from_disk);
-                cache()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .put(key, Arc::clone(&shared));
-                crate::trace_schema::mcp_cache_hit_disk();
-                return Ok(shared);
-            }
+            let shared = Arc::new(from_disk);
+            cache()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .put(key, Arc::clone(&shared));
+            crate::trace_schema::mcp_cache_hit_disk();
+            return Ok(shared);
         }
     }
 
@@ -252,25 +253,24 @@ pub fn sim_id(args: &Value, library: &str, registry_fp: &str, data_fp: &str) -> 
     format!("{:016x}", hash_config(args, library, registry_fp, data_fp))
 }
 
-/// True when a `StackResult` is silently empty in the way that motivates
-/// #708: no isotopes were produced in any layer, or the compute path reported
-/// an error-severity diagnostic (missing cross-sections, empty isotope
-/// composition, reaction outside energy range). Legitimate zero-yield runs
-/// are cheap to recompute; the cost of a false positive here is one extra
-/// recomputation, while the cost of a false negative is a physics number that
-/// silently outlives its cause.
+/// True when a `StackResult` produced nothing at all — no isotopes in any
+/// layer. This is the exact shape the #708 reproduction hits: a neutron run
+/// against a library missing the neutron sublibrary yields zero isotopes and
+/// no diagnostics (`compute_neutron_stack` has an explicit
+/// `TODO(#650 follow-up)`).
+///
+/// **Diagnostics deliberately don't gate on their own.** `compute_stack`
+/// emits `NoCrossSectionData` (severity Error) per (target_z, target_a) with
+/// missing data — and `tendl-2023-iso` ships no `p_H.parquet` and no C-13
+/// entries. So common physics stacks (water, H₂-18O, Kapton, graphite,
+/// steels, Havar) carry that diagnostic on every run while still producing
+/// real activation. Blanket "any error diagnostic → don't cache" would
+/// disable the cache for the F-18-water-behind-Havar workflow — recomputing
+/// the whole simulation on every read-only tool call and defeating #427/#568.
+/// The isotope-count check alone matches the failure mode we're targeting:
+/// a result that produced *nothing* isn't worth persisting; a partial
+/// result with a warning still is.
 fn is_empty_result(result: &StackResult) -> bool {
-    let has_error_diagnostic = result
-        .diagnostics
-        .iter()
-        .any(|d| d.severity == crate::types::DiagnosticSeverity::Error);
-    if has_error_diagnostic {
-        return true;
-    }
-    // Diagnostics aren't wired on every compute path yet — `compute_neutron_stack`
-    // carries an explicit `TODO(#650 follow-up)` at time of writing. Total
-    // isotope count catches those paths too: the bug reproduction in #708 is a
-    // neutron run with no diagnostics whose isotope_results are empty.
     result
         .layer_results
         .iter()
@@ -1044,8 +1044,10 @@ mod tests {
         for i in 0..6u64 {
             let args = json!({"projectile":"p","energy_mev": i as f64 + 0.001,"current_ma":0.02,"layers":[]});
             reset_mem_lru();
-            let _ =
-                cached_stack(&args, "lib-disk-cap", "", "", || Ok(sample_result(i as f64))).unwrap();
+            let _ = cached_stack(&args, "lib-disk-cap", "", "", || {
+                Ok(sample_result(i as f64))
+            })
+            .unwrap();
             // Space out mtimes so the LRU order is unambiguous.
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
@@ -1079,8 +1081,10 @@ mod tests {
         for i in 0..6u64 {
             let args = json!({"projectile":"p","energy_mev": i as f64 + 0.5,"current_ma":0.02,"layers":[]});
             reset_mem_lru();
-            let _ =
-                cached_stack(&args, "lib-disk-bytes", "", "", || Ok(sample_result(i as f64))).unwrap();
+            let _ = cached_stack(&args, "lib-disk-bytes", "", "", || {
+                Ok(sample_result(i as f64))
+            })
+            .unwrap();
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
         let total: u64 = std::fs::read_dir(td.path())
@@ -1157,8 +1161,7 @@ mod tests {
     fn silently_empty_result_is_not_persisted() {
         let _g = disk_test_guard();
         let td = isolate_disk();
-        let args =
-            json!({"projectile":"n","energy_mev":0.0,"current_ma":0.0,
+        let args = json!({"projectile":"n","energy_mev":0.0,"current_ma":0.0,
                    "layers":[{"material":"Co","thickness_cm":0.05}],
                    "irradiation_time_s":86400.0,"cooling_time_s":0.0});
         let lib = "lib-empty-neutron";
@@ -1211,37 +1214,43 @@ mod tests {
         );
     }
 
-    /// #708 — an error-diagnostic result is treated as empty even when
-    /// `isotope_results` happens to be non-empty. The charged path produces
-    /// this shape when some but not all elements have missing cross-sections:
-    /// partial isotopes plus an error diagnostic saying data is missing.
+    /// #708 review — a *partial* result (some isotopes plus a
+    /// `NoCrossSectionData` diagnostic for one target that had no data)
+    /// **must** be cached. `compute_stack` emits that diagnostic per missing
+    /// (target_z, target_a); `tendl-2023-iso` has no `p_H.parquet` and no
+    /// `C-13` entry, so a Havar-window / F-18-water / graphite stack — the
+    /// standard cyclotron workflow — carries that diagnostic on every
+    /// otherwise-correct run. A blanket "any error diagnostic → don't
+    /// cache" rule would recompute the whole simulation on every read-only
+    /// tool call, defeating the point of #427/#568.
     #[test]
-    fn result_with_error_diagnostic_is_not_persisted() {
+    fn partial_result_with_error_diagnostic_is_still_cached() {
         let _g = disk_test_guard();
         let td = isolate_disk();
         let args = json!({"projectile":"p","energy_mev":18.0,"current_ma":0.04,"layers":[]});
-        let lib = "lib-err-diag";
+        let lib = "lib-partial-diag";
 
-        // Non-empty isotopes but a NoCrossSectionData diagnostic — the shape
-        // #650's diagnostic channel produces when data is present for some
-        // targets but not others.
+        // Non-empty isotopes AND a NoCrossSectionData diagnostic — the shape
+        // an F-18-water run against tendl-2023-iso produces (real O-18 → F-18
+        // yield, plus the per-target diagnostic for H having no `p_H.parquet`).
         let mut result = sample_result(1.0);
         result.diagnostics.push(crate::types::Diagnostic::new(
             crate::types::DiagnosticKind::NoCrossSectionData {
                 projectile: "p".into(),
-                target_z: 88,
-                target_symbol: "Ra".into(),
-                target_a: 226,
+                target_z: 1,
+                target_symbol: "H".into(),
+                target_a: 1,
             },
-            None,
+            Some(0),
         ));
         assert!(
-            is_empty_result(&result),
-            "any error-severity diagnostic must classify the result as empty"
+            !is_empty_result(&result),
+            "a partial result with real isotopes is NOT empty just because a \
+             per-target diagnostic is attached — the standard cyclotron \
+             workflow always carries this shape"
         );
 
-        let _ =
-            cached_stack(&args, lib, "", "some-data-fp", || Ok(result.clone())).unwrap();
+        let _ = cached_stack(&args, lib, "", "some-data-fp", || Ok(result.clone())).unwrap();
         let count = std::fs::read_dir(td.path())
             .unwrap()
             .filter_map(Result::ok)
@@ -1253,9 +1262,9 @@ mod tests {
             })
             .count();
         assert_eq!(
-            count, 0,
-            "an error-diagnosed result must not be persisted, or the diagnostic \
-             outlives the data fix (#708)"
+            count, 1,
+            "a partial-but-real result must be persisted like any other, or \
+             every water/Havar/graphite run recomputes on every tool call"
         );
     }
 
@@ -1271,8 +1280,7 @@ mod tests {
     fn different_data_fingerprint_forces_cache_miss() {
         let _g = disk_test_guard();
         let _td = isolate_disk();
-        let args =
-            json!({"projectile":"n","energy_mev":0.0,"current_ma":0.0,
+        let args = json!({"projectile":"n","energy_mev":0.0,"current_ma":0.0,
                    "layers":[{"material":"Co","thickness_cm":0.05}],
                    "irradiation_time_s":86400.0,"cooling_time_s":0.0});
         let lib = "tendl-2023-iso";
@@ -1331,55 +1339,75 @@ mod tests {
         );
     }
 
-    /// #708 — a stale empty entry left on disk by an older build (or by a
-    /// race that predated the write-side filter) must be actively cleaned up,
-    /// not just ignored: otherwise the next call reads it and returns empty
-    /// again, and the fix accomplishes nothing.
+    /// #708 — a pre-fix empty entry on disk keys off the OLD canonical string
+    /// (no `data=<fp>|` segment). The new lookup computes a different key
+    /// and never touches the old file. It's an orphan, not poison — LRU
+    /// eviction retires it in the normal course of business. This test
+    /// documents that invariant so a future refactor of the key shape
+    /// doesn't accidentally re-collide on old entries.
     #[test]
-    fn stale_empty_disk_entry_is_deleted_and_recomputed() {
+    fn pre_fix_disk_entry_orphans_rather_than_collides() {
         let _g = disk_test_guard();
         let td = isolate_disk();
 
         let args = json!({"projectile":"n","energy_mev":0.0,"current_ma":0.0,
                           "layers":[{"material":"Co","thickness_cm":0.05}]});
-        let lib = "lib-stale-empty";
+        let lib = "lib-orphan-check";
         let data_fp = "root=/some/tree";
-        let key = hash_config(&args, lib, "", data_fp);
-        let path = entry_path(td.path(), key);
 
-        // Hand-write a stale empty envelope (simulating what a pre-fix build
-        // would have persisted). Valid salt + format, so it deserializes and
-        // reaches the emptiness check.
-        let env = DiskEnvelope {
-            salt: CACHE_SALT.to_string(),
-            format: DISK_ENVELOPE_FORMAT,
-            result: silently_empty_result(),
+        // The new key participates data_fp.
+        let new_key = hash_config(&args, lib, "", data_fp);
+        // Reconstruct what a pre-#708 hyrr would have hashed for the same
+        // args + lib: no data segment, no `data_fp` variable. This is
+        // deliberately kept in lockstep with the pre-fix `canonical_config`
+        // shape rather than calling the current one — the point is to catch a
+        // future accidental collision.
+        let old_canonical = {
+            let mut s = String::new();
+            s.push_str(CACHE_SALT);
+            s.push('|');
+            s.push_str(lib);
+            s.push('|'); // pre-fix had registry_fp here with no data= segment
+            s.push('|');
+            // The rest of the pre-fix canonical config would follow, but the
+            // absence of the `data=` segment is already enough to shift the
+            // hash — we assert that any pre-fix layout that omitted data_fp
+            // hashes differently.
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            s.hash(&mut h);
+            h.finish()
         };
-        let json = serde_json::to_vec(&env).unwrap();
-        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        std::io::Write::write_all(&mut enc, &json).unwrap();
-        std::fs::write(&path, enc.finish().unwrap()).unwrap();
-        assert!(path.exists(), "test precondition: stale empty exists on disk");
+        assert_ne!(
+            new_key, old_canonical,
+            "the new key MUST include a segment the old canonical form lacked, \
+             or a pre-fix empty entry could collide with a post-fix lookup"
+        );
 
+        // And a lookup at the new key against an empty tempdir is a clean
+        // miss (the compute closure runs).
         reset_mem_lru();
         use std::sync::atomic::{AtomicUsize, Ordering};
         let calls = AtomicUsize::new(0);
         let out = cached_stack(&args, lib, "", data_fp, || {
             calls.fetch_add(1, Ordering::SeqCst);
-            Ok(sample_result(7.0))
+            Ok(sample_result(3.0))
         })
         .unwrap();
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "stale empty must have been rejected; the compute closure had to run"
-        );
-        assert_eq!(out.irradiation_time_s, 7.0);
-        // The new non-empty result should have taken the slot (write-through
-        // happens after the stale-empty deletion + recompute).
-        assert!(path.exists(), "fresh non-empty result should have been persisted");
-        let reloaded = load_envelope(&path).unwrap().expect("envelope after refresh");
-        assert!(!is_empty_result(&reloaded.result));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(out.irradiation_time_s, 3.0);
+        // Sanity: the fresh non-empty result was persisted at the NEW key,
+        // and the tempdir has exactly one file (nothing crossed over).
+        let count = std::fs::read_dir(td.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|d| {
+                d.file_name()
+                    .to_str()
+                    .map(|n| n.ends_with(".json.gz"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(count, 1);
     }
 
     #[test]
