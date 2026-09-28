@@ -28,6 +28,8 @@
 
 #![cfg(feature = "mcp")]
 
+mod common;
+
 use hyrr_core::data_fetch::data_version;
 use hyrr_core::db::{DatabaseProtocol, ParquetDataStore};
 use hyrr_core::materials::MaterialRegistry;
@@ -39,6 +41,8 @@ use serde_json::{json, Value};
 const OTHER_LIBRARY: &str = "endfb-8.1";
 
 fn store() -> ParquetDataStore {
+    // Never touch the developer's real `~/.cache/hyrr/stack-results` (#708).
+    common::isolate_disk_cache();
     let data_dir = std::env::var("HYRR_DATA").unwrap_or_else(|_| {
         concat!(env!("CARGO_MANIFEST_DIR"), "/../nucl-parquet/data").to_string()
     });
