@@ -179,6 +179,18 @@ repos:
         files: (release-notes\.json|\.release-please-manifest\.json)$
         pass_filenames: false
 
+  # MCP Registry listing (#706): server.json must stay publishable. The
+  # publish only runs at tag time, after the wheels are on PyPI, so drift
+  # would otherwise surface too late to fix without another release.
+  - repo: local
+    hooks:
+      - id: check-mcp-registry
+        name: py-mcp/server.json is publishable to the MCP Registry (#706)
+        entry: scripts/check-mcp-registry.sh
+        language: system
+        files: ^(py-mcp/(server\.json|pyproject\.toml|README\.md)|scripts/check-mcp-registry\.sh)$
+        pass_filenames: false
+
   # Typo Linting — flake's typos (downloaded binary doesn't run on NixOS)
   - repo: local
     hooks:
