@@ -281,9 +281,10 @@ pub fn sim_id(args: &Value, library: &str, registry_fp: &str, data_fp: &str) -> 
 
 /// True when a `StackResult` produced nothing at all — no isotopes in any
 /// layer. This is the exact shape the #708 reproduction hits: a neutron run
-/// against a library missing the neutron sublibrary yields zero isotopes and
-/// no diagnostics (`compute_neutron_stack` has an explicit
-/// `TODO(#650 follow-up)`).
+/// against a library missing the neutron sublibrary. Since #668 the neutron
+/// pass now emits `NoCrossSectionData` diagnostics for that miss, so an
+/// empty-and-diagnosed result is no longer indistinguishable from an
+/// empty-and-silent one — the isotope-count check still holds regardless.
 ///
 /// **Diagnostics deliberately don't gate on their own.** `compute_stack`
 /// emits `NoCrossSectionData` (severity Error) per (target_z, target_a) with
@@ -1178,11 +1179,12 @@ mod tests {
 
     /// #708 — a silently empty result must not be written to either tier.
     ///
-    /// Reproduction shape: a `StackResult` with a layer but zero isotopes and
-    /// no diagnostics. That is exactly what `compute_neutron_stack` currently
-    /// produces when a neutron sublibrary is missing (the neutron path has an
-    /// explicit `TODO(#650 follow-up)` for diagnostics), and it is what the
-    /// disk cache used to persist.
+    /// Reproduction shape: a `StackResult` with a layer but zero isotopes.
+    /// This is what `compute_neutron_stack` used to produce when a neutron
+    /// sublibrary was missing — and what the disk cache used to persist.
+    /// Since #668 the neutron pass ALSO emits `NoCrossSectionData`
+    /// diagnostics on that path, but the isotope-count gate here is the
+    /// canonical "did we produce anything?" check and works either way.
     #[test]
     fn silently_empty_result_is_not_persisted() {
         let _g = disk_test_guard();

@@ -539,6 +539,30 @@ pub struct MissingConverterTarget {
 }
 
 impl DiagnosticKind {
+    /// Shared wording for one-or-more `NoCrossSectionData` misses that share a
+    /// (projectile, target element, layer) — the MCP diagnostic renderer
+    /// groups by that key and needs to compose a message across several mass
+    /// numbers ("p + H-1, H-2 in this library — that target isotopes produced
+    /// nothing.") without re-deriving the base phrasing. The singleton case
+    /// matches [`Self::NoCrossSectionData::message`] verbatim; larger groups
+    /// pluralise "target isotope".
+    pub fn no_cross_section_data_message(
+        projectile: &str,
+        target_symbol: &str,
+        target_atoms: &[u32],
+    ) -> String {
+        let list = target_atoms
+            .iter()
+            .map(|a| format!("{target_symbol}-{a}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let plural = if target_atoms.len() > 1 { "s" } else { "" };
+        format!(
+            "No cross-section data for {projectile} + {list} \
+             in this library — that target isotope{plural} produced nothing."
+        )
+    }
+
     /// Human-readable rendering. Kept as a method rather than a struct field so
     /// the text cannot drift from the data, and so non-UI surfaces (CLI, MCP)
     /// get the same wording for free.
@@ -549,10 +573,7 @@ impl DiagnosticKind {
                 target_symbol,
                 target_a,
                 ..
-            } => format!(
-                "No cross-section data for {projectile} + {target_symbol}-{target_a} \
-                 in this library — that target isotope produced nothing."
-            ),
+            } => Self::no_cross_section_data_message(projectile, target_symbol, &[*target_a]),
             Self::EmptyIsotopeComposition { symbol, .. } => format!(
                 "{symbol} has no naturally-occurring isotopes, so it contributes no \
                  target mass. Specify an enrichment to use it as a target."
@@ -605,11 +626,21 @@ impl DiagnosticKind {
                             m.layer_index + 1,
                         ));
                     }
-                    msg.push_str(
+                    // Deliberately generic — the hint used to hard-code
+                    // "tendl-2025 for 9Be", which is wrong for every other
+                    // converter miss and mis-steers the user when the miss
+                    // isn't Be at all. Name the isotope list; let the user
+                    // (or a follow-up tool) pick the covering library.
+                    let target_list = missing_converter_data
+                        .iter()
+                        .map(|m| format!("{}-{}", m.target_symbol, m.target_a))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    msg.push_str(&format!(
                         " in this library — that upstream converter produced no free \
-                         neutrons. Pick a library that carries the converter isotope \
-                         (e.g. `tendl-2025` for 9Be) to restore the source.",
-                    );
+                         neutrons. Pick a library that carries {target_list} to \
+                         restore the source."
+                    ));
                 }
                 msg
             }

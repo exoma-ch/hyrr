@@ -1430,32 +1430,11 @@ pub fn compute_stack_with_secondary_neutrons(
         // isotope is absent from the selected library (`tendl-2023-iso` has
         // no 9Be, so a Be→Al stack short-circuits here and reports only Al's
         // charged direct products with no hint that (n,x) was ever attempted).
-        // The parallel path is a legitimate zero (beam below every (x,n)
-        // threshold), which is why the severity downshifts based on whether
-        // any converter isotope is missing xs — see
-        // [`DiagnosticKind::severity`]. Every upstream `NoCrossSectionData`
-        // filed by the charged pass is a candidate cause; collect them into
-        // the variant so the message names the exact library gap. Charged
-        // projectiles only — an "n" miss here would be from a stray
-        // neutron-target layer, not the converter.
-        let missing_converter_data: Vec<crate::types::MissingConverterTarget> = charged
-            .diagnostics
-            .iter()
-            .filter_map(|d| match &d.kind {
-                crate::types::DiagnosticKind::NoCrossSectionData {
-                    projectile,
-                    target_symbol,
-                    target_a,
-                    ..
-                } if projectile != "n" => Some(crate::types::MissingConverterTarget {
-                    layer_index: d.layer_index.unwrap_or(0),
-                    projectile: projectile.clone(),
-                    target_symbol: target_symbol.clone(),
-                    target_a: *target_a,
-                }),
-                _ => None,
-            })
-            .collect();
+        // Severity downshifts to Warning when nothing plausible is missing —
+        // a legitimate physical zero (beam below every (x,n) threshold). See
+        // [`DiagnosticKind::severity`].
+        let missing_converter_data =
+            collect_converter_misses(&charged.diagnostics, stack.layers.len());
         charged.diagnostics.push(crate::types::Diagnostic::new(
             crate::types::DiagnosticKind::SecondaryNeutronsNoSource {
                 missing_converter_data,
@@ -1500,6 +1479,56 @@ pub fn compute_stack_with_secondary_neutrons(
         }
     }
     Ok(charged)
+}
+
+/// Filter the charged-pass diagnostics to the ones that plausibly explain a
+/// zero secondary-neutron source.
+///
+/// A `NoCrossSectionData` diagnostic qualifies only when:
+///
+/// 1. **It has a known layer** — a miss with `layer_index == None` cannot be
+///    tied to a converter position and would just guess "layer 1", so we drop
+///    it rather than mislabel it (the coordinator's blocker on the previous
+///    round: `unwrap_or(0)` was silently misattributing).
+/// 2. **The layer is upstream of at least one other layer** — an all-charged
+///    "activated" target layer with no xs data on the beam side has nothing
+///    downstream to activate; it is not the converter, it is the last layer.
+///    We include layers `0..n_layers - 1`; a single-layer stack has no
+///    converter position at all so the list is always empty there.
+/// 3. **The target is not H or He** — those isotopes carry no (x,n) channels
+///    relevant to a secondary-neutron converter (tendl-2023-iso ships no H/He
+///    at all, so a water moderator layer would otherwise poison the list on
+///    every `secondary_neutron: true` run on that library).
+/// 4. **The projectile is charged** — an "n" miss here is a leaked
+///    neutron-target diagnostic, not a converter cause.
+fn collect_converter_misses(
+    diagnostics: &[crate::types::Diagnostic],
+    n_layers: usize,
+) -> Vec<crate::types::MissingConverterTarget> {
+    let upstream_cap = n_layers.saturating_sub(1);
+    diagnostics
+        .iter()
+        .filter_map(|d| match &d.kind {
+            crate::types::DiagnosticKind::NoCrossSectionData {
+                projectile,
+                target_z,
+                target_symbol,
+                target_a,
+            } if projectile != "n" && *target_z >= 3 => {
+                let layer_index = d.layer_index?;
+                if layer_index >= upstream_cap {
+                    return None;
+                }
+                Some(crate::types::MissingConverterTarget {
+                    layer_index,
+                    projectile: projectile.clone(),
+                    target_symbol: target_symbol.clone(),
+                    target_a: *target_a,
+                })
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Superimpose secondary-neutron isotope results onto the charged results.
@@ -1825,6 +1854,159 @@ mod tests {
         assert!(
             sn.message.contains("physically legitimate"),
             "warning wording should call out the physical zero; got: {}",
+            sn.message
+        );
+    }
+
+    /// Coordinator's re-review case: a below-threshold Cu + downstream water
+    /// stack on a library that lacks H xs must NOT accuse the water H layer
+    /// of being a missing converter (it's downstream, and H doesn't make
+    /// (x,n) neutrons anyway). The physical zero here is Cu at low energy
+    /// producing no free neutrons; the H miss is genuine but unrelated.
+    ///
+    /// Guards three filter rules on `collect_converter_misses`:
+    /// 1. Skip H (Z ≤ 2) — no (x,n) channel of interest.
+    /// 2. Skip the last layer — it can't be a converter for anything.
+    /// 3. Preserve Warning severity when the filtered list is empty.
+    #[test]
+    fn below_threshold_upstream_plus_downstream_water_stays_a_warning() {
+        let mut db = InMemoryDataStore::new("test");
+        db.add_element(29, "Cu");
+        db.add_element(1, "H");
+        // Cu stopping.
+        let energies: Vec<f64> = (0..50)
+            .map(|i| 0.001_f64 * 10f64.powf(i as f64 / 10.0))
+            .collect();
+        let dedx_cu: Vec<f64> = energies.iter().map(|&e| 30.0 / e.sqrt()).collect();
+        db.add_stopping_data("PSTAR", 29, energies.clone(), dedx_cu);
+        // H stopping so the water layer can compute an energy step.
+        let dedx_h: Vec<f64> = energies.iter().map(|&e| 5.0 / e.sqrt()).collect();
+        db.add_stopping_data("PSTAR", 1, energies, dedx_h);
+        // Cu: xs open at 15 MeV (single (p,γ) channel — dz=0, da=0 → NOT
+        // an (x,n) reaction, so `neutron_source_rate` stays 0). No
+        // NoCrossSectionData filed for Cu.
+        db.add_cross_sections(
+            "p",
+            "Cu",
+            vec![CrossSectionData {
+                target_a: 63,
+                residual_z: 30,
+                residual_a: 64,
+                state: String::new(),
+                energies_mev: vec![1.0, 20.0],
+                xs_mb: vec![100.0, 100.0],
+            }],
+        );
+        // Deliberately no p_H parquet — mirrors tendl-2023-iso's coverage
+        // gap. compute_layer emits a NoCrossSectionData for p + H-1 on
+        // layer 1, which the OLD (unfiltered) collector would blame as
+        // the converter.
+        db.add_decay_data(DecayData {
+            z: 30,
+            a: 64,
+            state: String::new(),
+            half_life_s: None,
+            decay_modes: vec![],
+        });
+
+        let cu_layer = Layer {
+            density_g_cm3: 8.96,
+            elements: vec![(
+                Element {
+                    symbol: "Cu".into(),
+                    z: 29,
+                    isotopes: HashMap::from([(63u32, 1.0)]),
+                },
+                1.0,
+            )],
+            thickness_cm: Some(0.01),
+            areal_density_g_cm2: None,
+            energy_out_mev: None,
+            is_monitor: false,
+            nist_compound: None,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        };
+        let h_layer = Layer {
+            density_g_cm3: 1.0,
+            elements: vec![(
+                Element {
+                    symbol: "H".into(),
+                    z: 1,
+                    isotopes: HashMap::from([(1u32, 1.0)]),
+                },
+                1.0,
+            )],
+            thickness_cm: Some(0.01),
+            areal_density_g_cm2: None,
+            energy_out_mev: None,
+            is_monitor: false,
+            nist_compound: None,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        };
+        let mut stack = TargetStack {
+            beam: Beam::new(ProjectileType::Proton, 15.0, 1.0),
+            layers: vec![cu_layer, h_layer],
+            irradiation_time_s: 3600.0,
+            cooling_time_s: 0.0,
+            area_cm2: 1.0,
+            current_profile: None,
+        };
+        let result = compute_stack_with_secondary_neutrons(&db, &mut stack, true).unwrap();
+
+        // Precondition: the H miss really did fire on layer 2 (else the
+        // filter has nothing to filter).
+        let has_h_miss = result.diagnostics.iter().any(|d| {
+            matches!(&d.kind,
+                crate::types::DiagnosticKind::NoCrossSectionData {
+                    projectile, target_symbol, ..
+                } if projectile == "p" && target_symbol == "H")
+        });
+        assert!(
+            has_h_miss,
+            "precondition: charged pass must file NoCrossSectionData for p + H-1 on layer 2"
+        );
+
+        let sn = result
+            .diagnostics
+            .iter()
+            .find(|d| {
+                matches!(
+                    &d.kind,
+                    crate::types::DiagnosticKind::SecondaryNeutronsNoSource { .. }
+                )
+            })
+            .expect("SecondaryNeutronsNoSource must fire");
+        // The filter must drop H (Z=1) AND the layer-2-because-downstream
+        // rule, so the list is empty → severity Warning.
+        assert_eq!(
+            sn.severity,
+            crate::types::DiagnosticSeverity::Warning,
+            "H miss on a downstream layer must NOT promote severity to Error"
+        );
+        match &sn.kind {
+            crate::types::DiagnosticKind::SecondaryNeutronsNoSource {
+                missing_converter_data,
+            } => {
+                assert!(
+                    missing_converter_data.is_empty(),
+                    "converter-miss list must be empty (H is Z=1, layer 2 is last); got: {missing_converter_data:?}"
+                );
+            }
+            _ => unreachable!(),
+        }
+        // The generic message must NOT hardcode a specific library / isotope.
+        assert!(
+            !sn.message.contains("tendl-2025"),
+            "hardcoded library hint leaked into the message; got: {}",
+            sn.message
+        );
+        assert!(
+            !sn.message.contains("9Be"),
+            "hardcoded converter isotope leaked into the message; got: {}",
             sn.message
         );
     }

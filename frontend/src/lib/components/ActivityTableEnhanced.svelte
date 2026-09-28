@@ -485,7 +485,7 @@
       <summary>
         <strong>{errorDiagnostics.length}</strong>
         diagnostic{errorDiagnostics.length === 1 ? "" : "s"} — some yields may
-        be under-reported. Click to expand.
+        be under-reported.
       </summary>
       <ul>
         {#each errorDiagnostics as d}

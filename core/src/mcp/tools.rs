@@ -1894,6 +1894,30 @@ pub(crate) fn append_diagnostics_section(
     out: &mut String,
     diagnostics: &[crate::types::Diagnostic],
 ) {
+    append_diagnostics_section_at(out, diagnostics, DiagnosticsHeading::H2);
+}
+
+/// Heading level for [`append_diagnostics_section_at`] — the shared renderer
+/// is invoked once by most tools (H2 default), and by `compare_simulations`
+/// twice under an outer `### Diagnostics — <label>` block (H4). Passing the
+/// level in avoids the inversion where the caller wrote `###` and the helper
+/// then wrote `##` right below it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DiagnosticsHeading {
+    /// `## Diagnostics` — the default, used by every single-stack tool.
+    H2,
+    /// No heading at all — the caller has already opened its own section
+    /// (`### Diagnostics — <label>` in `compare_simulations`), so the helper
+    /// only appends the list itself.
+    Omit,
+}
+
+/// Same as [`append_diagnostics_section`] but with explicit heading control.
+pub(crate) fn append_diagnostics_section_at(
+    out: &mut String,
+    diagnostics: &[crate::types::Diagnostic],
+    heading: DiagnosticsHeading,
+) {
     if diagnostics.is_empty() {
         return;
     }
@@ -1952,16 +1976,14 @@ pub(crate) fn append_diagnostics_section(
     for g in &groups {
         let mut atoms = g.atoms.clone();
         atoms.sort();
-        let plural = if atoms.len() > 1 { "s" } else { "" };
-        let list = atoms
-            .iter()
-            .map(|a| format!("{}-{}", g.symbol, a))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let msg = format!(
-            "No cross-section data for {} + {} in this library — that target \
-             isotope{plural} produced nothing.",
-            g.projectile, list,
+        // Reuse the type-side formatter so grouped and singleton wordings
+        // stay one source of truth (`DiagnosticKind::message` for a single
+        // isotope produces the same text). Prevents this string from
+        // drifting from `types.rs::NoCrossSectionData` again.
+        let msg = crate::types::DiagnosticKind::no_cross_section_data_message(
+            &g.projectile,
+            &g.symbol,
+            &atoms,
         );
         rows.push((g.idx, msg, g.severity, g.layer_index));
     }
@@ -1970,7 +1992,11 @@ pub(crate) fn append_diagnostics_section(
     }
     rows.sort_by_key(|r| r.0);
 
-    out.push_str("\n## Diagnostics\n\n");
+    if matches!(heading, DiagnosticsHeading::H2) {
+        out.push_str("\n## Diagnostics\n\n");
+    } else {
+        out.push('\n');
+    }
     for (_, message, severity, layer_index) in rows {
         let sev = match severity {
             DiagnosticSeverity::Error => "⚠️",
@@ -2242,14 +2268,16 @@ fn tool_compare_simulations(
     }
 
     // Diagnostics for both configs, tagged so a #650 miss on one side isn't
-    // silently pooled with a healthy result on the other.
+    // silently pooled with a healthy result on the other. `Omit` because
+    // we open our own labelled H3 above — otherwise the helper's H2 would
+    // land under the H3 and invert the heading levels.
     if !result_a.diagnostics.is_empty() {
         output.push_str(&format!("\n### Diagnostics — {}\n", label_a));
-        append_diagnostics_section(&mut output, &result_a.diagnostics);
+        append_diagnostics_section_at(&mut output, &result_a.diagnostics, DiagnosticsHeading::Omit);
     }
     if !result_b.diagnostics.is_empty() {
         output.push_str(&format!("\n### Diagnostics — {}\n", label_b));
-        append_diagnostics_section(&mut output, &result_b.diagnostics);
+        append_diagnostics_section_at(&mut output, &result_b.diagnostics, DiagnosticsHeading::Omit);
     }
 
     Ok(output)

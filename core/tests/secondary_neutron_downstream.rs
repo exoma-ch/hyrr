@@ -215,3 +215,66 @@ fn secondary_neutron_with_no_source_emits_a_typed_diagnostic() {
         result.diagnostics
     );
 }
+
+/// End-to-end guard for the reporter's follow-up call: after a
+/// `secondary_neutron: true` short-circuit on `tendl-2023-iso`, a call to
+/// `get_isotope_production_curve(isotope="Na-24")` returns an error string —
+/// and that error string MUST carry the diagnostics block, not just the
+/// bare "Isotope 'Na-24' not produced in any layer" that the reporter saw.
+/// Exercises the shared `append_diagnostics_section` wiring on the error
+/// path, through the same public `call_tool` entry the MCP transport uses.
+///
+/// Gated on the `mcp` cargo feature — `hyrr_core::mcp` is only compiled when
+/// the feature is enabled (nix-check builds the non-mcp variant of the test
+/// binary separately, which must still compile).
+#[cfg(feature = "mcp")]
+#[test]
+fn production_curve_error_carries_diagnostics_when_secondary_neutron_short_circuits() {
+    use hyrr_core::mcp::tools::call_tool;
+    use serde_json::json;
+
+    let Some(dir) = data_dir() else {
+        eprintln!("skipping: no nucl-parquet data dir");
+        return;
+    };
+    let db = ParquetDataStore::new(&dir, "tendl-2023-iso").expect("open data store");
+    let mut materials: hyrr_core::materials::MaterialRegistry = HashMap::new();
+
+    let args = json!({
+        "projectile": "p",
+        "energy_mev": 17.8,
+        "current_ma": 0.02,
+        "layers": [
+            {"material": "Be", "thickness_cm": 0.2},
+            {"material": "Al", "thickness_cm": 0.2}
+        ],
+        "irradiation_time_s": 3600,
+        "cooling_time_s": 0,
+        "secondary_neutron": true,
+        "isotope": "Na-24",
+        "vs": "time"
+    });
+
+    let err = call_tool(&db, &mut materials, "get_isotope_production_curve", &args)
+        .expect_err("Na-24 must not be produced in this library, so the tool must Err");
+    // The reporter's original terse error — must still be there so old
+    // clients keep the exact phrase they matched on.
+    assert!(
+        err.contains("Isotope 'Na-24' not produced in any layer"),
+        "must preserve the terse original error phrasing; got: {err}"
+    );
+    // The new wiring: the diagnostic list must be appended so the user
+    // learns WHY without a second round-trip.
+    assert!(
+        err.contains("## Diagnostics"),
+        "error string must carry the diagnostics section; got:\n{err}"
+    );
+    assert!(
+        err.contains("p + Be-9"),
+        "diagnostics must name the p+Be-9 miss so the user can fix it; got:\n{err}"
+    );
+    assert!(
+        err.contains("secondary_neutron"),
+        "diagnostics must name the requested flag; got:\n{err}"
+    );
+}
