@@ -39,7 +39,14 @@ fn main() {
     let library = resolve_library(&args);
     let data_dir = resolve_data_dir(&args, &library);
 
-    hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library);
+    // Only run the routed-library healer against the managed cache
+    // (#709). A user-supplied `--data-dir` / `HYRR_DATA` / sibling
+    // checkout is out of scope — the healer is not entitled to alter
+    // paths the user owns.
+    let spawn_heal =
+        hyrr_core::data_fetch::resolved_is_managed_cache(std::path::Path::new(&data_dir));
+
+    hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library, spawn_heal);
 }
 
 /// Resolve the data directory. Priority:
@@ -69,22 +76,13 @@ fn resolve_data_dir(args: &[String], library: &str) -> String {
     // fall through to the fetch path.
     let local = hyrr_core::data_dir::resolve();
     if std::path::Path::new(&local).join("meta").is_dir() {
-        // #709 healer. A cache populated by 0.21.0/0.21.1 has only the
-        // charged library on disk; `library_for_projectile` routes
-        // neutron / heavy-ion projectiles to libraries that were never
-        // fetched, so those runs silently return empty. Best-effort
-        // repair — a network failure warns to stderr and continues
-        // (offline user with a working proton-only cache must keep
-        // working). Only touches the managed cache; a user-supplied
-        // path is left alone.
-        if hyrr_core::data_fetch::resolved_is_managed_cache(std::path::Path::new(&local)) {
-            if let Ok(outcome) = hyrr_core::data_fetch::try_heal_routed_libraries_in_managed_cache()
-            {
-                if let Some(msg) = outcome.warning_message() {
-                    eprintln!("{msg}");
-                }
-            }
-        }
+        // Warm cache — hand it back and let the transport spawn its
+        // background heal thread for missing routed libraries (#709).
+        // The synchronous version of this healer used to run right
+        // here and blocked the initialize handshake for the whole
+        // ~727 MB download; MCP client startup timeouts (~30s in
+        // Claude Code) then killed an upgrading user's session before
+        // it could complete.
         return local;
     }
 

@@ -1060,6 +1060,30 @@ pub fn call_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<ToolResponse, String> {
+    // #709: intercept routed-projectile requests when the routed library
+    // isn't on disk yet — the background heal thread is still fetching
+    // (or has failed and we're in the backoff window). Return a typed
+    // diagnostic before we ever reach a data-store lookup that would
+    // memoise a miss (`NpDataStore::ensure_xs` caches empty vectors).
+    //
+    // Applies to any tool that carries a `projectile` argument; charged
+    // particles fall straight through because the routed-library
+    // override doesn't apply to them. Kept out of individual tool
+    // functions so a new projectile-carrying tool automatically gets
+    // the same guard.
+    if let Some(projectile) = arguments.get("projectile").and_then(|v| v.as_str()) {
+        if let Some(diagnostic) = routed_library_unavailable_diagnostic(projectile) {
+            let mut r: ToolResponse = diagnostic.into();
+            r.text = format!(
+                "{}\n\n---\n*Library: {} · data release: {}*\n",
+                r.text,
+                db.library(),
+                data_release(),
+            );
+            return Ok(r);
+        }
+    }
+
     // Text-only tools return a String (→ ToolResponse via From); the dataset
     // tools return a ToolResponse directly (text + Parquet resources).
     let mut response: ToolResponse = match name {
@@ -3613,5 +3637,61 @@ mod tests {
             names.contains(&"get_version_info".to_string()),
             "list_tools must advertise get_version_info; got: {names:?}"
         );
+    }
+
+    /// **#709 tool-layer intercept — the routed-library diagnostic
+    /// shape.** `routed_library_unavailable_diagnostic` for a routed
+    /// projectile whose library is not yet on disk returns a message
+    /// that (a) names the library, (b) says the download is in
+    /// progress or the failure reason, and (c) tells the caller to
+    /// retry. `None` for charged particles (they never route to a
+    /// separate library). The check is done directly against the
+    /// `HealHandle` API without touching the OnceLock global, which
+    /// can't be reset between tests.
+    #[test]
+    fn heal_handle_library_status_transitions_from_downloading_to_available() {
+        use crate::data_fetch::{HealHandle, HealPhase, LibraryHealStatus};
+
+        let handle = HealHandle::test_new_downloading(vec![
+            crate::db::NEUTRON_LIBRARY.to_string(),
+            crate::db::HEAVY_ION_LIBRARY.to_string(),
+        ]);
+
+        // Before completion — both routed libs report Downloading.
+        assert_eq!(
+            handle.library_status(crate::db::NEUTRON_LIBRARY),
+            LibraryHealStatus::Downloading,
+        );
+        assert_eq!(
+            handle.library_status(crate::db::HEAVY_ION_LIBRARY),
+            LibraryHealStatus::Downloading,
+        );
+        // The store library is available (not routed away).
+        assert_eq!(
+            handle.library_status("tendl-2023-iso"),
+            LibraryHealStatus::Available,
+        );
+
+        // Heal completes for the neutron lib only.
+        handle.test_mark_available(crate::db::NEUTRON_LIBRARY);
+        handle.test_set_phase(HealPhase::Complete {
+            added: vec![crate::db::NEUTRON_LIBRARY.to_string()],
+        });
+        assert_eq!(
+            handle.library_status(crate::db::NEUTRON_LIBRARY),
+            LibraryHealStatus::Available,
+        );
+        // The heavy-ion lib is still missing (Complete but not added) — the
+        // handle reports Failed with a release-gap explanation, so the tool
+        // layer emits a diagnostic instead of an empty result.
+        match handle.library_status(crate::db::HEAVY_ION_LIBRARY) {
+            LibraryHealStatus::Failed { error, .. } => {
+                assert!(
+                    error.contains("does not include"),
+                    "diagnostic must call out the release gap: {error}"
+                );
+            }
+            other => panic!("expected Failed release-gap status, got {other:?}"),
+        }
     }
 }

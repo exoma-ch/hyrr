@@ -94,6 +94,25 @@ impl Lru {
             }
         }
     }
+
+    fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+}
+
+/// Drop every cached simulation result from the in-memory LRU. The
+/// on-disk cache is left alone — its keys already carry the data
+/// fingerprint (#708), so a subsequent store swap will miss on disk
+/// and recompute.
+///
+/// Called by the MCP transport after the background heal thread
+/// (#709) installs previously-missing routed libraries. Any result
+/// cached before the heal was computed against a store whose
+/// `NpDataStore::ensure_xs` memoised misses for those libs; keeping
+/// those results would defeat the heal.
+pub fn clear_memory_cache() {
+    cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 fn cache() -> &'static Mutex<Lru> {

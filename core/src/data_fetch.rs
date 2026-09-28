@@ -999,8 +999,15 @@ fn tls_root_certs_from(
 /// - `timeout_connect(30s)`: a half-open TCP socket on flaky Wi-Fi
 ///   would otherwise hang the splash until the App.svelte wall clock
 ///   fires (5 min) with no progress.
-/// - No read/global timeout: a slow-but-progressing 400 MB download on a
-///   rural DSL line should not be killed mid-stream.
+/// - `timeout_recv_response(60s)`: cap on waiting for HTTP response
+///   headers so a silently-hung server doesn't wedge the healer
+///   thread for the whole session.
+/// - `timeout_recv_body(30 min)`: total-body cap. ureq 3.x has no
+///   per-read stall timeout, so this is a compromise — a very slow
+///   link (400 kbps) can still finish a ~727 MB download inside this
+///   window, but a truly stuck stream can't tie up the thread forever.
+///   Callers must be able to recover from a mid-stream cut and retry
+///   (the heal thread's backoff marker handles that).
 /// - Roots from [`tls_root_certs`] — the OS store by default.
 fn build_http_client() -> Result<ureq::Agent> {
     let tls = ureq::tls::TlsConfig::builder()
@@ -1010,6 +1017,8 @@ fn build_http_client() -> Result<ureq::Agent> {
     Ok(ureq::Agent::config_builder()
         .user_agent(concat!("hyrr/", env!("CARGO_PKG_VERSION")))
         .timeout_connect(Some(std::time::Duration::from_secs(30)))
+        .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
+        .timeout_recv_body(Some(std::time::Duration::from_secs(30 * 60)))
         .tls_config(tls)
         .build()
         .new_agent())
@@ -1952,8 +1961,8 @@ fn fetch_full_tarball_with_seam(out: &Path, progress: ProgressFn<'_>) -> Result<
 /// **Warm caches from before this fix** short-circuit
 /// `data_dir::resolve()` before they ever reach `ensure_library`, so the
 /// resolvers hand off the pre-#709 cache directly to the transport. Those
-/// are healed by [`try_heal_routed_libraries_in_managed_cache`], which the
-/// MCP entry points call on the resolved path.
+/// are healed by the background thread [`spawn_managed_cache_heal_thread`],
+/// which the MCP transport spawns on the resolved path.
 ///
 /// On a warm cache (sentinel present) where the requested library **and
 /// every routed lib** are already extracted, returns immediately.
@@ -1981,124 +1990,533 @@ pub fn ensure_library_with_progress(library: &str, progress: ProgressFn<'_>) -> 
     prefixes.extend(lib_prefixes.iter().map(String::as_str));
     install_tarball_atomic(&tmp, &prefixes, progress)?;
 
-    // Post-extract sanity check: refuse to leave the sentinel over a
-    // cache that still doesn't cover the routed libs. Without this, a
-    // release that (for whatever reason) shipped without one of the
-    // routed subtrees would re-download the full 727 MB tarball on
-    // every call — `warm_cache_covers` would keep returning false and
-    // the fetch would keep failing to close the gap. Better to surface
-    // that once as an error than to loop silently.
+    // Post-extract split by lib category (#709 rev-3, reviewer's nit #3).
+    //
+    // Charged library missing: the release the user's build pins is
+    // broken for THIS install — proton runs won't work. Error out; the
+    // caller is `fetch_or_die` which will surface a full diagnostic.
+    //
+    // Routed library (`endfb-8.0` / `hi-xs-prod`) missing: the release
+    // is usable for charged particles (which is what the store's
+    // `library` is), so proton runs must NOT be blocked. Record a
+    // backoff marker so the async heal thread doesn't loop redownloading,
+    // and let the cold-cache boot succeed. Neutron / heavy-ion tools
+    // will surface a typed diagnostic naming the missing library via
+    // the [`HealHandle`] state.
     let missing = missing_required_libraries(library)?;
-    if !missing.is_empty() {
+    let (missing_charged, missing_routed): (Vec<_>, Vec<_>) =
+        missing.into_iter().partition(|lib| lib == library);
+    if !missing_charged.is_empty() {
         return Err(FetchError::Extract(format!(
-            "release data-{DATA_VERSION} extracted successfully but is missing library subtree(s): {} \
+            "release data-{DATA_VERSION} extracted successfully but is missing the requested library subtree `{}` \
              — this is a data-release problem, not a fetch problem. \
              Report at https://github.com/exoma-ch/nucl-parquet/issues.",
-            missing.join(", ")
+            missing_charged.join(", ")
         )));
+    }
+    if !missing_routed.is_empty() {
+        let reason = format!(
+            "release data-{DATA_VERSION} does not ship the routed neutron / heavy-ion \
+             library subtree(s): [{}]. This is a data-release gap, not a fetch failure; \
+             the async heal thread will not retry until the backoff window elapses.",
+            missing_routed.join(", ")
+        );
+        // Record so the async heal thread doesn't loop. The write is
+        // best-effort — a filesystem-refuses cache path is caught by
+        // the missing-lib error path, not by silent retries.
+        let _ = write_heal_backoff_marker(&missing_routed, &reason);
     }
     Ok(())
 }
 
-/// Best-effort routed-library healer for the **managed cache only**
-/// (#709). Runs during MCP data-dir resolution, after
-/// [`crate::data_dir::resolve`] returns the managed-cache path.
-///
-/// The problem: 0.21.0 / 0.21.1 populated the managed cache with only the
-/// charged library. [`crate::db::library_for_projectile`] silently routes
-/// `n` to `endfb-8.0` and heavy ions to `hi-xs-prod`, so those runs read
-/// an empty subtree and every call returned an empty table with no
-/// diagnostic. The resolvers in `hyrr-mcp/src/main.rs` and
-/// `py-mcp/src/lib.rs` see `is_cache_complete() == true`, return the
-/// managed-cache path immediately, and never reach [`ensure_library`] —
-/// so the cold-cache fix above cannot heal an existing user by itself.
-///
-/// This function closes that: on each MCP boot, if the managed cache is
-/// missing a routed lib, fetch and merge just those in. Existing users
-/// upgrade transparently on their next launch.
-///
-/// **Eager**, not lazy per-request. A lazy variant (fetch on the first
-/// `n` / heavy-ion tool call) would push a network I/O and a cache-write
-/// into a request/response hot path already holding a stack-cache lock
-/// (#708), and would race with concurrent tool calls that all trip the
-/// same miss. Eager keeps the cost bounded to one one-shot repair at
-/// startup — the same place a cold-cache boot already pays it.
-///
-/// **Never fatal.** A failed repair fetch returns `Ok(Warned{…})` so
-/// the MCP keeps running — an offline user with a working proton-only
-/// cache stayed offline before #709 and must keep working after. Only
-/// [`crate::db::library_for_projectile`]'s routed projectiles will
-/// surface empty; the charged path is unaffected. The caller is
-/// responsible for surfacing the warning to stderr (the printing lives
-/// in the MCP-crate boundary rather than here so the debug-print
-/// guardrail doesn't have to allowlist `core/`).
-///
-/// **Managed-cache-only.** Callers must have confirmed the resolved data
-/// dir is the managed cache before invoking; a user-supplied `--data-dir`
-/// / `HYRR_DATA` / `NUCL_PARQUET_DATA` / sibling checkout is out of scope.
-/// The helper [`resolved_is_managed_cache`] does that check.
-pub fn try_heal_routed_libraries_in_managed_cache() -> Result<HealOutcome> {
-    let missing = missing_routed_libraries()?;
-    if missing.is_empty() {
-        return Ok(HealOutcome::AlreadyPresent);
-    }
-    // `ensure_library` extracts the requested lib PLUS both routed libs.
-    // Passing `NEUTRON_LIBRARY` picks the same union we need.
-    let mut noop = no_op_progress();
-    match ensure_library_with_progress(NEUTRON_LIBRARY, &mut noop) {
-        Ok(()) => Ok(HealOutcome::Repaired {
-            added: missing.iter().map(|s| s.to_string()).collect(),
-        }),
-        Err(e) => Ok(HealOutcome::Warned {
-            missing: missing.iter().map(|s| s.to_string()).collect(),
-            error: e.to_string(),
-        }),
-    }
-}
-
-/// Outcome of [`try_heal_routed_libraries_in_managed_cache`].
+/// Public state a [`HealHandle`] reports for a particular routed library.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HealOutcome {
-    /// The managed cache already carried every routed lib; no fetch ran.
-    AlreadyPresent,
-    /// The named libraries were fetched and merged in.
-    Repaired { added: Vec<String> },
-    /// The repair fetch failed. Callers should surface `warning_message`
-    /// to the user and keep running with the pre-repair cache — routed
-    /// lookups will surface empty until the user reconciles, but the
-    /// charged path is unaffected. See [`HealOutcome::warning_message`].
-    Warned { missing: Vec<String>, error: String },
+pub enum LibraryHealStatus {
+    /// The library is on disk (either it always was, or a heal succeeded).
+    Available,
+    /// The heal thread hasn't started yet — the resolver saw all routed
+    /// libs present at boot. This is what a fresh install produces.
+    NotHealed,
+    /// The heal thread is currently fetching this library.
+    Downloading,
+    /// The last heal attempt for this library failed and we are in a
+    /// backoff window. `error` is the reason; `retry_after_epoch_s`
+    /// is the earliest time we would try again (see backoff marker).
+    Failed {
+        error: String,
+        retry_after_epoch_s: u64,
+    },
 }
 
-impl HealOutcome {
-    /// Formatted user-facing warning for [`HealOutcome::Warned`]. The MCP
-    /// callers `eprintln!` this into their startup diagnostic stream —
-    /// living here keeps the wording consistent across `hyrr-mcp` and
-    /// `py-mcp` without duplicating it, while the printing itself stays
-    /// in the caller so `core/` doesn't have to allowlist an eprintln.
-    pub fn warning_message(&self) -> Option<String> {
-        match self {
-            HealOutcome::Warned { missing, error } => Some(format!(
-                "hyrr: WARNING: nuclear-data cache is missing the routed library(s) \
-                 [{}] and the one-time repair fetch failed: {error}\n\
-                 hyrr:          Neutron and heavy-ion simulations will silently \
-                 return EMPTY until this is resolved (#709). Charged-particle runs \
-                 (p/d/t/3He/alpha) are unaffected.\n\
-                 hyrr:          Fix options:\n\
-                 hyrr:            * restore network and restart, OR\n\
-                 hyrr:            * `hyrr fetch-data --library endfb-8.0` and \
-                 `hyrr fetch-data --library hi-xs-prod` manually, OR\n\
-                 hyrr:            * point at a fresh install via --data-dir / HYRR_DATA.",
-                missing.join(", ")
-            )),
-            _ => None,
+/// Snapshot of the healer's current phase (see [`HealHandle::phase`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HealPhase {
+    /// Managed cache already covered every routed lib at boot.
+    NotNeeded,
+    /// Heal thread has been spawned and is running.
+    Downloading { missing: Vec<String> },
+    /// Heal thread finished. `added` names the libraries it successfully
+    /// installed (may be empty if the release lacked a routed subtree).
+    Complete { added: Vec<String> },
+    /// Heal thread failed; backoff marker is now set.
+    Failed { missing: Vec<String>, error: String },
+    /// A previous heal attempt failed within the backoff window; we are
+    /// deliberately not retrying yet. `until_epoch_s` is when we would
+    /// try again if the process were restarted.
+    BackoffActive {
+        missing: Vec<String>,
+        error: String,
+        until_epoch_s: u64,
+    },
+}
+
+/// Shared, cheaply-cloneable handle to the routed-library healer's state.
+///
+/// The MCP entry points create one via [`spawn_managed_cache_heal_thread`],
+/// install it globally via [`install_heal_handle`] so `tools.rs` can
+/// consult it, and drive the transport-side store swap through the
+/// `on_complete` callback.
+///
+/// Reads (`phase`, `library_status`) never block the request loop —
+/// only a brief `Mutex::lock` on the heal thread's state.
+#[derive(Clone)]
+pub struct HealHandle {
+    inner: std::sync::Arc<HealShared>,
+}
+
+struct HealShared {
+    phase: Mutex<HealPhase>,
+    /// The set of routed-library ids the heal is trying to add. Reads
+    /// remove entries once the on-disk subtree appears.
+    missing: Mutex<std::collections::HashSet<String>>,
+    /// Wall-clock epoch (seconds) when the current backoff window
+    /// expires, when applicable. `0` = no backoff.
+    backoff_until_epoch_s: Mutex<u64>,
+}
+
+impl HealHandle {
+    fn new(missing: Vec<String>, phase: HealPhase) -> Self {
+        Self {
+            inner: std::sync::Arc::new(HealShared {
+                phase: Mutex::new(phase),
+                missing: Mutex::new(missing.into_iter().collect()),
+                backoff_until_epoch_s: Mutex::new(0),
+            }),
         }
     }
+
+    /// Current phase — a snapshot; the healer may progress between the
+    /// read and the caller acting on it.
+    pub fn phase(&self) -> HealPhase {
+        self.inner.phase.lock().unwrap().clone()
+    }
+
+    /// Status of a specific routed library. Used by the MCP tool layer
+    /// to decide whether to serve a query or return a typed
+    /// "not yet available" diagnostic.
+    pub fn library_status(&self, library: &str) -> LibraryHealStatus {
+        let missing = self.inner.missing.lock().unwrap();
+        if !missing.contains(library) {
+            return LibraryHealStatus::Available;
+        }
+        drop(missing);
+        match &*self.inner.phase.lock().unwrap() {
+            HealPhase::NotNeeded => LibraryHealStatus::Available,
+            HealPhase::Downloading { .. } => LibraryHealStatus::Downloading,
+            HealPhase::Complete { added } => {
+                if added.iter().any(|l| l == library) {
+                    LibraryHealStatus::Available
+                } else {
+                    // Release didn't ship it; treat as failed with the
+                    // release-gap explanation.
+                    LibraryHealStatus::Failed {
+                        error: format!(
+                            "release data-{DATA_VERSION} does not include the `{library}` subtree"
+                        ),
+                        retry_after_epoch_s: *self.inner.backoff_until_epoch_s.lock().unwrap(),
+                    }
+                }
+            }
+            HealPhase::Failed { error, .. } | HealPhase::BackoffActive { error, .. } => {
+                LibraryHealStatus::Failed {
+                    error: error.clone(),
+                    retry_after_epoch_s: *self.inner.backoff_until_epoch_s.lock().unwrap(),
+                }
+            }
+        }
+    }
+
+    fn mark_available(&self, library: &str) {
+        self.inner.missing.lock().unwrap().remove(library);
+    }
+    fn set_phase(&self, phase: HealPhase) {
+        *self.inner.phase.lock().unwrap() = phase;
+    }
+    fn set_backoff_until(&self, epoch_s: u64) {
+        *self.inner.backoff_until_epoch_s.lock().unwrap() = epoch_s;
+    }
+
+    /// Test-only constructor: build a handle in `Downloading` phase with
+    /// the given libraries in its `missing` set. Not exposed to
+    /// production callers because the production shape is always
+    /// [`spawn_managed_cache_heal_thread`], which owns the missing set
+    /// via the on-disk cache and manages transitions itself.
+    #[cfg(test)]
+    pub fn test_new_downloading(missing: Vec<String>) -> Self {
+        Self::new(missing.clone(), HealPhase::Downloading { missing })
+    }
+
+    /// Test-only setter: `mark_available` is normally driven by the
+    /// heal thread's own bookkeeping.
+    #[cfg(test)]
+    pub fn test_mark_available(&self, library: &str) {
+        self.mark_available(library);
+    }
+
+    /// Test-only setter: `set_phase` is normally driven by the heal
+    /// thread's own state machine.
+    #[cfg(test)]
+    pub fn test_set_phase(&self, phase: HealPhase) {
+        self.set_phase(phase);
+    }
+}
+
+/// Global slot the MCP tool layer consults to decide whether a routed
+/// projectile can be served or needs a diagnostic. Set once per process
+/// by the MCP entry point.
+static HEAL_HANDLE: OnceLock<HealHandle> = OnceLock::new();
+
+/// Install the process-global heal handle. Callable once — subsequent
+/// installs are silently ignored (`OnceLock::set` semantics). Returns
+/// `false` when a handle was already installed, so the caller can log
+/// the duplicate-install case.
+pub fn install_heal_handle(handle: HealHandle) -> bool {
+    HEAL_HANDLE.set(handle).is_ok()
+}
+
+/// Retrieve the process-global heal handle. `None` when no MCP entry
+/// point has installed one (typical for a plain library / test build,
+/// or for a `--data-dir` / `HYRR_DATA` install where healing is out of
+/// scope).
+pub fn heal_handle() -> Option<&'static HealHandle> {
+    HEAL_HANDLE.get()
+}
+
+/// How long a failed heal attempt sidelines itself before another
+/// process is allowed to retry. 24 h matches typical release-cut
+/// cadence — a real network glitch clears fast, a broken release keeps
+/// us from hammering GitHub.
+const HEAL_BACKOFF_WINDOW: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Backoff marker path (`<cache_dir>/.heal-attempted`). Not `.complete`,
+/// so its presence never masquerades as a valid cache.
+fn heal_backoff_marker_path() -> Result<PathBuf> {
+    Ok(cache_dir()?.join(".heal-attempted"))
+}
+
+/// Persist a failed-attempt marker so any process (this one and the next
+/// restart) skips the routed-lib heal fetch for [`HEAL_BACKOFF_WINDOW`].
+/// The reason is stored verbatim for the user diagnostic later.
+///
+/// Format is plain `key=value` lines; forward-compatible with additional
+/// keys.
+fn write_heal_backoff_marker(missing: &[String], error: &str) -> Result<u64> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let until = now.saturating_add(HEAL_BACKOFF_WINDOW.as_secs());
+    let body = format!(
+        "attempted_epoch_s={now}\n\
+         retry_after_epoch_s={until}\n\
+         missing={}\n\
+         error={}\n",
+        missing.join(","),
+        // Newline-strip so a multi-line error can't corrupt the format.
+        error.replace('\n', " ").trim(),
+    );
+    let path = heal_backoff_marker_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, body)?;
+    Ok(until)
+}
+
+/// Read the backoff marker if present. Returns `Some(until_epoch_s,
+/// missing, error)` when a fresh-enough marker exists; `None` after the
+/// window has passed (and the marker gets deleted).
+fn read_heal_backoff_marker() -> Option<(u64, Vec<String>, String)> {
+    let path = heal_backoff_marker_path().ok()?;
+    let body = fs::read_to_string(&path).ok()?;
+    let mut until = 0u64;
+    let mut missing = Vec::new();
+    let mut error = String::new();
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("retry_after_epoch_s=") {
+            until = rest.parse().unwrap_or(0);
+        } else if let Some(rest) = line.strip_prefix("missing=") {
+            missing = rest
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
+        } else if let Some(rest) = line.strip_prefix("error=") {
+            error = rest.to_string();
+        }
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now >= until {
+        // Expired — sweep the marker so the next attempt runs.
+        let _ = fs::remove_file(&path);
+        return None;
+    }
+    Some((until, missing, error))
+}
+
+/// Spawn a background thread that heals the managed cache's missing
+/// routed libraries (#709). The MCP transport calls this AFTER the
+/// stdio loop starts serving requests, so a slow download can't push
+/// the server past a client's startup timeout.
+///
+/// Design summary — the reviewer's shape:
+/// 1. **Non-blocking startup.** Callers get a [`HealHandle`] immediately
+///    and start serving; the fetch runs on a detached thread.
+/// 2. **Typed diagnostic in-flight.** Tools consult
+///    [`HealHandle::library_status`] for routed projectiles and emit a
+///    "not yet available" / "download failed" diagnostic — never a
+///    silently-empty result — until the heal thread completes and the
+///    on-disk subtree appears.
+/// 3. **Managed-cache-only.** The caller must have verified the
+///    resolved data dir IS the managed cache (via
+///    [`resolved_is_managed_cache`]) before spawning; a user-supplied
+///    `--data-dir` / `HYRR_DATA` / sibling checkout is out of scope.
+/// 4. **24 h backoff.** A failed attempt writes
+///    [`heal_backoff_marker_path`] and both this process and the next
+///    restart skip the fetch until the window elapses.
+/// 5. **Atomic per-library rename.** [`heal_missing_libraries_atomic`]
+///    extracts only the missing lib prefixes into a partial dir and
+///    `fs::rename`s each library subtree into place. Never touches
+///    `.complete`, `meta/`, `stopping/`, or existing library dirs
+///    (other running sessions must be able to keep reading them).
+/// 6. **Store swap after success.** `on_complete` is invoked from the
+///    heal thread when at least one library was healed; the callback
+///    is expected to rebuild [`crate::db::ParquetDataStore`] against
+///    the now-updated data dir and swap it into the transport, so
+///    memoised misses from the old store (`NpDataStore::ensure_xs`
+///    caches empty vectors) don't outlive the fetch.
+///
+/// The returned handle is also cached in the process-global
+/// [`heal_handle`] slot so the MCP tool layer can consult it without
+/// needing to plumb the handle through every call site.
+pub fn spawn_managed_cache_heal_thread<F>(on_complete: F) -> HealHandle
+where
+    F: FnOnce() + Send + 'static,
+{
+    // Compute the initial missing set from the current on-disk state.
+    // If nothing is missing, we still return a handle but with phase
+    // NotNeeded — tools can shortcut on that.
+    let missing = missing_routed_libraries().unwrap_or_default();
+    if missing.is_empty() {
+        let handle = HealHandle::new(Vec::new(), HealPhase::NotNeeded);
+        let _ = install_heal_handle(handle.clone());
+        return handle;
+    }
+    let missing_str: Vec<String> = missing.iter().map(|s| s.to_string()).collect();
+
+    // Check the backoff marker BEFORE spawning any I/O. Even the local
+    // fs read is cheap and lets us report "in cooldown" instead of
+    // firing another download.
+    if let Some((until, saved_missing, saved_error)) = read_heal_backoff_marker() {
+        // Prefer the saved missing list if present, so the user sees the
+        // same libs the previous attempt was after.
+        let missing_out = if saved_missing.is_empty() {
+            missing_str.clone()
+        } else {
+            saved_missing
+        };
+        let handle = HealHandle::new(
+            missing_out.clone(),
+            HealPhase::BackoffActive {
+                missing: missing_out,
+                error: saved_error,
+                until_epoch_s: until,
+            },
+        );
+        handle.set_backoff_until(until);
+        let _ = install_heal_handle(handle.clone());
+        return handle;
+    }
+
+    let handle = HealHandle::new(
+        missing_str.clone(),
+        HealPhase::Downloading {
+            missing: missing_str.clone(),
+        },
+    );
+    let _ = install_heal_handle(handle.clone());
+
+    let thread_handle = handle.clone();
+    std::thread::Builder::new()
+        .name("hyrr-heal".to_string())
+        .spawn(move || {
+            let owned: Vec<String> = missing_str;
+            let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+            match heal_missing_libraries_atomic(&refs) {
+                Ok(added) => {
+                    // Remove each successfully-installed library from
+                    // the missing set so `library_status` flips to
+                    // `Available` for in-flight tool calls.
+                    for lib in &added {
+                        thread_handle.mark_available(lib);
+                    }
+                    let not_shipped: Vec<String> = owned
+                        .iter()
+                        .filter(|l| !added.iter().any(|a| a == *l))
+                        .cloned()
+                        .collect();
+                    if !not_shipped.is_empty() {
+                        // Release didn't ship one of the routed libs.
+                        // Record a backoff so we don't loop-fetch the
+                        // whole tarball on every next boot for a
+                        // library upstream doesn't publish.
+                        let reason = format!(
+                            "release data-{DATA_VERSION} does not include: [{}]",
+                            not_shipped.join(", ")
+                        );
+                        let until = write_heal_backoff_marker(&not_shipped, &reason).unwrap_or(0);
+                        thread_handle.set_backoff_until(until);
+                    }
+                    thread_handle.set_phase(HealPhase::Complete {
+                        added: added.clone(),
+                    });
+                    // Only swap the store if we actually gained coverage
+                    // — a zero-added completion (release lacked every
+                    // routed lib) leaves nothing new to see.
+                    if !added.is_empty() {
+                        on_complete();
+                    }
+                }
+                Err(e) => {
+                    let error = e.to_string();
+                    let until = write_heal_backoff_marker(&owned, &error).unwrap_or(0);
+                    thread_handle.set_backoff_until(until);
+                    thread_handle.set_phase(HealPhase::Failed {
+                        missing: owned,
+                        error,
+                    });
+                }
+            }
+        })
+        .expect("spawn hyrr-heal thread");
+
+    handle
+}
+
+/// Extract ONLY the given library subtrees from a freshly-fetched
+/// release tarball and atomically move each one into
+/// `<cache_dir>/data/<lib>/`.
+///
+/// **What this deliberately does not touch** — the reviewer's live-readers
+/// invariant: `meta/`, `stopping/`, `catalog.json`, `suppliers.json`, the
+/// `.complete` sentinel, or any pre-existing library directory. Other
+/// running sessions read those files and would be broken by a mid-merge
+/// removal / rename (`merge_dir_into`, used by `install_tarball_atomic`,
+/// removes-and-renames each meta / stopping entry — safe on cold cache,
+/// unsafe with live consumers).
+///
+/// **Locking.** Acquires the same cache lock as `ensure_library`, so a
+/// concurrent `ensure_library` or a second heal thread can't extract on
+/// top of us. Skips work if a peer already installed the libraries
+/// while we were waiting on the lock.
+///
+/// **Atomic install.** Each library subtree is materialised in a
+/// partial staging dir (`v{V}.heal-{pid}/data/{lib}`) and then a single
+/// `fs::rename` moves it into `<cache>/data/{lib}`. Readers see the
+/// full library or none of it — never a half-materialised directory.
+///
+/// Returns the libraries that were actually installed (empty is legal:
+/// the release may not ship all routed libs).
+fn heal_missing_libraries_atomic(missing: &[&str]) -> Result<Vec<String>> {
+    let _lock = acquire_lock()?;
+    // Peer may have healed while we were waiting on the lock.
+    let still_missing: Vec<&str> = {
+        let data = cache_dir()?.join("data");
+        missing
+            .iter()
+            .copied()
+            .filter(|lib| !data.join(lib).exists())
+            .collect()
+    };
+    if still_missing.is_empty() {
+        return Ok(missing.iter().map(|s| s.to_string()).collect());
+    }
+    require_free_space(1024 * 1024 * 1024)?;
+
+    let tmp = cache_root()?.join(tarball_filename());
+    let _guard = TmpFileGuard::new(tmp.clone());
+    fetch_full_tarball_with_seam(&tmp, &mut no_op_progress())?;
+
+    let lib_prefixes: Vec<String> = still_missing
+        .iter()
+        .map(|lib| format!("data/{lib}/"))
+        .collect();
+    let prefixes: Vec<&str> = lib_prefixes.iter().map(String::as_str).collect();
+
+    let pid = std::process::id();
+    let heal_root = cache_root()?.join(format!("v{DATA_VERSION}.heal-{pid}"));
+    // Best-effort sweep of stale heal dirs from prior crashes. The lock
+    // guarantees no other live heal is writing one right now.
+    if let Ok(entries) = fs::read_dir(cache_root()?) {
+        let stale = format!("v{DATA_VERSION}.heal-");
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&stale) {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    if heal_root.exists() {
+        fs::remove_dir_all(&heal_root)?;
+    }
+    extract_tarball(&tmp, &heal_root, &prefixes)?;
+
+    let data_dir = cache_dir()?.join("data");
+    fs::create_dir_all(&data_dir)?;
+    let mut added = Vec::new();
+    for lib in &still_missing {
+        let src = heal_root.join("data").join(lib);
+        if !src.exists() {
+            // Release didn't ship this lib. Skip silently — the caller
+            // (spawn thread) records the release-gap backoff.
+            continue;
+        }
+        let dst = data_dir.join(lib);
+        // Belt-and-braces: if `dst` somehow already exists (another
+        // heal since our peer check), remove first so `fs::rename` can
+        // succeed on platforms that refuse a non-empty target.
+        if dst.exists() {
+            fs::remove_dir_all(&dst)?;
+        }
+        // Cross-FS: fall back to copy + delete. Within `~/.hyrr` this
+        // is normally the same filesystem, but a tmpfs `$HOME` or a
+        // bind-mount around the cache root does happen.
+        if fs::rename(&src, &dst).is_err() {
+            copy_dir_recursive(&src, &dst)?;
+            fs::remove_dir_all(&src)?;
+        }
+        added.push((*lib).to_string());
+    }
+
+    let _ = fs::remove_dir_all(&heal_root);
+    Ok(added)
 }
 
 /// Does the resolved data dir point at the managed cache
 /// (`~/.hyrr/nucl-parquet/v{DATA_VERSION}/data`) — i.e. the only path
-/// [`try_heal_routed_libraries_in_managed_cache`] is allowed to touch?
+/// [`spawn_managed_cache_heal_thread`] is allowed to touch?
 ///
 /// Returns false for `--data-dir`, `HYRR_DATA`, `NUCL_PARQUET_DATA`, a
 /// sibling checkout, or a legacy `~/.hyrr/nucl-parquet/data` without the
@@ -4602,123 +5020,77 @@ mod tests {
         test_hooks::clear_fetch_source();
     }
 
-    /// **Nit #1 defence.** If a release ever ships without one of the
-    /// routed subtrees, `ensure_library` must error out — not merrily
-    /// re-write the sentinel and let the next call re-download 727 MB
-    /// forever. Simulate that with a tarball that only has `tendl-test`
-    /// and no `endfb-8.0`/`hi-xs-prod`, expect a fetch error naming the
-    /// missing libs.
+    /// **Regression for #709 — the atomic heal path.**
+    /// [`heal_missing_libraries_atomic`] must extract ONLY the missing
+    /// library subtrees and rename each into place, leaving `meta/`,
+    /// `stopping/`, the `.complete` sentinel, and pre-existing library
+    /// directories untouched. The reviewer's "live readers" invariant:
+    /// another running session must be able to keep reading the pre-heal
+    /// cache without seeing half-materialised state.
     #[test]
-    fn ensure_library_errors_if_release_lacks_a_routed_lib() {
-        let _g = SERIAL.lock().unwrap();
-        let td = isolated_home();
-        let archive = td.path().join("broken-release.tar.zst");
-        // Base fixture has meta/marker + tendl-test/xs only. No routed libs.
-        make_test_tarball(&archive);
-
-        test_hooks::arm_fetch_source(archive.clone());
-        let err = ensure_library("tendl-test")
-            .expect_err("release without routed libs must fail loudly, not silently succeed");
-        let msg = err.to_string();
-        assert!(
-            msg.contains(NEUTRON_LIBRARY) || msg.contains(HEAVY_ION_LIBRARY),
-            "diagnostic must name the missing routed lib(s): {msg}"
-        );
-        test_hooks::clear_fetch_source();
-    }
-
-    /// **Regression for #709 — the healer path.** The reviewer's own
-    /// managed cache on 0.21.1 held only `tendl-2023-iso`; `data_dir::resolve`
-    /// short-circuited on `is_cache_complete()`, `ensure_library` never
-    /// ran, and neutron / heavy-ion runs kept returning empty. This test
-    /// puts the cache in exactly that shape and asserts
-    /// `try_heal_routed_libraries_in_managed_cache` extracts the missing
-    /// routed subtrees on the next boot — the actual upgrade experience.
-    #[test]
-    fn try_heal_routed_libraries_repairs_a_pre_709_managed_cache() {
+    fn heal_missing_libraries_atomic_touches_only_missing_prefixes() {
         let _g = SERIAL.lock().unwrap();
         let td = isolated_home();
 
-        // Step 1: put the managed cache in pre-#709 shape (charged lib
-        // only, `.complete` set — this is what a 0.21.1 install left
-        // on disk).
+        // Step 1: pre-#709 warm cache — tendl-test only.
         let pre = td.path().join("pre.tar.zst");
         make_test_tarball(&pre);
         install_unverified(&pre).unwrap();
         assert!(is_cache_complete());
         let cd = cache_dir().unwrap();
-        assert!(!cd.join(format!("data/{NEUTRON_LIBRARY}")).exists());
-        assert!(!cd.join(format!("data/{HEAVY_ION_LIBRARY}")).exists());
+        let meta_before = fs::read(cd.join("data/meta/marker")).unwrap();
+        let tendl_before = fs::read(cd.join("data/tendl-test/xs/p_Cu.parquet")).unwrap();
+        let sentinel_before = fs::metadata(cd.join(".complete")).unwrap().modified().ok();
 
-        // Step 2: arm the fetch seam with the release-layout fixture
-        // (routing-aware, root-level entries — the real release shape).
+        // Step 2: heal with a REAL release-layout tarball (root-level).
         let repair = td.path().join("repair.tar.zst");
         make_release_layout_tarball_with_routing(&repair);
         test_hooks::arm_fetch_source(repair.clone());
 
-        let outcome = try_heal_routed_libraries_in_managed_cache().unwrap();
-        match outcome {
-            HealOutcome::Repaired { ref added } => {
-                assert!(added.iter().any(|s| s == NEUTRON_LIBRARY));
-                assert!(added.iter().any(|s| s == HEAVY_ION_LIBRARY));
-            }
-            other => panic!("expected Repaired, got {other:?}"),
-        }
-        assert!(cd.join(format!("data/{NEUTRON_LIBRARY}")).exists());
-        assert!(cd.join(format!("data/{HEAVY_ION_LIBRARY}")).exists());
-        // Charged lib survives.
-        assert!(cd.join("data/tendl-test/xs/p_Cu.parquet").exists());
+        let added = heal_missing_libraries_atomic(&[NEUTRON_LIBRARY, HEAVY_ION_LIBRARY]).unwrap();
+        assert_eq!(added.len(), 2);
+        assert!(added.iter().any(|s| s == NEUTRON_LIBRARY));
+        assert!(added.iter().any(|s| s == HEAVY_ION_LIBRARY));
+
+        // Routed subtrees now on disk.
+        assert!(cd
+            .join(format!("data/{NEUTRON_LIBRARY}/xs/n_Fe.parquet"))
+            .exists());
+        assert!(cd
+            .join(format!("data/{HEAVY_ION_LIBRARY}/xs/c12_Al.parquet"))
+            .exists());
+        // Untouched: meta, the pre-existing charged lib, and the sentinel.
+        assert_eq!(fs::read(cd.join("data/meta/marker")).unwrap(), meta_before);
+        assert_eq!(
+            fs::read(cd.join("data/tendl-test/xs/p_Cu.parquet")).unwrap(),
+            tendl_before
+        );
+        // The sentinel file must not have been rewritten by the heal
+        // — a rewrite would tick its mtime.
+        let sentinel_after = fs::metadata(cd.join(".complete")).unwrap().modified().ok();
+        assert_eq!(
+            sentinel_before, sentinel_after,
+            "heal must not touch .complete"
+        );
+
         test_hooks::clear_fetch_source();
     }
 
-    /// **The offline-preservation invariant.** A user on 0.21.1 who
-    /// never had network access has a proton-only cache but a working
-    /// hyrr-mcp. After #709 lands they upgrade, boot the MCP — the
-    /// healer sees the routed libs are missing, tries to fetch (armed
-    /// with a broken fetcher via the test seam) and fails. The MCP
-    /// must NOT crash and the charged-particle path must still work.
-    /// The healer returns `Warned` and writes to stderr.
+    /// The healer must be a no-op on a cache that already carries the
+    /// libraries. Passing an already-present library returns it in the
+    /// `added` list (idempotency) without touching the network.
     #[test]
-    fn try_heal_routed_libraries_warns_but_does_not_error_when_fetch_fails() {
+    fn heal_missing_libraries_atomic_is_idempotent() {
         let _g = SERIAL.lock().unwrap();
         let td = isolated_home();
-        let pre = td.path().join("pre.tar.zst");
-        make_test_tarball(&pre);
-        install_unverified(&pre).unwrap();
-
-        // Arm the seam with a source that does not exist — the copy
-        // step will fail with EEXIST/ENOENT, and the healer must
-        // fold that into a Warned outcome, not propagate as Err.
-        let broken = td.path().join("does-not-exist.tar.zst");
-        test_hooks::arm_fetch_source(broken);
-
-        let outcome = try_heal_routed_libraries_in_managed_cache().unwrap();
-        match outcome {
-            HealOutcome::Warned {
-                ref missing,
-                ref error,
-            } => {
-                assert!(missing.iter().any(|s| s == NEUTRON_LIBRARY));
-                assert!(missing.iter().any(|s| s == HEAVY_ION_LIBRARY));
-                assert!(!error.is_empty());
-            }
-            ref other => panic!("expected Warned, got {other:?}"),
-        }
-        // Warning message is available for the MCP callers to eprintln.
-        let msg = outcome
-            .warning_message()
-            .expect("Warned outcome must yield a diagnostic string");
-        assert!(msg.contains(NEUTRON_LIBRARY));
-        assert!(msg.contains(HEAVY_ION_LIBRARY));
-        assert!(
-            msg.contains("silently return EMPTY"),
-            "diagnostic must call the failure mode by name so the user knows why"
-        );
-        // Charged-particle path still works (subtree intact, sentinel
-        // still present — the failed repair did NOT delete anything).
+        let archive = td.path().join("full.tar.zst");
+        make_test_tarball_with_routing(&archive);
+        install_unverified(&archive).unwrap();
         assert!(is_cache_complete());
-        assert!(cache_dir().unwrap().join("data/tendl-test").exists());
-        test_hooks::clear_fetch_source();
+
+        // Not arming the seam — a passing test is proof no fetch fired.
+        let added = heal_missing_libraries_atomic(&[NEUTRON_LIBRARY, HEAVY_ION_LIBRARY]).unwrap();
+        assert_eq!(added.len(), 2);
     }
 
     /// **Managed-cache-only invariant.** `resolved_is_managed_cache`
@@ -4752,22 +5124,144 @@ mod tests {
         );
     }
 
-    /// The healer must be a no-op on a cache that already carries the
-    /// routed libs — `AlreadyPresent`, no fetch, no writes.
+    /// **Backoff marker round-trip.** A failed heal writes the marker;
+    /// a subsequent read parses the fields back and the marker
+    /// suppresses the next `spawn_managed_cache_heal_thread` retry
+    /// until the window elapses.
     #[test]
-    fn try_heal_routed_libraries_is_a_no_op_when_cache_is_covered() {
+    fn heal_backoff_marker_round_trips_and_gates_the_thread() {
         let _g = SERIAL.lock().unwrap();
         let td = isolated_home();
-        let archive = td.path().join("full.tar.zst");
-        make_test_tarball_with_routing(&archive);
+
+        // First install the pre-#709 shape (charged lib only, sentinel
+        // set) so `missing_routed_libraries` returns non-empty. If we
+        // wrote the marker BEFORE the install, `install_tarball_atomic`
+        // would `remove_dir_all(&cache_dir())` (its incomplete-cache
+        // sweep) and wipe our marker along with the rest of the dir.
+        let archive = td.path().join("pre.tar.zst");
+        make_test_tarball(&archive);
         install_unverified(&archive).unwrap();
         assert!(is_cache_complete());
 
-        // NOT arming the seam — if the healer tries to fetch, the test
-        // hits the real network and either times out or hits the
-        // no-fetch guard. A passing test is proof no fetch fired.
-        let outcome = try_heal_routed_libraries_in_managed_cache().unwrap();
-        assert_eq!(outcome, HealOutcome::AlreadyPresent);
+        // NOW write the marker into the same cache_dir.
+        let missing = vec![NEUTRON_LIBRARY.to_string(), HEAVY_ION_LIBRARY.to_string()];
+        let until = write_heal_backoff_marker(&missing, "simulated network drop").unwrap();
+        let cd = cache_dir().unwrap();
+        assert!(cd.join(".heal-attempted").exists());
+        let (retry, parsed_missing, err) =
+            read_heal_backoff_marker().expect("fresh marker must parse");
+        assert_eq!(retry, until);
+        assert!(parsed_missing.iter().any(|s| s == NEUTRON_LIBRARY));
+        assert!(parsed_missing.iter().any(|s| s == HEAVY_ION_LIBRARY));
+        assert!(err.contains("simulated network drop"));
+
+        // Spawn the heal thread — with a fresh marker on disk it must
+        // NOT retry, and instead report `BackoffActive`.
+        let handle = spawn_managed_cache_heal_thread(|| {});
+        match handle.phase() {
+            HealPhase::BackoffActive { until_epoch_s, .. } => {
+                assert_eq!(until_epoch_s, until);
+            }
+            other => panic!("expected BackoffActive, got {other:?}"),
+        }
+        // Marker still on disk (heal didn't run).
+        assert!(cache_dir().unwrap().join(".heal-attempted").exists());
+    }
+
+    /// **The offline-preservation invariant.** A user on 0.21.1 who
+    /// never had network access has a proton-only cache but a working
+    /// hyrr-mcp. After #709 they upgrade, boot the MCP — the heal
+    /// thread sees the routed libs are missing, tries to fetch (armed
+    /// with a broken fetcher via the test seam) and fails. The MCP
+    /// must NOT crash and the charged-particle path must still work.
+    /// The heal handle reports `Failed`, a backoff marker gets written,
+    /// and the `library_status` for each routed lib flips to `Failed`
+    /// so the tool layer emits a typed diagnostic instead of an empty
+    /// result.
+    #[test]
+    fn heal_thread_warns_but_does_not_error_when_fetch_fails() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        let pre = td.path().join("pre.tar.zst");
+        make_test_tarball(&pre);
+        install_unverified(&pre).unwrap();
+
+        // Arm the seam with a source that does not exist — the copy
+        // step will fail with ENOENT, which the heal thread must fold
+        // into a `Failed` phase (never a panic).
+        let broken = td.path().join("does-not-exist.tar.zst");
+        test_hooks::arm_fetch_source(broken);
+
+        let handle = spawn_managed_cache_heal_thread(|| {});
+        // Wait for the heal thread to finish. Poll instead of a fixed
+        // sleep so a slow CI host doesn't flake this test.
+        for _ in 0..200 {
+            if !matches!(handle.phase(), HealPhase::Downloading { .. }) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        match handle.phase() {
+            HealPhase::Failed {
+                ref missing,
+                ref error,
+            } => {
+                assert!(missing.iter().any(|s| s == NEUTRON_LIBRARY));
+                assert!(!error.is_empty());
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        // Charged-particle path still works.
+        assert!(is_cache_complete());
+        assert!(cache_dir().unwrap().join("data/tendl-test").exists());
+        // Backoff marker written so we don't loop on next boot.
+        assert!(cache_dir().unwrap().join(".heal-attempted").exists());
+        // library_status reports Failed for both routed libs.
+        match handle.library_status(NEUTRON_LIBRARY) {
+            LibraryHealStatus::Failed { .. } => {}
+            other => panic!("expected Failed for {NEUTRON_LIBRARY}, got {other:?}"),
+        }
+        match handle.library_status(HEAVY_ION_LIBRARY) {
+            LibraryHealStatus::Failed { .. } => {}
+            other => panic!("expected Failed for {HEAVY_ION_LIBRARY}, got {other:?}"),
+        }
+        test_hooks::clear_fetch_source();
+    }
+
+    /// **Cold cache with a release lacking a routed lib.** Reviewer's
+    /// nit #3: `ensure_library` must NOT exit(2) — the charged library
+    /// is on disk, proton runs must keep working. A backoff marker
+    /// gets written so the heal thread doesn't loop.
+    #[test]
+    fn ensure_library_warns_on_missing_routed_lib_but_still_promotes_the_cache() {
+        let _g = SERIAL.lock().unwrap();
+        let td = isolated_home();
+        // Base fixture has meta + tendl-test only — no routed libs.
+        // ensure_library("tendl-test") must succeed (charged is
+        // present) and record a backoff for the routed libs.
+        let archive = td.path().join("release-without-routed.tar.zst");
+        make_test_tarball(&archive);
+        test_hooks::arm_fetch_source(archive.clone());
+
+        let result = ensure_library("tendl-test");
+        assert!(
+            result.is_ok(),
+            "release without routed libs must not error on cold cache: {result:?}"
+        );
+        // Charged lib is on disk.
+        let cd = cache_dir().unwrap();
+        assert!(cd.join("data/tendl-test/xs/p_Cu.parquet").exists());
+        assert!(is_cache_complete());
+        // Backoff marker written.
+        assert!(cd.join(".heal-attempted").exists());
+        let (_, missing, err) = read_heal_backoff_marker().expect("marker must be readable");
+        assert!(
+            missing.iter().any(|s| s == NEUTRON_LIBRARY),
+            "backoff marker must record the missing neutron library"
+        );
+        assert!(err.contains(NEUTRON_LIBRARY) || err.contains("neutron"));
+
+        test_hooks::clear_fetch_source();
     }
 }
 
