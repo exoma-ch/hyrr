@@ -1158,6 +1158,13 @@ pub fn compute_neutron_stack(
     area_cm2: f64,
     enable_chains: bool,
 ) -> StackResult {
+    // The neutron path has its own cross-section lookup that can go silently
+    // empty (missing neutron sublibrary, or a target the sublibrary doesn't
+    // cover — a downstream secondary-activation layer without n xs would just
+    // drop out otherwise). Collect the same #650 diagnostics compute_layer
+    // does; this is the source-of-truth for the neutron pass, so both a direct
+    // `projectile:"n"` run and the Phase-2 secondary pass see them.
+    let mut diagnostics: Vec<crate::types::Diagnostic> = Vec::new();
     let layer_results: Vec<LayerResult> = layers
         .iter()
         .enumerate()
@@ -1170,6 +1177,8 @@ pub fn compute_neutron_stack(
                 cooling_time_s,
                 area_cm2,
                 enable_chains,
+                idx,
+                &mut diagnostics,
             );
             if lr.pruned_negligible_count > 0 {
                 crate::trace_schema::layer_inventory_pruned(
@@ -1183,16 +1192,14 @@ pub fn compute_neutron_stack(
         .collect();
     StackResult {
         layer_results,
-        // TODO(#650 follow-up): the neutron path has its own cross-section
-        // lookup and can go silently empty the same way; wiring it needs the
-        // same treatment as compute_layer.
-        diagnostics: Vec::new(),
+        diagnostics,
         irradiation_time_s,
         cooling_time_s,
         provenance: crate::provenance::Provenance::new(db.library(), db.data_origin()),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_neutron_layer(
     db: &dyn DatabaseProtocol,
     layer: &Layer,
@@ -1201,6 +1208,8 @@ fn compute_neutron_layer(
     cool_time: f64,
     area: f64,
     enable_chains: bool,
+    layer_index: usize,
+    diagnostics: &mut Vec<crate::types::Diagnostic>,
 ) -> LayerResult {
     let blank = LayerResult {
         energy_in: 0.0,
@@ -1234,13 +1243,51 @@ fn compute_neutron_layer(
     let mut isotope_results: HashMap<String, IsotopeResult> = HashMap::new();
 
     for (elem, atom_frac) in &layer.elements {
+        // Elements with no natural isotopes contribute no target mass; mirror
+        // the charged pass's #650 diagnostic so a Ra-in-Cu-style mix still
+        // says why nothing came from Ra (compute_layer emits the same).
+        if elem.isotopes.is_empty() {
+            let d = crate::types::Diagnostic::new(
+                crate::types::DiagnosticKind::EmptyIsotopeComposition {
+                    symbol: elem.symbol.clone(),
+                    z: elem.z,
+                },
+                Some(layer_index),
+            );
+            if !diagnostics.contains(&d) {
+                diagnostics.push(d);
+            }
+            continue;
+        }
         let target_symbol = db.get_element_symbol(elem.z);
         for (&a_target, &abundance) in &elem.isotopes {
             let n_target = number_density * atom_frac * abundance;
             if n_target <= 0.0 {
                 continue;
             }
-            for xs in &db.get_cross_sections("n", elem.z, a_target) {
+            let xs_list = db.get_cross_sections("n", elem.z, a_target);
+            // Same silent-empty path the charged loop guards (#650): a missing
+            // neutron parquet, a routed sublibrary that doesn't cover this
+            // target, or a Z-named-file mismatch (#488) all return an empty
+            // vector with no error. Without this diagnostic a downstream
+            // (n,x) layer just... disappears, which is the surfaced part of
+            // #668 once #709 finishes wiring the neutron library fetch.
+            if xs_list.is_empty() {
+                let d = crate::types::Diagnostic::new(
+                    crate::types::DiagnosticKind::NoCrossSectionData {
+                        projectile: "n".to_string(),
+                        target_z: elem.z,
+                        target_symbol: elem.symbol.clone(),
+                        target_a: a_target,
+                    },
+                    Some(layer_index),
+                );
+                if !diagnostics.contains(&d) {
+                    diagnostics.push(d);
+                }
+                continue;
+            }
+            for xs in &xs_list {
                 // Thin-target: empty Σ_t ⇒ the depth factor is the thickness.
                 let rate = neutron_channel_rate(
                     &xs.energies_mev,
@@ -1378,6 +1425,17 @@ pub fn compute_stack_with_secondary_neutrons(
         .map(|lr| lr.neutron_source_rate)
         .sum();
     if total_source <= 0.0 {
+        // The dominant #668 shape: the flag was requested, but the charged
+        // pass emitted zero free neutrons (typically because the converter
+        // isotope is absent from the selected library — `tendl-2023-iso` has
+        // no 9Be, so a Be→Al stack short-circuits here and reports only Al's
+        // charged direct products with no hint that (n,x) was ever attempted).
+        // Surface it as a hard diagnostic so the empty downstream inventory
+        // isn't confused with a genuine zero (#650).
+        charged.diagnostics.push(crate::types::Diagnostic::new(
+            crate::types::DiagnosticKind::SecondaryNeutronsNoSource,
+            None,
+        ));
         return Ok(charged);
     }
 
@@ -1405,6 +1463,15 @@ pub fn compute_stack_with_secondary_neutrons(
             &mut charged_layer.isotope_results,
             sec_layer.isotope_results,
         );
+    }
+    // Fold the neutron pass's own #650 diagnostics (e.g. missing endfb-8.0
+    // n_Al parquet) into the merged result — dedup to keep a single row per
+    // (kind, layer) since the charged and neutron passes can each see the
+    // same target isotope on their own axis.
+    for d in secondary.diagnostics {
+        if !charged.diagnostics.contains(&d) {
+            charged.diagnostics.push(d);
+        }
     }
     Ok(charged)
 }

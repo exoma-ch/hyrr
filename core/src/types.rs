@@ -503,6 +503,18 @@ pub enum DiagnosticKind {
         beam_min_mev: f64,
         beam_max_mev: f64,
     },
+    /// `secondary_neutron: true` was requested, but the charged pass produced
+    /// zero free (x,n) neutrons, so the downstream neutron activation pass had
+    /// no source term and was skipped.
+    ///
+    /// The dominant cause on a live run is a library that ships no
+    /// cross-sections for the converter's isotope — `tendl-2023-iso` has no
+    /// 9Be, so 17.8 MeV protons on Be produce no (p,n) neutrons; downstream Al
+    /// then silently shows only its own charged-particle direct products, and
+    /// ²⁷Al(n,α)²⁴Na is invisible (#668). A companion
+    /// [`Self::NoCrossSectionData`] fires from the charged pass for the same
+    /// underlying miss.
+    SecondaryNeutronsNoSource,
 }
 
 impl DiagnosticKind {
@@ -536,6 +548,14 @@ impl DiagnosticKind {
                  {beam_max_mev:.3} MeV in this layer — no channel overlaps, so nothing \
                  is produced. Try a different beam energy or library."
             ),
+            Self::SecondaryNeutronsNoSource => {
+                "`secondary_neutron: true` was requested, but the charged pass emitted \
+                 zero (x,n) free neutrons — the downstream neutron-activation pass was \
+                 skipped. Usually paired with a `no cross-section data` diagnostic on \
+                 the upstream converter; picking a library that carries the converter \
+                 isotope (e.g. `tendl-2025` for 9Be) restores the source."
+                    .to_string()
+            }
         }
     }
 
@@ -545,6 +565,7 @@ impl DiagnosticKind {
             Self::NoCrossSectionData { .. } => DiagnosticSeverity::Error,
             Self::EmptyIsotopeComposition { .. } => DiagnosticSeverity::Error,
             Self::ReactionOutsideEnergyRange { .. } => DiagnosticSeverity::Error,
+            Self::SecondaryNeutronsNoSource => DiagnosticSeverity::Error,
         }
     }
 }

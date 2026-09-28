@@ -1874,6 +1874,26 @@ fn tool_simulate(
         ));
     }
 
+    // Surface #650 diagnostics — the whole point of the channel is to keep
+    // "empty because the library doesn't cover this target" distinguishable
+    // from "empty because the reaction genuinely produces nothing". Without a
+    // renderer, a secondary-neutron short-circuit or a missing (n,x) parquet
+    // looks like a healthy zero.
+    if !result.diagnostics.is_empty() {
+        output.push_str("\n## Diagnostics\n\n");
+        for d in &result.diagnostics {
+            let sev = match d.severity {
+                crate::types::DiagnosticSeverity::Error => "⚠️",
+                crate::types::DiagnosticSeverity::Warning => "ℹ️",
+            };
+            let scope = match d.layer_index {
+                Some(i) => format!(" (Layer {})", i + 1),
+                None => String::new(),
+            };
+            output.push_str(&format!("- {sev}{scope} {}\n", d.message));
+        }
+    }
+
     Ok(output)
 }
 
