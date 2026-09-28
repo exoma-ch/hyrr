@@ -4,6 +4,7 @@ import {
   fetchErrorTitle,
   type FetchErrorPayload,
 } from "./parse-fetch-error";
+import { DataFetchError } from "@hyrr/compute";
 
 describe("parseFetchError — every Rust variant round-trips", () => {
   it("classifies HttpStatus from a structured payload", () => {
@@ -159,6 +160,27 @@ describe("parseFetchError — fallbacks", () => {
   it("falls back to unknown for a non-FetchError object", () => {
     const result = parseFetchError({ kind: "StoppingError", message: "x" });
     expect(result.kind).toBe("unknown");
+  });
+
+  it("classifies a browser-side DataFetchError (init-time stopping/emissions failure)", () => {
+    // Pins the handshake #689 relies on: `DataStore.init` throws a
+    // `DataFetchError` whose `.message` is a JSON-encoded FetchErrorPayload,
+    // and `parseFetchError`'s Error branch JSON-parses `.message`. If either
+    // side changed the wire shape independently the load-bearing failure
+    // would silently degrade to `kind: "unknown"` and `FetchErrorCard`
+    // would lose its variant-specific recovery hints.
+    const err = new DataFetchError({
+      url: "https://example.com/data/parquet/stopping/PSTAR.parquet",
+      status: 403,
+      source: "stopping/PSTAR",
+      humanMessage: "Failed to load stopping/PSTAR (HTTP 403)",
+    });
+    const result = parseFetchError(err);
+    if (result.kind !== "FetchError" || result.variant !== "HttpStatus") {
+      throw new Error(`expected HttpStatus from DataFetchError, got ${result.kind}`);
+    }
+    expect(result.status).toBe(403);
+    expect(result.url).toContain("PSTAR.parquet");
   });
 });
 

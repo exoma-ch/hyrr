@@ -75,6 +75,7 @@ export async function initBackend(
   }
 
   // 2. Try WASM
+  let wasmInitError: unknown = null;
   try {
     onProgress?.("Loading WASM compute engine...", 0.1);
     const wasm = await import("hyrr-wasm");
@@ -140,9 +141,17 @@ export async function initBackend(
     return "wasm";
   } catch (e) {
     trace.event("_init", "backend.wasm.init_failed", { error: String(e) });
+    wasmInitError = e;
   }
 
-  // No TS fallback — Rust (Tauri or WASM) is required
+  // No TS fallback — Rust (Tauri or WASM) is required. Preserve the typed
+  // underlying error (a `DataFetchError` from `DataStore.init`, an
+  // `AuthGateInterceptedError`, a WASM engine load failure) so
+  // `parseFetchError` / `FetchErrorCard` can render the actual remedy
+  // instead of the generic "No compute backend" line. Fixes the last mile
+  // of #689 — a load-bearing data failure that reached here still landed
+  // on a generic error and lost every field the UI needs to help. (#689)
+  if (wasmInitError != null) throw wasmInitError;
   throw new Error(
     "No compute backend available. Tauri and WASM both failed to initialize.",
   );

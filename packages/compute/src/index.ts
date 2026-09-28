@@ -7,8 +7,8 @@
  */
 
 // --- Data store ---
-export { DataStore } from "./data-store";
-export type { EmissionLine, EmissionRadType, GammaLine, DecayEmissionLine, EmissionChannel } from "./data-store";
+export { DataStore, AuthGateInterceptedError, DataFetchError } from "./data-store";
+export type { EmissionLine, EmissionRadType, GammaLine, DecayEmissionLine, EmissionChannel, DataFetchErrorPayload } from "./data-store";
 
 // --- Materials ---
 export {
