@@ -98,7 +98,7 @@ jobs:
         with:
           version: "v0.13.1"
 
-      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/nix-installer-action@v23
 
       - name: Install sops + age
         run: nix profile install nixpkgs#sops nixpkgs#age
