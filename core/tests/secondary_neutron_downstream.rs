@@ -161,11 +161,13 @@ fn secondary_neutron_with_no_source_emits_a_typed_diagnostic() {
     );
 
     // The new #650 diagnostic must be present with error severity so a
-    // downstream consumer can distinguish this from a healthy zero.
+    // downstream consumer can distinguish this from a healthy zero, and its
+    // `missing_converter_data` payload must name the p+9Be miss so the
+    // message can be actionable without a second round-trip.
     let sn = result
         .diagnostics
         .iter()
-        .find(|d| matches!(&d.kind, DiagnosticKind::SecondaryNeutronsNoSource));
+        .find(|d| matches!(&d.kind, DiagnosticKind::SecondaryNeutronsNoSource { .. }));
     let sn = sn.unwrap_or_else(|| {
         panic!(
             "expected a SecondaryNeutronsNoSource diagnostic; got: {:?}",
@@ -176,6 +178,25 @@ fn secondary_neutron_with_no_source_emits_a_typed_diagnostic() {
     assert!(
         sn.message.contains("secondary_neutron"),
         "message should name the flag so the user can act on it: {:?}",
+        sn.message
+    );
+    let missing = match &sn.kind {
+        DiagnosticKind::SecondaryNeutronsNoSource {
+            missing_converter_data,
+        } => missing_converter_data,
+        _ => unreachable!(),
+    };
+    let names_be9 = missing
+        .iter()
+        .any(|m| m.projectile == "p" && m.target_symbol == "Be" && m.target_a == 9);
+    assert!(
+        names_be9,
+        "SecondaryNeutronsNoSource should carry the p+Be-9 miss so the message names \
+         the exact converter isotope: got {missing:?}"
+    );
+    assert!(
+        sn.message.contains("p + Be-9") && sn.message.contains("layer 1"),
+        "rendered message should name the p+Be-9 miss and its layer: {:?}",
         sn.message
     );
 

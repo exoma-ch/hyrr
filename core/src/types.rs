@@ -507,14 +507,35 @@ pub enum DiagnosticKind {
     /// zero free (x,n) neutrons, so the downstream neutron activation pass had
     /// no source term and was skipped.
     ///
-    /// The dominant cause on a live run is a library that ships no
-    /// cross-sections for the converter's isotope — `tendl-2023-iso` has no
-    /// 9Be, so 17.8 MeV protons on Be produce no (p,n) neutrons; downstream Al
-    /// then silently shows only its own charged-particle direct products, and
-    /// ²⁷Al(n,α)²⁴Na is invisible (#668). A companion
-    /// [`Self::NoCrossSectionData`] fires from the charged pass for the same
-    /// underlying miss.
-    SecondaryNeutronsNoSource,
+    /// `missing_converter_data` names the (layer, projectile, target) triples
+    /// that had no cross-section data in the selected library — the concrete
+    /// converter miss(es) responsible for the zero. Empty when the charged
+    /// pass had xs coverage for every upstream target and the reactions
+    /// simply produced no free neutrons (a physically legitimate zero — beam
+    /// below all (x,n) thresholds, all-γ channels only, …); the severity
+    /// downshifts to Warning in that case so the flag can be left on without
+    /// noise for stacks it doesn't apply to.
+    ///
+    /// The dominant #668 shape is the non-empty variant: `tendl-2023-iso`
+    /// ships no 9Be xs, so 17.8 MeV protons on a Be converter produce no
+    /// (p,n) neutrons; downstream Al then silently shows only its own
+    /// charged-particle direct products, and ²⁷Al(n,α)²⁴Na is invisible.
+    SecondaryNeutronsNoSource {
+        missing_converter_data: Vec<MissingConverterTarget>,
+    },
+}
+
+/// One `(layer, projectile+target)` miss on the charged pass that explains
+/// why the secondary-neutron source is zero (#668). Serialised as a plain
+/// object; no `kind` tag because it's a field of [`DiagnosticKind`], never
+/// a top-level diagnostic on its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MissingConverterTarget {
+    /// 0-based index into `StackResult::layer_results`.
+    pub layer_index: usize,
+    pub projectile: String,
+    pub target_symbol: String,
+    pub target_a: u32,
 }
 
 impl DiagnosticKind {
@@ -548,24 +569,73 @@ impl DiagnosticKind {
                  {beam_max_mev:.3} MeV in this layer — no channel overlaps, so nothing \
                  is produced. Try a different beam energy or library."
             ),
-            Self::SecondaryNeutronsNoSource => {
-                "`secondary_neutron: true` was requested, but the charged pass emitted \
-                 zero (x,n) free neutrons — the downstream neutron-activation pass was \
-                 skipped. Usually paired with a `no cross-section data` diagnostic on \
-                 the upstream converter; picking a library that carries the converter \
-                 isotope (e.g. `tendl-2025` for 9Be) restores the source."
-                    .to_string()
+            Self::SecondaryNeutronsNoSource {
+                missing_converter_data,
+            } => {
+                let mut msg = String::from(
+                    "`secondary_neutron: true` was requested, but the charged pass emitted \
+                     zero (x,n) free neutrons — the downstream neutron-activation pass was \
+                     skipped.",
+                );
+                if missing_converter_data.is_empty() {
+                    // Empty ⇒ the library covered every upstream target, so the
+                    // zero is physical (beam below all (x,n) thresholds, only γ
+                    // channels open, …). Severity downshifts to Warning at
+                    // emit-time so the flag can stay on without noise.
+                    msg.push_str(
+                        " The library covered every upstream target, so this looks like \
+                         a physically legitimate zero — no (x,n) channel is open at these \
+                         energies. Raise the beam energy or drop the flag.",
+                    );
+                } else {
+                    msg.push_str(" No cross-section data for");
+                    for (i, m) in missing_converter_data.iter().enumerate() {
+                        let sep = if i == 0 {
+                            " "
+                        } else if i + 1 == missing_converter_data.len() {
+                            " and "
+                        } else {
+                            ", "
+                        };
+                        msg.push_str(&format!(
+                            "{sep}{} + {}-{} in layer {}",
+                            m.projectile,
+                            m.target_symbol,
+                            m.target_a,
+                            m.layer_index + 1,
+                        ));
+                    }
+                    msg.push_str(
+                        " in this library — that upstream converter produced no free \
+                         neutrons. Pick a library that carries the converter isotope \
+                         (e.g. `tendl-2025` for 9Be) to restore the source.",
+                    );
+                }
+                msg
             }
         }
     }
 
     /// Default severity for this kind.
+    ///
+    /// [`Self::SecondaryNeutronsNoSource`] downshifts to `Warning` when its
+    /// `missing_converter_data` list is empty — a legitimate physical zero
+    /// (nothing to act on, keep the flag) — and stays `Error` when the list is
+    /// non-empty, which is the #668 shape (library gap, actionable).
     pub fn severity(&self) -> DiagnosticSeverity {
         match self {
             Self::NoCrossSectionData { .. } => DiagnosticSeverity::Error,
             Self::EmptyIsotopeComposition { .. } => DiagnosticSeverity::Error,
             Self::ReactionOutsideEnergyRange { .. } => DiagnosticSeverity::Error,
-            Self::SecondaryNeutronsNoSource => DiagnosticSeverity::Error,
+            Self::SecondaryNeutronsNoSource {
+                missing_converter_data,
+            } => {
+                if missing_converter_data.is_empty() {
+                    DiagnosticSeverity::Warning
+                } else {
+                    DiagnosticSeverity::Error
+                }
+            }
         }
     }
 }

@@ -1426,14 +1426,40 @@ pub fn compute_stack_with_secondary_neutrons(
         .sum();
     if total_source <= 0.0 {
         // The dominant #668 shape: the flag was requested, but the charged
-        // pass emitted zero free neutrons (typically because the converter
-        // isotope is absent from the selected library — `tendl-2023-iso` has
+        // pass emitted zero free neutrons — typically because the converter
+        // isotope is absent from the selected library (`tendl-2023-iso` has
         // no 9Be, so a Be→Al stack short-circuits here and reports only Al's
         // charged direct products with no hint that (n,x) was ever attempted).
-        // Surface it as a hard diagnostic so the empty downstream inventory
-        // isn't confused with a genuine zero (#650).
+        // The parallel path is a legitimate zero (beam below every (x,n)
+        // threshold), which is why the severity downshifts based on whether
+        // any converter isotope is missing xs — see
+        // [`DiagnosticKind::severity`]. Every upstream `NoCrossSectionData`
+        // filed by the charged pass is a candidate cause; collect them into
+        // the variant so the message names the exact library gap. Charged
+        // projectiles only — an "n" miss here would be from a stray
+        // neutron-target layer, not the converter.
+        let missing_converter_data: Vec<crate::types::MissingConverterTarget> = charged
+            .diagnostics
+            .iter()
+            .filter_map(|d| match &d.kind {
+                crate::types::DiagnosticKind::NoCrossSectionData {
+                    projectile,
+                    target_symbol,
+                    target_a,
+                    ..
+                } if projectile != "n" => Some(crate::types::MissingConverterTarget {
+                    layer_index: d.layer_index.unwrap_or(0),
+                    projectile: projectile.clone(),
+                    target_symbol: target_symbol.clone(),
+                    target_a: *target_a,
+                }),
+                _ => None,
+            })
+            .collect();
         charged.diagnostics.push(crate::types::Diagnostic::new(
-            crate::types::DiagnosticKind::SecondaryNeutronsNoSource,
+            crate::types::DiagnosticKind::SecondaryNeutronsNoSource {
+                missing_converter_data,
+            },
             None,
         ));
         return Ok(charged);
@@ -1697,6 +1723,109 @@ mod tests {
             cu64.reactions.iter().any(|r| r == "⁶³Cu(n,γ)"),
             "secondary route should be ⁶³Cu(n,γ); got {:?}",
             cu64.reactions
+        );
+    }
+
+    /// #668 blocker-follow-up: when the library COVERS the converter isotope
+    /// but no (x,n) channel qualifies (every reaction has dz != 0 or da == 0),
+    /// the pass short-circuits with a physically legitimate zero — not a
+    /// library gap. Severity downshifts to Warning and `missing_converter_data`
+    /// is empty so a downstream renderer can present a light-touch info line
+    /// instead of an error banner.
+    #[test]
+    fn secondary_neutrons_no_source_is_warning_when_library_covered_the_converter() {
+        let mut db = InMemoryDataStore::new("test");
+        db.add_element(29, "Cu");
+        db.add_element(30, "Zn");
+        let energies: Vec<f64> = (0..50)
+            .map(|i| 0.001_f64 * 10f64.powf(i as f64 / 10.0))
+            .collect();
+        let dedx_cu: Vec<f64> = energies.iter().map(|&e| 30.0 / e.sqrt()).collect();
+        db.add_stopping_data("PSTAR", 29, energies, dedx_cu);
+        // p + ⁶³Cu → ⁶⁴Zn — (p,γ). dz = 5-30 = 0? No: dz = (29+1) - 30 = 0,
+        // da = (63+1) - 64 = 0. That's (p,γ) with da==0, so it emits ZERO free
+        // neutrons per the compute_layer filter (`da > 0` required). The
+        // charged pass finds xs (no NoCrossSectionData), the pass runs, but
+        // total_source == 0.
+        db.add_cross_sections(
+            "p",
+            "Cu",
+            vec![CrossSectionData {
+                target_a: 63,
+                residual_z: 30,
+                residual_a: 64,
+                state: String::new(),
+                energies_mev: vec![1.0, 20.0],
+                xs_mb: vec![500.0, 500.0],
+            }],
+        );
+        db.add_decay_data(DecayData {
+            z: 30,
+            a: 64,
+            state: String::new(),
+            half_life_s: None, // stable
+            decay_modes: vec![],
+        });
+
+        let layer = Layer {
+            density_g_cm3: 8.96,
+            elements: vec![(
+                Element {
+                    symbol: "Cu".into(),
+                    z: 29,
+                    isotopes: HashMap::from([(63u32, 1.0)]),
+                },
+                1.0,
+            )],
+            thickness_cm: Some(0.1),
+            areal_density_g_cm2: None,
+            energy_out_mev: None,
+            is_monitor: false,
+            nist_compound: None,
+            computed_energy_in: 0.0,
+            computed_energy_out: 0.0,
+            computed_thickness: 0.0,
+        };
+        let mut stack = TargetStack {
+            beam: Beam::new(ProjectileType::Proton, 15.0, 1.0),
+            layers: vec![layer],
+            irradiation_time_s: 3600.0,
+            cooling_time_s: 0.0,
+            area_cm2: 1.0,
+            current_profile: None,
+        };
+        let result = compute_stack_with_secondary_neutrons(&db, &mut stack, true).unwrap();
+
+        // Zero source with no library gap.
+        assert_eq!(result.layer_results[0].neutron_source_rate, 0.0);
+        let sn = result
+            .diagnostics
+            .iter()
+            .find(|d| {
+                matches!(
+                    &d.kind,
+                    crate::types::DiagnosticKind::SecondaryNeutronsNoSource { .. }
+                )
+            })
+            .expect("SecondaryNeutronsNoSource must fire");
+        assert_eq!(sn.severity, crate::types::DiagnosticSeverity::Warning);
+        match &sn.kind {
+            crate::types::DiagnosticKind::SecondaryNeutronsNoSource {
+                missing_converter_data,
+            } => {
+                assert!(
+                    missing_converter_data.is_empty(),
+                    "no NoCrossSectionData was emitted, so the list must be empty; got: {missing_converter_data:?}"
+                );
+            }
+            _ => unreachable!(),
+        }
+        // The message must call the zero "physically legitimate" so a client
+        // knows to leave the flag alone rather than switch libraries.
+        assert!(
+            sn.message.contains("physically legitimate"),
+            "warning wording should call out the physical zero; got: {}",
+            sn.message
         );
     }
     use std::collections::HashMap;

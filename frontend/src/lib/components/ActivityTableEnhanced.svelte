@@ -33,6 +33,13 @@
       .slice()
       .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1)),
   );
+  // #668: the "table is non-empty but the story is incomplete" case — a
+  // secondary_neutron short-circuit, or a downstream (n,x) miss, still
+  // deserves a compact notice above the table so the user sees WHY a
+  // downstream yield is absent even when Al's direct products are present.
+  const errorDiagnostics = $derived(
+    (result.diagnostics ?? []).filter((d) => d.severity === "error"),
+  );
 
   type SortKey = "name" | "activity" | "activity_eob" | "half_life" | "layer" | "direct" | "daughter" | "rnp" | "rnp_eob" | "dose";
   let sortKey = $state<SortKey>("activity");
@@ -465,6 +472,29 @@
     </p>
   {/if}
 
+  <!--
+    #650 error-severity diagnostics above the (non-empty) table too. The old
+    empty-tbody branch only fired when the whole table was empty, so a case
+    like #668 (Be→Al under `secondary_neutron`) — Al rows present, Na-24
+    silently absent — never showed the reasoning. Compact collapsible so it
+    doesn't dominate on a healthy run. Follow-up: promote layer-scoped
+    diagnostics into per-row hints (#… — file when this grows).
+  -->
+  {#if rows.length > 0 && errorDiagnostics.length > 0}
+    <details class="diagnostics-notice" data-testid="diag-notice" open>
+      <summary>
+        <strong>{errorDiagnostics.length}</strong>
+        diagnostic{errorDiagnostics.length === 1 ? "" : "s"} — some yields may
+        be under-reported. Click to expand.
+      </summary>
+      <ul>
+        {#each errorDiagnostics as d}
+          <li data-testid={`diag-${d.kind}`}>{d.message}</li>
+        {/each}
+      </ul>
+    </details>
+  {/if}
+
   <div class="table-wrapper">
     <table>
       <thead>
@@ -709,6 +739,34 @@
     padding-left: 1.1rem;
   }
   .empty-state li {
+    margin-bottom: 0.2rem;
+  }
+
+  /* #668: compact notice above a non-empty table. Same visual weight as
+     `.cooling-note` so it doesn't dominate; expands on click. */
+  .diagnostics-notice {
+    margin: 0.25rem 0 0.6rem;
+    padding: 0.4rem 0.55rem;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    color: var(--c-text);
+    background: var(--c-bg-subtle, rgba(255, 200, 120, 0.08));
+    border-left: 3px solid var(--c-warning, #d19d3c);
+    border-radius: 3px;
+  }
+  .diagnostics-notice summary {
+    cursor: pointer;
+    color: var(--c-text-subtle);
+    font-weight: 500;
+  }
+  .diagnostics-notice summary strong {
+    color: var(--c-text);
+  }
+  .diagnostics-notice ul {
+    margin: 0.35rem 0 0;
+    padding-left: 1.15rem;
+  }
+  .diagnostics-notice li {
     margin-bottom: 0.2rem;
   }
 

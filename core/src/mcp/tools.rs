@@ -1874,27 +1874,114 @@ fn tool_simulate(
         ));
     }
 
-    // Surface #650 diagnostics — the whole point of the channel is to keep
-    // "empty because the library doesn't cover this target" distinguishable
-    // from "empty because the reaction genuinely produces nothing". Without a
-    // renderer, a secondary-neutron short-circuit or a missing (n,x) parquet
-    // looks like a healthy zero.
-    if !result.diagnostics.is_empty() {
-        output.push_str("\n## Diagnostics\n\n");
-        for d in &result.diagnostics {
-            let sev = match d.severity {
-                crate::types::DiagnosticSeverity::Error => "⚠️",
-                crate::types::DiagnosticSeverity::Warning => "ℹ️",
-            };
-            let scope = match d.layer_index {
-                Some(i) => format!(" (Layer {})", i + 1),
-                None => String::new(),
-            };
-            output.push_str(&format!("- {sev}{scope} {}\n", d.message));
+    append_diagnostics_section(&mut output, &result.diagnostics);
+
+    Ok(output)
+}
+
+/// Append a `## Diagnostics` block for the #650 diagnostics attached to a
+/// [`StackResult`]. Kept in one place so every tool that runs a stack — not
+/// just `simulate` — surfaces the same reasons a result is emptier than it
+/// looks (a `get_isotope_production_curve` that errors "not produced in any
+/// layer" is exactly the confusing case #668 opened against). No-op when
+/// the list is empty, so a healthy run doesn't gain a trailing empty section.
+///
+/// `NoCrossSectionData` rows for the same (projectile, target element,
+/// layer) are grouped: one line per element listing the isotopes, so a
+/// tendl-2023-iso water stack collapses `p + H-1 / p + H-2` into a single
+/// row instead of two per layer.
+pub(crate) fn append_diagnostics_section(
+    out: &mut String,
+    diagnostics: &[crate::types::Diagnostic],
+) {
+    if diagnostics.is_empty() {
+        return;
+    }
+    use crate::types::{DiagnosticKind, DiagnosticSeverity};
+
+    // Group NoCrossSectionData rows by (severity, layer, projectile, element)
+    // so a compound with several missing isotopes prints one line, not N.
+    // The order in `diagnostics` is preserved; grouped rows land at the
+    // position of the first constituent, which keeps a stable "beam-first"
+    // narrative when multiple layers each contribute misses.
+    struct Group {
+        idx: usize,
+        severity: DiagnosticSeverity,
+        layer_index: Option<usize>,
+        projectile: String,
+        symbol: String,
+        atoms: Vec<u32>,
+    }
+    let mut groups: Vec<Group> = Vec::new();
+    let mut passthrough: Vec<(usize, &crate::types::Diagnostic)> = Vec::new();
+    for (i, d) in diagnostics.iter().enumerate() {
+        match &d.kind {
+            DiagnosticKind::NoCrossSectionData {
+                projectile,
+                target_symbol,
+                target_a,
+                ..
+            } => {
+                if let Some(g) = groups.iter_mut().find(|g| {
+                    g.severity == d.severity
+                        && g.layer_index == d.layer_index
+                        && g.projectile == *projectile
+                        && g.symbol == *target_symbol
+                }) {
+                    if !g.atoms.contains(target_a) {
+                        g.atoms.push(*target_a);
+                    }
+                } else {
+                    groups.push(Group {
+                        idx: i,
+                        severity: d.severity,
+                        layer_index: d.layer_index,
+                        projectile: projectile.clone(),
+                        symbol: target_symbol.clone(),
+                        atoms: vec![*target_a],
+                    });
+                }
+            }
+            _ => passthrough.push((i, d)),
         }
     }
 
-    Ok(output)
+    // Merge grouped + passthrough rows back in original order.
+    let mut rows: Vec<(usize, String, DiagnosticSeverity, Option<usize>)> =
+        Vec::with_capacity(groups.len() + passthrough.len());
+    for g in &groups {
+        let mut atoms = g.atoms.clone();
+        atoms.sort();
+        let plural = if atoms.len() > 1 { "s" } else { "" };
+        let list = atoms
+            .iter()
+            .map(|a| format!("{}-{}", g.symbol, a))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let msg = format!(
+            "No cross-section data for {} + {} in this library — that target \
+             isotope{plural} produced nothing.",
+            g.projectile, list,
+        );
+        rows.push((g.idx, msg, g.severity, g.layer_index));
+    }
+    for (i, d) in &passthrough {
+        rows.push((*i, d.message.clone(), d.severity, d.layer_index));
+    }
+    rows.sort_by_key(|r| r.0);
+
+    out.push_str("\n## Diagnostics\n\n");
+    for (_, message, severity, layer_index) in rows {
+        let sev = match severity {
+            DiagnosticSeverity::Error => "⚠️",
+            DiagnosticSeverity::Warning => "ℹ️",
+        };
+        let scope = match layer_index {
+            Some(i) => format!(" (Layer {})", i + 1),
+            None => String::new(),
+        };
+        out.push_str(&format!("- {sev}{scope} {message}\n"));
+    }
 }
 
 fn tool_list_materials(registry: &MaterialRegistry) -> Result<String, String> {
@@ -2154,6 +2241,17 @@ fn tool_compare_simulations(
         ));
     }
 
+    // Diagnostics for both configs, tagged so a #650 miss on one side isn't
+    // silently pooled with a healthy result on the other.
+    if !result_a.diagnostics.is_empty() {
+        output.push_str(&format!("\n### Diagnostics — {}\n", label_a));
+        append_diagnostics_section(&mut output, &result_a.diagnostics);
+    }
+    if !result_b.diagnostics.is_empty() {
+        output.push_str(&format!("\n### Diagnostics — {}\n", label_b));
+        append_diagnostics_section(&mut output, &result_b.diagnostics);
+    }
+
     Ok(output)
 }
 
@@ -2405,7 +2503,21 @@ fn tool_get_isotope_production_curve(
 
     let result = cached_sim(db, registry, args)?;
 
-    let sel = select_producing_layer(&result, &isotope, layer_index)?;
+    // #668: "not produced in any layer" MUST carry the same #650 diagnostics
+    // the simulate table would surface — otherwise the reporter's exact
+    // follow-up (`get_isotope_production_curve(isotope="Na-24")` after a
+    // secondary_neutron short-circuit) still looks like a "genuinely zero"
+    // result. Rerender the diagnostic list into the error string so a client
+    // that only sees this call gets the actionable text too.
+    let sel = match select_producing_layer(&result, &isotope, layer_index) {
+        Ok(sel) => sel,
+        Err(mut e) => {
+            if !result.diagnostics.is_empty() {
+                append_diagnostics_section(&mut e, &result.diagnostics);
+            }
+            return Err(e);
+        }
+    };
     let layer_idx = sel.layer_idx;
     let lr = sel.lr;
     let iso = sel.iso;
@@ -2514,6 +2626,8 @@ fn tool_get_isotope_production_curve(
         }
     }
 
+    append_diagnostics_section(&mut output, &result.diagnostics);
+
     Ok(output)
 }
 
@@ -2534,10 +2648,12 @@ fn tool_list_producing_layers(
 
     let producers = producing_layers(&result, &isotope);
     if producers.is_empty() {
-        return Ok(format!(
+        let mut msg = format!(
             "# Producing layers for {}\n\nNo layer in this stack produces {}.\n",
             isotope, isotope
-        ));
+        );
+        append_diagnostics_section(&mut msg, &result.diagnostics);
+        return Ok(msg);
     }
 
     // Reporting-layer filter (#567) — never in compute; producing_layers still
@@ -2631,6 +2747,8 @@ fn tool_list_producing_layers(
             filtered_below_floor, activity_floor_bq,
         ));
     }
+
+    append_diagnostics_section(&mut output, &result.diagnostics);
 
     Ok(output)
 }
@@ -2866,6 +2984,8 @@ fn tool_get_simulation_dataset(
         resources.push(parquet_resource(&sim_id, table, &meta)?);
     }
 
+    append_diagnostics_section(&mut text, &result.diagnostics);
+
     Ok(ToolResponse { text, resources })
 }
 
@@ -2914,6 +3034,7 @@ fn tool_get_isotope_inventory(
         text.push_str(&render_table_section(table, top_n, effective_sort)?);
         vec![parquet_resource(&sim_id, table, &meta)?]
     };
+    append_diagnostics_section(&mut text, &result.diagnostics);
     Ok(ToolResponse { text, resources })
 }
 
@@ -2994,6 +3115,7 @@ fn tool_get_emission_curve(
         text.push_str(&render_table_section(table, top_n, effective_sort)?);
         vec![parquet_resource(&sim_id, table, &meta)?]
     };
+    append_diagnostics_section(&mut text, &result.diagnostics);
     Ok(ToolResponse { text, resources })
 }
 
@@ -3193,6 +3315,8 @@ and contribute **0** to the total: {}. The reported total is a LOWER BOUND.\n\n"
         ));
     }
 
+    append_diagnostics_section(&mut output, &result.diagnostics);
+
     Ok(output)
 }
 
@@ -3314,6 +3438,8 @@ fn tool_get_activity_at(
     text.push_str("```json\n");
     text.push_str(&json);
     text.push_str("\n```\n");
+
+    append_diagnostics_section(&mut text, &result.diagnostics);
 
     Ok(ToolResponse {
         text,
@@ -3489,6 +3615,8 @@ fn tool_get_dose_rate_at(
     text.push_str("```json\n");
     text.push_str(&json);
     text.push_str("\n```\n");
+
+    append_diagnostics_section(&mut text, &result.diagnostics);
 
     Ok(ToolResponse {
         text,
@@ -4148,6 +4276,95 @@ mod tests {
         assert!(
             routed_library_unavailable_diagnostic_with(&handle, &plain).is_none(),
             "plain charged call must not be gated by a routed-library download"
+        );
+    }
+
+    // -- append_diagnostics_section shape (#668 blocker follow-up) ------------
+
+    /// Building block: build a `Diagnostic` for a NoCrossSectionData row so
+    /// the render tests aren't 8 lines of boilerplate each.
+    fn nxs(proj: &str, sym: &str, target_a: u32, layer: Option<usize>) -> crate::types::Diagnostic {
+        use crate::types::{Diagnostic, DiagnosticKind};
+        Diagnostic::new(
+            DiagnosticKind::NoCrossSectionData {
+                projectile: proj.to_string(),
+                target_z: 1,
+                target_symbol: sym.to_string(),
+                target_a,
+            },
+            layer,
+        )
+    }
+
+    /// Multiple missing isotopes for the same (projectile, element, layer)
+    /// must collapse to a single line naming all of them — the noise the
+    /// blocker calls out for a tendl-2023-iso water stack.
+    #[test]
+    fn diagnostics_group_isotopes_per_element_per_layer() {
+        let diags = vec![
+            nxs("p", "H", 1, Some(0)),
+            nxs("p", "H", 2, Some(0)),
+            nxs("p", "O", 16, Some(0)),
+        ];
+        let mut out = String::new();
+        append_diagnostics_section(&mut out, &diags);
+        // One H row listing both isotopes.
+        assert!(
+            out.contains("p + H-1, H-2"),
+            "H-1 and H-2 must be collapsed into one row; got:\n{out}"
+        );
+        // Grouped-row copy: "target isotopes" (plural) — the phrasing
+        // difference is what tells a reader that the row is a group.
+        assert!(
+            out.contains("target isotopes produced nothing"),
+            "grouped row wording must be plural; got:\n{out}"
+        );
+        // O-16 stays on its own.
+        assert!(
+            out.contains("p + O-16 in this library"),
+            "single-isotope row must render individually; got:\n{out}"
+        );
+        // Exactly one Diagnostics section header (never emitted twice).
+        assert_eq!(out.matches("## Diagnostics").count(), 1);
+    }
+
+    /// Grouping is scoped by layer — a miss in layer 1 and the same isotope
+    /// missing in layer 2 must still print separately (they may have
+    /// different upstream implications).
+    #[test]
+    fn diagnostics_dont_group_across_layers() {
+        let diags = vec![nxs("p", "Be", 9, Some(0)), nxs("p", "Be", 9, Some(1))];
+        let mut out = String::new();
+        append_diagnostics_section(&mut out, &diags);
+        assert!(
+            out.contains("(Layer 1)") && out.contains("(Layer 2)"),
+            "both layers must have their own row; got:\n{out}"
+        );
+    }
+
+    /// A downshift-to-warning SecondaryNeutronsNoSource (empty
+    /// missing_converter_data — a physically legitimate zero) must render
+    /// with the `ℹ️` glyph, not `⚠️`, so a stack where the flag is on but
+    /// irrelevant isn't noisy.
+    #[test]
+    fn diagnostics_render_severity_glyph_per_kind() {
+        use crate::types::{Diagnostic, DiagnosticKind};
+        let warning = Diagnostic::new(
+            DiagnosticKind::SecondaryNeutronsNoSource {
+                missing_converter_data: vec![],
+            },
+            None,
+        );
+        assert_eq!(warning.severity, crate::types::DiagnosticSeverity::Warning);
+        let mut out = String::new();
+        append_diagnostics_section(&mut out, &[warning]);
+        assert!(
+            out.contains("ℹ️"),
+            "Warning severity must render with the info glyph; got:\n{out}"
+        );
+        assert!(
+            !out.contains("⚠️"),
+            "a pure-warning list must not render the error glyph; got:\n{out}"
         );
     }
 }
