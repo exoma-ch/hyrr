@@ -3,7 +3,7 @@
   "name": "io.github.exoma-ch/hyrr",
   "title": "HYRR",
   "description": "Radio-isotope production, activity and dose for charged-particle beams on stacked targets",
-  "version": "0.21.1",
+  "version": "0.22.0",
   "websiteUrl": "https://exoma-ch.github.io/hyrr/",
   "repository": {
     "url": "https://github.com/exoma-ch/hyrr",
@@ -15,7 +15,9 @@
     {
       "src": "https://exoma-ch.github.io/hyrr/hyrr-icon-192.png",
       "mimeType": "image/png",
-      "sizes": ["192x192"]
+      "sizes": [
+        "192x192"
+      ]
     }
   ],
   "packages": [
@@ -23,7 +25,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "hyrr-mcp",
-      "version": "0.21.1",
+      "version": "0.22.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

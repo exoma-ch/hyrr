@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0](https://github.com/exoma-ch/hyrr/compare/v0.21.1...v0.22.0) (2026-09-28)
+
+
+### Features
+
+* **mcp:** list hyrr-mcp in the official MCP Registry ([#707](https://github.com/exoma-ch/hyrr/issues/707)) ([1447bc0](https://github.com/exoma-ch/hyrr/commit/1447bc069afac9e93362c58f15473b9a94b89d23)), closes [#706](https://github.com/exoma-ch/hyrr/issues/706)
+
+
+### Bug Fixes
+
+* **compute:** init() fails loudly when stopping / emissions loads fail ([#715](https://github.com/exoma-ch/hyrr/issues/715)) ([557d76c](https://github.com/exoma-ch/hyrr/commit/557d76ce822455a6cf9dc0450a3f651c28868c4a)), closes [#689](https://github.com/exoma-ch/hyrr/issues/689)
+* **core+mcp:** ensure_library + async managed-cache healer for routed neutron/heavy-ion libraries ([#719](https://github.com/exoma-ch/hyrr/issues/719)) ([eb45ae1](https://github.com/exoma-ch/hyrr/commit/eb45ae19d9f53b112101a09ac78902df31b3cafc)), closes [#709](https://github.com/exoma-ch/hyrr/issues/709)
+* **core:** surface why secondary_neutron produced no downstream activation ([#668](https://github.com/exoma-ch/hyrr/issues/668)) ([#721](https://github.com/exoma-ch/hyrr/issues/721)) ([566d56b](https://github.com/exoma-ch/hyrr/commit/566d56bebe313c96a221e3c463c6cf540c77b9ee))
+* **core:** thermal Maxwellian used density shape as flux (4/π over-prediction on 1/v (n,γ)) — closes [#711](https://github.com/exoma-ch/hyrr/issues/711) ([#718](https://github.com/exoma-ch/hyrr/issues/718)) ([328b931](https://github.com/exoma-ch/hyrr/commit/328b931e8a0f39d9a7e46cfed90781b6ba9c4931))
+* **deps:** bump rustls to 0.23.45 for RUSTSEC-2026-0285 ([#716](https://github.com/exoma-ch/hyrr/issues/716)) ([1e9248b](https://github.com/exoma-ch/hyrr/commit/1e9248b80494a72ff67438137413e240326c3a7e)), closes [#700](https://github.com/exoma-ch/hyrr/issues/700)
+* **frontend:** recompute yield/preview when an applied custom material is edited ([#692](https://github.com/exoma-ch/hyrr/issues/692)) ([1272547](https://github.com/exoma-ch/hyrr/commit/1272547948a435c8bd962f59809c6e16a9a70af1))
+* **mcp:** key the stack-result cache on data identity, refuse to persist empties ([#717](https://github.com/exoma-ch/hyrr/issues/717)) ([af21b07](https://github.com/exoma-ch/hyrr/commit/af21b075ef12a88628ebe05f28b8cc87ac087966)), closes [#708](https://github.com/exoma-ch/hyrr/issues/708)
+
+
+### Miscellaneous
+
+* **deps-dev:** bump plotly.js-basic-dist-min in /frontend ([#702](https://github.com/exoma-ch/hyrr/issues/702)) ([54548c6](https://github.com/exoma-ch/hyrr/commit/54548c6148b95e4e4d9796a35dc1861f102e50c7))
+* **deps:** bump DeterminateSystems/nix-installer-action from 22 to 23 ([#703](https://github.com/exoma-ch/hyrr/issues/703)) ([acffbd5](https://github.com/exoma-ch/hyrr/commit/acffbd59d68cc505ddd127137b8d854c1b09f719))
+* **deps:** bump plotly.js-dist-min from 3.7.0 to 4.1.1 in /frontend ([#701](https://github.com/exoma-ch/hyrr/issues/701)) ([887efc4](https://github.com/exoma-ch/hyrr/commit/887efc4e8644cb76c5566e206a26df30cbd77f2f))
+
+
+### Documentation
+
+* **release-notes:** add the 0.22.0 entry so the release PR can merge ([#724](https://github.com/exoma-ch/hyrr/issues/724)) ([8fb651f](https://github.com/exoma-ch/hyrr/commit/8fb651f4e65860c82da5be3f4611b3be45db0ffe))
+
 ## [0.21.1](https://github.com/exoma-ch/hyrr/compare/v0.21.0...v0.21.1) (2026-08-27)
 
 
