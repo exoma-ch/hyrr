@@ -292,49 +292,34 @@ async function fetchParquet(url: string, source: string): Promise<ArrayBuffer> {
       humanMessage: `Failed to load ${source} (HTTP ${response.status} from ${url})`,
     });
   }
-  // 200 OK but the wrong kind of body. Two independent detectors, tried
-  // in order:
+  // 200 OK — verify the body IS actually a Parquet.
   //
-  //   1. Content-Type of `text/html` / `text/xml` — the ETH WAYF gate
-  //      returns 200 with HTML, and Vite dev/preview's SPA fallback for
-  //      a missing file does the same. This is the fast path.
+  // The source of truth is the body's PAR1 magic bytes (Apache Parquet v2:
+  // first four AND last four bytes are `PAR1`). Content-Type is diagnostic
+  // detail only — the ACTUAL parquet bytes reject false negatives.
   //
-  //   2. PAR1 magic-byte check on the body itself — Parquet files begin
-  //      AND end with the ASCII bytes `PAR1` (Apache Parquet v2 spec).
-  //      A body with no Content-Type header, or `application/octet-stream`
-  //      on a mis-configured server, still falls through content-type
-  //      sniffing but fails the magic check. Both cases were previously
-  //      surfacing as an opaque hyparquet "invalid parquet" error. (#689
-  //      PR #715 re-review)
-  //
-  // Both arms route to the same `UnexpectedContent` variant so
-  // FetchErrorCard renders the actual remedy — sign-in guidance for
-  // the auth-gate case is delivered separately by the AuthGate branch
-  // (SW-marked 502) and by the scheduler's `sw`-aware degrade logic.
-  const contentType = response.headers.get("Content-Type") ?? "";
-  if (/^\s*text\/(html|xml)/i.test(contentType)) {
-    throw DataFetchError.unexpectedContent({
-      url,
-      source,
-      contentType,
-      humanMessage:
-        `Expected a Parquet file at ${url} but the server returned ` +
-        `${contentType}. This is usually a sign-in page (auth gate) or a ` +
-        `dev-server SPA fallback for a missing file. Sign in and refresh, ` +
-        `or verify the file is present. (#689)`,
-    });
-  }
+  // Why NOT trust Content-Type: Tauri v2's asset protocol on Linux
+  // (WebKit2GTK) serves unknown extensions — `.parquet` among them — with
+  // `Content-Type: text/html`. That's the very case a naive content-type
+  // sniff would call an auth-gate SPA fallback, which is what broke the
+  // e2e-tauri suite on PR #715 before this reordering. Under the ETH
+  // WAYF gate and under Vite dev/preview's SPA fallback the body is
+  // ACTUALLY html, not a parquet, so the PAR1 check catches those cases
+  // without depending on the Content-Type header at all. See PR #715
+  // re-review-2 for the full analysis.
   const buffer = await response.arrayBuffer();
   if (!hasParquetMagic(buffer)) {
+    const contentType = response.headers.get("Content-Type") ?? "";
     throw DataFetchError.unexpectedContent({
       url,
       source,
       contentType: contentType || "(no Content-Type)",
       humanMessage:
         `Expected a Parquet file at ${url} but the body does not carry the ` +
-        `PAR1 magic bytes. The body is likely a placeholder or wrong file. ` +
-        `Verify the file is present and served with the correct MIME type. ` +
-        `(#689)`,
+        `PAR1 magic bytes (Content-Type was ${contentType || "(none)"}). ` +
+        `This is usually a sign-in page (auth gate) or a dev-server SPA ` +
+        `fallback for a missing file. Sign in and refresh, or verify the ` +
+        `file is present. (#689)`,
     });
   }
   return buffer;

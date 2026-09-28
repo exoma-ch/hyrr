@@ -290,13 +290,16 @@ describe("DataStore.init — load-bearing failures (#689)", () => {
     expect((err as DataFetchError).status).toBe(0);
   });
 
-  it("throws UnexpectedContent when a 200 body is text/html (WAYF SSO gate / SPA fallback)", async () => {
+  it("throws UnexpectedContent when a 200 body is actually HTML (WAYF SSO gate / SPA fallback)", async () => {
     // The ETH deployment's WAYF auth gate returns 200 with HTML, not a
     // redirect. Vite dev/preview's SPA fallback for a missing file also
     // returns 200 HTML. Both would previously fail deep inside hyparquet
     // as "invalid parquet" with no operator-visible signal for either
-    // root cause — this arm routes them to the right recovery UI. (#689
-    // PR #715 review nits 6, 8)
+    // root cause — the PAR1 magic-byte check routes them to the right
+    // recovery UI. Content-Type doesn't factor into the decision (see
+    // the Tauri regression that motivated re-review-2 — Tauri v2's asset
+    // protocol on Linux serves .parquet as `text/html`, so a content-
+    // type sniff would false-positive there). (#689 PR #715 review)
     const handlers = happyDefaults();
     handlers["/stopping/PSTAR.parquet"] = {
       status: 200,
@@ -318,18 +321,17 @@ describe("DataStore.init — load-bearing failures (#689)", () => {
 
   it("throws UnexpectedContent on a non-parquet body with no Content-Type (PAR1 magic-byte guard)", async () => {
     // PR #715 re-review blocker: a 200 with `application/octet-stream`
-    // or no Content-Type header slipped through the earlier text/html
-    // sniff, hyparquet threw an opaque "invalid parquet" and the
-    // scheduler's outer catch classified it as `kind: "Unknown"` — the
-    // exact silent-wrong-answer regression #689 was filed to prevent.
-    // The PAR1-magic-byte check catches this class regardless of
-    // content-type; both first four bytes and last four must be `PAR1`.
+    // or no Content-Type header used to slip past a text/html sniff,
+    // hyparquet threw an opaque "invalid parquet" and the scheduler's
+    // outer catch classified it as `kind: "Unknown"` — the exact
+    // silent-wrong-answer regression #689 was filed to prevent. The
+    // PAR1-magic-byte check is now the source of truth: first four and
+    // last four bytes MUST be `PAR1`, regardless of Content-Type.
     const handlers = happyDefaults();
     handlers["/stopping/PSTAR.parquet"] = {
       status: 200,
       rawBody: new TextEncoder().encode("this is definitely not a parquet"),
-      // No Content-Type — the text/html sniff misses this one, so the
-      // PAR1 check is the only line of defence.
+      // No Content-Type — the PAR1 check is the only line of defence.
     };
     installFetch(handlers);
 
@@ -346,6 +348,33 @@ describe("DataStore.init — load-bearing failures (#689)", () => {
     // knows the check is the reason — not a mystery hyparquet error.
     expect(((err as DataFetchError).payload as { message: string }).message)
       .toContain("PAR1");
+  });
+
+  it("accepts a valid parquet body even when Content-Type is text/html (Tauri asset-protocol case)", async () => {
+    // The regression that killed e2e-tauri on the second commit of PR #715:
+    // Tauri v2's asset protocol on Linux serves unknown extensions —
+    // `.parquet` among them — with `Content-Type: text/html`. A prior
+    // Content-Type sniff on `text/html` false-positived there and made
+    // the desktop app fail to boot with `.app-flow` never appearing.
+    // The current check reads the body's actual PAR1 magic instead, so
+    // Tauri's mislabelled-but-valid parquet is accepted. (#689 PR #715
+    // re-review-2)
+    const handlers = happyDefaults();
+    handlers["/stopping/PSTAR.parquet"] = {
+      status: 200,
+      // rows: [] is the default happy path — the fetch stub wraps them
+      // in PAR1 magic bytes, mirroring a real parquet whose Content-Type
+      // has been erroneously labelled by the server.
+      rows: [{ source: "PSTAR", target_Z: 29, energy_MeV: 10, dedx: 1.5 }],
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    };
+    installFetch(handlers);
+
+    const store = new DataStore("https://example.com/data/parquet");
+    await expect(store.init()).resolves.toBeUndefined();
+    // Confirm the row landed — proof the parquet was accepted.
+    const sp = store.getStoppingPower("PSTAR", 29);
+    expect(sp.energiesMeV.length).toBe(1);
   });
 
   it("dose_constants 404 is optional — init still succeeds", async () => {
