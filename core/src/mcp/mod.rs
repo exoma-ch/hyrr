@@ -9,6 +9,7 @@ pub mod cache;
 pub mod dataset;
 pub mod dose;
 pub mod nuclide;
+pub mod strict_args;
 pub mod tools;
 pub mod transport;
 pub mod viewer_export;

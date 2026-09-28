@@ -204,8 +204,8 @@ fn compute_layer(
             nist,
         )?;
         (thick, e_out)
-    } else {
-        let thick = layer.areal_density_g_cm2.unwrap() / density;
+    } else if let Some(areal) = layer.areal_density_g_cm2 {
+        let thick = areal / density;
         let e_out = compute_energy_out(
             db,
             projectile,
@@ -217,6 +217,16 @@ fn compute_layer(
             nist,
         )?;
         (thick, e_out)
+    } else {
+        // #712 review: the pre-fix `layer.areal_density_g_cm2.unwrap()` used
+        // to panic the whole engine when a layer reached here with none of
+        // thickness_cm / energy_out_mev / areal_density_g_cm2 set. MCP now
+        // catches that in `parse_layers` before compute, but returning a
+        // typed error here means WASM/Tauri/a direct caller can't crash the
+        // engine either (#355 — every input path should surface a Result,
+        // never abort). The layer is passed by-index by every caller of
+        // this function, so this attribution is exact.
+        return Err(StoppingError::LayerUnresolvedThickness { layer_index });
     };
 
     layer.computed_energy_in = energy_in;
@@ -820,6 +830,7 @@ pub fn compute_stack_stopping_only(
             layer,
             energy_in,
             area,
+            idx,
         )
         .map_err(|e| e.with_layer_context(idx, material_hint))?;
         energy_in = lr.energy_out;
@@ -849,6 +860,7 @@ fn compute_layer_stopping_only(
     layer: &mut Layer,
     energy_in: f64,
     area: f64,
+    layer_index: usize,
 ) -> Result<LayerResult, StoppingError> {
     // Beam already stopped upstream — see [`compute_layer`] for rationale
     // (#211 / sub-tracked-floor handling for #527).
@@ -899,8 +911,8 @@ fn compute_layer_stopping_only(
             nist,
         )?;
         (thick, e_out)
-    } else {
-        let thick = layer.areal_density_g_cm2.unwrap() / density;
+    } else if let Some(areal) = layer.areal_density_g_cm2 {
+        let thick = areal / density;
         let e_out = compute_energy_out(
             db,
             projectile,
@@ -912,6 +924,16 @@ fn compute_layer_stopping_only(
             nist,
         )?;
         (thick, e_out)
+    } else {
+        // #712 review: the pre-fix `layer.areal_density_g_cm2.unwrap()` used
+        // to panic the whole engine when a layer reached here with none of
+        // thickness_cm / energy_out_mev / areal_density_g_cm2 set. MCP now
+        // catches that in `parse_layers` before compute, but returning a
+        // typed error here means WASM/Tauri/a direct caller can't crash the
+        // engine either (#355 — every input path should surface a Result,
+        // never abort). The layer is passed by-index by every caller of
+        // this function, so this attribution is exact.
+        return Err(StoppingError::LayerUnresolvedThickness { layer_index });
     };
 
     layer.computed_energy_in = energy_in;

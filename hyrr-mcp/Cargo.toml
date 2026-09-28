@@ -23,4 +23,10 @@ hyrr-core = { path = "../core", features = ["mcp", "trace-jsonl"] }
 strip = true
 lto = true
 codegen-units = 1
-panic = "abort"
+# `panic = "unwind"` (the default, spelled out here to override an earlier
+# `abort` setting) so `std::panic::catch_unwind` at the MCP dispatch boundary
+# actually works in shipped binaries — see
+# `hyrr_core::mcp::transport::handle_request` (#712 review, #355). A long-lived
+# stdio server surviving a tool-level panic is worth the small size / perf
+# cost of an unwind ABI; WASM keeps `abort` in its own profile.
+panic = "unwind"

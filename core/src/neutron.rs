@@ -35,7 +35,7 @@ pub const KT_THERMAL_MEV: f64 = 2.53e-8;
 /// Serialised tagged by `kind` for the JSON boundary, e.g.
 /// `{"kind":"thermal","flux":1e13,"kt_mev":2.53e-8}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FluxModel {
     /// Maxwellian thermal: `φ(E) = flux·(2/√π)·√E/kT^{3/2}·exp(−E/kT)`.
     Thermal { flux: f64, kt_mev: f64 },

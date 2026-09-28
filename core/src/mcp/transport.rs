@@ -274,6 +274,19 @@ fn is_notification(request: &JsonRpcRequest) -> bool {
     request.id.is_none() || request.method.starts_with("notifications/")
 }
 
+/// Extract a human-readable message from a `catch_unwind` payload. Panics
+/// most commonly carry a `&'static str` or a `String`; anything else lands
+/// as a placeholder so the client at least learns that a panic happened.
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panic with non-string payload".to_string()
+    }
+}
+
 /// Route a parsed JSON-RPC frame to its handler.
 ///
 /// Returns `None` for JSON-RPC notifications (see [`is_notification`]);
@@ -356,7 +369,44 @@ fn handle_request(
                 .cloned()
                 .unwrap_or(Value::Object(serde_json::Map::new()));
 
-            match tools::call_tool(db, materials, name, &arguments) {
+            // Catch panics at the tool-dispatch boundary (#712 review, #355).
+            // hyrr-core panicking mid-tool used to kill the stdio server: the
+            // process exited, the client saw its pipe close, and nothing in
+            // between was recoverable. Wrapping the call in `catch_unwind`
+            // turns a panic into an `isError` result the client can render
+            // and recover from — the same shape as a returned `Err(String)`,
+            // just with a payload that names the panic.
+            //
+            // AssertUnwindSafe is sound in practice because every `tool_*`
+            // panics BEFORE it mutates the shared `MaterialRegistry` (only
+            // `tool_define_material` mutates it, and its parser errors out
+            // long before the insert). The only truly-shared state visible
+            // through `db` is the xs_cache Mutex, whose poison error the
+            // db.rs recovery path handles (`unwrap_or_else(|e| e.into_inner())`)
+            // rather than propagating.
+            //
+            // This is the belt-and-braces safety net. The primary defence
+            // is `parse_layers` (typed rejection before compute) plus
+            // `StoppingError::LayerUnresolvedThickness` (typed error from
+            // compute); the catch_unwind exists so an as-yet-unaudited
+            // panic path still becomes a Result-shaped response instead of
+            // a dead server.
+            //
+            // For `hyrr-mcp` release builds, `hyrr-mcp/Cargo.toml`
+            // explicitly pins `panic = "unwind"` — without that override,
+            // the shipped binary would abort and the "server did not exit"
+            // message would be a lie. WASM keeps `abort` (its own profile).
+            let call =
+                std::panic::AssertUnwindSafe(|| tools::call_tool(db, materials, name, &arguments));
+            let result = std::panic::catch_unwind(call).unwrap_or_else(|panic_payload| {
+                let msg = panic_message(&panic_payload);
+                Err(format!(
+                    "Internal error: `{name}` panicked ({msg}). This is a bug; \
+                     please report it with the arguments that triggered it. \
+                     The server did not exit."
+                ))
+            });
+            match result {
                 Ok(result) => {
                     // Text block first, then one embedded `resource` block per
                     // attached Parquet table (#427).

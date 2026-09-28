@@ -144,12 +144,29 @@ fn collect_evaluated(
     }
 }
 
+/// Reject unknown top-level keys BEFORE the caller pays for `cached_sim`
+/// (#712 review). Kept as a separate entry point because `call_tool`
+/// dispatches export_result_html by running the simulation first and then
+/// calling [`tool_export_result_html`] with the finished `StackResult`; a
+/// key rejection buried inside that function costs the caller the compute.
+///
+/// The allowlist is derived from the schema in `list_tools`, so it stays
+/// in lockstep with what `additionalProperties: false` advertises (#712
+/// re-review — no hand-maintained key slice can drift).
+pub(crate) fn validate_export_args(args: &Value) -> Result<(), String> {
+    crate::mcp::strict_args::validate_args("export_result_html", args)
+}
+
 pub fn tool_export_result_html(
     db: &dyn DatabaseProtocol,
     registry: &MaterialRegistry,
     args: &Value,
     result: &crate::types::StackResult,
 ) -> Result<ToolResponse, String> {
+    // `validate_export_args` is called upstream by `call_tool` before the
+    // simulate step so a typo doesn't cost a compute; re-check here in
+    // case any caller reaches this fn directly (tests, future bindings).
+    validate_export_args(args)?;
     let _ = registry;
     let tier = parse_tier(args)?;
     let template = resolve_template(args)?;

@@ -213,7 +213,10 @@ fn activity_at_eob_matches_isotope_production_curve() {
     let mut reg = MaterialRegistry::new();
 
     // First: get the curve to know what "EOB activity" is on the 200-grid.
-    let mut curve_args = f18_args(json!([7200.0])); // at_s is ignored by curve tool
+    // `at_s` is stripped before the call — post-#712 the curve tool rejects
+    // it as an unknown key rather than silently ignoring it.
+    let mut curve_args = f18_args(json!([7200.0]));
+    curve_args.as_object_mut().unwrap().remove("at_s");
     curve_args
         .as_object_mut()
         .unwrap()
