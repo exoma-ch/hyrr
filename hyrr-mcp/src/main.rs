@@ -39,7 +39,14 @@ fn main() {
     let library = resolve_library(&args);
     let data_dir = resolve_data_dir(&args, &library);
 
-    hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library);
+    // Only run the routed-library healer against the managed cache
+    // (#709). A user-supplied `--data-dir` / `HYRR_DATA` / sibling
+    // checkout is out of scope — the healer is not entitled to alter
+    // paths the user owns.
+    let spawn_heal =
+        hyrr_core::data_fetch::resolved_is_managed_cache(std::path::Path::new(&data_dir));
+
+    hyrr_core::mcp::transport::run_mcp_server_with_library(&data_dir, &library, spawn_heal);
 }
 
 /// Resolve the data directory. Priority:
@@ -69,6 +76,13 @@ fn resolve_data_dir(args: &[String], library: &str) -> String {
     // fall through to the fetch path.
     let local = hyrr_core::data_dir::resolve();
     if std::path::Path::new(&local).join("meta").is_dir() {
+        // Warm cache — hand it back and let the transport spawn its
+        // background heal thread for missing routed libraries (#709).
+        // The synchronous version of this healer used to run right
+        // here and blocked the initialize handshake for the whole
+        // ~727 MB download; MCP client startup timeouts (~30s in
+        // Claude Code) then killed an upgrading user's session before
+        // it could complete.
         return local;
     }
 

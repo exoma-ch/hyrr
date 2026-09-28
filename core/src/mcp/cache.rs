@@ -94,6 +94,32 @@ impl Lru {
             }
         }
     }
+
+    fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+}
+
+/// Drop every cached simulation result from the in-memory LRU.
+///
+/// Called by the MCP transport after the background heal thread
+/// (#709) installs previously-missing routed libraries. Any result
+/// cached before the heal was computed against a store whose
+/// `NpDataStore::ensure_xs` memoised misses for those libs; keeping
+/// those in-memory results would defeat the heal.
+///
+/// The on-disk tier is invalidated **naturally** now that #717 has
+/// landed: `hash_config` folds `db.data_fingerprint()` into the key,
+/// and a store swap changes that fingerprint, so a pre-swap entry
+/// misses on disk and recomputes against the fresh store. This
+/// `clear_memory_cache` call is the belt half of a belt-and-braces
+/// pair — the disk tier is the braces. The tool-layer routed-library
+/// gate (`routed_library_unavailable_diagnostic`) is a third layer:
+/// routed-lib-unavailable calls return a diagnostic before compute
+/// runs, so a stale entry can't be written in the first place.
+pub fn clear_memory_cache() {
+    cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 fn cache() -> &'static Mutex<Lru> {

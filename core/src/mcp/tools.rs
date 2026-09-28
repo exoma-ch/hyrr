@@ -432,6 +432,172 @@ fn cached_sim_with_id(
     Ok((result, sim_id))
 }
 
+/// Routed libraries the given tool-call config depends on beyond the
+/// store's default library. Union of:
+///
+/// * The projectile's routed library — `NEUTRON_LIBRARY` for
+///   `projectile=="n"`, `HEAVY_ION_LIBRARY` for heavy-ion keys.
+/// * `NEUTRON_LIBRARY` when `secondary_neutron: true` — the Phase-2
+///   (x,n) → activation path in `simulate` reads (n,x) cross sections
+///   regardless of the primary projectile. So a `p + secondary_neutron`
+///   call needs `endfb-8.0` even though the projectile itself is
+///   charged (rev-3 reviewer blocker).
+/// * **All of the above collected recursively over every nested object
+///   argument** that carries a `projectile` key. `compare_simulations`
+///   nests full sim configs in `config_a` / `config_b` (each the same
+///   shape as `simulate` args), and future tools may follow the same
+///   pattern; a top-level-only check would let a nested
+///   `projectile: "n"` or nested `secondary_neutron: true` slip past
+///   the gate for the whole heal window AND every backoff — silently
+///   empty or partial comparisons for as long as the missing library
+///   isn't there (rev-4 reviewer blocker).
+///
+/// Empty when the call only depends on the store's own library, which
+/// the transport verified at boot.
+fn routed_libraries_for_call(args: &Value) -> Vec<&'static str> {
+    let mut libs: Vec<&'static str> = Vec::new();
+    collect_routed_libraries(args, &mut libs);
+    libs
+}
+
+/// Recursive worker for [`routed_libraries_for_call`]. Walks every
+/// object value in the tree and folds in the routed libs required by
+/// any node that looks like a simulate config (has a `projectile` key
+/// or `secondary_neutron: true`). Kept iterative-ish (a Vec-based
+/// walk) rather than actually recursive to avoid a stack blow-up on a
+/// pathological deeply-nested config; tool inputs are bounded but the
+/// gate must not be the thing that panics on hostile input.
+fn collect_routed_libraries(node: &Value, libs: &mut Vec<&'static str>) {
+    let mut stack: Vec<&Value> = vec![node];
+    while let Some(v) = stack.pop() {
+        if let Some(obj) = v.as_object() {
+            if let Some(projectile) = obj.get("projectile").and_then(|p| p.as_str()) {
+                if projectile == "n" && !libs.contains(&crate::db::NEUTRON_LIBRARY) {
+                    libs.push(crate::db::NEUTRON_LIBRARY);
+                } else if crate::db::is_heavy_ion_key(projectile)
+                    && !libs.contains(&crate::db::HEAVY_ION_LIBRARY)
+                {
+                    libs.push(crate::db::HEAVY_ION_LIBRARY);
+                }
+            }
+            if obj
+                .get("secondary_neutron")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+                && !libs.contains(&crate::db::NEUTRON_LIBRARY)
+            {
+                libs.push(crate::db::NEUTRON_LIBRARY);
+            }
+            for (_k, child) in obj {
+                stack.push(child);
+            }
+        } else if let Some(arr) = v.as_array() {
+            for child in arr {
+                stack.push(child);
+            }
+        }
+    }
+}
+
+/// Typed diagnostic for a call that depends on a routed library which
+/// isn't on disk yet — either the background heal thread hasn't finished
+/// (#709), or it finished with a failure. `None` when every routed
+/// library the call needs is available.
+///
+/// Reused by `simulate`, `list_reaction_channels`, and every other tool
+/// that carries a `projectile` or `secondary_neutron` argument — never
+/// returning an empty-result "no data" string when the real answer is
+/// "we haven't downloaded it yet".
+fn routed_library_unavailable_diagnostic(args: &Value) -> Option<String> {
+    let handle = crate::data_fetch::heal_handle()?;
+    routed_library_unavailable_diagnostic_with(&handle, args)
+}
+
+/// Test-friendly variant: the handle is passed in rather than read from
+/// the process-global slot, so unit tests can exercise the gate
+/// without needing to install one. Production callers use the wrapper
+/// above.
+fn routed_library_unavailable_diagnostic_with(
+    handle: &crate::data_fetch::HealHandle,
+    args: &Value,
+) -> Option<String> {
+    let needed = routed_libraries_for_call(args);
+    if needed.is_empty() {
+        return None;
+    }
+    use crate::data_fetch::LibraryHealStatus;
+    for routed in needed {
+        match handle.library_status(routed) {
+            LibraryHealStatus::Available => continue,
+            LibraryHealStatus::Downloading => {
+                let marker = heal_marker_path_hint();
+                return Some(format!(
+                    "# Nuclear data not yet available\n\
+                     \n\
+                     This call needs the `{routed}` library, which is not on disk yet.\n\
+                     HYRR is downloading it in the background (~727 MB, one-time). Please\n\
+                     retry this call in a few minutes.\n\
+                     \n\
+                     Charged-particle simulations (p, d, t, ³He, α) that do not set\n\
+                     `secondary_neutron: true` are unaffected and can proceed.\n\
+                     \n\
+                     Related: #709 (silent-empty routed-library fetches), #650 (typed diagnostics).{marker}\n"
+                ));
+            }
+            LibraryHealStatus::Failed {
+                error,
+                retry_after_epoch_s,
+            } => {
+                let retry_hint = if retry_after_epoch_s > 0 {
+                    format!(
+                        " Automatic retry not before epoch {retry_after_epoch_s} \
+                         (short window for transient failures, 24 h for a genuine \
+                         release-gap — see the marker file below for the reason)."
+                    )
+                } else {
+                    String::new()
+                };
+                let marker = heal_marker_path_hint();
+                return Some(format!(
+                    "# Nuclear data unavailable\n\
+                     \n\
+                     This call needs the `{routed}` library, which failed to \
+                     download: {error}.{retry_hint}\n\
+                     \n\
+                     Charged-particle simulations (p, d, t, ³He, α) that do not set\n\
+                     `secondary_neutron: true` are unaffected and can proceed.\n\
+                     \n\
+                     Recovery:\n\
+                     * Fix the local problem (network / disk / TLS) and delete the\n\
+                       backoff marker to force an immediate retry on the next MCP\n\
+                       launch — the retry window on a transient failure is 15\n\
+                       minutes, so `hyrr-mcp` restarts inside that window pick\n\
+                       up the retry automatically.\n\
+                     * Or run `hyrr fetch-data --library {routed}` manually.\n\
+                     * Or point at a fresh install via `--data-dir` / `HYRR_DATA`.\n\
+                     \n\
+                     Related: #709.{marker}\n"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// One-line hint about where the `.heal-attempted` marker lives so a
+/// user can `rm` it to force an immediate retry. Best-effort — a
+/// process without `HOME` can't know its cache dir; the hint is
+/// skipped rather than misleading the user.
+fn heal_marker_path_hint() -> String {
+    match crate::data_fetch::cache_dir() {
+        Ok(p) => format!(
+            "\n\nBackoff marker: `{}` — delete this file to allow an immediate retry.",
+            p.join(".heal-attempted").display()
+        ),
+        Err(_) => String::new(),
+    }
+}
+
 /// Beam params for display headers, read directly from args (the cache returns
 /// only a `StackResult`, so metadata comes from the request).
 fn beam_args(args: &Value) -> (String, f64, f64) {
@@ -1060,6 +1226,48 @@ pub fn call_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<ToolResponse, String> {
+    // Order matters — reviewer's rebase-time note:
+    //   1. Strict-arg validation FIRST (#720). A typo like
+    //      `tarrget_z` must surface as "Unknown key 'tarrget_z' …
+    //      Did you mean 'target_z'?", not get masked by a
+    //      "download in progress" diagnostic.
+    //   2. Routed-library gate (#709). Only after we know the
+    //      arguments are shape-valid; otherwise we might
+    //      short-circuit on a `projectile` that a typo-checker
+    //      would flag anyway.
+    //   3. Compute (dispatch table below).
+    //
+    // Every `tool_*` function ALSO calls `validate_args` at its own
+    // entry (#720 convention). Calling it here first is redundant
+    // for those tools but idempotent (returns `Ok(())` on the second
+    // walk), and it makes the ordering explicit for tools whose
+    // dispatch arm doesn't currently front-load a validate call.
+    validate_args(name, arguments)?;
+
+    // #709: intercept requests that need a routed library which isn't
+    // on disk yet — the background heal thread is still fetching (or
+    // has failed and we're in the backoff window). Return a typed
+    // diagnostic before we ever reach a data-store lookup that would
+    // memoise a miss (`NpDataStore::ensure_xs` caches empty vectors).
+    //
+    // The check consults [`routed_libraries_for_call`], which folds
+    // in `secondary_neutron: true` — a `p + secondary_neutron` call
+    // needs `endfb-8.0` even though the projectile itself is charged
+    // (reviewer's blocker #1). Charged calls without secondary_neutron
+    // fall straight through: `routed_libraries_for_call` returns an
+    // empty set for them. Kept out of individual tool functions so a
+    // new tool that carries either arg automatically gets the guard.
+    if let Some(diagnostic) = routed_library_unavailable_diagnostic(arguments) {
+        let mut r: ToolResponse = diagnostic.into();
+        r.text = format!(
+            "{}\n\n---\n*Library: {} · data release: {}*\n",
+            r.text,
+            db.library(),
+            data_release(),
+        );
+        return Ok(r);
+    }
+
     // Text-only tools return a String (→ ToolResponse via From); the dataset
     // tools return a ToolResponse directly (text + Parquet resources).
     let mut response: ToolResponse = match name {
@@ -3612,6 +3820,314 @@ mod tests {
         assert!(
             names.contains(&"get_version_info".to_string()),
             "list_tools must advertise get_version_info; got: {names:?}"
+        );
+    }
+
+    /// **#709 tool-layer intercept — the routed-library diagnostic
+    /// shape.** `HealHandle::library_status` for a routed library that
+    /// is not yet on disk reports `Downloading`, then `Available`
+    /// after `mark_available`, and the tool layer uses that transition
+    /// to decide whether to emit a typed diagnostic or run the query.
+    /// The check is done directly against the `HealHandle` API
+    /// without touching the process-global `OnceLock`, which can't be
+    /// reset between tests.
+    #[test]
+    fn heal_handle_library_status_transitions_from_downloading_to_available() {
+        use crate::data_fetch::{HealHandle, HealPhase, LibraryHealStatus};
+
+        let handle = HealHandle::test_new_downloading(vec![
+            crate::db::NEUTRON_LIBRARY.to_string(),
+            crate::db::HEAVY_ION_LIBRARY.to_string(),
+        ]);
+
+        // Before completion — both routed libs report Downloading.
+        assert_eq!(
+            handle.library_status(crate::db::NEUTRON_LIBRARY),
+            LibraryHealStatus::Downloading,
+        );
+        assert_eq!(
+            handle.library_status(crate::db::HEAVY_ION_LIBRARY),
+            LibraryHealStatus::Downloading,
+        );
+        // The store library is available (not routed away).
+        assert_eq!(
+            handle.library_status("tendl-2023-iso"),
+            LibraryHealStatus::Available,
+        );
+
+        // Heal completes for the neutron lib only.
+        handle.test_mark_available(crate::db::NEUTRON_LIBRARY);
+        handle.test_set_phase(HealPhase::Complete {
+            added: vec![crate::db::NEUTRON_LIBRARY.to_string()],
+        });
+        assert_eq!(
+            handle.library_status(crate::db::NEUTRON_LIBRARY),
+            LibraryHealStatus::Available,
+        );
+        // The heavy-ion lib is still missing (Complete but not added) — the
+        // handle reports Failed with a release-gap explanation, so the tool
+        // layer emits a diagnostic instead of an empty result.
+        match handle.library_status(crate::db::HEAVY_ION_LIBRARY) {
+            LibraryHealStatus::Failed { error, .. } => {
+                assert!(
+                    error.contains("does not include"),
+                    "diagnostic must call out the release gap: {error}"
+                );
+            }
+            other => panic!("expected Failed release-gap status, got {other:?}"),
+        }
+    }
+
+    /// **Reviewer's blocker #1 — `secondary_neutron: true` needs the
+    /// neutron library even for a charged primary projectile.** The
+    /// naïve projectile-name check would let `p + secondary_neutron`
+    /// through as a plain charged call; the Phase-2 (x,n)-activation
+    /// step then reads `endfb-8.0` and — since the heal hasn't
+    /// finished — gets an empty subtree, ships an unlabelled
+    /// no-neutron result to the disk cache, and serves it forever.
+    /// The new `routed_libraries_for_call` union closes that.
+    #[test]
+    fn routed_libraries_for_call_folds_in_secondary_neutron() {
+        use serde_json::json;
+
+        // Plain charged: no routed dependency.
+        let plain = json!({"projectile": "p", "energy_mev": 18.0});
+        assert!(routed_libraries_for_call(&plain).is_empty());
+
+        // Neutron source: routes to NEUTRON_LIBRARY.
+        let n_source = json!({"projectile": "n"});
+        assert_eq!(
+            routed_libraries_for_call(&n_source),
+            vec![crate::db::NEUTRON_LIBRARY]
+        );
+
+        // Heavy-ion primary: routes to HEAVY_ION_LIBRARY.
+        let hi = json!({"projectile": "c12", "energy_mev": 100.0});
+        assert_eq!(
+            routed_libraries_for_call(&hi),
+            vec![crate::db::HEAVY_ION_LIBRARY]
+        );
+
+        // Charged + secondary_neutron: adds NEUTRON_LIBRARY. THE regression.
+        let p_secondary = json!({"projectile": "p", "secondary_neutron": true});
+        assert!(
+            routed_libraries_for_call(&p_secondary).contains(&crate::db::NEUTRON_LIBRARY),
+            "p + secondary_neutron must pull in the neutron library"
+        );
+
+        // Heavy-ion + secondary_neutron: BOTH routed libs.
+        let hi_secondary = json!({"projectile": "c12", "secondary_neutron": true});
+        let libs = routed_libraries_for_call(&hi_secondary);
+        assert!(libs.contains(&crate::db::HEAVY_ION_LIBRARY));
+        assert!(libs.contains(&crate::db::NEUTRON_LIBRARY));
+
+        // Neutron source + secondary_neutron: NEUTRON_LIBRARY once (dedup).
+        let n_secondary = json!({"projectile": "n", "secondary_neutron": true});
+        let libs = routed_libraries_for_call(&n_secondary);
+        assert_eq!(libs, vec![crate::db::NEUTRON_LIBRARY]);
+    }
+
+    /// **Reviewer rev-4 blocker — nested configs must also gate.**
+    /// `compare_simulations` takes `config_a` / `config_b`, each the
+    /// same shape as a `simulate` arg object. A top-level-only check
+    /// let a nested `projectile: "n"` or a nested `secondary_neutron:
+    /// true` through — the comparison then ran against the missing
+    /// routed library and produced a silently empty / partial result
+    /// for the entire backoff window (or forever on a release-gap).
+    /// The recursive union closes that.
+    #[test]
+    fn routed_libraries_for_call_recurses_into_nested_configs() {
+        use serde_json::json;
+
+        // compare_simulations with a nested neutron primary in config_a.
+        let compare_n = json!({
+            "config_a": {"projectile": "n", "energy_mev": 14.0},
+            "config_b": {"projectile": "p", "energy_mev": 18.0},
+        });
+        let libs = routed_libraries_for_call(&compare_n);
+        assert!(
+            libs.contains(&crate::db::NEUTRON_LIBRARY),
+            "nested projectile='n' in config_a must pull in the neutron library: {libs:?}"
+        );
+
+        // Nested secondary_neutron on a charged primary.
+        let compare_secondary = json!({
+            "config_a": {"projectile": "p", "energy_mev": 18.0},
+            "config_b": {"projectile": "p", "energy_mev": 25.0, "secondary_neutron": true},
+        });
+        let libs = routed_libraries_for_call(&compare_secondary);
+        assert!(
+            libs.contains(&crate::db::NEUTRON_LIBRARY),
+            "nested secondary_neutron=true in config_b must pull in the neutron library: {libs:?}"
+        );
+
+        // Nested heavy-ion primary.
+        let compare_hi = json!({
+            "config_a": {"projectile": "p", "energy_mev": 18.0},
+            "config_b": {"projectile": "c12", "energy_mev": 100.0},
+        });
+        let libs = routed_libraries_for_call(&compare_hi);
+        assert!(
+            libs.contains(&crate::db::HEAVY_ION_LIBRARY),
+            "nested heavy-ion in config_b must pull in the heavy-ion library: {libs:?}"
+        );
+
+        // Both nested need it → still one entry each (dedup).
+        let compare_both_n = json!({
+            "config_a": {"projectile": "n", "secondary_neutron": true},
+            "config_b": {"projectile": "p", "secondary_neutron": true},
+        });
+        let libs = routed_libraries_for_call(&compare_both_n);
+        assert_eq!(
+            libs.iter()
+                .filter(|l| **l == crate::db::NEUTRON_LIBRARY)
+                .count(),
+            1
+        );
+
+        // Purely charged nested configs — no routed dependency.
+        let compare_plain = json!({
+            "config_a": {"projectile": "p", "energy_mev": 18.0},
+            "config_b": {"projectile": "d", "energy_mev": 12.0},
+        });
+        assert!(routed_libraries_for_call(&compare_plain).is_empty());
+    }
+
+    /// **Reviewer rev-4 blocker end-to-end — `call_tool` itself must
+    /// return the typed diagnostic** for a top-level
+    /// `p + secondary_neutron` AND a nested `compare_simulations`
+    /// carrying a neutron-routing config, both during the
+    /// `Downloading` window. This exercises the production intercept
+    /// path (`call_tool` → `routed_library_unavailable_diagnostic` →
+    /// process-global heal handle) rather than only the
+    /// `_with(handle, …)` seam.
+    ///
+    /// Serialises against `data_fetch::tests::SERIAL` because the
+    /// global heal handle is a process-wide slot and other tests would
+    /// race with it otherwise.
+    #[test]
+    fn call_tool_gates_top_level_and_nested_configs_during_download() {
+        use crate::data_fetch::{self, HealHandle};
+        use crate::db::InMemoryDataStore;
+        use serde_json::json;
+
+        let _g = crate::data_fetch::tests::SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        // Install a Downloading handle covering NEUTRON_LIBRARY.
+        data_fetch::install_heal_handle(HealHandle::test_new_downloading(vec![
+            crate::db::NEUTRON_LIBRARY.to_string(),
+        ]));
+
+        let db = InMemoryDataStore::new("tendl-2023-iso");
+        let mut materials: crate::materials::MaterialRegistry = HashMap::new();
+
+        // TOP-LEVEL: p + secondary_neutron. Would otherwise call
+        // compute_stack_with_secondary_neutrons against endfb-8.0.
+        let top_level_args = json!({
+            "projectile": "p",
+            "energy_mev": 18.0,
+            "current_ma": 0.1,
+            "layers": [],
+            "secondary_neutron": true,
+        });
+        let resp = call_tool(&db, &mut materials, "simulate", &top_level_args)
+            .expect("call_tool returns Ok with the diagnostic body");
+        assert!(
+            resp.text.contains(crate::db::NEUTRON_LIBRARY),
+            "top-level p+secondary_neutron must be gated: {}",
+            resp.text
+        );
+        assert!(
+            resp.text.contains("not yet available") || resp.text.contains("Downloading"),
+            "top-level diagnostic must call out the in-flight state: {}",
+            resp.text
+        );
+
+        // NESTED: compare_simulations with config_b.projectile == "n".
+        let compare_args = json!({
+            "config_a": {"projectile": "p", "energy_mev": 18.0, "current_ma": 0.1, "layers": []},
+            "config_b": {"projectile": "n", "energy_mev": 14.0, "current_ma": 0.1, "layers": []},
+        });
+        let resp = call_tool(&db, &mut materials, "compare_simulations", &compare_args)
+            .expect("call_tool returns Ok with the diagnostic body");
+        assert!(
+            resp.text.contains(crate::db::NEUTRON_LIBRARY),
+            "nested projectile='n' in compare_simulations must be gated: {}",
+            resp.text
+        );
+
+        // NESTED secondary_neutron on charged: same treatment.
+        let compare_secondary = json!({
+            "config_a": {"projectile": "p", "energy_mev": 18.0, "current_ma": 0.1, "layers": []},
+            "config_b": {"projectile": "p", "energy_mev": 25.0, "current_ma": 0.1, "layers": [], "secondary_neutron": true},
+        });
+        let resp = call_tool(
+            &db,
+            &mut materials,
+            "compare_simulations",
+            &compare_secondary,
+        )
+        .expect("call_tool returns Ok with the diagnostic body");
+        assert!(
+            resp.text.contains(crate::db::NEUTRON_LIBRARY),
+            "nested secondary_neutron=true in compare_simulations must be gated: {}",
+            resp.text
+        );
+
+        // Restore the "no MCP boot" state so this test doesn't leak
+        // its Downloading handle into whatever runs next.
+        data_fetch::clear_heal_handle_for_tests();
+    }
+
+    /// **Reviewer's blocker #1 — call-layer gate for `p + secondary_neutron`
+    /// during Downloading returns the typed diagnostic, not an empty
+    /// result and not a computed-then-cached result.** Exercises the
+    /// `routed_library_unavailable_diagnostic_with` seam directly so
+    /// we can control the `HealHandle` state without depending on the
+    /// process-global `OnceLock`.
+    #[test]
+    fn call_layer_gate_fires_for_p_plus_secondary_neutron_during_download() {
+        use crate::data_fetch::HealHandle;
+        use serde_json::json;
+
+        // Heal is downloading the neutron library.
+        let handle = HealHandle::test_new_downloading(vec![crate::db::NEUTRON_LIBRARY.to_string()]);
+
+        // A `p + secondary_neutron` call would run
+        // `compute_stack_with_secondary_neutrons`, which reads (n,x)
+        // cross-sections from `endfb-8.0`. Since that library is
+        // downloading, the tool layer must return a diagnostic —
+        // NOT run the compute and cache the neutron-free result.
+        let args = json!({
+            "projectile": "p",
+            "energy_mev": 18.0,
+            "current_ma": 0.1,
+            "layers": [],
+            "secondary_neutron": true,
+        });
+        let diag = routed_library_unavailable_diagnostic_with(&handle, &args)
+            .expect("p+secondary_neutron must fire the gate when NEUTRON_LIBRARY is downloading");
+        assert!(
+            diag.contains(crate::db::NEUTRON_LIBRARY),
+            "diagnostic must name the missing library: {diag}"
+        );
+        assert!(
+            diag.contains("not yet available") || diag.contains("Downloading"),
+            "diagnostic must call out the download-in-flight state: {diag}"
+        );
+        // A plain charged call without secondary_neutron falls straight
+        // through — no unnecessary gate.
+        let plain = json!({
+            "projectile": "p",
+            "energy_mev": 18.0,
+            "current_ma": 0.1,
+            "layers": [],
+        });
+        assert!(
+            routed_library_unavailable_diagnostic_with(&handle, &plain).is_none(),
+            "plain charged call must not be gated by a routed-library download"
         );
     }
 }
