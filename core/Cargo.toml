@@ -48,8 +48,8 @@ flate2 = { version = "1.1.9", default-features = false, features = ["rust_backen
 # nucl-parquet's (already in the tree). `default-features = false` keeps this to
 # the array/schema/record-batch core nucl-parquet already pulls — no csv/ipc/json
 # umbrella. mcp-only.
-arrow = { version = "59", optional = true, default-features = false }
-parquet = { version = "59", optional = true, default-features = false, features = ["arrow"] }
+arrow = { version = "60", optional = true, default-features = false }
+parquet = { version = "60", optional = true, default-features = false, features = ["arrow"] }
 base64 = { version = "0.23", optional = true }
 # TypeScript type generation for the config codec (#539 increment 3a). Optional,
 # gated behind the `ts` feature — pulled in only when regenerating the committed
@@ -84,7 +84,7 @@ ts-rs = { version = "12", features = ["serde-json-impl"], optional = true }
 #                        rather than a user's first run.
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "gzip"] }
 tar = "0.4"
-zstd = "0.13"
+zstd = "0.14"
 fs2 = "0.4"
 # SHA-256 for the data-tarball integrity pin (#577). Pure Rust (RustCrypto),
 # no C toolchain — deliberately not `ring`, which is only in the graph as
@@ -95,7 +95,7 @@ sha2 = { version = "0.11", default-features = false }
 # transitive dependencies — the whole point of choosing minisign over Sigstore
 # (`sigstore-rs` is 0.x with breaking changes between minors, and signing of
 # *data* artifacts is still rare across Zenodo / HF / IAEA / NNDC / JEFF).
-minisign-verify = "0.2"
+minisign-verify = "0.3"
 # `home` is the platform-correct way to resolve $HOME for redacting paths
 # at the Tauri/IPC boundary (#173). Pure-Rust, tiny, no transitive
 # baggage. Native-only because wasm32 has no filesystem.
